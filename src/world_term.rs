@@ -44,11 +44,21 @@ const KITTY_ONESHOT_ID_BASE: u32 = 2000;
 const KEYPRESS: i32 = 0;
 const KEYUP: i32 = 2;
 
-// Approximate cell size in pixels for terminal-aware scaling. Real cells vary
-// (most are 8×16 to 10×20 depending on font), but this is a reasonable v1
-// default; CSI 16 t could query exact metrics later.
-const CELL_W: u32 = 8;
-const CELL_H: u32 = 16;
+// Fallback cell size when the terminal didn't reply to the `CSI 16 t` probe.
+// Real cells vary (most are 8×16 to 10×20 depending on font); we ask the
+// terminal for the actual pixel size in `cell_pixels()` and fall back to
+// these defaults only when the query returns nothing.
+const CELL_W_DEFAULT: u32 = 8;
+const CELL_H_DEFAULT: u32 = 16;
+
+/// Pixel size of one terminal cell — queried via `CSI 16 t` and cached by
+/// [`crate::term_query`]. Falls back to `(8, 16)` when the terminal didn't
+/// reply (multiplexers, ancient terminals, non-tty stdout).
+fn cell_pixels() -> (u32, u32) {
+    crate::term_query::graphics_caps()
+        .cell_px
+        .unwrap_or((CELL_W_DEFAULT, CELL_H_DEFAULT))
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum Backend {
@@ -130,6 +140,9 @@ pub fn kitty_supported() -> bool {
 struct PixmapSink {
     /// Target output box in pixels (`None` = render at native size).
     target_px: Option<(u32, u32)>,
+    /// Upper bound on the rasterizer's uniform scale factor — depends on
+    /// the active backend (1.0 for Kitty/Sixel, smaller for half-blocks).
+    max_scale: f32,
     /// Output pixmap, allocated when `begin` fires.
     pixmap: Option<Pixmap>,
     /// `input → output` scale folded into a transform applied to every path.
@@ -147,9 +160,10 @@ struct PendingPath {
 }
 
 impl PixmapSink {
-    fn new(target_px: Option<(u32, u32)>) -> Self {
+    fn new(target_px: Option<(u32, u32)>, max_scale: f32) -> Self {
         Self {
             target_px,
+            max_scale,
             pixmap: None,
             base: Transform::identity(),
             clip_stack: Vec::new(),
@@ -214,7 +228,7 @@ impl DrawSink for PixmapSink {
     fn begin(&mut self, width: f32, height: f32) {
         let w = width.ceil().max(1.0) as u32;
         let h = height.ceil().max(1.0) as u32;
-        let s = compute_scale(w, h, self.target_px);
+        let s = compute_scale(w, h, self.target_px, self.max_scale);
         self.out_w = ((w as f32) * s).ceil().max(1.0) as u32;
         self.out_h = ((h as f32) * s).ceil().max(1.0) as u32;
         self.base = Transform::from_scale(s, s);
@@ -369,22 +383,23 @@ fn sk_line_join(j: LineJoin) -> SkLineJoin {
 fn rasterize_draw_list_dl(
     dl: &crate::ir::DrawList,
     target_px: Option<(u32, u32)>,
+    max_scale: f32,
 ) -> Option<Pixmap> {
-    let mut sink = PixmapSink::new(target_px);
+    let mut sink = PixmapSink::new(target_px, max_scale);
     dl.play_into(&mut sink);
     sink.pixmap
 }
 
-/// Uniform scale factor to fit `(w, h)` inside `target` (both in pixels).
-/// Capped at 1.0 — never upscales.
-fn compute_scale(w: u32, h: u32, target: Option<(u32, u32)>) -> f32 {
+/// Uniform scale factor to fit `(w, h)` inside `target` (both in pixels),
+/// capped at `max_scale` so we never upscale beyond the per-backend limit.
+fn compute_scale(w: u32, h: u32, target: Option<(u32, u32)>, max_scale: f32) -> f32 {
     match target {
         Some((tw, th)) if w > 0 && h > 0 && tw > 0 && th > 0 => {
             let sw = tw as f32 / w as f32;
             let sh = th as f32 / h as f32;
-            sw.min(sh).clamp(1e-3, 1.0)
+            sw.min(sh).clamp(1e-3, max_scale)
         }
-        _ => 1.0,
+        _ => max_scale,
     }
 }
 
@@ -546,12 +561,31 @@ fn target_pixels_for_backend(backend: Backend) -> Option<(u32, u32)> {
     // Reserve one row so the prompt that follows the image (or the prompt
     // sitting above an alt-screen animation) doesn't push the last row off.
     let rows_avail = rows.saturating_sub(1).max(1);
+    let (cw, ch) = cell_pixels();
     Some(match backend {
-        Backend::Kitty | Backend::Sixel => (cols as u32 * CELL_W, rows_avail as u32 * CELL_H),
+        Backend::Kitty | Backend::Sixel => (cols as u32 * cw, rows_avail as u32 * ch),
         // Half-blocks pack two image-pixel rows into one cell row, and one
         // image-pixel column into one cell column.
         Backend::TextBlocks => (cols as u32, rows_avail as u32 * 2),
     })
+}
+
+/// Per-backend upper bound on the rasterizer's uniform scale factor.
+///
+/// For Kitty/Sixel each pixmap pixel is one screen pixel, so capping at
+/// `1.0` keeps the image at native size or smaller. For half-blocks each
+/// pixmap pixel covers `cell_w × cell_h/2` screen pixels — uncapped, a 100×100
+/// logical image would stretch to ~`100·cell_w` screen pixels wide. Cap at
+/// `1 / max(cell_w, cell_h/2)` so a logical pixel never expands past one
+/// screen pixel.
+fn max_scale_for_backend(backend: Backend) -> f32 {
+    match backend {
+        Backend::Kitty | Backend::Sixel => 1.0,
+        Backend::TextBlocks => {
+            let (cw, ch) = cell_pixels();
+            1.0 / (cw as f32).max(ch as f32 / 2.0)
+        }
+    }
 }
 
 /// Render a pixmap to truecolor ANSI half-blocks (`▀`). Each pair of pixmap
@@ -587,7 +621,10 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<u16>
                 tr, tg, tb, br, bg, bb
             )?;
         }
-        out.write_all(b"\x1b[0m\n")?;
+        // CRLF — in animation mode the tty is in raw mode and a bare LF
+        // wouldn't return the cursor to column 0, so each line would start
+        // wherever the previous one ended.
+        out.write_all(b"\x1b[0m\r\n")?;
         lines = lines.saturating_add(1);
         y += 2;
     }
@@ -647,7 +684,8 @@ pub fn show_image_dl(dl: &crate::ir::DrawList) {
         return;
     };
     let target = target_pixels_for_backend(backend);
-    let Some(pixmap) = rasterize_draw_list_dl(dl, target) else {
+    let max_scale = max_scale_for_backend(backend);
+    let Some(pixmap) = rasterize_draw_list_dl(dl, target, max_scale) else {
         eprintln!("[spython] failed to rasterize draw list");
         return;
     };
@@ -910,7 +948,7 @@ mod tests {
     }
 
     fn rasterize(dl: &DrawList) -> Pixmap {
-        rasterize_draw_list_dl(dl, None).expect("pixmap")
+        rasterize_draw_list_dl(dl, None, 1.0).expect("pixmap")
     }
 
     fn rect_path(dl: &mut DrawList, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
@@ -1047,7 +1085,7 @@ mod tests {
         // 200×100 input + 50×50 target → fit width: scale=0.25 → 50×25 output.
         let mut dl = DrawList::new(200.0, 100.0);
         rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0);
-        let pm = rasterize_draw_list_dl(&dl, Some((50, 50))).expect("pixmap");
+        let pm = rasterize_draw_list_dl(&dl, Some((50, 50)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 50);
         assert_eq!(pm.height(), 25);
         assert_eq!(pixel_rgba(&pm, 25, 12), (0, 0, 255, 255));
@@ -1058,7 +1096,7 @@ mod tests {
         // Tiny 10×10 image + huge 1000×1000 target should keep native dims.
         let mut dl = DrawList::new(10.0, 10.0);
         rect_path(&mut dl, solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0);
-        let pm = rasterize_draw_list_dl(&dl, Some((1000, 1000))).expect("pixmap");
+        let pm = rasterize_draw_list_dl(&dl, Some((1000, 1000)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 10);
         assert_eq!(pm.height(), 10);
     }
@@ -1068,9 +1106,23 @@ mod tests {
         // 100×200 input + 200×50 target → fit height: scale=0.25 → 25×50 output.
         let mut dl = DrawList::new(100.0, 200.0);
         rect_path(&mut dl, solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0);
-        let pm = rasterize_draw_list_dl(&dl, Some((200, 50))).expect("pixmap");
+        let pm = rasterize_draw_list_dl(&dl, Some((200, 50)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 25);
         assert_eq!(pm.height(), 50);
+    }
+
+    #[test]
+    fn text_blocks_max_scale_caps_below_native() {
+        // A 100×100 image rendered for half-blocks (cell 8×16) must shrink to
+        // ~native screen pixels: 100 px → P_w = 100/8 ≈ 12 image px. With the
+        // old cap of 1.0 the pixmap was 100×100, which painted 100 cols × 50
+        // cell rows on screen — way bigger than the native logical size.
+        let mut dl = DrawList::new(100.0, 100.0);
+        rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
+        // target is the half-blocks bounding box for an 80×24 terminal.
+        let pm = rasterize_draw_list_dl(&dl, Some((80, 48)), 1.0 / 8.0).expect("pixmap");
+        assert!(pm.width() <= 13, "got width {}", pm.width());
+        assert!(pm.height() <= 13, "got height {}", pm.height());
     }
 
     #[test]

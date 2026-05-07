@@ -8,10 +8,11 @@
 //! 1. Open the controlling tty directly (`/dev/tty` on Unix, `CONIN$`/`CONOUT$`
 //!    on Windows). This works even if stdin/stdout were redirected.
 //! 2. Put the tty in raw mode so byte-level reads see escape responses.
-//! 3. Send three queries back-to-back:
+//! 3. Send four queries back-to-back:
 //!    * Kitty graphics query — `\x1b_Gi=N,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\`
 //!      (transmits a 1×1 transparent image with id=N and asks for the result).
 //!    * DA1 — `\x1b[c` (returns `\x1b[?<list>c`; list contains `4` for Sixel).
+//!    * Cell pixel size — `\x1b[16t` (returns `\x1b[6;H;Wt`, char cell in px).
 //!    * CPR — `\x1b[6n` (returns `\x1b[<row>;<col>R`). This is the sentinel:
 //!      every VT-style terminal answers it, so receiving the CPR response
 //!      tells us the terminal has finished replying to the earlier queries.
@@ -40,13 +41,16 @@ const KITTY_QUERY_ID: &str = "31";
 
 /// The escape sequence emitted on every probe — same on Unix and Windows.
 fn build_query() -> String {
-    format!("\x1b_Gi={KITTY_QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c\x1b[6n")
+    format!("\x1b_Gi={KITTY_QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c\x1b[16t\x1b[6n")
 }
 
 #[derive(Default, Copy, Clone)]
 pub struct GraphicsCaps {
     pub kitty: bool,
     pub sixel: bool,
+    /// Pixel size of one terminal cell, reported by `CSI 16 t`. `None` when
+    /// the terminal didn't reply (multiplexed, ancient xterm, etc.).
+    pub cell_px: Option<(u32, u32)>,
 }
 
 static CACHED: OnceLock<GraphicsCaps> = OnceLock::new();
@@ -104,6 +108,37 @@ fn has_cpr_response(buf: &[u8]) -> bool {
 fn parse_kitty_ok(buf: &[u8]) -> bool {
     let needle = format!("\x1b_Gi={KITTY_QUERY_ID};OK");
     buf.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+
+/// Parse the `CSI 16 t` response: `\x1b [ 6 ; <height> ; <width> t`.
+/// Height/width are pixels per character cell. Returns `(width, height)`.
+fn parse_cell_pixels(buf: &[u8]) -> Option<(u32, u32)> {
+    let mut i = 0;
+    while i + 4 < buf.len() {
+        if buf[i] == 0x1b && buf[i + 1] == b'[' && buf[i + 2] == b'6' && buf[i + 3] == b';' {
+            let mut j = i + 4;
+            while j < buf.len() && buf[j] != b't' {
+                j += 1;
+            }
+            if j < buf.len() {
+                let body = &buf[i + 4..j];
+                let parts: Vec<&[u8]> = body.split(|&b| b == b';').collect();
+                if parts.len() == 2
+                    && let (Ok(hs), Ok(ws)) =
+                        (std::str::from_utf8(parts[0]), std::str::from_utf8(parts[1]))
+                    && let (Ok(h), Ok(w)) = (hs.trim().parse::<u32>(), ws.trim().parse::<u32>())
+                    && w > 0
+                    && h > 0
+                {
+                    return Some((w, h));
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 /// DA1 response is `\x1b[?<list>c` where `<list>` is `;`-separated integers.
@@ -214,6 +249,7 @@ mod unix_impl {
         GraphicsCaps {
             kitty: parse_kitty_ok(&buf),
             sixel: parse_da1_has_sixel(&buf),
+            cell_px: parse_cell_pixels(&buf),
         }
     }
 
@@ -408,6 +444,7 @@ mod windows_impl {
         GraphicsCaps {
             kitty: parse_kitty_ok(&buf),
             sixel: parse_da1_has_sixel(&buf),
+            cell_px: parse_cell_pixels(&buf),
         }
     }
 }
@@ -466,5 +503,25 @@ mod tests {
     #[test]
     fn cpr_not_in_other_csi() {
         assert!(!has_cpr_response(b"\x1b[?62;1;4c"));
+    }
+
+    #[test]
+    fn cell_pixels_parses_csi16t_response() {
+        // Ghostty / xterm reply: ESC [ 6 ; height ; width t.
+        let buf = b"junk\x1b[6;28;14tmore";
+        assert_eq!(parse_cell_pixels(buf), Some((14, 28)));
+    }
+
+    #[test]
+    fn cell_pixels_returns_none_when_absent() {
+        let buf = b"\x1b[?62;1;4c\x1b[12;34R";
+        assert_eq!(parse_cell_pixels(buf), None);
+    }
+
+    #[test]
+    fn cell_pixels_skips_zero_dimensions() {
+        // Some terminals reply with 0 when they don't know the cell size.
+        let buf = b"\x1b[6;0;0t";
+        assert_eq!(parse_cell_pixels(buf), None);
     }
 }
