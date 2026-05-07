@@ -1,0 +1,38 @@
+[package]
+name = "simage"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Draw-list based 2D graphics with terminal (Kitty/Sixel/half-blocks) and PDF outputs. Originated in spython; designed to be shared with sgleam."
+repository = "https://github.com/malbarbo/simage"
+readme = "README.md"
+
+[dependencies]
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+kurbo = { version = "0.13", default-features = false, features = ["std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ttf-parser = { version = "0.25", default-features = false, features = [
+    "std",
+    "opentype-layout",
+    "glyph-names",
+] }
+pdf-writer = "0.14"
+crossterm = "0.29"
+base64 = "0.22"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
+
+[lib]
+name = "simage"
+path = "src/lib.rs"
