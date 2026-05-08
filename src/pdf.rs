@@ -146,7 +146,8 @@ impl DrawSink for PdfSink {
         // so for x' = s*x and y' = -s*y + s*h (where s = PX_TO_PT) we need
         // a=s, d=-s, f=s*h.
         let s = PX_TO_PT;
-        self.content.transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
+        self.content
+            .transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
     }
 
     fn path_begin(&mut self, style: &PathStyle) {
@@ -205,8 +206,9 @@ impl DrawSink for PdfSink {
         let hh = clip.h / 2.0;
         let cos = (clip.angle * std::f32::consts::PI / 180.0).cos();
         let sin = (clip.angle * std::f32::consts::PI / 180.0).sin();
-        let corner =
-            |x: f32, y: f32| -> (f32, f32) { (clip.cx + x * cos - y * sin, clip.cy + x * sin + y * cos) };
+        let corner = |x: f32, y: f32| -> (f32, f32) {
+            (clip.cx + x * cos - y * sin, clip.cy + x * sin + y * cos)
+        };
         let p0 = corner(-hw, -hh);
         let p1 = corner(hw, -hh);
         let p2 = corner(hw, hh);

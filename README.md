@@ -6,7 +6,7 @@ methods; renderers replay it through the trait.
 
 Outputs:
 
-- **Raster** — `tiny_skia::Pixmap` via `PixmapSink` (in `world_term`).
+- **Raster** — `tiny_skia::Pixmap` via `PixmapSink` (in `terminal`).
 - **Terminal display** — Kitty graphics protocol, DEC Sixel, or 24-bit
   ANSI half-blocks (`▀`), chosen automatically per the active terminal.
 - **PDF** — vector path output via `PdfSink`, with text rendered as
@@ -47,7 +47,7 @@ dl.line_to(40.0, 30.0);
 dl.line_to(0.0, 30.0);
 dl.path_end();
 
-simage::world_term::show_image_dl(&dl);          // terminal
+simage::terminal::show_image_dl(&dl);            // terminal
 let pdf: Vec<u8> = simage::pdf::render_to_pdf_dl(&dl);
 ```
 

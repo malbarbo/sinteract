@@ -41,8 +41,9 @@ use crate::sixel;
 const KITTY_ANIMATION_ID: u32 = 1042;
 const KITTY_ONESHOT_ID_BASE: u32 = 2000;
 
-const KEYPRESS: i32 = 0;
-const KEYUP: i32 = 2;
+pub(crate) const KEYPRESS: i32 = 0;
+pub(crate) const KEYDOWN: i32 = 1;
+pub(crate) const KEYUP: i32 = 2;
 
 // Fallback cell size when the terminal didn't reply to the `CSI 16 t` probe.
 // Real cells vary (most are 8×16 to 10×20 depending on font); we ask the
@@ -201,7 +202,13 @@ impl PixmapSink {
                 (p.style.fill.a * 255.0).round().clamp(0.0, 255.0) as u8,
             );
             paint.anti_alias = true;
-            pixmap.fill_path(&path, &paint, sk_fill_rule(p.style.fill_rule), self.base, mask);
+            pixmap.fill_path(
+                &path,
+                &paint,
+                sk_fill_rule(p.style.fill_rule),
+                self.base,
+                mask,
+            );
         }
         if p.style.stroke.a > 0.0 && p.style.stroke_width > 0.0 {
             let mut paint = Paint::default();
@@ -380,7 +387,7 @@ fn sk_line_join(j: LineJoin) -> SkLineJoin {
 /// scaled so it fits inside the target box while preserving aspect ratio.
 /// Scaling is **shrink-only**: an image smaller than the target stays at its
 /// native dimensions (the user picked those numbers; respect them).
-fn rasterize_draw_list_dl(
+pub(crate) fn rasterize_draw_list_dl(
     dl: &crate::ir::DrawList,
     target_px: Option<(u32, u32)>,
     max_scale: f32,

@@ -4,7 +4,7 @@
 //! Used by:
 //!   - `wasm_ffi::measure_text_*` on native targets, so the SVG fallback gets
 //!     the same metrics as the rasterizer.
-//!   - The CLI terminal renderer (`world_term::rasterize_draw_list`) which
+//!   - The CLI terminal renderer (`terminal::rasterize_draw_list`) which
 //!     calls [`outline`] to fill glyph paths into a `tiny_skia::PathBuilder`.
 //!
 //! The measurements return offsets relative to the *box center* — text spans

@@ -20,6 +20,19 @@ ttf-parser = { version = "0.25", default-features = false, features = [
 pdf-writer = "0.14"
 crossterm = "0.29"
 base64 = "0.22"
+winit = { version = "0.30", default-features = false, features = [
+    "x11",
+    "wayland",
+    "wayland-dlopen",
+    "wayland-csd-adwaita-notitle",
+    "rwh_06",
+] }
+softbuffer = { version = "0.4", default-features = false, features = [
+    "x11",
+    "x11-dlopen",
+    "wayland",
+    "wayland-dlopen",
+] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -7,7 +7,7 @@
 //!
 //! Coordinates are in CSS pixels with y-down / top-left origin, matching the
 //! draw-list wire format. Backends that need a different convention apply a
-//! transform once at the start (see `pdf` and `world_term`).
+//! transform once at the start (see `pdf` and `terminal`).
 
 use crate::ir::{ClipBox, PathStyle, TextNode};
 
