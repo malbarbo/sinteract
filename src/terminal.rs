@@ -414,10 +414,6 @@ fn compute_scale(w: u32, h: u32, target: Option<(u32, u32)>, max_scale: f32) -> 
 // Text rendering (T tag → text node)
 // -----------------------------------------------------------------------------
 
-// Synthetic italic shear (slope of vertical strokes, ~12°). Matches the
-// ratio used by browsers for `font-style: oblique`.
-const ITALIC_SHEAR: f32 = 0.207;
-
 fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Transform) {
     // Match Python: `int(f.size)` is used for measurement.
     let size_i = node.size as i32;
@@ -425,36 +421,37 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
         return;
     }
 
-    let original_w = crate::text::measure_width(&node.text, size_i) as f32;
-    let original_h = crate::text::measure_height(&node.text, size_i) as f32;
+    // Pick the actual variant requested. `node.family` falls back to
+    // Liberation Sans when empty (default), so the historic test fixtures
+    // keep rendering with the same face.
+    let font = crate::text::resolve(&node.family, node.weight, node.style);
+    let face = font.face();
+
+    let original_w = crate::text::measure_width_with(face, &node.text, size_i) as f32;
+    let original_h = crate::text::measure_height_with(face, &node.text, size_i) as f32;
     if original_w <= 0.0 || original_h <= 0.0 {
         return;
     }
-    let baseline_y = crate::text::measure_y_offset(&node.text, size_i) as f32;
+    let baseline_y = crate::text::measure_y_offset_with(face, &node.text, size_i) as f32;
 
     let mut builder = PathBuilder::new();
-    let shear = match node.italic {
-        crate::ir::FontItalic::Normal => 0.0,
-        _ => ITALIC_SHEAR,
-    };
-    let mut adapter = SkiaOutline {
-        b: &mut builder,
-        shear,
-        baseline_y,
-    };
-    crate::text::outline(&node.text, size_i, &mut adapter);
+    let mut adapter = SkiaOutline { b: &mut builder };
+    crate::text::outline_with(face, &node.text, size_i, &mut adapter);
 
     if node.underline {
-        // Liberation Sans underline metrics (font-units): position ~ -217,
-        // thickness ~ 150. Translate to box-local coords (y down, baseline at
-        // baseline_y, font y-up), and centre the rect on the underline line.
-        let face_units = 2048.0_f32;
+        // Use the face's own metrics so non-Sans fonts (Serif / Mono /
+        // system) get a position that matches their design — hardcoded
+        // Liberation Sans values would look misplaced under e.g. a Serif.
+        let face_units = face.units_per_em() as f32;
         let scale = node.size / face_units;
-        let underline_pos = -217.0 * scale; // font y-up → flips to +y in box-local
-        let thickness = (150.0 * scale).max(1.0);
+        let metrics = face.underline_metrics();
+        let pos_units = metrics.map(|m| m.position as f32).unwrap_or(-217.0);
+        let thickness_units = metrics.map(|m| m.thickness as f32).unwrap_or(150.0);
+        let underline_pos = -pos_units * scale; // font y-up → flips to +y in box-local
+        let thickness = (thickness_units * scale).max(1.0);
         let y_top = baseline_y + underline_pos - thickness / 2.0;
         let y_bot = y_top + thickness;
-        let x_l = crate::text::measure_x_offset(&node.text, size_i) as f32;
+        let x_l = crate::text::measure_x_offset_with(face, &node.text, size_i) as f32;
         let x_r = x_l + original_w;
         builder.move_to(x_l, y_top);
         builder.line_to(x_r, y_top);
@@ -513,40 +510,20 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
 
 struct SkiaOutline<'a> {
     b: &'a mut PathBuilder,
-    shear: f32,
-    baseline_y: f32,
-}
-
-impl<'a> SkiaOutline<'a> {
-    fn shear_x(&self, x: f32, y: f32) -> f32 {
-        if self.shear == 0.0 {
-            x
-        } else {
-            x + self.shear * (self.baseline_y - y)
-        }
-    }
 }
 
 impl<'a> crate::text::OutlineBuilder for SkiaOutline<'a> {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.b.move_to(self.shear_x(x, y), y);
+        self.b.move_to(x, y);
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.b.line_to(self.shear_x(x, y), y);
+        self.b.line_to(x, y);
     }
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        self.b
-            .quad_to(self.shear_x(cx, cy), cy, self.shear_x(x, y), y);
+        self.b.quad_to(cx, cy, x, y);
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        self.b.cubic_to(
-            self.shear_x(cx1, cy1),
-            cy1,
-            self.shear_x(cx2, cy2),
-            cy2,
-            self.shear_x(x, y),
-            y,
-        );
+        self.b.cubic_to(cx1, cy1, cx2, cy2, x, y);
     }
     fn close(&mut self) {
         self.b.close();
@@ -913,7 +890,7 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{DrawList, FontItalic};
+    use crate::ir::DrawList;
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -936,21 +913,13 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            stroke: Rgba::default(),
-            stroke_width: 0.0,
-            line_cap: LineCap::Butt,
-            line_join: LineJoin::Miter,
             cx,
             cy,
             bw,
             bh,
-            angle: 0.0,
-            flip_h: false,
-            flip_v: false,
             size,
-            italic: FontItalic::Normal,
-            underline: false,
             text: text.to_owned(),
+            ..TextNode::default()
         }
     }
 

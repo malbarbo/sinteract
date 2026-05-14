@@ -87,27 +87,31 @@ pub struct ClipBox {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum FontItalic {
+pub enum FontStyle {
     #[default]
     Normal = 0,
     Italic = 1,
-    Slant = 2,
+    Oblique = 2,
 }
 
-impl FontItalic {
+impl FontStyle {
     pub fn from_u8(v: u8) -> Self {
         match v {
             1 => Self::Italic,
-            2 => Self::Slant,
+            2 => Self::Oblique,
             _ => Self::Normal,
         }
     }
 }
 
 /// Text node fields. The four corners of the bounding box, after applying
-/// `angle`, define where the glyph paths land. Glyphs are drawn in the
-/// embedded Liberation Sans font; `family`/`weight` from the original input
-/// are dropped on the wire (the renderers cannot honor them anyway).
+/// `angle`, define where the glyph paths land.
+///
+/// `family` is the resolved font family — the name of the family the
+/// renderer that produced this node actually used to measure the glyphs
+/// (after fallback). Empty means "use the renderer's default Sans". On the
+/// wire (`simage::wire`) clients honor it so layout stays stable across
+/// hosts. `weight` follows CSS conventions (400 = Regular, 700 = Bold).
 #[derive(Clone, Debug)]
 pub struct TextNode {
     pub fill: Rgba,
@@ -123,9 +127,36 @@ pub struct TextNode {
     pub flip_h: bool,
     pub flip_v: bool,
     pub size: f32,
-    pub italic: FontItalic,
+    pub family: String,
+    pub weight: u16,
+    pub style: FontStyle,
     pub underline: bool,
     pub text: String,
+}
+
+impl Default for TextNode {
+    fn default() -> Self {
+        Self {
+            fill: Rgba::default(),
+            stroke: Rgba::default(),
+            stroke_width: 0.0,
+            line_cap: LineCap::default(),
+            line_join: LineJoin::default(),
+            cx: 0.0,
+            cy: 0.0,
+            bw: 0.0,
+            bh: 0.0,
+            angle: 0.0,
+            flip_h: false,
+            flip_v: false,
+            size: 0.0,
+            family: String::new(),
+            weight: 400,
+            style: FontStyle::Normal,
+            underline: false,
+            text: String::new(),
+        }
+    }
 }
 
 /// A materialized draw command. Variants mirror [`crate::sink::DrawSink`]

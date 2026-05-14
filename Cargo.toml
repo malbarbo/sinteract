@@ -17,6 +17,10 @@ ttf-parser = { version = "0.25", default-features = false, features = [
     "opentype-layout",
     "glyph-names",
 ] }
+# System font discovery for fonts the embedded Sans/Serif/Mono families
+# don't cover. Lazy: only consulted when the caller asks for an exact
+# family name that does not match an embedded one.
+fontdb = "0.23"
 pdf-writer = "0.14"
 crossterm = "0.29"
 base64 = "0.22"

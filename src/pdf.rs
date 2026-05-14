@@ -25,10 +25,8 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::ir::{ClipBox, FillRule, FontItalic, LineCap, LineJoin, PathStyle, Rgba, TextNode};
+use crate::ir::{ClipBox, FillRule, LineCap, LineJoin, PathStyle, Rgba, TextNode};
 use crate::sink::DrawSink;
-
-const ITALIC_SHEAR: f32 = 0.207;
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
 /// matching the canvas/SVG renderer) to PDF points: 1 px = 1/96 in,
@@ -383,13 +381,16 @@ fn render_text(node: &TextNode, sink: &mut PdfSink) {
         return;
     }
 
-    let original_w = crate::text::measure_width(&node.text, size_i) as f32;
-    let original_h = crate::text::measure_height(&node.text, size_i) as f32;
+    let font = crate::text::resolve(&node.family, node.weight, node.style);
+    let face = font.face();
+
+    let original_w = crate::text::measure_width_with(face, &node.text, size_i) as f32;
+    let original_h = crate::text::measure_height_with(face, &node.text, size_i) as f32;
     if original_w <= 0.0 || original_h <= 0.0 {
         return;
     }
-    let baseline_y = crate::text::measure_y_offset(&node.text, size_i) as f32;
-    let x_left = crate::text::measure_x_offset(&node.text, size_i) as f32;
+    let baseline_y = crate::text::measure_y_offset_with(face, &node.text, size_i) as f32;
+    let x_left = crate::text::measure_x_offset_with(face, &node.text, size_i) as f32;
     let scale_x = node.bw / original_w * if node.flip_h { -1.0 } else { 1.0 };
     let scale_y = node.bh / original_h * if node.flip_v { -1.0 } else { 1.0 };
 
@@ -432,23 +433,20 @@ fn render_text(node: &TextNode, sink: &mut PdfSink) {
     let d = scale_y * ct;
     sink.content.transform([a, bb, c, d, node.cx, node.cy]);
 
-    let shear = match node.italic {
-        FontItalic::Normal => 0.0,
-        _ => ITALIC_SHEAR,
-    };
     let mut adapter = PdfOutline {
-        shear,
-        baseline_y,
         ops: Vec::new(),
     };
-    crate::text::outline(&node.text, size_i, &mut adapter);
+    crate::text::outline_with(face, &node.text, size_i, &mut adapter);
     emit_path_ops(&adapter.ops, &mut sink.content);
 
     if node.underline {
-        let face_units = 2048.0_f32;
+        let face_units = face.units_per_em() as f32;
         let scale = node.size / face_units;
-        let underline_pos = -217.0 * scale;
-        let thickness = (150.0 * scale).max(1.0);
+        let metrics = face.underline_metrics();
+        let pos_units = metrics.map(|m| m.position as f32).unwrap_or(-217.0);
+        let thickness_units = metrics.map(|m| m.thickness as f32).unwrap_or(150.0);
+        let underline_pos = -pos_units * scale;
+        let thickness = (thickness_units * scale).max(1.0);
         let y_top = baseline_y + underline_pos - thickness / 2.0;
         let y_bot = y_top + thickness;
         let x_l = x_left;
@@ -465,27 +463,15 @@ fn render_text(node: &TextNode, sink: &mut PdfSink) {
 }
 
 struct PdfOutline {
-    shear: f32,
-    baseline_y: f32,
     ops: Vec<PathOp>,
-}
-
-impl PdfOutline {
-    fn shear_x(&self, x: f32, y: f32) -> f32 {
-        if self.shear == 0.0 {
-            x
-        } else {
-            x + self.shear * (self.baseline_y - y)
-        }
-    }
 }
 
 impl crate::text::OutlineBuilder for PdfOutline {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.ops.push(PathOp::Move(self.shear_x(x, y), y));
+        self.ops.push(PathOp::Move(x, y));
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.ops.push(PathOp::Line(self.shear_x(x, y), y));
+        self.ops.push(PathOp::Line(x, y));
     }
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
         let p0 = self.ops.last().and_then(|op| match *op {
@@ -493,27 +479,15 @@ impl crate::text::OutlineBuilder for PdfOutline {
             PathOp::Cubic(_, _, _, _, x, y) => Some((x, y)),
             PathOp::Close => None,
         });
-        let (p0x, p0y) = match p0 {
-            Some(p) => p,
-            None => (self.shear_x(x, y), y),
-        };
-        let cx_s = self.shear_x(cx, cy);
-        let x_s = self.shear_x(x, y);
-        let c1x = p0x + 2.0 / 3.0 * (cx_s - p0x);
+        let (p0x, p0y) = p0.unwrap_or((x, y));
+        let c1x = p0x + 2.0 / 3.0 * (cx - p0x);
         let c1y = p0y + 2.0 / 3.0 * (cy - p0y);
-        let c2x = x_s + 2.0 / 3.0 * (cx_s - x_s);
+        let c2x = x + 2.0 / 3.0 * (cx - x);
         let c2y = y + 2.0 / 3.0 * (cy - y);
-        self.ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x_s, y));
+        self.ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        self.ops.push(PathOp::Cubic(
-            self.shear_x(cx1, cy1),
-            cy1,
-            self.shear_x(cx2, cy2),
-            cy2,
-            self.shear_x(x, y),
-            y,
-        ));
+        self.ops.push(PathOp::Cubic(cx1, cy1, cx2, cy2, x, y));
     }
     fn close(&mut self) {
         self.ops.push(PathOp::Close);
@@ -582,21 +556,13 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            stroke: Rgba::default(),
-            stroke_width: 0.0,
-            line_cap: LineCap::Butt,
-            line_join: LineJoin::Miter,
             cx: 50.0,
             cy: 15.0,
             bw: 80.0,
             bh: 20.0,
-            angle: 0.0,
-            flip_h: false,
-            flip_v: false,
             size: 16.0,
-            italic: FontItalic::Normal,
-            underline: false,
             text: "Hi".to_owned(),
+            ..TextNode::default()
         });
         let out = render_to_pdf_dl(&dl);
         assert!(out.starts_with(b"%PDF-"));
