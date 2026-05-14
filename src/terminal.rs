@@ -15,9 +15,9 @@
 //! - Terminals do not distinguish keydown from keyup, so all key events are
 //!   reported as KEYPRESS (event_type = 0). `on_key_down` / `on_key_up`
 //!   handlers therefore behave like `on_key_press`.
-//! - Text uses the embedded Liberation Sans font regardless of the requested
-//!   `family`. Italic is synthesized (shear); `weight=BOLD` is not synthesized
-//!   (rendered as regular).
+//! - Text resolves through [`crate::text::resolve`] — Liberation Sans /
+//!   Serif / Mono are embedded in all four variants; unknown families fall
+//!   back to a system font (via fontdb) or to Liberation Sans.
 //! - Bitmap nodes are not rendered (the renderer logs a warning and skips
 //!   them); SVG output remains the canonical form.
 
@@ -34,7 +34,7 @@ use tiny_skia::{
     Pixmap, Stroke, Transform,
 };
 
-use crate::ir::{ClipBox, FillRule, LineCap, LineJoin, PathStyle, Rgba, TextNode};
+use crate::ir::{BitmapNode, ClipBox, FillRule, LineCap, LineJoin, PathStyle, Rgba, TextNode};
 use crate::sink::DrawSink;
 use crate::sixel;
 
@@ -342,7 +342,7 @@ impl DrawSink for PixmapSink {
         render_text(node, pixmap, self.clip_stack.last(), self.base);
     }
 
-    fn bitmap(&mut self) {
+    fn bitmap(&mut self, _node: &BitmapNode) {
         self.flush_path();
         let mut s = STATE.lock().unwrap();
         if !s.warned_bitmap {
@@ -933,7 +933,6 @@ mod tests {
         dl.line_to(x + w, y);
         dl.line_to(x + w, y + h);
         dl.line_to(x, y + h);
-        dl.path_end();
     }
 
     #[test]
@@ -953,7 +952,6 @@ mod tests {
         dl.move_to(40.0, 20.0);
         dl.arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0);
         dl.arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0);
-        dl.path_end();
         let pm = rasterize(&dl);
         let (r, g, b, _) = pixel_rgba(&pm, 20, 20);
         assert_eq!((r, g, b), (255, 0, 0));

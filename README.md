@@ -23,13 +23,18 @@ images: originally extracted from
 ```
 front end         simage::ir::DrawList            simage::sink::DrawSink
 ─────────         ────────────────────            ──────────────────────
-build via    →    Vec<DrawCmd>             →     PixmapSink   (terminal)
-builder           (PathBegin, MoveTo, ...)        PdfSink      (PDF)
+build via    →    Vec<DrawNode>            →     PixmapSink   (terminal)
+builder           (Path, ClipPush, Text, ...)     PdfSink      (PDF)
 methods                                           your sink    (custom)
 ```
 
-Arcs are pre-expanded to cubics in `DrawList::arc_to`, so every renderer
-only sees `MoveTo` / `LineTo` / `QuadTo` / `CubicTo`.
+A `Path` carries `(style, verbs, coords)` — `verbs` is a flat byte stream
+(0=move, 1=line, 2=quad, 3=cubic) consuming 2/2/4/6 floats per verb from
+`coords`. Arcs are pre-expanded to cubics in `DrawList::arc_to`, so every
+renderer only sees move / line / quad / cubic primitives. Paths are
+committed implicitly — there is no explicit `path_end`; the next
+`path_begin`, `clip_push`, `clip_pop`, `text`, `bitmap`, or playback
+flushes the in-flight path.
 
 ## Example
 
@@ -45,7 +50,6 @@ dl.move_to(0.0, 0.0);
 dl.line_to(40.0, 0.0);
 dl.line_to(40.0, 30.0);
 dl.line_to(0.0, 30.0);
-dl.path_end();
 
 simage::terminal::show_image_dl(&dl);            // terminal
 let pdf: Vec<u8> = simage::pdf::render_to_pdf_dl(&dl);

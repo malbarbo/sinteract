@@ -9,7 +9,7 @@
 //! draw-list wire format. Backends that need a different convention apply a
 //! transform once at the start (see `pdf` and `terminal`).
 
-use crate::ir::{ClipBox, PathStyle, TextNode};
+use crate::ir::{BitmapNode, ClipBox, PathStyle, TextNode};
 
 pub trait DrawSink {
     /// Called once with the canvas dimensions before any draw command. May be
@@ -33,10 +33,10 @@ pub trait DrawSink {
 
     fn text(&mut self, node: &TextNode);
 
-    /// Bitmap placeholder. The current renderers do not paint bitmaps and
-    /// either skip or warn. Provided so the parser can stay total over the
-    /// `B` tag.
-    fn bitmap(&mut self);
+    /// Blit a previously-uploaded bitmap referenced by `node.id`. The current
+    /// renderers (terminal, pdf) skip with a warning; only the future canvas
+    /// / WebGL frontends honor this.
+    fn bitmap(&mut self, node: &BitmapNode);
 
     /// Called once after the last command. Sinks that buffer output (PDF,
     /// [`tiny_skia::Pixmap`]) flush here.

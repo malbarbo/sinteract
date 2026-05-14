@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::ir::{ClipBox, FillRule, LineCap, LineJoin, PathStyle, Rgba, TextNode};
+use crate::ir::{BitmapNode, ClipBox, FillRule, LineCap, LineJoin, PathStyle, Rgba, TextNode};
 use crate::sink::DrawSink;
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -232,7 +232,7 @@ impl DrawSink for PdfSink {
         render_text(node, self);
     }
 
-    fn bitmap(&mut self) {
+    fn bitmap(&mut self, _node: &BitmapNode) {
         // Bitmaps are not supported in PDF v1 (consistent with the
         // terminal renderer); silently skip.
         self.flush_path();
@@ -517,7 +517,6 @@ mod tests {
         dl.line_to(x + w, y);
         dl.line_to(x + w, y + h);
         dl.line_to(x, y + h);
-        dl.path_end();
     }
 
     #[test]
