@@ -526,7 +526,7 @@ fn write_input_event(mut b: input_event::Builder<'_>, ev: &InputEvent) {
             kb.set_key(&*k.key);
             kb.set_modifiers(k.modifiers);
         }
-        InputEvent::Tick => b.set_tick(()),
+        InputEvent::Vsync => b.set_tick(()),
         InputEvent::Close => b.set_close(()),
     }
 }
@@ -542,7 +542,7 @@ fn read_input_event(r: input_event::Reader<'_>) -> Result<InputEvent, Error> {
                 modifiers: k.get_modifiers(),
             }))
         }
-        Which::Tick(()) => Ok(InputEvent::Tick),
+        Which::Tick(()) => Ok(InputEvent::Vsync),
         Which::Close(()) => Ok(InputEvent::Close),
     }
 }
@@ -677,9 +677,9 @@ mod tests {
     }
 
     #[test]
-    fn tick_and_close_events_round_trip() {
-        match decode(&encode_event(&InputEvent::Tick)).unwrap() {
-            Decoded::Event(ev) => assert!(ev.is_tick()),
+    fn vsync_and_close_events_round_trip() {
+        match decode(&encode_event(&InputEvent::Vsync)).unwrap() {
+            Decoded::Event(ev) => assert!(ev.is_vsync()),
             _ => panic!(),
         }
         match decode(&encode_event(&InputEvent::Close)).unwrap() {

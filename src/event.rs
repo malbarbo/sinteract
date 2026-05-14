@@ -7,7 +7,7 @@
 //! ```text
 //! while let Some(ev) = frontend.wait_event(deadline) {
 //!     match ev {
-//!         InputEvent::Tick           => on_tick(),
+//!         InputEvent::Vsync          => on_frame(),
 //!         InputEvent::Key(KeyEvent { kind: KeyKind::Press, .. }) => ...,
 //!         InputEvent::Close          => break,
 //!         _ => {}
@@ -15,9 +15,11 @@
 //! }
 //! ```
 //!
-//! `Tick` is a queue event, not an internal timer — the frontend (or its
-//! transport: rAF in the browser, the server in multiplayer) decides when one
-//! lands. The engine does not own the clock.
+//! `Vsync` is a frame-opportunity event: the frontend (its OS swap chain in a
+//! window, an internal timer in the terminal, rAF in the browser, the peer in
+//! stdio multiplayer) decides when one lands. The engine does not own the
+//! clock. The host loop is free to derive its own "tick" (logical simulation
+//! step) on top by accumulating elapsed time between Vsyncs.
 
 /// Modifier-key bitmask. Matches the order spython has historically used in
 /// its FFI `[bool; 5]`: `[alt, ctrl, shift, meta, repeat]`.
@@ -78,21 +80,23 @@ impl KeyEvent {
     }
 }
 
-/// What landed on the input queue. `Tick` and `Close` are not key events;
+/// What landed on the input queue. `Vsync` and `Close` are not key events;
 /// they are first-class so handlers do not have to invent sentinel keys.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
     Key(KeyEvent),
-    /// One animation step. Frontends emit Tick at the requested `tick_rate`.
-    Tick,
+    /// One frame opportunity — the surface can be repainted now. Emitted by
+    /// each frontend at its native cadence (timer in terminal, swap-chain
+    /// vsync in window, rAF in browser, peer in stdio).
+    Vsync,
     /// Window/terminal closed, or transport shut down. The host loop should
     /// exit cleanly.
     Close,
 }
 
 impl InputEvent {
-    pub fn is_tick(&self) -> bool {
-        matches!(self, InputEvent::Tick)
+    pub fn is_vsync(&self) -> bool {
+        matches!(self, InputEvent::Vsync)
     }
     pub fn is_close(&self) -> bool {
         matches!(self, InputEvent::Close)
@@ -125,11 +129,11 @@ mod tests {
 
     #[test]
     fn input_event_classifiers() {
-        assert!(InputEvent::Tick.is_tick());
-        assert!(!InputEvent::Tick.is_close());
+        assert!(InputEvent::Vsync.is_vsync());
+        assert!(!InputEvent::Vsync.is_close());
         assert!(InputEvent::Close.is_close());
         let k = InputEvent::Key(KeyEvent::default());
-        assert!(!k.is_tick());
+        assert!(!k.is_vsync());
         assert!(k.as_key().is_some());
     }
 

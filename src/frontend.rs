@@ -7,10 +7,9 @@
 //! ```ignore
 //! let mut fr = Frontend::pick_native("My game");
 //! fr.enter();
-//! fr.set_tick_rate(30);
 //! while let Some(ev) = fr.wait_event(None) {
 //!     match ev {
-//!         InputEvent::Tick => { /* simulate */ },
+//!         InputEvent::Vsync => { /* simulate + repaint */ },
 //!         InputEvent::Key(k) => { /* dispatch */ },
 //!         InputEvent::Close => break,
 //!     }
@@ -31,9 +30,12 @@ use crate::ir::DrawList;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::stdio::StdioFrontend;
 
-/// Default animation rate for hosts that did not call [`Frontend::set_tick_rate`].
-/// Matches the historical spython default.
-pub const DEFAULT_TICK_HZ: u32 = 30;
+/// Convenience: build a [`Duration`] period from a frequency in Hz. Each
+/// backend uses this to express its own software-timed vsync cadence — the
+/// value is not shared across backends.
+const fn period_from_hz(hz: u32) -> Duration {
+    Duration::from_nanos(1_000_000_000 / hz as u64)
+}
 
 /// Public driver. Construct one with [`Frontend::terminal`],
 /// [`Frontend::window`], or [`Frontend::stdio`]; the host then drives it
@@ -80,17 +82,6 @@ impl Frontend {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn stdio() -> Self {
         Frontend::Stdio(StdioFrontend::new())
-    }
-
-    pub fn set_tick_rate(&mut self, hz: u32) {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Frontend::Terminal(f) => f.set_tick_rate(hz),
-            #[cfg(not(target_arch = "wasm32"))]
-            Frontend::Window(f) => f.set_tick_rate(hz),
-            #[cfg(not(target_arch = "wasm32"))]
-            Frontend::Stdio(f) => f.set_tick_rate(hz),
-        }
     }
 
     pub fn enter(&mut self) {
@@ -154,69 +145,58 @@ impl Frontend {
 }
 
 // ---------------------------------------------------------------------------
-// Common tick-scheduling helper
+// Common vsync-scheduling helper
 // ---------------------------------------------------------------------------
 
-/// Tracks the `tick_rate` set by the host and the time of the last fired
-/// Tick. Frontends compute their event-loop deadline as
-/// `min(caller_deadline, next_tick_at)`.
+/// Software-timed vsync emitter. Each backend constructs one with its own
+/// period (terminal vs window vs others). Real-vsync integration (winit
+/// swap chain, browser rAF) bypasses this helper and emits Vsync events
+/// directly from the platform callback.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct TickClock {
-    hz: u32,
-    /// `None` until the first tick has been emitted; lets the very first
-    /// `wait_event` fire `Tick` immediately.
-    last_tick: Option<Instant>,
+pub(crate) struct VsyncClock {
+    period: Duration,
+    /// `None` until the first vsync has been emitted; lets the very first
+    /// `wait_event` fire `Vsync` immediately.
+    last_vsync: Option<Instant>,
 }
 
-impl TickClock {
-    pub(crate) fn new(hz: u32) -> Self {
-        Self { hz, last_tick: None }
-    }
-
-    pub(crate) fn set_hz(&mut self, hz: u32) {
-        self.hz = hz;
-    }
-
-    /// Time at which the next Tick should fire, or `None` if `hz == 0`
-    /// (ticks disabled).
-    pub(crate) fn next_tick_at(&self) -> Option<Instant> {
-        if self.hz == 0 {
-            return None;
-        }
-        let now = Instant::now();
-        match self.last_tick {
-            None => Some(now),
-            Some(t) => Some(t + Duration::from_nanos(1_000_000_000 / self.hz as u64)),
+impl VsyncClock {
+    pub(crate) fn new(period: Duration) -> Self {
+        Self {
+            period,
+            last_vsync: None,
         }
     }
 
-    /// Mark a tick as fired now. Returns the [`InputEvent::Tick`] for
+    /// Time at which the next Vsync should fire.
+    pub(crate) fn next_vsync_at(&self) -> Instant {
+        match self.last_vsync {
+            None => Instant::now(),
+            Some(t) => t + self.period,
+        }
+    }
+
+    /// Mark a vsync as fired now. Returns the [`InputEvent::Vsync`] for
     /// convenience.
     pub(crate) fn fire(&mut self) -> InputEvent {
-        self.last_tick = Some(Instant::now());
-        InputEvent::Tick
+        self.last_vsync = Some(Instant::now());
+        InputEvent::Vsync
     }
 
-    /// `true` if a Tick is due (ignoring overshoot). Saves an `Instant::now`
+    /// `true` if a Vsync is due (ignoring overshoot). Saves an `Instant::now`
     /// when the caller already knows the time.
     pub(crate) fn is_due(&self, now: Instant) -> bool {
-        match self.next_tick_at() {
-            Some(t) => now >= t,
-            None => false,
-        }
+        now >= self.next_vsync_at()
     }
 }
 
-/// Combine the caller's deadline with the next tick deadline, returning the
+/// Combine the caller's deadline with the next vsync deadline, returning the
 /// tightest `Duration` we can wait on the OS poll.
-pub(crate) fn poll_timeout(deadline: Option<Instant>, next_tick: Option<Instant>) -> Duration {
+pub(crate) fn poll_timeout(deadline: Option<Instant>, next_vsync: Instant) -> Duration {
     let now = Instant::now();
-    let mut out = Duration::from_secs(60 * 60); // upper bound — keeps polls bounded.
+    let mut out = next_vsync.saturating_duration_since(now);
     if let Some(d) = deadline {
         out = out.min(d.saturating_duration_since(now));
-    }
-    if let Some(t) = next_tick {
-        out = out.min(t.saturating_duration_since(now));
     }
     out
 }
@@ -262,21 +242,22 @@ pub(crate) fn key_event_from_legacy(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub struct TerminalFrontend {
-    clock: TickClock,
+    clock: VsyncClock,
     entered: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl TerminalFrontend {
+    /// Vsync cadence in the terminal. There is no hardware refresh to sync
+    /// against; 60 Hz is enough for smooth half-block animation without
+    /// flooding the pty with escape codes.
+    const VSYNC_PERIOD: Duration = period_from_hz(60);
+
     pub fn new() -> Self {
         Self {
-            clock: TickClock::new(DEFAULT_TICK_HZ),
+            clock: VsyncClock::new(Self::VSYNC_PERIOD),
             entered: false,
         }
-    }
-
-    pub fn set_tick_rate(&mut self, hz: u32) {
-        self.clock.set_hz(hz);
     }
 
     pub fn enter(&mut self) {
@@ -298,7 +279,7 @@ impl TerminalFrontend {
     }
 
     pub fn wait_event(&mut self, deadline: Option<Instant>) -> Option<InputEvent> {
-        // Fast path: tick due before we even poll.
+        // Fast path: vsync due before we even poll.
         if self.clock.is_due(Instant::now()) {
             return Some(self.clock.fire());
         }
@@ -320,9 +301,9 @@ impl TerminalFrontend {
                 let (et, key, flags) = legacy;
                 return Some(key_event_from_legacy(et, key, flags));
             }
-            let next_tick = self.clock.next_tick_at();
-            let timeout = poll_timeout(deadline, next_tick);
-            // Hard floor so we don't burn CPU when the next tick is microseconds away.
+            let next_vsync = self.clock.next_vsync_at();
+            let timeout = poll_timeout(deadline, next_vsync);
+            // Hard floor so we don't burn CPU when the next vsync is microseconds away.
             std::thread::sleep(timeout.min(Duration::from_millis(8)));
         }
     }
@@ -342,22 +323,24 @@ impl Default for TerminalFrontend {
 #[cfg(not(target_arch = "wasm32"))]
 pub struct WindowFrontend {
     title: String,
-    clock: TickClock,
+    clock: VsyncClock,
     entered: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl WindowFrontend {
+    /// Software-timed vsync cadence used by the current window stub. Once
+    /// the window switches to a real swap chain (winit + wgpu present), the
+    /// clock will be replaced by platform vsync callbacks and this constant
+    /// becomes irrelevant.
+    const VSYNC_PERIOD: Duration = period_from_hz(60);
+
     pub fn new(title: &str) -> Self {
         Self {
             title: title.to_owned(),
-            clock: TickClock::new(DEFAULT_TICK_HZ),
+            clock: VsyncClock::new(Self::VSYNC_PERIOD),
             entered: false,
         }
-    }
-
-    pub fn set_tick_rate(&mut self, hz: u32) {
-        self.clock.set_hz(hz);
     }
 
     pub fn enter(&mut self) {
@@ -399,8 +382,8 @@ impl WindowFrontend {
                 let (et, key, flags) = legacy;
                 return Some(key_event_from_legacy(et, key, flags));
             }
-            let next_tick = self.clock.next_tick_at();
-            let timeout = poll_timeout(deadline, next_tick);
+            let next_vsync = self.clock.next_vsync_at();
+            let timeout = poll_timeout(deadline, next_vsync);
             std::thread::sleep(timeout.min(Duration::from_millis(8)));
         }
     }

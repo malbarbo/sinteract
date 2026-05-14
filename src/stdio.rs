@@ -45,10 +45,11 @@ const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
 /// Frontend that talks the wire protocol on stdin/stdout. Construct with
 /// [`StdioFrontend::new`] (uses real stdin/stdout) or
-/// [`StdioFrontend::with_streams`] for tests.
+/// [`StdioFrontend::with_streams`] for tests. The peer (server/client on the
+/// other side of the pipe) is responsible for emitting Vsync events — this
+/// frontend is purely the protocol carrier.
 pub struct StdioFrontend {
     inner: Mutex<Inner>,
-    tick_hz: u32,
 }
 
 struct Inner {
@@ -74,18 +75,7 @@ impl StdioFrontend {
                 reader: Box::new(reader),
                 writer: Box::new(writer),
             }),
-            tick_hz: super::frontend::DEFAULT_TICK_HZ,
         }
-    }
-
-    pub fn set_tick_rate(&mut self, hz: u32) {
-        self.tick_hz = hz;
-    }
-
-    /// Tick rate as agreed locally; servers usually echo this back as Tick
-    /// events on stdin, so the host loop does not generate ticks itself.
-    pub fn tick_rate(&self) -> u32 {
-        self.tick_hz
     }
 
     /// No-op for stdio — the framing is the protocol; there is no
@@ -308,12 +298,12 @@ mod tests {
         // KeyEvent. The frontend logs the first and yields the second.
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&wire::encode_asset(1, b"png", Some("image/png"))));
-        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Tick)));
+        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
         let mut fr = StdioFrontend::with_streams(
             BufReader::new(Cursor::new(stream)),
             Vec::<u8>::new(),
         );
-        assert!(fr.wait_event(None).unwrap().is_tick());
+        assert!(fr.wait_event(None).unwrap().is_vsync());
     }
 
     #[test]
