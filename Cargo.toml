@@ -10,6 +10,11 @@ readme = "README.md"
 [dependencies]
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 kurbo = { version = "0.13", default-features = false, features = ["std"] }
+# Wire format. The schema lives in `schema/frame.capnp`; bindings are
+# generated offline by `capnp compile` (see top of `schema/frame.capnp` for
+# the regen command) and committed in `src/wire/frame_capnp.rs` so we do not
+# depend on the Cap'n Proto CLI at build time.
+capnp = "0.25"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ttf-parser = { version = "0.25", default-features = false, features = [

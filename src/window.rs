@@ -128,11 +128,17 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                // The Python animation loop has no way to observe window
+                // The Python animation loop today has no way to observe window
                 // closure on its own — without exiting the process here it
-                // would keep ticking forever after the window is gone.
-                // Mirrors the terminal backend's Ctrl-C handling, which
-                // also calls `std::process::exit` from the key handler.
+                // would keep ticking forever after the window is gone. Mirrors
+                // the terminal backend's Ctrl-C handling.
+                //
+                // TODO(fase 5): once hosts drive the window through
+                // `crate::frontend::Frontend`, surface closure as
+                // `InputEvent::Close` (set `self.closed = true` and rely on
+                // `WindowFrontend::wait_event` to deliver it) instead of
+                // killing the process — `process::exit` here makes the
+                // Frontend lifecycle a lie.
                 event_loop.exit();
                 std::process::exit(0);
             }

@@ -852,6 +852,12 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
     };
 
     // Ctrl-C in the animation should exit cleanly.
+    //
+    // TODO(fase 5): once hosts drive the terminal through
+    // `crate::frontend::Frontend`, surface Ctrl-C as `InputEvent::Close`
+    // instead of killing the process. The current behavior pre-dates
+    // `Frontend` and matches `simage::window`'s `CloseRequested` handler;
+    // both should change together.
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
         exit_animation();
         std::process::exit(130);
