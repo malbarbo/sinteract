@@ -67,7 +67,10 @@ static SERIF: [EmbeddedFont; 4] = [
     embed!("Liberation Serif", "../fonts/LiberationSerif-Regular.ttf"),
     embed!("Liberation Serif", "../fonts/LiberationSerif-Bold.ttf"),
     embed!("Liberation Serif", "../fonts/LiberationSerif-Italic.ttf"),
-    embed!("Liberation Serif", "../fonts/LiberationSerif-BoldItalic.ttf"),
+    embed!(
+        "Liberation Serif",
+        "../fonts/LiberationSerif-BoldItalic.ttf"
+    ),
 ];
 static MONO: [EmbeddedFont; 4] = [
     embed!("Liberation Mono", "../fonts/LiberationMono-Regular.ttf"),
@@ -290,12 +293,7 @@ pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size_px: i32) -> f64 
     (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * scale
 }
 
-pub fn outline_with(
-    face: &Face<'_>,
-    text: &str,
-    size_px: i32,
-    out: &mut dyn OutlineBuilder,
-) {
+pub fn outline_with(face: &Face<'_>, text: &str, size_px: i32, out: &mut dyn OutlineBuilder) {
     if text.is_empty() || size_px <= 0 {
         return;
     }
@@ -562,11 +560,7 @@ mod tests {
         // net at the bottom of `resolve`). We don't depend on fontconfig's
         // exact behavior for this name; instead we pick something so
         // implausible that no system would have it.
-        let f = resolve(
-            "ZZZ_SimageNonexistentFontXyzzy_ZZZ",
-            400,
-            FontStyle::Normal,
-        );
+        let f = resolve("ZZZ_SimageNonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
     }
 }

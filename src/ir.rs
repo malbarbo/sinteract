@@ -399,7 +399,9 @@ impl DrawList {
     /// Borrow the in-flight path's parts, for the wire encoder. Returns
     /// `None` if no path is open.
     pub(crate) fn open_path_parts(&self) -> Option<(&PathStyle, &[u8], &[f32])> {
-        self.open.as_ref().map(|o| (&o.style, o.verbs.as_slice(), o.coords.as_slice()))
+        self.open
+            .as_ref()
+            .map(|o| (&o.style, o.verbs.as_slice(), o.coords.as_slice()))
     }
 
     /// Append a fully-built path. Used by the wire decoder; lets us bypass
@@ -431,7 +433,12 @@ impl DrawList {
     }
 }
 
-fn play_path(style: &PathStyle, verbs: &[u8], coords: &[f32], sink: &mut dyn crate::sink::DrawSink) {
+fn play_path(
+    style: &PathStyle,
+    verbs: &[u8],
+    coords: &[f32],
+    sink: &mut dyn crate::sink::DrawSink,
+) {
     sink.path_begin(style);
     let mut i = 0usize;
     for &v in verbs {

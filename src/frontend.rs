@@ -24,7 +24,9 @@
 
 use std::time::{Duration, Instant};
 
-use crate::event::{InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT};
+use crate::event::{
+    InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
+};
 use crate::ir::DrawList;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -203,11 +205,7 @@ pub(crate) fn poll_timeout(deadline: Option<Instant>, next_vsync: Instant) -> Du
 
 /// Translate the `[alt, ctrl, shift, meta, repeat]` tuple historic spython
 /// uses into an [`InputEvent`] modifier bitmask.
-pub(crate) fn key_event_from_legacy(
-    event_type: i32,
-    key: String,
-    flags: [bool; 5],
-) -> InputEvent {
+pub(crate) fn key_event_from_legacy(event_type: i32, key: String, flags: [bool; 5]) -> InputEvent {
     let kind = match event_type {
         1 => KeyKind::Down,
         2 => KeyKind::Up,

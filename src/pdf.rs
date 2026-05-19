@@ -433,9 +433,7 @@ fn render_text(node: &TextNode, sink: &mut PdfSink) {
     let d = scale_y * ct;
     sink.content.transform([a, bb, c, d, node.cx, node.cy]);
 
-    let mut adapter = PdfOutline {
-        ops: Vec::new(),
-    };
+    let mut adapter = PdfOutline { ops: Vec::new() };
     crate::text::outline_with(face, &node.text, size_i, &mut adapter);
     emit_path_ops(&adapter.ops, &mut sink.content);
 

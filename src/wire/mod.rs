@@ -20,17 +20,19 @@ use std::io::Cursor;
 use capnp::message::{Builder as MessageBuilder, ReaderOptions};
 use capnp::serialize;
 
-use crate::event::{InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT};
+use crate::event::{
+    InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
+};
 use crate::ir::{
-    verb, BitmapNode, ClipBox, DrawList, DrawNode, FillRule, FontStyle, LineCap, LineJoin, Path,
-    PathStyle, Rgba, TextNode,
+    BitmapNode, ClipBox, DrawList, DrawNode, FillRule, FontStyle, LineCap, LineJoin, Path,
+    PathStyle, Rgba, TextNode, verb,
 };
 
 use crate::frame_capnp::{
-    bitmap_node, clip_box as wire_clip_box, draw_list, draw_node, input_event,
-    key_event as wire_key_event, message, path as wire_path, path_style as wire_path_style,
-    rgba as wire_rgba, text_node, FillRule as WFillRule, FontStyle as WFontStyle,
-    KeyKind as WKeyKind, LineCap as WLineCap, LineJoin as WLineJoin,
+    FillRule as WFillRule, FontStyle as WFontStyle, KeyKind as WKeyKind, LineCap as WLineCap,
+    LineJoin as WLineJoin, bitmap_node, clip_box as wire_clip_box, draw_list, draw_node,
+    input_event, key_event as wire_key_event, message, path as wire_path,
+    path_style as wire_path_style, rgba as wire_rgba, text_node,
 };
 
 /// Stdio-framing magic. Cap'n Proto's own `serialize::write_message` already
@@ -51,10 +53,7 @@ pub enum Error {
     /// A `Path` arrived with a verb stream whose argument count does not
     /// match the float coordinates: e.g. 1 cubic verb (6 floats) but only
     /// 4 floats provided.
-    PathLengthMismatch {
-        verbs: usize,
-        coords: usize,
-    },
+    PathLengthMismatch { verbs: usize, coords: usize },
     /// A `Path` carried a verb byte we don't know how to consume.
     UnknownVerb(u8),
 }
@@ -66,7 +65,10 @@ impl std::fmt::Display for Error {
             Error::UnknownVariant(name, tag) => write!(f, "unknown {name} discriminant: {tag}"),
             Error::MissingField(name) => write!(f, "missing required field: {name}"),
             Error::PathLengthMismatch { verbs, coords } => {
-                write!(f, "path verbs ({verbs} bytes) and coords ({coords} floats) disagree")
+                write!(
+                    f,
+                    "path verbs ({verbs} bytes) and coords ({coords} floats) disagree"
+                )
             }
             Error::UnknownVerb(v) => write!(f, "unknown path verb byte: {v}"),
         }
@@ -459,7 +461,11 @@ fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
     let verbs = r.get_verbs()?.to_vec();
     let coords: Vec<f32> = r.get_coords()?.iter().collect();
     validate_path_lengths(&verbs, coords.len())?;
-    Ok(Path { style, verbs, coords })
+    Ok(Path {
+        style,
+        verbs,
+        coords,
+    })
 }
 
 fn write_drawnode(mut b: draw_node::Builder<'_>, node: &DrawNode) {
@@ -582,8 +588,18 @@ mod tests {
     fn sample_drawlist() -> DrawList {
         let mut dl = DrawList::new(120.0, 80.0);
         dl.path_begin(PathStyle {
-            fill: Rgba { r: 10, g: 20, b: 30, a: 0.5 },
-            stroke: Rgba { r: 200, g: 0, b: 0, a: 1.0 },
+            fill: Rgba {
+                r: 10,
+                g: 20,
+                b: 30,
+                a: 0.5,
+            },
+            stroke: Rgba {
+                r: 200,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
             stroke_width: 2.5,
             line_cap: LineCap::Round,
             line_join: LineJoin::Bevel,
@@ -594,9 +610,20 @@ mod tests {
         dl.line_to(10.0, 0.0);
         dl.quad_to(15.0, 5.0, 20.0, 10.0);
         dl.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
-        dl.clip_push(ClipBox { cx: 50.0, cy: 50.0, w: 30.0, h: 20.0, angle: 15.0 });
+        dl.clip_push(ClipBox {
+            cx: 50.0,
+            cy: 50.0,
+            w: 30.0,
+            h: 20.0,
+            angle: 15.0,
+        });
         dl.text(TextNode {
-            fill: Rgba { r: 0, g: 0, b: 0, a: 1.0 },
+            fill: Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
             cx: 60.0,
             cy: 30.0,
             bw: 50.0,
@@ -693,7 +720,11 @@ mod tests {
         let blob: Vec<u8> = (0u8..=255).collect();
         let bytes = encode_asset(42, &blob, Some("image/png"));
         match decode(&bytes).unwrap() {
-            Decoded::Asset { id, blob: out, mime } => {
+            Decoded::Asset {
+                id,
+                blob: out,
+                mime,
+            } => {
                 assert_eq!(id, 42);
                 assert_eq!(out, blob);
                 assert_eq!(mime.as_deref(), Some("image/png"));
@@ -764,7 +795,13 @@ mod tests {
         let bytes = finish(builder);
         let err = decode(&bytes).unwrap_err();
         assert!(
-            matches!(err, Error::PathLengthMismatch { verbs: 1, coords: 4 }),
+            matches!(
+                err,
+                Error::PathLengthMismatch {
+                    verbs: 1,
+                    coords: 4
+                }
+            ),
             "got {err:?}",
         );
     }

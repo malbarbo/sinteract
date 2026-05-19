@@ -233,12 +233,19 @@ mod tests {
     #[test]
     fn present_writes_framed_frame_message() {
         let written = SharedWriter::default();
-        let mut fr =
-            StdioFrontend::with_streams(BufReader::new(Cursor::new(Vec::<u8>::new())), written.clone());
+        let mut fr = StdioFrontend::with_streams(
+            BufReader::new(Cursor::new(Vec::<u8>::new())),
+            written.clone(),
+        );
 
         let mut dl = DrawList::new(10.0, 10.0);
         dl.path_begin(PathStyle {
-            fill: Rgba { r: 1, g: 2, b: 3, a: 1.0 },
+            fill: Rgba {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 1.0,
+            },
             ..PathStyle::default()
         });
         dl.move_to(0.0, 0.0);
@@ -268,10 +275,8 @@ mod tests {
             modifiers: 0,
         }));
         let stream = frame(&payload);
-        let mut fr = StdioFrontend::with_streams(
-            BufReader::new(Cursor::new(stream)),
-            Vec::<u8>::new(),
-        );
+        let mut fr =
+            StdioFrontend::with_streams(BufReader::new(Cursor::new(stream)), Vec::<u8>::new());
 
         match fr.wait_event(None).expect("event") {
             InputEvent::Key(k) => {
@@ -299,20 +304,16 @@ mod tests {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&wire::encode_asset(1, b"png", Some("image/png"))));
         stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
-        let mut fr = StdioFrontend::with_streams(
-            BufReader::new(Cursor::new(stream)),
-            Vec::<u8>::new(),
-        );
+        let mut fr =
+            StdioFrontend::with_streams(BufReader::new(Cursor::new(stream)), Vec::<u8>::new());
         assert!(fr.wait_event(None).unwrap().is_vsync());
     }
 
     #[test]
     fn close_message_surfaces_as_close_event() {
         let stream = frame(&wire::encode_close());
-        let mut fr = StdioFrontend::with_streams(
-            BufReader::new(Cursor::new(stream)),
-            Vec::<u8>::new(),
-        );
+        let mut fr =
+            StdioFrontend::with_streams(BufReader::new(Cursor::new(stream)), Vec::<u8>::new());
         assert!(fr.wait_event(None).unwrap().is_close());
     }
 
@@ -321,10 +322,8 @@ mod tests {
         let mut bad = Vec::new();
         bad.extend_from_slice(b"junk");
         bad.extend_from_slice(&[0u8; 4]);
-        let mut fr = StdioFrontend::with_streams(
-            BufReader::new(Cursor::new(bad)),
-            Vec::<u8>::new(),
-        );
+        let mut fr =
+            StdioFrontend::with_streams(BufReader::new(Cursor::new(bad)), Vec::<u8>::new());
         // wait_event surfaces the error as Close, not a panic.
         assert!(fr.wait_event(None).unwrap().is_close());
     }
@@ -332,8 +331,10 @@ mod tests {
     #[test]
     fn push_asset_then_present_share_writer() {
         let written = SharedWriter::default();
-        let mut fr =
-            StdioFrontend::with_streams(BufReader::new(Cursor::new(Vec::<u8>::new())), written.clone());
+        let mut fr = StdioFrontend::with_streams(
+            BufReader::new(Cursor::new(Vec::<u8>::new())),
+            written.clone(),
+        );
         fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"));
         fr.present(&DrawList::new(8.0, 8.0));
         let buf = written.0.lock().unwrap().clone();

@@ -26,22 +26,10 @@ pub mod ir;
 pub mod sink;
 pub mod wire;
 
-// Cap'n Proto generates code that references `crate::frame_capnp::*`, so the
-// generated module must live at the crate root. The path lives under `wire/`
-// for organisational reasons; only `wire::*` should consume it.
-#[allow(
-    clippy::all,
-    clippy::pedantic,
-    clippy::nursery,
-    dead_code,
-    unused_imports,
-    unused_qualifications,
-    unsafe_op_in_unsafe_fn,
-    mismatched_lifetime_syntaxes,
-    non_camel_case_types,
-    non_snake_case
-)]
+// VERB_* constants are emitted for non-Rust hosts (JS, Python); Rust uses
+// `ir::verb` directly.
 #[path = "wire/frame_capnp.rs"]
+#[allow(dead_code)]
 mod frame_capnp;
 
 #[cfg(not(target_arch = "wasm32"))]
