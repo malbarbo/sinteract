@@ -36,7 +36,8 @@ use tiny_skia::{
 };
 
 use crate::ir::{
-    BitmapNode, ClipBox, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, TextNode,
+    BitmapNode, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, TextNode,
+    verb,
 };
 use crate::sink::DrawSink;
 use crate::sixel;
@@ -289,24 +290,47 @@ impl DrawSink for PixmapSink {
         self.flush_path();
     }
 
-    fn clip_push(&mut self, clip: &ClipBox) {
+    fn clip_push(&mut self, clip: &ClipPath) {
         self.flush_path();
         let parent = self.clip_stack.last();
         let mut builder = PathBuilder::new();
-        let hw = clip.w / 2.0;
-        let hh = clip.h / 2.0;
-        let corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)];
-        let cos = (clip.angle * std::f32::consts::PI / 180.0).cos();
-        let sin = (clip.angle * std::f32::consts::PI / 180.0).sin();
-        for (i, (x, y)) in corners.iter().enumerate() {
-            let rx = clip.cx + x * cos - y * sin;
-            let ry = clip.cy + x * sin + y * cos;
-            if i == 0 {
-                builder.move_to(rx, ry);
-            } else {
-                builder.line_to(rx, ry);
+        let mut i = 0usize;
+        for &v in &clip.verbs {
+            match v {
+                verb::MOVE if clip.coords.len() >= i + 2 => {
+                    builder.move_to(clip.coords[i], clip.coords[i + 1]);
+                    i += 2;
+                }
+                verb::LINE if clip.coords.len() >= i + 2 => {
+                    builder.line_to(clip.coords[i], clip.coords[i + 1]);
+                    i += 2;
+                }
+                verb::QUAD if clip.coords.len() >= i + 4 => {
+                    builder.quad_to(
+                        clip.coords[i],
+                        clip.coords[i + 1],
+                        clip.coords[i + 2],
+                        clip.coords[i + 3],
+                    );
+                    i += 4;
+                }
+                verb::CUBIC if clip.coords.len() >= i + 6 => {
+                    builder.cubic_to(
+                        clip.coords[i],
+                        clip.coords[i + 1],
+                        clip.coords[i + 2],
+                        clip.coords[i + 3],
+                        clip.coords[i + 4],
+                        clip.coords[i + 5],
+                    );
+                    i += 6;
+                }
+                _ => break,
             }
         }
+        // SVG `<clipPath>` semantics: sub-paths are filled, so close before
+        // intersecting. tiny_skia tolerates an explicit close on an already-
+        // closed contour.
         builder.close();
         let Some(path) = builder.finish() else { return };
         let Some(mut mask) = (match parent {
@@ -327,7 +351,7 @@ impl DrawSink for PixmapSink {
         }) else {
             return;
         };
-        mask.intersect_path(&path, SkFillRule::Winding, true, self.base);
+        mask.intersect_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
         self.clip_stack.push(mask);
     }
 
@@ -482,9 +506,11 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
     let font = crate::text::resolve(&node.family, node.weight, node.style);
     let face = font.face();
 
+    // Measure the rendered width — only used for the underline rect now;
+    // the rest of the placement lives in `node.transform`. Vertical extent
+    // is read from face metrics directly when the underline runs.
     let original_w = crate::text::measure_width_with(face, &node.text, size_i) as f32;
-    let original_h = crate::text::measure_height_with(face, &node.text, size_i) as f32;
-    if original_w <= 0.0 || original_h <= 0.0 {
+    if original_w <= 0.0 {
         return;
     }
     let baseline_y = crate::text::measure_y_offset_with(face, &node.text, size_i) as f32;
@@ -519,15 +545,19 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
         return;
     };
 
-    let scale_x = node.bw / original_w * if node.flip_h { -1.0 } else { 1.0 };
-    let scale_y = node.bh / original_h * if node.flip_v { -1.0 } else { 1.0 };
-    // Compose the local text transform first, then the global pixmap-scale
-    // (`base`). `post_concat` means: apply `local` to the point, then `base`
-    // — i.e. final = base * local * p.
-    let transform = Transform::from_translate(node.cx, node.cy)
-        .pre_rotate(node.angle)
-        .pre_scale(scale_x, scale_y)
-        .post_concat(base);
+    // `node.transform` follows the PDF `cm` / SVG `matrix(...)` convention,
+    // which is exactly tiny_skia's `Transform::from_row` row order.
+    let local = Transform::from_row(
+        node.transform[0],
+        node.transform[1],
+        node.transform[2],
+        node.transform[3],
+        node.transform[4],
+        node.transform[5],
+    );
+    // `post_concat(base)` => final = base * local: apply the local text
+    // transform first, then the global pixmap-scale.
+    let transform = local.post_concat(base);
 
     let Rgba {
         r: fr,
@@ -552,12 +582,14 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
         let mut paint = Paint::default();
         paint.set_color_rgba8(sr, sg, sb, (sa * 255.0).round().clamp(0.0, 255.0) as u8);
         paint.anti_alias = true;
+        // Text outlines are closed contours on smooth curves — cap/join
+        // tweaks are imperceptible, so we don't carry them through the
+        // wire. tiny_skia's defaults (butt cap, miter join) are fine.
         let stroke = Stroke {
             width: node.stroke_width,
-            line_cap: sk_line_cap(node.line_cap),
-            line_join: sk_line_join(node.line_join),
             miter_limit: 10.0,
             dash: None,
+            ..Stroke::default()
         };
         pixmap.stroke_path(&path, &paint, &stroke, transform, mask);
     }
@@ -974,10 +1006,18 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            cx,
-            cy,
-            bw,
-            bh,
+            transform: crate::ir::text_box_affine(
+                "",
+                400,
+                crate::ir::FontStyle::Normal,
+                size,
+                text,
+                cx,
+                cy,
+                bw,
+                bh,
+                0.0,
+            ),
             size,
             text: text.to_owned(),
             ..TextNode::default()
@@ -1023,13 +1063,7 @@ mod tests {
         // Blue rectangle clipped to a 20×20 box centered at (10, 10) — pixel
         // (35, 25) would lie outside the clip if the full rect made it through.
         let mut dl = DrawList::new(20.0, 20.0);
-        dl.clip_push(ClipBox {
-            cx: 10.0,
-            cy: 10.0,
-            w: 20.0,
-            h: 20.0,
-            angle: 0.0,
-        });
+        dl.clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
         rect_path(&mut dl, solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0);
         dl.clip_pop();
         let pm = rasterize(&dl);

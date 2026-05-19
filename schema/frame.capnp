@@ -118,44 +118,53 @@ struct PathStyle {
     dashOffset  @9 :Float32;
 }
 
-struct ClipBox {
-    cx    @0 :Float32;
-    cy    @1 :Float32;
-    w     @2 :Float32;
-    h     @3 :Float32;
-    angle @4 :Float32;
+# Arbitrary clip region. `verbs` / `coords` follow the same encoding as
+# `Path` (see below); `fillRule` decides which sub-regions count as inside.
+# Sub-paths are treated as implicitly closed (SVG `<clipPath>` semantics),
+# so callers do not have to add a final line back to the starting point.
+struct ClipPath {
+    verbs    @0 :Data;
+    coords   @1 :List(Float32);
+    fillRule @2 :FillRule;
 }
 
+# The 6-float affine maps the bitmap's natural image-pixel coordinates
+# `(0..img_w, 0..img_h)` onto the canvas — same `cm` / `matrix(...)`
+# convention as TextNode. The producer is expected to bake fit-to-box,
+# rotation, and mirroring into this matrix (see `simage::ir::bitmap_box_affine`).
 struct BitmapNode {
-    id     @0 :UInt32;
-    cx     @1 :Float32;
-    cy     @2 :Float32;
-    w      @3 :Float32;
-    h      @4 :Float32;
-    angle  @5 :Float32;
-    flipH  @6 :Bool;
-    flipV  @7 :Bool;
+    id @0 :UInt32;
+    m0 @1 :Float32;
+    m1 @2 :Float32;
+    m2 @3 :Float32;
+    m3 @4 :Float32;
+    m4 @5 :Float32;
+    m5 @6 :Float32;
 }
 
+# Glyphs are drawn in "natural" text space (origin at baseline-left, units in
+# `size`-pixel font units) and then mapped to canvas pixels by the affine
+# below. Convention follows PDF's `cm` operator and SVG `matrix(...)`:
+#   x' = m0 * x + m2 * y + m4
+#   y' = m1 * x + m3 * y + m5
+# The producer is expected to bake fit-to-box, rotation, and mirroring into
+# this matrix (see `simage::ir::text_box_affine` for the canonical helper).
 struct TextNode {
     fill        @0  :Rgba;
     stroke      @1  :Rgba;
     strokeWidth @2  :Float32;
-    lineCap     @3  :LineCap;
-    lineJoin    @4  :LineJoin;
-    cx          @5  :Float32;
-    cy          @6  :Float32;
-    bw          @7  :Float32;
-    bh          @8  :Float32;
-    angle       @9  :Float32;
-    flipH       @10 :Bool;
-    flipV       @11 :Bool;
-    size        @12 :Float32;
-    family      @13 :Text;
-    weight      @14 :UInt16;
-    style       @15 :FontStyle;
-    underline   @16 :Bool;
-    text        @17 :Text;
+    m0          @3  :Float32;
+    m1          @4  :Float32;
+    m2          @5  :Float32;
+    m3          @6  :Float32;
+    m4          @7  :Float32;
+    m5          @8  :Float32;
+    size        @9  :Float32;
+    family      @10 :Text;
+    weight      @11 :UInt16;
+    style       @12 :FontStyle;
+    underline   @13 :Bool;
+    text        @14 :Text;
 }
 
 # ----- Path — verbs+coords, SVG-style. -----
@@ -179,7 +188,7 @@ struct Path {
 struct DrawNode {
     union {
         path     @0 :Path;
-        clipPush @1 :ClipBox;
+        clipPush @1 :ClipPath;
         clipPop  @2 :Void;
         text     @3 :TextNode;
         bitmap   @4 :BitmapNode;

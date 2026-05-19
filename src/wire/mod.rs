@@ -24,13 +24,13 @@ use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
 use crate::ir::{
-    BitmapNode, ClipBox, DrawList, DrawNode, FillRule, FontStyle, LineCap, LineJoin,
+    BitmapNode, ClipPath, DrawList, DrawNode, FillRule, FontStyle, LineCap, LineJoin,
     LinearGradient, Paint, Path, PathStyle, RadialGradient, Rgba, SpreadMode, Stop, TextNode, verb,
 };
 
 use crate::frame_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, KeyKind as WKeyKind, LineCap as WLineCap,
-    LineJoin as WLineJoin, SpreadMode as WSpreadMode, bitmap_node, clip_box as wire_clip_box,
+    LineJoin as WLineJoin, SpreadMode as WSpreadMode, bitmap_node, clip_path as wire_clip_path,
     draw_list, draw_node, input_event, key_event as wire_key_event,
     linear_gradient as wire_linear_gradient, message, paint as wire_paint, path as wire_path,
     path_style as wire_path_style, radial_gradient as wire_radial_gradient, rgba as wire_rgba,
@@ -441,45 +441,47 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
     })
 }
 
-fn write_clip(mut b: wire_clip_box::Builder<'_>, c: ClipBox) {
-    b.set_cx(c.cx);
-    b.set_cy(c.cy);
-    b.set_w(c.w);
-    b.set_h(c.h);
-    b.set_angle(c.angle);
+fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
+    b.set_verbs(&c.verbs);
+    b.set_fill_rule(fill_rule_to_wire(c.fill_rule));
+    let mut out = b.init_coords(c.coords.len() as u32);
+    for (i, &v) in c.coords.iter().enumerate() {
+        out.set(i as u32, v);
+    }
 }
 
-fn read_clip(r: wire_clip_box::Reader<'_>) -> ClipBox {
-    ClipBox {
-        cx: r.get_cx(),
-        cy: r.get_cy(),
-        w: r.get_w(),
-        h: r.get_h(),
-        angle: r.get_angle(),
-    }
+fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, Error> {
+    let verbs = r.get_verbs()?.to_vec();
+    let coords: Vec<f32> = r.get_coords()?.iter().collect();
+    validate_path_lengths(&verbs, coords.len())?;
+    Ok(ClipPath {
+        verbs,
+        coords,
+        fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
+    })
 }
 
 fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &BitmapNode) {
     b.set_id(n.id);
-    b.set_cx(n.cx);
-    b.set_cy(n.cy);
-    b.set_w(n.w);
-    b.set_h(n.h);
-    b.set_angle(n.angle);
-    b.set_flip_h(n.flip_h);
-    b.set_flip_v(n.flip_v);
+    b.set_m0(n.transform[0]);
+    b.set_m1(n.transform[1]);
+    b.set_m2(n.transform[2]);
+    b.set_m3(n.transform[3]);
+    b.set_m4(n.transform[4]);
+    b.set_m5(n.transform[5]);
 }
 
 fn read_bitmap(r: bitmap_node::Reader<'_>) -> BitmapNode {
     BitmapNode {
         id: r.get_id(),
-        cx: r.get_cx(),
-        cy: r.get_cy(),
-        w: r.get_w(),
-        h: r.get_h(),
-        angle: r.get_angle(),
-        flip_h: r.get_flip_h(),
-        flip_v: r.get_flip_v(),
+        transform: [
+            r.get_m0(),
+            r.get_m1(),
+            r.get_m2(),
+            r.get_m3(),
+            r.get_m4(),
+            r.get_m5(),
+        ],
     }
 }
 
@@ -487,15 +489,12 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &TextNode) {
     write_rgba(b.reborrow().init_fill(), n.fill);
     write_rgba(b.reborrow().init_stroke(), n.stroke);
     b.set_stroke_width(n.stroke_width);
-    b.set_line_cap(line_cap_to_wire(n.line_cap));
-    b.set_line_join(line_join_to_wire(n.line_join));
-    b.set_cx(n.cx);
-    b.set_cy(n.cy);
-    b.set_bw(n.bw);
-    b.set_bh(n.bh);
-    b.set_angle(n.angle);
-    b.set_flip_h(n.flip_h);
-    b.set_flip_v(n.flip_v);
+    b.set_m0(n.transform[0]);
+    b.set_m1(n.transform[1]);
+    b.set_m2(n.transform[2]);
+    b.set_m3(n.transform[3]);
+    b.set_m4(n.transform[4]);
+    b.set_m5(n.transform[5]);
     b.set_size(n.size);
     b.set_family(&*n.family);
     b.set_weight(n.weight);
@@ -509,15 +508,14 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
         fill: read_rgba(r.get_fill()?),
         stroke: read_rgba(r.get_stroke()?),
         stroke_width: r.get_stroke_width(),
-        line_cap: line_cap_from_wire(r.get_line_cap()?),
-        line_join: line_join_from_wire(r.get_line_join()?),
-        cx: r.get_cx(),
-        cy: r.get_cy(),
-        bw: r.get_bw(),
-        bh: r.get_bh(),
-        angle: r.get_angle(),
-        flip_h: r.get_flip_h(),
-        flip_v: r.get_flip_v(),
+        transform: [
+            r.get_m0(),
+            r.get_m1(),
+            r.get_m2(),
+            r.get_m3(),
+            r.get_m4(),
+            r.get_m5(),
+        ],
         size: r.get_size(),
         family: r.get_family()?.to_str()?.to_owned(),
         weight: r.get_weight(),
@@ -590,7 +588,7 @@ fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
 fn write_drawnode(mut b: draw_node::Builder<'_>, node: &DrawNode) {
     match node {
         DrawNode::Path(p) => write_path_parts(b.init_path(), &p.style, &p.verbs, &p.coords),
-        DrawNode::ClipPush(c) => write_clip(b.init_clip_push(), *c),
+        DrawNode::ClipPush(c) => write_clip_path(b.init_clip_push(), c),
         DrawNode::ClipPop => b.set_clip_pop(()),
         DrawNode::Text(t) => write_text_node(b.init_text(), t),
         DrawNode::Bitmap(n) => write_bitmap(b.init_bitmap(), n),
@@ -621,7 +619,7 @@ fn read_drawnode(node: draw_node::Reader<'_>, out: &mut DrawList) -> Result<(), 
             let path = read_path(p?)?;
             out.push_path(path);
         }
-        Which::ClipPush(c) => out.clip_push(read_clip(c?)),
+        Which::ClipPush(c) => out.clip_push(read_clip_path(c?)?),
         Which::ClipPop(()) => out.clip_pop(),
         Which::Text(t) => out.text(read_text_node(t?)?),
         Which::Bitmap(n) => out.bitmap(read_bitmap(n?)),
@@ -720,13 +718,7 @@ mod tests {
         dl.line_to(10.0, 0.0);
         dl.quad_to(15.0, 5.0, 20.0, 10.0);
         dl.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
-        dl.clip_push(ClipBox {
-            cx: 50.0,
-            cy: 50.0,
-            w: 30.0,
-            h: 20.0,
-            angle: 15.0,
-        });
+        dl.clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
         dl.text(TextNode {
             fill: Rgba {
                 r: 0,
@@ -734,10 +726,18 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            cx: 60.0,
-            cy: 30.0,
-            bw: 50.0,
-            bh: 14.0,
+            transform: crate::ir::text_box_affine(
+                "Liberation Sans",
+                700,
+                FontStyle::Italic,
+                12.0,
+                "Olá",
+                60.0,
+                30.0,
+                50.0,
+                14.0,
+                0.0,
+            ),
             size: 12.0,
             family: "Liberation Sans".into(),
             weight: 700,
@@ -748,13 +748,8 @@ mod tests {
         });
         dl.bitmap(BitmapNode {
             id: 7,
-            cx: 70.0,
-            cy: 40.0,
-            w: 32.0,
-            h: 32.0,
-            angle: 90.0,
-            flip_h: true,
-            flip_v: false,
+            // 64×64 asset, mirrored horizontally, rotated 90°, centred at (70, 40).
+            transform: crate::ir::bitmap_box_affine(64, 64, 70.0, 40.0, -32.0, 32.0, 90.0),
         });
         dl.clip_pop();
         dl
@@ -1128,6 +1123,69 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn clip_path_round_trips() {
+        // Build a clip path directly (not via clip_rect) with a quadratic
+        // segment + even-odd rule to exercise verb walking and fill-rule
+        // preservation across the wire.
+        let mut dl = DrawList::new(50.0, 50.0);
+        dl.clip_push(ClipPath {
+            verbs: vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE],
+            coords: vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0],
+            fill_rule: FillRule::EvenOdd,
+        });
+        dl.clip_pop();
+        let bytes = encode_frame(&dl);
+        match decode(&bytes).unwrap() {
+            Decoded::Frame(d) => {
+                let DrawNode::ClipPush(c) = &d.nodes[0] else {
+                    panic!("expected ClipPush, got {:?}", d.nodes[0]);
+                };
+                assert_eq!(
+                    c.verbs,
+                    vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE]
+                );
+                assert_eq!(
+                    c.coords,
+                    vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0]
+                );
+                assert_eq!(c.fill_rule, FillRule::EvenOdd);
+                assert!(matches!(&d.nodes[1], DrawNode::ClipPop));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn malformed_clip_path_is_rejected() {
+        // Hand-build a ClipPath with CUBIC (needs 6 floats) and only 2 coords;
+        // decoder must reject it the same way it rejects malformed Paths.
+        let mut builder = MessageBuilder::new_default();
+        {
+            let msg = builder.init_root::<message::Builder>();
+            let frame = msg.init_frame();
+            let mut nodes = frame.init_nodes(1);
+            let node = nodes.reborrow().get(0);
+            let mut c = node.init_clip_push();
+            c.set_verbs(&[verb::CUBIC]);
+            let mut coords = c.init_coords(2);
+            coords.set(0, 0.0);
+            coords.set(1, 0.0);
+        }
+        let bytes = finish(builder);
+        let err = decode(&bytes).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::PathLengthMismatch {
+                    verbs: 1,
+                    coords: 2
+                }
+            ),
+            "got {err:?}",
+        );
     }
 
     #[test]

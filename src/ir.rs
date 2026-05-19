@@ -196,13 +196,15 @@ impl FillRule {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ClipBox {
-    pub cx: f32,
-    pub cy: f32,
-    pub w: f32,
-    pub h: f32,
-    pub angle: f32,
+/// Arbitrary clip region described by a verb/coord path (same encoding as
+/// [`Path`]). Sub-paths are treated as implicitly closed — callers do not
+/// have to add a final line back to the starting point. `fill_rule` decides
+/// which sub-regions count as "inside".
+#[derive(Clone, Debug, Default)]
+pub struct ClipPath {
+    pub verbs: Vec<u8>,
+    pub coords: Vec<f32>,
+    pub fill_rule: FillRule,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -224,8 +226,19 @@ impl FontStyle {
     }
 }
 
-/// Text node fields. The four corners of the bounding box, after applying
-/// `angle`, define where the glyph paths land.
+/// Text node fields. Glyphs are drawn in "natural" text space (origin at
+/// the baseline-left, units in `size`-pixel font units) and then mapped to
+/// canvas pixels by [`Self::transform`]. The transform follows the PDF
+/// `cm` / SVG `matrix(...)` convention:
+///
+/// ```text
+/// x' = transform[0] * x + transform[2] * y + transform[4]
+/// y' = transform[1] * x + transform[3] * y + transform[5]
+/// ```
+///
+/// The producer is expected to bake "fit to bounding box", rotation, and
+/// mirroring into this matrix — see [`text_box_affine`] for the canonical
+/// helper that mirrors the legacy `(cx, cy, bw, bh, angle)` API.
 ///
 /// `family` is the resolved font family — the name of the family the
 /// renderer that produced this node actually used to measure the glyphs
@@ -237,15 +250,7 @@ pub struct TextNode {
     pub fill: Rgba,
     pub stroke: Rgba,
     pub stroke_width: f32,
-    pub line_cap: LineCap,
-    pub line_join: LineJoin,
-    pub cx: f32,
-    pub cy: f32,
-    pub bw: f32,
-    pub bh: f32,
-    pub angle: f32,
-    pub flip_h: bool,
-    pub flip_v: bool,
+    pub transform: [f32; 6],
     pub size: f32,
     pub family: String,
     pub weight: u16,
@@ -260,15 +265,10 @@ impl Default for TextNode {
             fill: Rgba::default(),
             stroke: Rgba::default(),
             stroke_width: 0.0,
-            line_cap: LineCap::default(),
-            line_join: LineJoin::default(),
-            cx: 0.0,
-            cy: 0.0,
-            bw: 0.0,
-            bh: 0.0,
-            angle: 0.0,
-            flip_h: false,
-            flip_v: false,
+            // Identity affine — renders glyphs in their natural orientation
+            // at the origin. Callers that want a translated/rotated/fitted
+            // text run go through [`text_box_affine`].
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             size: 0.0,
             family: String::new(),
             weight: 400,
@@ -279,22 +279,108 @@ impl Default for TextNode {
     }
 }
 
+/// Compose the affine for "fit the rendered text into a rotated bounding
+/// box of size `bw × bh` centred on `(cx, cy)`". Measures the text once at
+/// `size` via [`crate::text`] (same code the renderers use, so producer
+/// and backend agree) and returns `[a, b, c, d, e, f]` in the PDF `cm` /
+/// SVG `matrix(...)` convention. Negative `bw` mirrors horizontally;
+/// negative `bh` mirrors vertically. Empty or zero-sized text returns the
+/// identity-translated-to-`(cx, cy)` matrix — the renderer short-circuits
+/// at the same gate, so the choice is cosmetic.
+///
+/// Native-only: WASM frontends measure text via `OffscreenCanvas` (see
+/// `text.rs` module docs) and build the affine on the JS side.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+pub fn text_box_affine(
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+    size: f32,
+    text: &str,
+    cx: f32,
+    cy: f32,
+    bw: f32,
+    bh: f32,
+    angle_deg: f32,
+) -> [f32; 6] {
+    let size_i = size as i32;
+    if size_i <= 0 || text.is_empty() {
+        return [1.0, 0.0, 0.0, 1.0, cx, cy];
+    }
+    let font = crate::text::resolve(family, weight, style);
+    let face = font.face();
+    let orig_w = crate::text::measure_width_with(face, text, size_i) as f32;
+    let orig_h = crate::text::measure_height_with(face, text, size_i) as f32;
+    if orig_w <= 0.0 || orig_h <= 0.0 {
+        return [1.0, 0.0, 0.0, 1.0, cx, cy];
+    }
+    let sx = bw / orig_w;
+    let sy = bh / orig_h;
+    let theta = angle_deg * std::f32::consts::PI / 180.0;
+    let ct = theta.cos();
+    let st = theta.sin();
+    [sx * ct, sx * st, -sy * st, sy * ct, cx, cy]
+}
+
 /// A bitmap blit. The `id` references a previously-uploaded asset
 /// (`Message::Asset` on the wire); the renderer is responsible for
-/// resolving it to actual pixels. The geometry is the same as
-/// [`ClipBox`] / [`TextNode`]: `(cx, cy)` is the centre, `w`/`h` is the
-/// unrotated size, `angle` is in degrees, and `flip_h`/`flip_v` mirror
-/// across the local axes.
-#[derive(Clone, Copy, Debug, Default)]
+/// resolving it to actual pixels. The 6-float affine maps the bitmap's
+/// natural image-pixel coordinates `(0..img_w, 0..img_h)` onto the canvas,
+/// same PDF `cm` / SVG `matrix(...)` convention as [`TextNode::transform`].
+/// See [`bitmap_box_affine`] for the canonical "fit in a rotated box"
+/// helper.
+#[derive(Clone, Copy, Debug)]
 pub struct BitmapNode {
     pub id: u32,
-    pub cx: f32,
-    pub cy: f32,
-    pub w: f32,
-    pub h: f32,
-    pub angle: f32,
-    pub flip_h: bool,
-    pub flip_v: bool,
+    pub transform: [f32; 6],
+}
+
+impl Default for BitmapNode {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        }
+    }
+}
+
+/// Compose the affine for "fit the bitmap into a rotated bounding box of
+/// size `w × h` centred on `(cx, cy)`". `img_w`/`img_h` are the asset's
+/// natural pixel dimensions. Negative `w` mirrors horizontally; negative
+/// `h` mirrors vertically. Zero-sized inputs return the identity-
+/// translated-to-`(cx, cy)` matrix.
+#[allow(clippy::too_many_arguments)]
+pub fn bitmap_box_affine(
+    img_w: u32,
+    img_h: u32,
+    cx: f32,
+    cy: f32,
+    w: f32,
+    h: f32,
+    angle_deg: f32,
+) -> [f32; 6] {
+    if img_w == 0 || img_h == 0 {
+        return [1.0, 0.0, 0.0, 1.0, cx, cy];
+    }
+    // Centre the asset on (cx, cy): pre-translate by (-img_w/2, -img_h/2)
+    // before the scale/rotate so the asset's centre lands on (cx, cy)
+    // after the rest of the transform.
+    let sx = w / img_w as f32;
+    let sy = h / img_h as f32;
+    let theta = angle_deg * std::f32::consts::PI / 180.0;
+    let ct = theta.cos();
+    let st = theta.sin();
+    // M = T(cx,cy) · R(theta) · S(sx,sy) · T(-iw/2, -ih/2)
+    let a = sx * ct;
+    let b = sx * st;
+    let c = -sy * st;
+    let d = sy * ct;
+    let half_w = img_w as f32 * 0.5;
+    let half_h = img_h as f32 * 0.5;
+    let e = cx - (a * half_w + c * half_h);
+    let f = cy - (b * half_w + d * half_h);
+    [a, b, c, d, e, f]
 }
 
 /// Path verb byte. Each verb in [`Path::verbs`] picks how many floats to
@@ -326,7 +412,7 @@ pub struct Path {
 #[derive(Clone, Debug)]
 pub enum DrawNode {
     Path(Path),
-    ClipPush(ClipBox),
+    ClipPush(ClipPath),
     ClipPop,
     Text(Box<TextNode>),
     Bitmap(BitmapNode),
@@ -479,9 +565,38 @@ impl DrawList {
         }
     }
 
-    pub fn clip_push(&mut self, clip: ClipBox) {
+    pub fn clip_push(&mut self, clip: ClipPath) {
         self.commit_open();
         self.nodes.push(DrawNode::ClipPush(clip));
+    }
+
+    /// Push an axis-aligned-or-rotated rectangular clip — the common case.
+    /// Builds the 4-corner `ClipPath` (rotated by `angle_deg` around the
+    /// centre) and pushes it. Saves callers from open-coding the rotation.
+    pub fn clip_rect(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        w: f32,
+        h: f32,
+        angle_deg: f32,
+        fill_rule: FillRule,
+    ) {
+        let hw = w / 2.0;
+        let hh = h / 2.0;
+        let theta = angle_deg * std::f32::consts::PI / 180.0;
+        let (cos, sin) = (theta.cos(), theta.sin());
+        let corner =
+            |x: f32, y: f32| -> (f32, f32) { (cx + x * cos - y * sin, cy + x * sin + y * cos) };
+        let p0 = corner(-hw, -hh);
+        let p1 = corner(hw, -hh);
+        let p2 = corner(hw, hh);
+        let p3 = corner(-hw, hh);
+        self.clip_push(ClipPath {
+            verbs: vec![verb::MOVE, verb::LINE, verb::LINE, verb::LINE],
+            coords: vec![p0.0, p0.1, p1.0, p1.1, p2.0, p2.1, p3.0, p3.1],
+            fill_rule,
+        });
     }
 
     pub fn clip_pop(&mut self) {

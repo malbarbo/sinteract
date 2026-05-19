@@ -9,7 +9,7 @@
 //! draw-list wire format. Backends that need a different convention apply a
 //! transform once at the start (see `pdf` and `terminal`).
 
-use crate::ir::{BitmapNode, ClipBox, PathStyle, TextNode};
+use crate::ir::{BitmapNode, ClipPath, PathStyle, TextNode};
 
 pub trait DrawSink {
     /// Called once with the canvas dimensions before any draw command. May be
@@ -25,10 +25,10 @@ pub trait DrawSink {
     fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32);
     fn path_end(&mut self);
 
-    /// Push a clip rectangle onto the clip stack. The rectangle is centred at
-    /// `(cx, cy)`, has size `(w, h)` in unrotated space, and is rotated by
-    /// `angle` degrees around its centre.
-    fn clip_push(&mut self, clip: &ClipBox);
+    /// Push a clip path onto the clip stack. The path uses the same
+    /// verb/coord encoding as a regular path; sub-paths are treated as
+    /// implicitly closed, and `clip.fill_rule` decides the inside.
+    fn clip_push(&mut self, clip: &ClipPath);
     fn clip_pop(&mut self);
 
     fn text(&mut self, node: &TextNode);

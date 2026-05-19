@@ -24,8 +24,8 @@ use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::ir::{
-    BitmapNode, ClipBox, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
-    RadialGradient, Rgba, Stop, TextNode,
+    BitmapNode, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
+    RadialGradient, Rgba, Stop, TextNode, verb,
 };
 use crate::sink::DrawSink;
 
@@ -297,27 +297,67 @@ impl DrawSink for PdfSink {
         self.flush_path();
     }
 
-    fn clip_push(&mut self, clip: &ClipBox) {
+    fn clip_push(&mut self, clip: &ClipPath) {
         self.flush_path();
-        let hw = clip.w / 2.0;
-        let hh = clip.h / 2.0;
-        let cos = (clip.angle * std::f32::consts::PI / 180.0).cos();
-        let sin = (clip.angle * std::f32::consts::PI / 180.0).sin();
-        let corner = |x: f32, y: f32| -> (f32, f32) {
-            (clip.cx + x * cos - y * sin, clip.cy + x * sin + y * cos)
-        };
-        let p0 = corner(-hw, -hh);
-        let p1 = corner(hw, -hh);
-        let p2 = corner(hw, hh);
-        let p3 = corner(-hw, hh);
-
         self.content.save_state();
-        self.content.move_to(p0.0, p0.1);
-        self.content.line_to(p1.0, p1.1);
-        self.content.line_to(p2.0, p2.1);
-        self.content.line_to(p3.0, p3.1);
+        let mut last_point: Option<(f32, f32)> = None;
+        let mut i = 0usize;
+        for &v in &clip.verbs {
+            match v {
+                verb::MOVE if clip.coords.len() >= i + 2 => {
+                    let (x, y) = (clip.coords[i], clip.coords[i + 1]);
+                    self.content.move_to(x, y);
+                    last_point = Some((x, y));
+                    i += 2;
+                }
+                verb::LINE if clip.coords.len() >= i + 2 => {
+                    let (x, y) = (clip.coords[i], clip.coords[i + 1]);
+                    self.content.line_to(x, y);
+                    last_point = Some((x, y));
+                    i += 2;
+                }
+                verb::QUAD if clip.coords.len() >= i + 4 => {
+                    let (cx, cy, x, y) = (
+                        clip.coords[i],
+                        clip.coords[i + 1],
+                        clip.coords[i + 2],
+                        clip.coords[i + 3],
+                    );
+                    if let Some((p0x, p0y)) = last_point {
+                        let c1x = p0x + 2.0 / 3.0 * (cx - p0x);
+                        let c1y = p0y + 2.0 / 3.0 * (cy - p0y);
+                        let c2x = x + 2.0 / 3.0 * (cx - x);
+                        let c2y = y + 2.0 / 3.0 * (cy - y);
+                        self.content.cubic_to(c1x, c1y, c2x, c2y, x, y);
+                    }
+                    last_point = Some((x, y));
+                    i += 4;
+                }
+                verb::CUBIC if clip.coords.len() >= i + 6 => {
+                    let (c1x, c1y, c2x, c2y, x, y) = (
+                        clip.coords[i],
+                        clip.coords[i + 1],
+                        clip.coords[i + 2],
+                        clip.coords[i + 3],
+                        clip.coords[i + 4],
+                        clip.coords[i + 5],
+                    );
+                    self.content.cubic_to(c1x, c1y, c2x, c2y, x, y);
+                    last_point = Some((x, y));
+                    i += 6;
+                }
+                _ => break,
+            }
+        }
         self.content.close_path();
-        self.content.clip_nonzero();
+        match clip.fill_rule {
+            FillRule::NonZero => {
+                self.content.clip_nonzero();
+            }
+            FillRule::EvenOdd => {
+                self.content.clip_even_odd();
+            }
+        }
         self.content.end_path();
     }
 
@@ -683,15 +723,14 @@ fn render_text(node: &TextNode, sink: &mut PdfSink) {
     let font = crate::text::resolve(&node.family, node.weight, node.style);
     let face = font.face();
 
+    // Width is still needed for the underline rect (drawn in natural text
+    // space); vertical layout uses face metrics directly.
     let original_w = crate::text::measure_width_with(face, &node.text, size_i) as f32;
-    let original_h = crate::text::measure_height_with(face, &node.text, size_i) as f32;
-    if original_w <= 0.0 || original_h <= 0.0 {
+    if original_w <= 0.0 {
         return;
     }
     let baseline_y = crate::text::measure_y_offset_with(face, &node.text, size_i) as f32;
     let x_left = crate::text::measure_x_offset_with(face, &node.text, size_i) as f32;
-    let scale_x = node.bw / original_w * if node.flip_h { -1.0 } else { 1.0 };
-    let scale_y = node.bh / original_h * if node.flip_v { -1.0 } else { 1.0 };
 
     let do_fill = node.fill.a > 0.0;
     let do_stroke = node.stroke.a > 0.0 && node.stroke_width > 0.0;
@@ -718,19 +757,12 @@ fn render_text(node: &TextNode, sink: &mut PdfSink) {
             node.stroke.b as f32 / 255.0,
         );
         sink.content.set_line_width(node.stroke_width);
-        sink.content.set_line_cap(pdf_line_cap(node.line_cap));
-        sink.content.set_line_join(pdf_line_join(node.line_join));
+        // Cap/join intentionally omitted: text outlines are closed contours
+        // on smooth curves, so the PDF defaults (butt cap, miter join) are
+        // visually identical to anything the producer might pick.
     }
-    // Compose translate * rotate * scale into a single cm. PDF cm matrix
-    // [a b c d e f] applies x' = a*x + c*y + e; y' = b*x + d*y + f.
-    let theta = node.angle * std::f32::consts::PI / 180.0;
-    let ct = theta.cos();
-    let st = theta.sin();
-    let a = scale_x * ct;
-    let bb = scale_x * st;
-    let c = -scale_y * st;
-    let d = scale_y * ct;
-    sink.content.transform([a, bb, c, d, node.cx, node.cy]);
+    // `node.transform` is already in the PDF `cm` convention.
+    sink.content.transform(node.transform);
 
     let mut adapter = PdfOutline { ops: Vec::new() };
     crate::text::outline_with(face, &node.text, size_i, &mut adapter);
@@ -847,10 +879,18 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            cx: 50.0,
-            cy: 15.0,
-            bw: 80.0,
-            bh: 20.0,
+            transform: crate::ir::text_box_affine(
+                "",
+                400,
+                crate::ir::FontStyle::Normal,
+                16.0,
+                "Hi",
+                50.0,
+                15.0,
+                80.0,
+                20.0,
+                0.0,
+            ),
             size: 16.0,
             text: "Hi".to_owned(),
             ..TextNode::default()
