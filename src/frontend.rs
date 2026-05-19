@@ -13,7 +13,7 @@
 //!         InputEvent::Key(k) => { /* dispatch */ },
 //!         InputEvent::Close => break,
 //!     }
-//!     fr.present(&dl);
+//!     fr.present(&scene);
 //! }
 //! fr.exit();
 //! ```
@@ -105,12 +105,12 @@ impl Frontend {
         }
     }
 
-    /// Render `dl` to the active output.
-    pub fn present(&mut self, dl: &Scene) {
+    /// Render `scene` to the active output.
+    pub fn present(&mut self, scene: &Scene) {
         match self {
-            Frontend::Terminal(f) => f.present(dl),
-            Frontend::Window(f) => f.present(dl),
-            Frontend::Stdio(f) => f.present(dl),
+            Frontend::Terminal(f) => f.present(scene),
+            Frontend::Window(f) => f.present(scene),
+            Frontend::Stdio(f) => f.present(scene),
         }
     }
 
@@ -248,8 +248,8 @@ impl TerminalFrontend {
         }
     }
 
-    pub fn present(&mut self, dl: &Scene) {
-        crate::terminal::show_image_dl(dl);
+    pub fn present(&mut self, scene: &Scene) {
+        crate::terminal::show_image(scene);
     }
 
     pub fn wait_event(&mut self, deadline: Option<Instant>) -> Option<InputEvent> {
@@ -328,8 +328,8 @@ impl WindowFrontend {
         }
     }
 
-    pub fn present(&mut self, dl: &Scene) {
-        crate::window::show_image_dl(dl);
+    pub fn present(&mut self, scene: &Scene) {
+        crate::window::show_image(scene);
     }
 
     pub fn wait_event(&mut self, deadline: Option<Instant>) -> Option<InputEvent> {

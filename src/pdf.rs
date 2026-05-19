@@ -399,9 +399,9 @@ fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
 }
 
 /// Render a [`crate::scene::Scene`] to PDF bytes.
-pub fn render_to_pdf_dl(dl: &crate::scene::Scene) -> Vec<u8> {
+pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
     let mut sink = PdfRenderer::new();
-    dl.play_into(&mut sink);
+    scene.play_into(&mut sink);
     finish_pdf(sink)
 }
 
@@ -835,8 +835,8 @@ mod tests {
         }
     }
 
-    fn rect(dl: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        let mut p = dl.begin_path(style);
+    fn rect(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
+        let mut p = scene.begin_path(style);
         p.move_to(x, y);
         p.line_to(x + w, y);
         p.line_to(x + w, y + h);
@@ -845,17 +845,17 @@ mod tests {
 
     #[test]
     fn header_only_emits_pdf_marker() {
-        let dl = Scene::new(100.0, 50.0);
-        let out = render_to_pdf_dl(&dl);
+        let scene = Scene::new(100.0, 50.0);
+        let out = render_to_pdf(&scene);
         assert!(out.starts_with(b"%PDF-"), "missing PDF header");
         assert!(out.windows(5).any(|w| w == b"%%EOF"), "missing PDF trailer");
     }
 
     #[test]
     fn rect_path_emits_fill_op() {
-        let mut dl = Scene::new(100.0, 50.0);
-        rect(&mut dl, red_fill(1.0), 0.0, 0.0, 100.0, 50.0);
-        let out = render_to_pdf_dl(&dl);
+        let mut scene = Scene::new(100.0, 50.0);
+        rect(&mut scene, red_fill(1.0), 0.0, 0.0, 100.0, 50.0);
+        let out = render_to_pdf(&scene);
         assert!(out.starts_with(b"%PDF-"));
         // Look for the fill op `f` (non-zero winding). pdf-writer emits
         // streams uncompressed by default so we can search byte-wise.
@@ -871,8 +871,8 @@ mod tests {
 
     #[test]
     fn text_emits_some_path_data() {
-        let mut dl = Scene::new(100.0, 30.0);
-        dl.text(TextNode {
+        let mut scene = Scene::new(100.0, 30.0);
+        scene.text(TextNode {
             fill: Rgba {
                 r: 0,
                 g: 0,
@@ -895,7 +895,7 @@ mod tests {
             text: "Hi".to_owned(),
             ..TextNode::default()
         });
-        let out = render_to_pdf_dl(&dl);
+        let out = render_to_pdf(&scene);
         assert!(out.starts_with(b"%PDF-"));
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains(" cm"), "expected cm transform in content stream");
@@ -903,9 +903,9 @@ mod tests {
 
     #[test]
     fn alpha_creates_extgstate_resource() {
-        let mut dl = Scene::new(100.0, 50.0);
-        rect(&mut dl, red_fill(0.5), 0.0, 0.0, 100.0, 50.0);
-        let out = render_to_pdf_dl(&dl);
+        let mut scene = Scene::new(100.0, 50.0);
+        rect(&mut scene, red_fill(0.5), 0.0, 0.0, 100.0, 50.0);
+        let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("ExtGState"), "expected ExtGState resource");
         assert!(s.contains("/Gs0"), "expected gs name reference");
@@ -915,7 +915,7 @@ mod tests {
     fn dash_pattern_emits_d_operator() {
         // A stroked rect with dash_array [3, 2] dash_offset 1 should produce
         // the PDF `d` operator with the same numbers in the content stream.
-        let mut dl = Scene::new(100.0, 50.0);
+        let mut scene = Scene::new(100.0, 50.0);
         let style = PathStyle {
             stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 1.0,
@@ -923,8 +923,8 @@ mod tests {
             dash_offset: 1.0,
             ..PathStyle::default()
         };
-        rect(&mut dl, style, 0.0, 0.0, 100.0, 50.0);
-        let out = render_to_pdf_dl(&dl);
+        rect(&mut scene, style, 0.0, 0.0, 100.0, 50.0);
+        let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
         // `set_dash_pattern` emits `[a b] off d`.
         assert!(s.contains(" d\n") || s.contains(" d\r"), "no `d` op: {s}");
@@ -934,7 +934,7 @@ mod tests {
     #[test]
     fn miter_limit_emits_m_operator() {
         // Miter joins with non-default miter_limit should emit the `M` op.
-        let mut dl = Scene::new(50.0, 50.0);
+        let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
             stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 4.0,
@@ -942,8 +942,8 @@ mod tests {
             line_join: LineJoin::Miter,
             ..PathStyle::default()
         };
-        rect(&mut dl, style, 5.0, 5.0, 40.0, 40.0);
-        let out = render_to_pdf_dl(&dl);
+        rect(&mut scene, style, 5.0, 5.0, 40.0, 40.0);
+        let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("12 M"), "expected miter limit op: {s}");
     }
@@ -955,7 +955,7 @@ mod tests {
         //  - one FunctionShading (ShadingType 2 = axial) referencing it,
         //  - one ShadingPattern,
         //  - the content stream using `cs /Pattern\n /P0 scn` for the fill.
-        let mut dl = Scene::new(50.0, 50.0);
+        let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
             fill: crate::scene::Paint::Linear(crate::scene::LinearGradient {
                 x0: 0.0,
@@ -986,8 +986,8 @@ mod tests {
             }),
             ..PathStyle::default()
         };
-        rect(&mut dl, style, 0.0, 0.0, 50.0, 50.0);
-        let out = render_to_pdf_dl(&dl);
+        rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
+        let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
         // ShadingType 2 = axial gradient.
         assert!(
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[test]
     fn radial_gradient_emits_radial_shading() {
-        let mut dl = Scene::new(50.0, 50.0);
+        let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
             fill: crate::scene::Paint::Radial(crate::scene::RadialGradient {
                 cx: 25.0,
@@ -1037,8 +1037,8 @@ mod tests {
             }),
             ..PathStyle::default()
         };
-        rect(&mut dl, style, 0.0, 0.0, 50.0, 50.0);
-        let out = render_to_pdf_dl(&dl);
+        rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
+        let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
         // ShadingType 3 = radial gradient.
         assert!(
@@ -1051,7 +1051,7 @@ mod tests {
     fn multi_stop_gradient_uses_stitching_function() {
         // 3 stops should produce a Type 3 (stitching) function wrapping two
         // Type 2 sub-functions.
-        let mut dl = Scene::new(60.0, 10.0);
+        let mut scene = Scene::new(60.0, 10.0);
         let style = PathStyle {
             fill: crate::scene::Paint::Linear(crate::scene::LinearGradient {
                 x0: 0.0,
@@ -1091,8 +1091,8 @@ mod tests {
             }),
             ..PathStyle::default()
         };
-        rect(&mut dl, style, 0.0, 0.0, 60.0, 10.0);
-        let out = render_to_pdf_dl(&dl);
+        rect(&mut scene, style, 0.0, 0.0, 60.0, 10.0);
+        let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
         // Stitching function present (FunctionType 3).
         assert!(

@@ -84,8 +84,8 @@ impl StdioFrontend {
 
     /// Send a frame to stdout. `flush` is performed so the consuming server
     /// sees the bytes immediately.
-    pub fn present(&mut self, dl: &Scene) {
-        let bytes = wire::encode_frame(dl);
+    pub fn present(&mut self, scene: &Scene) {
+        let bytes = wire::encode_frame(scene);
         self.write_framed(&bytes);
     }
 
@@ -236,16 +236,16 @@ mod tests {
             written.clone(),
         );
 
-        let mut dl = Scene::new(10.0, 10.0);
+        let mut scene = Scene::new(10.0, 10.0);
         {
-            let mut p = dl.begin_path(PathStyle {
+            let mut p = scene.begin_path(PathStyle {
                 fill: Paint::rgba(1, 2, 3, 1.0),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
             p.line_to(10.0, 10.0);
         }
-        fr.present(&dl);
+        fr.present(&scene);
 
         let buf = written.0.lock().unwrap().clone();
         assert!(buf.len() > 8);

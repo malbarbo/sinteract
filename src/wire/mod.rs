@@ -122,12 +122,12 @@ fn finish(builder: MessageBuilder<capnp::message::HeapAllocator>) -> Vec<u8> {
 }
 
 /// Encode a draw list as `Message::Frame`.
-pub fn encode_frame(dl: &Scene) -> Vec<u8> {
+pub fn encode_frame(scene: &Scene) -> Vec<u8> {
     let mut builder = MessageBuilder::new_default();
     {
         let msg = builder.init_root::<message::Builder>();
         let frame = msg.init_frame();
-        write_scene(frame, dl);
+        write_scene(frame, scene);
     }
     finish(builder)
 }
@@ -595,11 +595,11 @@ fn write_element(mut b: element::Builder<'_>, node: &Element) {
     }
 }
 
-fn write_scene(mut b: wire_scene::Builder<'_>, dl: &Scene) {
-    b.set_width(dl.width);
-    b.set_height(dl.height);
-    let mut nodes = b.init_elements(dl.elements.len() as u32);
-    for (i, node) in dl.elements.iter().enumerate() {
+fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
+    b.set_width(scene.width);
+    b.set_height(scene.height);
+    let mut nodes = b.init_elements(scene.elements.len() as u32);
+    for (i, node) in scene.elements.iter().enumerate() {
         write_element(nodes.reborrow().get(i as u32), node);
     }
 }
@@ -695,9 +695,9 @@ mod tests {
     use super::*;
 
     fn sample_scene() -> Scene {
-        let mut dl = Scene::new(120.0, 80.0);
+        let mut scene = Scene::new(120.0, 80.0);
         {
-            let mut p = dl.begin_path(PathStyle {
+            let mut p = scene.begin_path(PathStyle {
                 fill: Paint::rgba(10, 20, 30, 0.5),
                 stroke: Paint::rgba(200, 0, 0, 1.0),
                 stroke_width: 2.5,
@@ -713,7 +713,7 @@ mod tests {
             p.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
         }
         {
-            let mut clip = dl.push_clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
+            let mut clip = scene.push_clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
             clip.text(TextNode {
                 fill: Rgba {
                     r: 0,
@@ -747,7 +747,7 @@ mod tests {
                 transform: crate::scene::bitmap_box_affine(64, 64, 70.0, 40.0, -32.0, 32.0, 90.0),
             });
         }
-        dl
+        scene
     }
 
     fn assert_scene_eq(a: &Scene, b: &Scene) {
@@ -761,18 +761,18 @@ mod tests {
 
     #[test]
     fn frame_round_trip_preserves_drawlist() {
-        let dl = sample_scene();
-        let bytes = encode_frame(&dl);
+        let scene = sample_scene();
+        let bytes = encode_frame(&scene);
         match decode(&bytes).expect("decode") {
-            Decoded::Frame(d) => assert_scene_eq(&dl, &d),
+            Decoded::Frame(d) => assert_scene_eq(&scene, &d),
             other => panic!("expected Frame, got {other:?}"),
         }
     }
 
     #[test]
     fn empty_drawlist_round_trips() {
-        let dl = Scene::new(640.0, 480.0);
-        let bytes = encode_frame(&dl);
+        let scene = Scene::new(640.0, 480.0);
+        let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
                 assert_eq!(d.width, 640.0);
@@ -880,9 +880,9 @@ mod tests {
 
     #[test]
     fn dash_and_miter_round_trip() {
-        let mut dl = Scene::new(100.0, 50.0);
+        let mut scene = Scene::new(100.0, 50.0);
         {
-            let mut p = dl.begin_path(PathStyle {
+            let mut p = scene.begin_path(PathStyle {
                 stroke: Paint::rgba(0, 0, 0, 1.0),
                 stroke_width: 2.0,
                 miter_limit: 7.5,
@@ -893,7 +893,7 @@ mod tests {
             p.move_to(0.0, 0.0);
             p.line_to(50.0, 50.0);
         }
-        let bytes = encode_frame(&dl);
+        let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
                 let node = d.elements.first().expect("one node");
@@ -910,7 +910,7 @@ mod tests {
 
     #[test]
     fn linear_gradient_paint_round_trips() {
-        let mut dl = Scene::new(50.0, 50.0);
+        let mut scene = Scene::new(50.0, 50.0);
         let gradient = LinearGradient {
             x0: 0.0,
             y0: 0.0,
@@ -948,7 +948,7 @@ mod tests {
             ..LinearGradient::default()
         };
         {
-            let mut p = dl.begin_path(PathStyle {
+            let mut p = scene.begin_path(PathStyle {
                 fill: Paint::Linear(gradient.clone()),
                 ..PathStyle::default()
             });
@@ -956,7 +956,7 @@ mod tests {
             p.line_to(50.0, 0.0);
             p.line_to(50.0, 50.0);
         }
-        let bytes = encode_frame(&dl);
+        let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
                 let Element::Path(p) = d.elements.first().unwrap() else {
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn radial_gradient_paint_round_trips() {
-        let mut dl = Scene::new(50.0, 50.0);
+        let mut scene = Scene::new(50.0, 50.0);
         let gradient = RadialGradient {
             cx: 25.0,
             cy: 25.0,
@@ -998,14 +998,14 @@ mod tests {
             ..RadialGradient::default()
         };
         {
-            let mut p = dl.begin_path(PathStyle {
+            let mut p = scene.begin_path(PathStyle {
                 fill: Paint::Radial(gradient.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
             p.line_to(50.0, 50.0);
         }
-        let bytes = encode_frame(&dl);
+        let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
                 let Element::Path(p) = d.elements.first().unwrap() else {
@@ -1021,7 +1021,7 @@ mod tests {
     fn gradient_spread_mode_round_trips() {
         // Linear with Reflect and Radial with Repeat — both should survive
         // a wire round-trip.
-        let mut dl = Scene::new(50.0, 50.0);
+        let mut scene = Scene::new(50.0, 50.0);
         let linear = LinearGradient {
             x0: 0.0,
             y0: 0.0,
@@ -1050,7 +1050,7 @@ mod tests {
             ],
         };
         {
-            let mut p = dl.begin_path(PathStyle {
+            let mut p = scene.begin_path(PathStyle {
                 fill: Paint::Linear(linear.clone()),
                 ..PathStyle::default()
             });
@@ -1079,14 +1079,14 @@ mod tests {
             ],
         };
         {
-            let mut p = dl.begin_path(PathStyle {
+            let mut p = scene.begin_path(PathStyle {
                 fill: Paint::Radial(radial.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
             p.line_to(50.0, 50.0);
         }
-        let bytes = encode_frame(&dl);
+        let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
                 let Element::Path(p0) = &d.elements[0] else {
@@ -1107,13 +1107,13 @@ mod tests {
         // Build a clip path directly (not via clip_rect) with a quadratic
         // segment + even-odd rule to exercise verb walking and fill-rule
         // preservation across the wire.
-        let mut dl = Scene::new(50.0, 50.0);
-        drop(dl.push_clip(ClipPath {
+        let mut scene = Scene::new(50.0, 50.0);
+        drop(scene.push_clip(ClipPath {
             verbs: vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE],
             coords: vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0],
             fill_rule: FillRule::EvenOdd,
         }));
-        let bytes = encode_frame(&dl);
+        let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
                 let Element::ClipPush(c) = &d.elements[0] else {
@@ -1169,12 +1169,12 @@ mod tests {
         // Encode/decode with all defaults: paint should be Solid(transparent),
         // dash empty, miter_limit at SVG default. Guards against future
         // accidental changes to Default.
-        let mut dl = Scene::new(10.0, 10.0);
+        let mut scene = Scene::new(10.0, 10.0);
         {
-            let mut p = dl.begin_path(PathStyle::default());
+            let mut p = scene.begin_path(PathStyle::default());
             p.move_to(0.0, 0.0);
         }
-        let bytes = encode_frame(&dl);
+        let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
                 let Element::Path(p) = d.elements.first().unwrap() else {

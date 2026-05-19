@@ -8,7 +8,7 @@
 //! Mirrors [`crate::terminal`]:
 //!
 //! - [`enter_animation`] — initialize the window state. Idempotent.
-//! - [`show_image_dl`] — rasterize a draw list and present it to the window.
+//! - [`show_image`] — rasterize a draw list and present it to the window.
 //! - [`poll_key_event`] — non-blocking poll, returns the next queued
 //!   keyboard event in the same shape as [`crate::terminal::poll_key_event`]:
 //!   `(event_type, key, [alt, ctrl, shift, meta, repeat])`.
@@ -57,8 +57,8 @@ type KeyEventTuple = (i32, String, [bool; 5]);
 struct App {
     title: String,
     /// Size requested for the next window-creation. Set on each
-    /// `show_image_dl` from the draw-list dimensions; the `resumed` callback
-    /// reads it. `None` until the first `show_image_dl`.
+    /// `show_image` from the draw-list dimensions; the `resumed` callback
+    /// reads it. `None` until the first `show_image`.
     pending_size: Option<(u32, u32)>,
     window: Option<Rc<Window>>,
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
@@ -235,7 +235,7 @@ thread_local! {
 /// Initialize the window backend. Idempotent — calling twice without a
 /// matching [`exit_animation`] is a no-op.
 ///
-/// The OS window itself is created lazily on the first [`show_image_dl`],
+/// The OS window itself is created lazily on the first [`show_image`],
 /// using the draw-list size as the initial logical dimensions. This way
 /// the host doesn't need to predict a size before its first frame.
 pub fn enter_animation(title: &str) {
@@ -296,14 +296,14 @@ pub fn closed() -> bool {
     STATE.with(|cell| cell.borrow().as_ref().map(|s| s.app.closed).unwrap_or(true))
 }
 
-/// Rasterize `dl` and present it in the window. Pumps the event loop first
+/// Rasterize `scene` and present it in the window. Pumps the event loop first
 /// so window resize / DPI changes take effect on the same frame, and
-/// lazily creates the window using `dl.width` / `dl.height` on the first
+/// lazily creates the window using `scene.width` / `scene.height` on the first
 /// call.
-pub fn show_image_dl(dl: &crate::scene::Scene) {
+pub fn show_image(scene: &crate::scene::Scene) {
     let dl_size = (
-        dl.width.ceil().max(1.0) as u32,
-        dl.height.ceil().max(1.0) as u32,
+        scene.width.ceil().max(1.0) as u32,
+        scene.height.ceil().max(1.0) as u32,
     );
     STATE.with(|cell| {
         if let Some(state) = cell.borrow_mut().as_mut()
@@ -339,7 +339,7 @@ pub fn show_image_dl(dl: &crate::scene::Scene) {
         }
 
         let target_px = (w.get(), h.get());
-        let pixmap = match crate::terminal::rasterize_scene(dl, Some(target_px), 32.0) {
+        let pixmap = match crate::terminal::rasterize_scene(scene, Some(target_px), 32.0) {
             Some(p) => p,
             None => return,
         };

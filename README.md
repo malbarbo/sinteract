@@ -53,8 +53,8 @@ let mut scene = Scene::new(40.0, 30.0);
     p.line_to(0.0, 30.0);
 }
 
-simage::terminal::show_image_dl(&scene);          // terminal
-let pdf: Vec<u8> = simage::pdf::render_to_pdf_dl(&scene);
+simage::terminal::show_image(&scene);          // terminal
+let pdf: Vec<u8> = simage::pdf::render_to_pdf(&scene);
 ```
 
 ## License

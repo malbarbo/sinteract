@@ -459,7 +459,7 @@ impl Scene {
     /// recorded.
     pub fn begin_path(&mut self, style: PathStyle) -> PathBuilder<'_> {
         PathBuilder {
-            dl: self,
+            scene: self,
             style,
             verbs: Vec::new(),
             coords: Vec::new(),
@@ -472,7 +472,7 @@ impl Scene {
     /// through the guard's `Deref` and pop in the right order.
     pub fn push_clip(&mut self, clip: ClipPath) -> ClipGuard<'_> {
         self.elements.push(Element::ClipPush(clip));
-        ClipGuard { dl: self }
+        ClipGuard { scene: self }
     }
 
     /// Push an axis-aligned-or-rotated rectangular clip — the common case.
@@ -542,7 +542,7 @@ impl Scene {
 /// was recorded).
 #[must_use = "PathBuilder commits the path on drop; bind it so geometry methods can run"]
 pub struct PathBuilder<'a> {
-    dl: &'a mut Scene,
+    scene: &'a mut Scene,
     style: PathStyle,
     verbs: Vec<u8>,
     coords: Vec<f32>,
@@ -639,7 +639,7 @@ impl<'a> Drop for PathBuilder<'a> {
         if self.verbs.is_empty() {
             return;
         }
-        self.dl.elements.push(Element::Path(Path {
+        self.scene.elements.push(Element::Path(Path {
             style: std::mem::take(&mut self.style),
             verbs: std::mem::take(&mut self.verbs),
             coords: std::mem::take(&mut self.coords),
@@ -655,25 +655,25 @@ impl<'a> Drop for PathBuilder<'a> {
 /// outer one.
 #[must_use = "ClipGuard pops the clip on drop; bind it where the clip should end"]
 pub struct ClipGuard<'a> {
-    dl: &'a mut Scene,
+    scene: &'a mut Scene,
 }
 
 impl<'a> std::ops::Deref for ClipGuard<'a> {
     type Target = Scene;
     fn deref(&self) -> &Scene {
-        self.dl
+        self.scene
     }
 }
 
 impl<'a> std::ops::DerefMut for ClipGuard<'a> {
     fn deref_mut(&mut self) -> &mut Scene {
-        self.dl
+        self.scene
     }
 }
 
 impl<'a> Drop for ClipGuard<'a> {
     fn drop(&mut self) {
-        self.dl.elements.push(Element::ClipPop);
+        self.scene.elements.push(Element::ClipPop);
     }
 }
 

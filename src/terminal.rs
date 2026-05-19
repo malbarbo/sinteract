@@ -2,7 +2,7 @@
 //! protocol.
 //!
 //! On Kitty-compatible terminals (Kitty, Ghostty, WezTerm, modern Konsole),
-//! `show_image_dl` rasterizes a [`crate::scene::Scene`] directly with
+//! `show_image` rasterizes a [`crate::scene::Scene`] directly with
 //! `tiny-skia` and transmits it as an RGBA payload. Animations (`World.run`)
 //! drive into alt-screen + raw mode via `enter_animation` / `exit_animation`,
 //! and each frame replaces the previous image at (0, 0). Keyboard events are
@@ -467,12 +467,12 @@ fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
 /// Scaling is **shrink-only**: an image smaller than the target stays at its
 /// native dimensions (the user picked those numbers; respect them).
 pub(crate) fn rasterize_scene(
-    dl: &crate::scene::Scene,
+    scene: &crate::scene::Scene,
     target_px: Option<(u32, u32)>,
     max_scale: f32,
 ) -> Option<Pixmap> {
     let mut sink = PixmapRenderer::new(target_px, max_scale);
-    dl.play_into(&mut sink);
+    scene.play_into(&mut sink);
     sink.pixmap
 }
 
@@ -747,16 +747,16 @@ fn delete_kitty_image<W: Write>(w: &mut W, id: u32) -> io::Result<()> {
 // Public entry points
 // -----------------------------------------------------------------------------
 
-/// `show_image_dl` handler installed into the engine on native targets.
+/// `show_image` handler installed into the engine on native targets.
 /// Receives a pre-built [`crate::scene::Scene`] and dispatches to Kitty when
 /// supported, otherwise to Sixel, otherwise to half-blocks ANSI.
-pub fn show_image_dl(dl: &crate::scene::Scene) {
+pub fn show_image(scene: &crate::scene::Scene) {
     let Some(backend) = pick_backend() else {
         return;
     };
     let target = target_pixels_for_backend(backend);
     let max_scale = max_scale_for_backend(backend);
-    let Some(pixmap) = rasterize_scene(dl, target, max_scale) else {
+    let Some(pixmap) = rasterize_scene(scene, target, max_scale) else {
         eprintln!("[spython] failed to rasterize draw list");
         return;
     };
@@ -1024,12 +1024,12 @@ mod tests {
         }
     }
 
-    fn rasterize(dl: &Scene) -> Pixmap {
-        rasterize_scene(dl, None, 1.0).expect("pixmap")
+    fn rasterize(scene: &Scene) -> Pixmap {
+        rasterize_scene(scene, None, 1.0).expect("pixmap")
     }
 
-    fn rect_path(dl: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        let mut p = dl.begin_path(style);
+    fn rect_path(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
+        let mut p = scene.begin_path(style);
         p.move_to(x, y);
         p.line_to(x + w, y);
         p.line_to(x + w, y + h);
@@ -1038,9 +1038,9 @@ mod tests {
 
     #[test]
     fn rasterize_filled_rectangle() {
-        let mut dl = Scene::new(40.0, 30.0);
-        rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 40.0, 30.0);
-        let pm = rasterize(&dl);
+        let mut scene = Scene::new(40.0, 30.0);
+        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 40.0, 30.0);
+        let pm = rasterize(&scene);
         assert_eq!(pm.width(), 40);
         assert_eq!(pm.height(), 30);
         assert_eq!(pixel_rgba(&pm, 20, 15), (0, 0, 255, 255));
@@ -1048,14 +1048,14 @@ mod tests {
 
     #[test]
     fn rasterize_filled_circle_center_is_red() {
-        let mut dl = Scene::new(40.0, 40.0);
+        let mut scene = Scene::new(40.0, 40.0);
         {
-            let mut p = dl.begin_path(solid(255, 0, 0));
+            let mut p = scene.begin_path(solid(255, 0, 0));
             p.move_to(40.0, 20.0);
             p.arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0);
             p.arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0);
         }
-        let pm = rasterize(&dl);
+        let pm = rasterize(&scene);
         let (r, g, b, _) = pixel_rgba(&pm, 20, 20);
         assert_eq!((r, g, b), (255, 0, 0));
     }
@@ -1064,12 +1064,12 @@ mod tests {
     fn rasterize_clip_excludes_outside() {
         // Blue rectangle clipped to a 20×20 box centered at (10, 10) — pixel
         // (35, 25) would lie outside the clip if the full rect made it through.
-        let mut dl = Scene::new(20.0, 20.0);
+        let mut scene = Scene::new(20.0, 20.0);
         {
-            let mut clip = dl.push_clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
+            let mut clip = scene.push_clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
             rect_path(&mut clip, solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0);
         }
-        let pm = rasterize(&dl);
+        let pm = rasterize(&scene);
         assert_eq!(
             (
                 pixel_rgba(&pm, 10, 10).0,
@@ -1083,8 +1083,8 @@ mod tests {
     #[test]
     fn rasterize_default_background_is_transparent() {
         // Empty image (no commands) should leave the pixmap fully transparent.
-        let dl = Scene::new(5.0, 5.0);
-        let pm = rasterize(&dl);
+        let scene = Scene::new(5.0, 5.0);
+        let pm = rasterize(&scene);
         assert_eq!(pixel_rgba(&pm, 2, 2).3, 0);
     }
 
@@ -1102,17 +1102,17 @@ mod tests {
 
     #[test]
     fn rasterize_text_draws_some_pixels() {
-        let mut dl = Scene::new(100.0, 40.0);
-        dl.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
-        let pm = rasterize(&dl);
+        let mut scene = Scene::new(100.0, 40.0);
+        scene.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
+        let pm = rasterize(&scene);
         assert!(count_opaque_pixels(&pm) > 50, "expected text pixels");
     }
 
     #[test]
     fn rasterize_text_corners_remain_transparent() {
-        let mut dl = Scene::new(200.0, 60.0);
-        dl.text(text_node(100.0, 30.0, 200.0, 60.0, 24.0, "Hi"));
-        let pm = rasterize(&dl);
+        let mut scene = Scene::new(200.0, 60.0);
+        scene.text(text_node(100.0, 30.0, 200.0, 60.0, 24.0, "Hi"));
+        let pm = rasterize(&scene);
         assert_eq!(pixel_rgba(&pm, 0, 0).3, 0);
         assert_eq!(pixel_rgba(&pm, 199, 59).3, 0);
     }
@@ -1121,9 +1121,9 @@ mod tests {
     fn rasterize_text_handles_multibyte_utf8() {
         // Portuguese "Olá" — multi-byte UTF-8. Render must not panic and must
         // paint pixels.
-        let mut dl = Scene::new(100.0, 40.0);
-        dl.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Olá"));
-        let pm = rasterize(&dl);
+        let mut scene = Scene::new(100.0, 40.0);
+        scene.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Olá"));
+        let pm = rasterize(&scene);
         assert!(count_opaque_pixels(&pm) > 30, "expected text pixels");
     }
 
@@ -1146,18 +1146,18 @@ mod tests {
     #[test]
     fn rasterize_text_empty_renders_nothing() {
         // Empty string + valid box should leave the canvas transparent.
-        let mut dl = Scene::new(10.0, 10.0);
-        dl.text(text_node(5.0, 5.0, 10.0, 10.0, 24.0, ""));
-        let pm = rasterize(&dl);
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.text(text_node(5.0, 5.0, 10.0, 10.0, 24.0, ""));
+        let pm = rasterize(&scene);
         assert_eq!(count_opaque_pixels(&pm), 0);
     }
 
     #[test]
     fn scale_to_fit_preserves_aspect() {
         // 200×100 input + 50×50 target → fit width: scale=0.25 → 50×25 output.
-        let mut dl = Scene::new(200.0, 100.0);
-        rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0);
-        let pm = rasterize_scene(&dl, Some((50, 50)), 1.0).expect("pixmap");
+        let mut scene = Scene::new(200.0, 100.0);
+        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0);
+        let pm = rasterize_scene(&scene, Some((50, 50)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 50);
         assert_eq!(pm.height(), 25);
         assert_eq!(pixel_rgba(&pm, 25, 12), (0, 0, 255, 255));
@@ -1166,9 +1166,9 @@ mod tests {
     #[test]
     fn scale_to_fit_does_not_upscale() {
         // Tiny 10×10 image + huge 1000×1000 target should keep native dims.
-        let mut dl = Scene::new(10.0, 10.0);
-        rect_path(&mut dl, solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0);
-        let pm = rasterize_scene(&dl, Some((1000, 1000)), 1.0).expect("pixmap");
+        let mut scene = Scene::new(10.0, 10.0);
+        rect_path(&mut scene, solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0);
+        let pm = rasterize_scene(&scene, Some((1000, 1000)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 10);
         assert_eq!(pm.height(), 10);
     }
@@ -1176,9 +1176,9 @@ mod tests {
     #[test]
     fn scale_to_fit_height_constrained() {
         // 100×200 input + 200×50 target → fit height: scale=0.25 → 25×50 output.
-        let mut dl = Scene::new(100.0, 200.0);
-        rect_path(&mut dl, solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0);
-        let pm = rasterize_scene(&dl, Some((200, 50)), 1.0).expect("pixmap");
+        let mut scene = Scene::new(100.0, 200.0);
+        rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0);
+        let pm = rasterize_scene(&scene, Some((200, 50)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 25);
         assert_eq!(pm.height(), 50);
     }
@@ -1189,19 +1189,19 @@ mod tests {
         // ~native screen pixels: 100 px → P_w = 100/8 ≈ 12 image px. With the
         // old cap of 1.0 the pixmap was 100×100, which painted 100 cols × 50
         // cell rows on screen — way bigger than the native logical size.
-        let mut dl = Scene::new(100.0, 100.0);
-        rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
+        let mut scene = Scene::new(100.0, 100.0);
+        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
         // target is the half-blocks bounding box for an 80×24 terminal.
-        let pm = rasterize_scene(&dl, Some((80, 48)), 1.0 / 8.0).expect("pixmap");
+        let pm = rasterize_scene(&scene, Some((80, 48)), 1.0 / 8.0).expect("pixmap");
         assert!(pm.width() <= 13, "got width {}", pm.width());
         assert!(pm.height() <= 13, "got height {}", pm.height());
     }
 
     #[test]
     fn text_blocks_renders_some_pixels() {
-        let mut dl = Scene::new(4.0, 4.0);
-        rect_path(&mut dl, solid(255, 0, 0), 0.0, 0.0, 4.0, 4.0);
-        let pm = rasterize(&dl);
+        let mut scene = Scene::new(4.0, 4.0);
+        rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 4.0, 4.0);
+        let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
         let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
         assert_eq!(lines, 2);
@@ -1211,9 +1211,9 @@ mod tests {
 
     #[test]
     fn text_blocks_uses_truecolor_codes() {
-        let mut dl = Scene::new(2.0, 2.0);
-        rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 2.0, 2.0);
-        let pm = rasterize(&dl);
+        let mut scene = Scene::new(2.0, 2.0);
+        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 2.0, 2.0);
+        let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
         render_text_blocks(&mut buf, &pm).expect("write ok");
         let s = String::from_utf8_lossy(&buf);
@@ -1225,9 +1225,9 @@ mod tests {
     #[test]
     fn text_blocks_handles_odd_height() {
         // 3×3: last cell row has no bottom pixel and must default to black.
-        let mut dl = Scene::new(3.0, 3.0);
-        rect_path(&mut dl, solid(255, 255, 255), 0.0, 0.0, 3.0, 3.0);
-        let pm = rasterize(&dl);
+        let mut scene = Scene::new(3.0, 3.0);
+        rect_path(&mut scene, solid(255, 255, 255), 0.0, 0.0, 3.0, 3.0);
+        let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
         let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
         // ceil(3/2) = 2 cell rows.
@@ -1254,7 +1254,7 @@ mod tests {
         // 40×10 rect, linear gradient from black (x=0) to white (x=40). The
         // leftmost pixel should be ≈ black, the rightmost ≈ white, and the
         // middle a clearly-different gray in between.
-        let mut dl = Scene::new(40.0, 10.0);
+        let mut scene = Scene::new(40.0, 10.0);
         let style = PathStyle {
             fill: IrPaint::Linear(LinearGradient {
                 x0: 0.0,
@@ -1285,8 +1285,8 @@ mod tests {
             }),
             ..PathStyle::default()
         };
-        rect_path(&mut dl, style, 0.0, 0.0, 40.0, 10.0);
-        let pm = rasterize(&dl);
+        rect_path(&mut scene, style, 0.0, 0.0, 40.0, 10.0);
+        let pm = rasterize(&scene);
         let left = pixel_rgba(&pm, 1, 5).0;
         let mid = pixel_rgba(&pm, 20, 5).0;
         let right = pixel_rgba(&pm, 38, 5).0;
@@ -1302,7 +1302,7 @@ mod tests {
     fn rasterize_radial_gradient_center_bright_edge_dark() {
         // 40×40, radial gradient centered at (20, 20) radius 20: white at
         // center, transparent at the edge.
-        let mut dl = Scene::new(40.0, 40.0);
+        let mut scene = Scene::new(40.0, 40.0);
         let style = PathStyle {
             fill: IrPaint::Radial(RadialGradient {
                 cx: 20.0,
@@ -1332,8 +1332,8 @@ mod tests {
             }),
             ..PathStyle::default()
         };
-        rect_path(&mut dl, style, 0.0, 0.0, 40.0, 40.0);
-        let pm = rasterize(&dl);
+        rect_path(&mut scene, style, 0.0, 0.0, 40.0, 40.0);
+        let pm = rasterize(&scene);
         let center_a = pixel_rgba(&pm, 20, 20).3;
         let edge_a = pixel_rgba(&pm, 0, 20).3;
         assert!(center_a > 200, "center too dim: {center_a}");
@@ -1346,7 +1346,7 @@ mod tests {
         // tiles like an even mirror over t periods of length 2. Pixel at
         // x=10 sits at t=0.5 (mid-axis, gray). Pixel at x=30 sits at t=1.5,
         // which Pad clamps to white but Reflect folds back to t=0.5 (gray).
-        let mut dl = Scene::new(80.0, 10.0);
+        let mut scene = Scene::new(80.0, 10.0);
         let style = PathStyle {
             fill: IrPaint::Linear(crate::scene::LinearGradient {
                 x0: 0.0,
@@ -1377,8 +1377,8 @@ mod tests {
             }),
             ..PathStyle::default()
         };
-        rect_path(&mut dl, style, 0.0, 0.0, 80.0, 10.0);
-        let pm = rasterize(&dl);
+        rect_path(&mut scene, style, 0.0, 0.0, 80.0, 10.0);
+        let pm = rasterize(&scene);
         let mid_axis = pixel_rgba(&pm, 10, 5).0; // t = 0.5 → ~gray
         let pad_zone = pixel_rgba(&pm, 30, 5).0; // t = 1.5 → reflect → ~gray
         let pad_far = pixel_rgba(&pm, 50, 5).0; // t = 2.5 → reflect → mid again
@@ -1399,9 +1399,9 @@ mod tests {
         // Horizontal stroke from (5,10) to (95,10) with a [10, 10] dash.
         // Sample on the line: x=10 sits inside an "on" segment (opaque); x=20
         // sits inside an "off" segment (transparent).
-        let mut dl = Scene::new(100.0, 20.0);
+        let mut scene = Scene::new(100.0, 20.0);
         {
-            let mut p = dl.begin_path(PathStyle {
+            let mut p = scene.begin_path(PathStyle {
                 stroke: IrPaint::rgba(255, 0, 0, 1.0),
                 stroke_width: 3.0,
                 dash_array: vec![10.0, 10.0],
@@ -1410,7 +1410,7 @@ mod tests {
             p.move_to(5.0, 10.0);
             p.line_to(95.0, 10.0);
         }
-        let pm = rasterize(&dl);
+        let pm = rasterize(&scene);
         let on = pixel_rgba(&pm, 10, 10).3;
         let off = pixel_rgba(&pm, 20, 10).3;
         assert!(on > 200, "on-segment expected opaque: {on}");
