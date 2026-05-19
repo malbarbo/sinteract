@@ -1029,11 +1029,11 @@ mod tests {
     }
 
     fn rect_path(dl: &mut DrawList, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        dl.path_begin(style);
-        dl.move_to(x, y);
-        dl.line_to(x + w, y);
-        dl.line_to(x + w, y + h);
-        dl.line_to(x, y + h);
+        let mut p = dl.begin_path(style);
+        p.move_to(x, y);
+        p.line_to(x + w, y);
+        p.line_to(x + w, y + h);
+        p.line_to(x, y + h);
     }
 
     #[test]
@@ -1049,10 +1049,12 @@ mod tests {
     #[test]
     fn rasterize_filled_circle_center_is_red() {
         let mut dl = DrawList::new(40.0, 40.0);
-        dl.path_begin(solid(255, 0, 0));
-        dl.move_to(40.0, 20.0);
-        dl.arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0);
-        dl.arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0);
+        {
+            let mut p = dl.begin_path(solid(255, 0, 0));
+            p.move_to(40.0, 20.0);
+            p.arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0);
+            p.arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0);
+        }
         let pm = rasterize(&dl);
         let (r, g, b, _) = pixel_rgba(&pm, 20, 20);
         assert_eq!((r, g, b), (255, 0, 0));
@@ -1063,9 +1065,10 @@ mod tests {
         // Blue rectangle clipped to a 20×20 box centered at (10, 10) — pixel
         // (35, 25) would lie outside the clip if the full rect made it through.
         let mut dl = DrawList::new(20.0, 20.0);
-        dl.clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
-        rect_path(&mut dl, solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0);
-        dl.clip_pop();
+        {
+            let mut clip = dl.push_clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
+            rect_path(&mut clip, solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0);
+        }
         let pm = rasterize(&dl);
         assert_eq!(
             (
@@ -1397,14 +1400,16 @@ mod tests {
         // Sample on the line: x=10 sits inside an "on" segment (opaque); x=20
         // sits inside an "off" segment (transparent).
         let mut dl = DrawList::new(100.0, 20.0);
-        dl.path_begin(PathStyle {
-            stroke: IrPaint::rgba(255, 0, 0, 1.0),
-            stroke_width: 3.0,
-            dash_array: vec![10.0, 10.0],
-            ..PathStyle::default()
-        });
-        dl.move_to(5.0, 10.0);
-        dl.line_to(95.0, 10.0);
+        {
+            let mut p = dl.begin_path(PathStyle {
+                stroke: IrPaint::rgba(255, 0, 0, 1.0),
+                stroke_width: 3.0,
+                dash_array: vec![10.0, 10.0],
+                ..PathStyle::default()
+            });
+            p.move_to(5.0, 10.0);
+            p.line_to(95.0, 10.0);
+        }
         let pm = rasterize(&dl);
         let on = pixel_rgba(&pm, 10, 10).3;
         let off = pixel_rgba(&pm, 20, 10).3;

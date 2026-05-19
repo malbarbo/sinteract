@@ -398,7 +398,7 @@ pub mod verb {
 ///
 /// `verbs[i]` pulls 2 (move/line), 4 (quad), or 6 (cubic) floats from
 /// `coords` in order. The pair always agrees in length — frontends build
-/// it via [`DrawList::path_begin`] / [`DrawList::move_to`] / etc., and the
+/// it via [`DrawList::begin_path`] and the [`PathBuilder`] returned, and the
 /// wire decoder rejects mismatched paths.
 #[derive(Clone, Debug, Default)]
 pub struct Path {
@@ -419,42 +419,26 @@ pub enum DrawNode {
 }
 
 /// Materialized event log produced by Python (or any other front end) and
-/// consumed by every renderer. Built incrementally with [`Self::path_begin`]
-/// / [`Self::move_to`] / [`Self::line_to`] / etc.; replayed once via
+/// consumed by every renderer. Built via RAII guards — [`Self::begin_path`]
+/// returns a [`PathBuilder`] that commits the path on drop, and
+/// [`Self::push_clip`] / [`Self::push_clip_rect`] return a [`ClipGuard`] that
+/// emits the matching `ClipPop` on drop. The list is replayed once via
 /// [`Self::play_into`].
 ///
-/// A path is opened by [`Self::path_begin`] and committed implicitly by the
-/// next path-terminator: a new [`Self::path_begin`], [`Self::clip_push`],
-/// [`Self::clip_pop`], [`Self::text`], [`Self::bitmap`], or by
-/// [`Self::play_into`] / wire-encoding the list. There is no explicit
-/// `path_end`.
+/// Because path geometry only flows through `PathBuilder` and clip nesting is
+/// scoped by `ClipGuard`, several footguns of the older flat API are
+/// statically impossible: you cannot append path verbs without an open path,
+/// commit an empty path, unbalance the clip stack, or interleave a clip with
+/// a half-built path.
 ///
-/// Until a path is committed, it lives in an internal buffer and does **not**
-/// appear in [`Self::nodes`]; both [`Self::play_into`] and the wire encoder
-/// flush it transparently, so external observers always see a consistent list.
-///
-/// Arcs entered via [`Self::arc_to`] are pre-expanded to cubics here, so
+/// Arcs entered via [`PathBuilder::arc_to`] are pre-expanded to cubics so
 /// renderers only see line / quad / cubic primitives — same surface as the
 /// text-format parser in [`crate::parse`].
 #[derive(Clone, Debug, Default)]
 pub struct DrawList {
     pub width: f32,
     pub height: f32,
-    /// Committed nodes in draw order. An in-flight path opened by
-    /// [`Self::path_begin`] but not yet terminated lives in a private
-    /// buffer; it is appended here lazily on the next terminator (or
-    /// flushed by [`Self::play_into`] / the wire encoder), so reading
-    /// `nodes` directly may not reflect every issued call.
     pub nodes: Vec<DrawNode>,
-    open: Option<OpenPath>,
-    last_point: Option<(f32, f32)>,
-}
-
-#[derive(Clone, Debug)]
-struct OpenPath {
-    style: PathStyle,
-    verbs: Vec<u8>,
-    coords: Vec<f32>,
 }
 
 /// Tolerance for SVG arc → cubic conversion. Matches [`crate::parse`].
@@ -466,114 +450,35 @@ impl DrawList {
             width,
             height,
             nodes: Vec::new(),
-            open: None,
+        }
+    }
+
+    /// Begin a new path. Returns a [`PathBuilder`] whose `move_to` / `line_to`
+    /// / `quad_to` / `cubic_to` / `arc_to` methods append verbs; the path is
+    /// committed to [`Self::nodes`] on drop, or discarded if no geometry was
+    /// recorded.
+    pub fn begin_path(&mut self, style: PathStyle) -> PathBuilder<'_> {
+        PathBuilder {
+            dl: self,
+            style,
+            verbs: Vec::new(),
+            coords: Vec::new(),
             last_point: None,
         }
     }
 
-    pub fn path_begin(&mut self, style: PathStyle) {
-        self.commit_open();
-        self.open = Some(OpenPath {
-            style,
-            verbs: Vec::new(),
-            coords: Vec::new(),
-        });
-        self.last_point = None;
-    }
-
-    pub fn move_to(&mut self, x: f32, y: f32) {
-        if let Some(p) = self.open.as_mut() {
-            p.verbs.push(verb::MOVE);
-            p.coords.extend([x, y]);
-        }
-        self.last_point = Some((x, y));
-    }
-
-    pub fn line_to(&mut self, x: f32, y: f32) {
-        if let Some(p) = self.open.as_mut() {
-            p.verbs.push(verb::LINE);
-            p.coords.extend([x, y]);
-        }
-        self.last_point = Some((x, y));
-    }
-
-    pub fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        if let Some(p) = self.open.as_mut() {
-            p.verbs.push(verb::QUAD);
-            p.coords.extend([cx, cy, x, y]);
-        }
-        self.last_point = Some((x, y));
-    }
-
-    pub fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
-        if let Some(p) = self.open.as_mut() {
-            p.verbs.push(verb::CUBIC);
-            p.coords.extend([c1x, c1y, c2x, c2y, x, y]);
-        }
-        self.last_point = Some((x, y));
-    }
-
-    /// Append an SVG endpoint arc, pre-expanding to cubic segments. Mirrors
-    /// the text parser's `A` handling: degenerate arcs collapse to a line.
-    #[allow(clippy::too_many_arguments)]
-    pub fn arc_to(
-        &mut self,
-        rx: f32,
-        ry: f32,
-        rotation_deg: f32,
-        large_arc: bool,
-        sweep: bool,
-        x: f32,
-        y: f32,
-    ) {
-        let Some((x1, y1)) = self.last_point else {
-            // No current point — fall back to a move so the renderer is in a
-            // valid state. The text parser silently drops this case; we mirror.
-            self.move_to(x, y);
-            return;
-        };
-        let svg_arc = kurbo::SvgArc {
-            from: kurbo::Point::new(x1 as f64, y1 as f64),
-            to: kurbo::Point::new(x as f64, y as f64),
-            radii: kurbo::Vec2::new(rx as f64, ry as f64),
-            x_rotation: (rotation_deg as f64).to_radians(),
-            large_arc,
-            sweep,
-        };
-        match kurbo::Arc::from_svg_arc(&svg_arc) {
-            Some(arc) => {
-                if let Some(p) = self.open.as_mut() {
-                    for el in arc.append_iter(ARC_TOLERANCE) {
-                        if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
-                            p.verbs.push(verb::CUBIC);
-                            p.coords.extend([
-                                p1.x as f32,
-                                p1.y as f32,
-                                p2.x as f32,
-                                p2.y as f32,
-                                p3.x as f32,
-                                p3.y as f32,
-                            ]);
-                        }
-                    }
-                }
-                self.last_point = Some((x, y));
-            }
-            None => {
-                self.line_to(x, y);
-            }
-        }
-    }
-
-    pub fn clip_push(&mut self, clip: ClipPath) {
-        self.commit_open();
+    /// Push an arbitrary clip path. Returns a [`ClipGuard`] that emits the
+    /// matching `ClipPop` on drop; nested clips just call [`Self::push_clip`]
+    /// through the guard's `Deref` and pop in the right order.
+    pub fn push_clip(&mut self, clip: ClipPath) -> ClipGuard<'_> {
         self.nodes.push(DrawNode::ClipPush(clip));
+        ClipGuard { dl: self }
     }
 
     /// Push an axis-aligned-or-rotated rectangular clip — the common case.
     /// Builds the 4-corner `ClipPath` (rotated by `angle_deg` around the
-    /// centre) and pushes it. Saves callers from open-coding the rotation.
-    pub fn clip_rect(
+    /// centre) and returns the guard.
+    pub fn push_clip_rect(
         &mut self,
         cx: f32,
         cy: f32,
@@ -581,7 +486,7 @@ impl DrawList {
         h: f32,
         angle_deg: f32,
         fill_rule: FillRule,
-    ) {
+    ) -> ClipGuard<'_> {
         let hw = w / 2.0;
         let hh = h / 2.0;
         let theta = angle_deg * std::f32::consts::PI / 180.0;
@@ -592,64 +497,30 @@ impl DrawList {
         let p1 = corner(hw, -hh);
         let p2 = corner(hw, hh);
         let p3 = corner(-hw, hh);
-        self.clip_push(ClipPath {
+        self.push_clip(ClipPath {
             verbs: vec![verb::MOVE, verb::LINE, verb::LINE, verb::LINE],
             coords: vec![p0.0, p0.1, p1.0, p1.1, p2.0, p2.1, p3.0, p3.1],
             fill_rule,
-        });
-    }
-
-    pub fn clip_pop(&mut self) {
-        self.commit_open();
-        self.nodes.push(DrawNode::ClipPop);
+        })
     }
 
     pub fn text(&mut self, node: TextNode) {
-        self.commit_open();
         self.nodes.push(DrawNode::Text(Box::new(node)));
     }
 
     pub fn bitmap(&mut self, node: BitmapNode) {
-        self.commit_open();
         self.nodes.push(DrawNode::Bitmap(node));
     }
 
-    fn commit_open(&mut self) {
-        if let Some(open) = self.open.take() {
-            self.nodes.push(DrawNode::Path(Path {
-                style: open.style,
-                verbs: open.verbs,
-                coords: open.coords,
-            }));
-        }
-    }
-
-    /// Whether a path is currently open (one or more `path_begin` / `*_to`
-    /// have happened with no committing terminator yet). Used by the wire
-    /// encoder to mirror [`Self::play_into`]'s "trailing open path" handling.
-    pub(crate) fn has_open_path(&self) -> bool {
-        self.open.is_some()
-    }
-
-    /// Borrow the in-flight path's parts, for the wire encoder. Returns
-    /// `None` if no path is open.
-    pub(crate) fn open_path_parts(&self) -> Option<(&PathStyle, &[u8], &[f32])> {
-        self.open
-            .as_ref()
-            .map(|o| (&o.style, o.verbs.as_slice(), o.coords.as_slice()))
-    }
-
     /// Append a fully-built path. Used by the wire decoder; lets us bypass
-    /// the `path_begin / move_to / …` chatter when we've already validated
-    /// the verb/coords pair.
+    /// the `begin_path / move_to / …` guard for paths whose verbs/coords
+    /// were already validated.
     pub(crate) fn push_path(&mut self, path: Path) {
-        self.commit_open();
         self.nodes.push(DrawNode::Path(path));
     }
 
     /// Replay every node into `sink`. Wraps `sink.begin()` and `sink.end()`
-    /// around the dispatch loop so callers don't have to. Any path still
-    /// open at the time of the call is replayed before `sink.end()`.
+    /// around the dispatch loop so callers don't have to.
     pub fn play_into(&self, sink: &mut dyn crate::sink::DrawSink) {
         sink.begin(self.width, self.height);
         for node in &self.nodes {
@@ -661,10 +532,148 @@ impl DrawList {
                 DrawNode::Bitmap(b) => sink.bitmap(b),
             }
         }
-        if let Some(open) = self.open.as_ref() {
-            play_path(&open.style, &open.verbs, &open.coords, sink);
-        }
         sink.end();
+    }
+}
+
+/// Path geometry accumulator returned by [`DrawList::begin_path`]. Holds the
+/// style and the in-flight verb/coord buffers; on drop, commits a
+/// [`DrawNode::Path`] to the parent [`DrawList`] (or discards if no geometry
+/// was recorded).
+#[must_use = "PathBuilder commits the path on drop; bind it so geometry methods can run"]
+pub struct PathBuilder<'a> {
+    dl: &'a mut DrawList,
+    style: PathStyle,
+    verbs: Vec<u8>,
+    coords: Vec<f32>,
+    last_point: Option<(f32, f32)>,
+}
+
+impl<'a> PathBuilder<'a> {
+    pub fn move_to(&mut self, x: f32, y: f32) -> &mut Self {
+        self.verbs.push(verb::MOVE);
+        self.coords.extend([x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn line_to(&mut self, x: f32, y: f32) -> &mut Self {
+        self.verbs.push(verb::LINE);
+        self.coords.extend([x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) -> &mut Self {
+        self.verbs.push(verb::QUAD);
+        self.coords.extend([cx, cy, x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn cubic_to(
+        &mut self,
+        c1x: f32,
+        c1y: f32,
+        c2x: f32,
+        c2y: f32,
+        x: f32,
+        y: f32,
+    ) -> &mut Self {
+        self.verbs.push(verb::CUBIC);
+        self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    /// Append an SVG endpoint arc, pre-expanding to cubic segments. Mirrors
+    /// the text parser's `A` handling: with no current point, falls back to
+    /// `move_to(x, y)`; degenerate arcs collapse to a line.
+    #[allow(clippy::too_many_arguments)]
+    pub fn arc_to(
+        &mut self,
+        rx: f32,
+        ry: f32,
+        rotation_deg: f32,
+        large_arc: bool,
+        sweep: bool,
+        x: f32,
+        y: f32,
+    ) -> &mut Self {
+        let Some((x1, y1)) = self.last_point else {
+            return self.move_to(x, y);
+        };
+        let svg_arc = kurbo::SvgArc {
+            from: kurbo::Point::new(x1 as f64, y1 as f64),
+            to: kurbo::Point::new(x as f64, y as f64),
+            radii: kurbo::Vec2::new(rx as f64, ry as f64),
+            x_rotation: (rotation_deg as f64).to_radians(),
+            large_arc,
+            sweep,
+        };
+        match kurbo::Arc::from_svg_arc(&svg_arc) {
+            Some(arc) => {
+                for el in arc.append_iter(ARC_TOLERANCE) {
+                    if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
+                        self.verbs.push(verb::CUBIC);
+                        self.coords.extend([
+                            p1.x as f32,
+                            p1.y as f32,
+                            p2.x as f32,
+                            p2.y as f32,
+                            p3.x as f32,
+                            p3.y as f32,
+                        ]);
+                    }
+                }
+                self.last_point = Some((x, y));
+                self
+            }
+            None => self.line_to(x, y),
+        }
+    }
+}
+
+impl<'a> Drop for PathBuilder<'a> {
+    fn drop(&mut self) {
+        if self.verbs.is_empty() {
+            return;
+        }
+        self.dl.nodes.push(DrawNode::Path(Path {
+            style: std::mem::take(&mut self.style),
+            verbs: std::mem::take(&mut self.verbs),
+            coords: std::mem::take(&mut self.coords),
+        }));
+    }
+}
+
+/// Active clip scope returned by [`DrawList::push_clip`] /
+/// [`DrawList::push_clip_rect`]. `Deref`s to the parent [`DrawList`] so all
+/// draw methods remain reachable through the guard; on drop, emits the
+/// matching `ClipPop`. Nested clips work because each `push_clip` call on the
+/// guard creates a fresh `ClipGuard` whose lifetime is contained within the
+/// outer one.
+#[must_use = "ClipGuard pops the clip on drop; bind it where the clip should end"]
+pub struct ClipGuard<'a> {
+    dl: &'a mut DrawList,
+}
+
+impl<'a> std::ops::Deref for ClipGuard<'a> {
+    type Target = DrawList;
+    fn deref(&self) -> &DrawList {
+        self.dl
+    }
+}
+
+impl<'a> std::ops::DerefMut for ClipGuard<'a> {
+    fn deref_mut(&mut self) -> &mut DrawList {
+        self.dl
+    }
+}
+
+impl<'a> Drop for ClipGuard<'a> {
+    fn drop(&mut self) {
+        self.dl.nodes.push(DrawNode::ClipPop);
     }
 }
 

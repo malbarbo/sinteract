@@ -836,11 +836,11 @@ mod tests {
     }
 
     fn rect(dl: &mut DrawList, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        dl.path_begin(style);
-        dl.move_to(x, y);
-        dl.line_to(x + w, y);
-        dl.line_to(x + w, y + h);
-        dl.line_to(x, y + h);
+        let mut p = dl.begin_path(style);
+        p.move_to(x, y);
+        p.line_to(x + w, y);
+        p.line_to(x + w, y + h);
+        p.line_to(x, y + h);
     }
 
     #[test]

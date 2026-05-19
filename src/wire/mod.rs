@@ -598,17 +598,9 @@ fn write_drawnode(mut b: draw_node::Builder<'_>, node: &DrawNode) {
 fn write_drawlist(mut b: draw_list::Builder<'_>, dl: &DrawList) {
     b.set_width(dl.width);
     b.set_height(dl.height);
-    // Serialize committed nodes plus any still-open path as a trailing Path
-    // node, mirroring play_into's behavior.
-    let extra = if dl.has_open_path() { 1 } else { 0 };
-    let total = dl.nodes.len() + extra;
-    let mut nodes = b.init_nodes(total as u32);
+    let mut nodes = b.init_nodes(dl.nodes.len() as u32);
     for (i, node) in dl.nodes.iter().enumerate() {
         write_drawnode(nodes.reborrow().get(i as u32), node);
-    }
-    if let Some((style, verbs, coords)) = dl.open_path_parts() {
-        let i = dl.nodes.len() as u32;
-        write_path_parts(nodes.reborrow().get(i).init_path(), style, verbs, coords);
     }
 }
 
@@ -619,8 +611,8 @@ fn read_drawnode(node: draw_node::Reader<'_>, out: &mut DrawList) -> Result<(), 
             let path = read_path(p?)?;
             out.push_path(path);
         }
-        Which::ClipPush(c) => out.clip_push(read_clip_path(c?)?),
-        Which::ClipPop(()) => out.clip_pop(),
+        Which::ClipPush(c) => out.nodes.push(DrawNode::ClipPush(read_clip_path(c?)?)),
+        Which::ClipPop(()) => out.nodes.push(DrawNode::ClipPop),
         Which::Text(t) => out.text(read_text_node(t?)?),
         Which::Bitmap(n) => out.bitmap(read_bitmap(n?)),
     }
@@ -704,54 +696,57 @@ mod tests {
 
     fn sample_drawlist() -> DrawList {
         let mut dl = DrawList::new(120.0, 80.0);
-        dl.path_begin(PathStyle {
-            fill: Paint::rgba(10, 20, 30, 0.5),
-            stroke: Paint::rgba(200, 0, 0, 1.0),
-            stroke_width: 2.5,
-            line_cap: LineCap::Round,
-            line_join: LineJoin::Bevel,
-            fill_rule: FillRule::EvenOdd,
-            closed: true,
-            ..PathStyle::default()
-        });
-        dl.move_to(0.0, 0.0);
-        dl.line_to(10.0, 0.0);
-        dl.quad_to(15.0, 5.0, 20.0, 10.0);
-        dl.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
-        dl.clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
-        dl.text(TextNode {
-            fill: Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 1.0,
-            },
-            transform: crate::ir::text_box_affine(
-                "Liberation Sans",
-                700,
-                FontStyle::Italic,
-                12.0,
-                "Olá",
-                60.0,
-                30.0,
-                50.0,
-                14.0,
-                0.0,
-            ),
-            size: 12.0,
-            family: "Liberation Sans".into(),
-            weight: 700,
-            style: FontStyle::Italic,
-            underline: true,
-            text: "Olá".into(),
-            ..TextNode::default()
-        });
-        dl.bitmap(BitmapNode {
-            id: 7,
-            // 64×64 asset, mirrored horizontally, rotated 90°, centred at (70, 40).
-            transform: crate::ir::bitmap_box_affine(64, 64, 70.0, 40.0, -32.0, 32.0, 90.0),
-        });
-        dl.clip_pop();
+        {
+            let mut p = dl.begin_path(PathStyle {
+                fill: Paint::rgba(10, 20, 30, 0.5),
+                stroke: Paint::rgba(200, 0, 0, 1.0),
+                stroke_width: 2.5,
+                line_cap: LineCap::Round,
+                line_join: LineJoin::Bevel,
+                fill_rule: FillRule::EvenOdd,
+                closed: true,
+                ..PathStyle::default()
+            });
+            p.move_to(0.0, 0.0);
+            p.line_to(10.0, 0.0);
+            p.quad_to(15.0, 5.0, 20.0, 10.0);
+            p.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
+        }
+        {
+            let mut clip = dl.push_clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
+            clip.text(TextNode {
+                fill: Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                transform: crate::ir::text_box_affine(
+                    "Liberation Sans",
+                    700,
+                    FontStyle::Italic,
+                    12.0,
+                    "Olá",
+                    60.0,
+                    30.0,
+                    50.0,
+                    14.0,
+                    0.0,
+                ),
+                size: 12.0,
+                family: "Liberation Sans".into(),
+                weight: 700,
+                style: FontStyle::Italic,
+                underline: true,
+                text: "Olá".into(),
+                ..TextNode::default()
+            });
+            clip.bitmap(BitmapNode {
+                id: 7,
+                // 64×64 asset, mirrored horizontally, rotated 90°, centred at (70, 40).
+                transform: crate::ir::bitmap_box_affine(64, 64, 70.0, 40.0, -32.0, 32.0, 90.0),
+            });
+        }
         dl
     }
 
@@ -851,34 +846,6 @@ mod tests {
     }
 
     #[test]
-    fn open_path_without_terminator_is_flushed() {
-        // A frontend that calls path_begin / move_to / line_to and never
-        // hits a terminator should still serialize the path: encode_frame
-        // mirrors play_into and emits the in-flight path.
-        let mut dl = DrawList::new(50.0, 50.0);
-        dl.path_begin(PathStyle::default());
-        dl.move_to(0.0, 0.0);
-        dl.line_to(10.0, 10.0);
-        // No clip_push / text / bitmap / second path_begin — open path lives.
-        assert_eq!(dl.nodes.len(), 0, "no node committed yet");
-        assert!(dl.has_open_path());
-        let bytes = encode_frame(&dl);
-        match decode(&bytes).expect("decode") {
-            Decoded::Frame(d) => {
-                assert_eq!(d.nodes.len(), 1, "expected one Path node");
-                match &d.nodes[0] {
-                    DrawNode::Path(p) => {
-                        assert_eq!(p.verbs, vec![verb::MOVE, verb::LINE]);
-                        assert_eq!(p.coords, vec![0.0, 0.0, 10.0, 10.0]);
-                    }
-                    other => panic!("expected Path, got {other:?}"),
-                }
-            }
-            _ => panic!(),
-        }
-    }
-
-    #[test]
     fn malformed_path_is_rejected() {
         // Hand-build a Path with verbs=[CUBIC] (needs 6 floats) but only
         // 4 coords → decoder must reject with PathLengthMismatch.
@@ -914,16 +881,18 @@ mod tests {
     #[test]
     fn dash_and_miter_round_trip() {
         let mut dl = DrawList::new(100.0, 50.0);
-        dl.path_begin(PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 1.0),
-            stroke_width: 2.0,
-            miter_limit: 7.5,
-            dash_array: vec![4.0, 2.0, 1.0],
-            dash_offset: 1.5,
-            ..PathStyle::default()
-        });
-        dl.move_to(0.0, 0.0);
-        dl.line_to(50.0, 50.0);
+        {
+            let mut p = dl.begin_path(PathStyle {
+                stroke: Paint::rgba(0, 0, 0, 1.0),
+                stroke_width: 2.0,
+                miter_limit: 7.5,
+                dash_array: vec![4.0, 2.0, 1.0],
+                dash_offset: 1.5,
+                ..PathStyle::default()
+            });
+            p.move_to(0.0, 0.0);
+            p.line_to(50.0, 50.0);
+        }
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
@@ -978,13 +947,15 @@ mod tests {
             ],
             ..LinearGradient::default()
         };
-        dl.path_begin(PathStyle {
-            fill: Paint::Linear(gradient.clone()),
-            ..PathStyle::default()
-        });
-        dl.move_to(0.0, 0.0);
-        dl.line_to(50.0, 0.0);
-        dl.line_to(50.0, 50.0);
+        {
+            let mut p = dl.begin_path(PathStyle {
+                fill: Paint::Linear(gradient.clone()),
+                ..PathStyle::default()
+            });
+            p.move_to(0.0, 0.0);
+            p.line_to(50.0, 0.0);
+            p.line_to(50.0, 50.0);
+        }
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
@@ -1026,12 +997,14 @@ mod tests {
             ],
             ..RadialGradient::default()
         };
-        dl.path_begin(PathStyle {
-            fill: Paint::Radial(gradient.clone()),
-            ..PathStyle::default()
-        });
-        dl.move_to(0.0, 0.0);
-        dl.line_to(50.0, 50.0);
+        {
+            let mut p = dl.begin_path(PathStyle {
+                fill: Paint::Radial(gradient.clone()),
+                ..PathStyle::default()
+            });
+            p.move_to(0.0, 0.0);
+            p.line_to(50.0, 50.0);
+        }
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
@@ -1076,12 +1049,14 @@ mod tests {
                 },
             ],
         };
-        dl.path_begin(PathStyle {
-            fill: Paint::Linear(linear.clone()),
-            ..PathStyle::default()
-        });
-        dl.move_to(0.0, 0.0);
-        dl.line_to(50.0, 50.0);
+        {
+            let mut p = dl.begin_path(PathStyle {
+                fill: Paint::Linear(linear.clone()),
+                ..PathStyle::default()
+            });
+            p.move_to(0.0, 0.0);
+            p.line_to(50.0, 50.0);
+        }
         let radial = RadialGradient {
             cx: 25.0,
             cy: 25.0,
@@ -1103,12 +1078,14 @@ mod tests {
                 },
             ],
         };
-        dl.path_begin(PathStyle {
-            fill: Paint::Radial(radial.clone()),
-            ..PathStyle::default()
-        });
-        dl.move_to(0.0, 0.0);
-        dl.line_to(50.0, 50.0);
+        {
+            let mut p = dl.begin_path(PathStyle {
+                fill: Paint::Radial(radial.clone()),
+                ..PathStyle::default()
+            });
+            p.move_to(0.0, 0.0);
+            p.line_to(50.0, 50.0);
+        }
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
@@ -1131,12 +1108,11 @@ mod tests {
         // segment + even-odd rule to exercise verb walking and fill-rule
         // preservation across the wire.
         let mut dl = DrawList::new(50.0, 50.0);
-        dl.clip_push(ClipPath {
+        drop(dl.push_clip(ClipPath {
             verbs: vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE],
             coords: vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0],
             fill_rule: FillRule::EvenOdd,
-        });
-        dl.clip_pop();
+        }));
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
@@ -1194,8 +1170,10 @@ mod tests {
         // dash empty, miter_limit at SVG default. Guards against future
         // accidental changes to Default.
         let mut dl = DrawList::new(10.0, 10.0);
-        dl.path_begin(PathStyle::default());
-        dl.move_to(0.0, 0.0);
+        {
+            let mut p = dl.begin_path(PathStyle::default());
+            p.move_to(0.0, 0.0);
+        }
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {

@@ -237,12 +237,14 @@ mod tests {
         );
 
         let mut dl = DrawList::new(10.0, 10.0);
-        dl.path_begin(PathStyle {
-            fill: Paint::rgba(1, 2, 3, 1.0),
-            ..PathStyle::default()
-        });
-        dl.move_to(0.0, 0.0);
-        dl.line_to(10.0, 10.0);
+        {
+            let mut p = dl.begin_path(PathStyle {
+                fill: Paint::rgba(1, 2, 3, 1.0),
+                ..PathStyle::default()
+            });
+            p.move_to(0.0, 0.0);
+            p.line_to(10.0, 10.0);
+        }
         fr.present(&dl);
 
         let buf = written.0.lock().unwrap().clone();
