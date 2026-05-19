@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
-use crate::ir::DrawList;
+use crate::scene::Scene;
 
 use crate::stdio::StdioFrontend;
 
@@ -106,7 +106,7 @@ impl Frontend {
     }
 
     /// Render `dl` to the active output.
-    pub fn present(&mut self, dl: &DrawList) {
+    pub fn present(&mut self, dl: &Scene) {
         match self {
             Frontend::Terminal(f) => f.present(dl),
             Frontend::Window(f) => f.present(dl),
@@ -248,7 +248,7 @@ impl TerminalFrontend {
         }
     }
 
-    pub fn present(&mut self, dl: &DrawList) {
+    pub fn present(&mut self, dl: &Scene) {
         crate::terminal::show_image_dl(dl);
     }
 
@@ -328,7 +328,7 @@ impl WindowFrontend {
         }
     }
 
-    pub fn present(&mut self, dl: &DrawList) {
+    pub fn present(&mut self, dl: &Scene) {
         crate::window::show_image_dl(dl);
     }
 

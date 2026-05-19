@@ -9,7 +9,7 @@
 //! draw-list wire format. Backends that need a different convention apply a
 //! transform once at the start (see `pdf` and `terminal`).
 
-use crate::ir::{BitmapNode, ClipPath, PathStyle, TextNode};
+use crate::scene::{BitmapNode, ClipPath, PathStyle, TextNode};
 
 pub trait DrawSink {
     /// Called once with the canvas dimensions before any draw command. May be

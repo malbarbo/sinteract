@@ -2,7 +2,7 @@
 //! protocol.
 //!
 //! On Kitty-compatible terminals (Kitty, Ghostty, WezTerm, modern Konsole),
-//! `show_image_dl` rasterizes a [`crate::ir::DrawList`] directly with
+//! `show_image_dl` rasterizes a [`crate::scene::Scene`] directly with
 //! `tiny-skia` and transmits it as an RGBA payload. Animations (`World.run`)
 //! drive into alt-screen + raw mode via `enter_animation` / `exit_animation`,
 //! and each frame replaces the previous image at (0, 0). Keyboard events are
@@ -35,7 +35,7 @@ use tiny_skia::{
     SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::ir::{
+use crate::scene::{
     BitmapNode, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, TextNode,
     verb,
 };
@@ -412,18 +412,18 @@ fn sk_color(c: Rgba) -> SkColor {
     SkColor::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8)
 }
 
-fn sk_stops(stops: &[crate::ir::Stop]) -> Vec<SkStop> {
+fn sk_stops(stops: &[crate::scene::Stop]) -> Vec<SkStop> {
     stops
         .iter()
         .map(|s| SkStop::new(s.offset, sk_color(s.color)))
         .collect()
 }
 
-fn sk_spread(s: crate::ir::SpreadMode) -> SkSpread {
+fn sk_spread(s: crate::scene::SpreadMode) -> SkSpread {
     match s {
-        crate::ir::SpreadMode::Pad => SkSpread::Pad,
-        crate::ir::SpreadMode::Reflect => SkSpread::Reflect,
-        crate::ir::SpreadMode::Repeat => SkSpread::Repeat,
+        crate::scene::SpreadMode::Pad => SkSpread::Pad,
+        crate::scene::SpreadMode::Reflect => SkSpread::Reflect,
+        crate::scene::SpreadMode::Repeat => SkSpread::Repeat,
     }
 }
 
@@ -461,13 +461,13 @@ fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
     }
 }
 
-/// Rasterize a [`crate::ir::DrawList`], optionally fitting the output to
+/// Rasterize a [`crate::scene::Scene`], optionally fitting the output to
 /// `target_px` (in pixels). When a target is given, the output is uniformly
 /// scaled so it fits inside the target box while preserving aspect ratio.
 /// Scaling is **shrink-only**: an image smaller than the target stays at its
 /// native dimensions (the user picked those numbers; respect them).
-pub(crate) fn rasterize_draw_list_dl(
-    dl: &crate::ir::DrawList,
+pub(crate) fn rasterize_scene(
+    dl: &crate::scene::Scene,
     target_px: Option<(u32, u32)>,
     max_scale: f32,
 ) -> Option<Pixmap> {
@@ -748,15 +748,15 @@ fn delete_kitty_image<W: Write>(w: &mut W, id: u32) -> io::Result<()> {
 // -----------------------------------------------------------------------------
 
 /// `show_image_dl` handler installed into the engine on native targets.
-/// Receives a pre-built [`crate::ir::DrawList`] and dispatches to Kitty when
+/// Receives a pre-built [`crate::scene::Scene`] and dispatches to Kitty when
 /// supported, otherwise to Sixel, otherwise to half-blocks ANSI.
-pub fn show_image_dl(dl: &crate::ir::DrawList) {
+pub fn show_image_dl(dl: &crate::scene::Scene) {
     let Some(backend) = pick_backend() else {
         return;
     };
     let target = target_pixels_for_backend(backend);
     let max_scale = max_scale_for_backend(backend);
-    let Some(pixmap) = rasterize_draw_list_dl(dl, target, max_scale) else {
+    let Some(pixmap) = rasterize_scene(dl, target, max_scale) else {
         eprintln!("[spython] failed to rasterize draw list");
         return;
     };
@@ -983,7 +983,7 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::DrawList;
+    use crate::scene::Scene;
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -1006,10 +1006,10 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            transform: crate::ir::text_box_affine(
+            transform: crate::scene::text_box_affine(
                 "",
                 400,
-                crate::ir::FontStyle::Normal,
+                crate::scene::FontStyle::Normal,
                 size,
                 text,
                 cx,
@@ -1024,11 +1024,11 @@ mod tests {
         }
     }
 
-    fn rasterize(dl: &DrawList) -> Pixmap {
-        rasterize_draw_list_dl(dl, None, 1.0).expect("pixmap")
+    fn rasterize(dl: &Scene) -> Pixmap {
+        rasterize_scene(dl, None, 1.0).expect("pixmap")
     }
 
-    fn rect_path(dl: &mut DrawList, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
+    fn rect_path(dl: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
         let mut p = dl.begin_path(style);
         p.move_to(x, y);
         p.line_to(x + w, y);
@@ -1038,7 +1038,7 @@ mod tests {
 
     #[test]
     fn rasterize_filled_rectangle() {
-        let mut dl = DrawList::new(40.0, 30.0);
+        let mut dl = Scene::new(40.0, 30.0);
         rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 40.0, 30.0);
         let pm = rasterize(&dl);
         assert_eq!(pm.width(), 40);
@@ -1048,7 +1048,7 @@ mod tests {
 
     #[test]
     fn rasterize_filled_circle_center_is_red() {
-        let mut dl = DrawList::new(40.0, 40.0);
+        let mut dl = Scene::new(40.0, 40.0);
         {
             let mut p = dl.begin_path(solid(255, 0, 0));
             p.move_to(40.0, 20.0);
@@ -1064,7 +1064,7 @@ mod tests {
     fn rasterize_clip_excludes_outside() {
         // Blue rectangle clipped to a 20×20 box centered at (10, 10) — pixel
         // (35, 25) would lie outside the clip if the full rect made it through.
-        let mut dl = DrawList::new(20.0, 20.0);
+        let mut dl = Scene::new(20.0, 20.0);
         {
             let mut clip = dl.push_clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
             rect_path(&mut clip, solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0);
@@ -1083,7 +1083,7 @@ mod tests {
     #[test]
     fn rasterize_default_background_is_transparent() {
         // Empty image (no commands) should leave the pixmap fully transparent.
-        let dl = DrawList::new(5.0, 5.0);
+        let dl = Scene::new(5.0, 5.0);
         let pm = rasterize(&dl);
         assert_eq!(pixel_rgba(&pm, 2, 2).3, 0);
     }
@@ -1102,7 +1102,7 @@ mod tests {
 
     #[test]
     fn rasterize_text_draws_some_pixels() {
-        let mut dl = DrawList::new(100.0, 40.0);
+        let mut dl = Scene::new(100.0, 40.0);
         dl.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
         let pm = rasterize(&dl);
         assert!(count_opaque_pixels(&pm) > 50, "expected text pixels");
@@ -1110,7 +1110,7 @@ mod tests {
 
     #[test]
     fn rasterize_text_corners_remain_transparent() {
-        let mut dl = DrawList::new(200.0, 60.0);
+        let mut dl = Scene::new(200.0, 60.0);
         dl.text(text_node(100.0, 30.0, 200.0, 60.0, 24.0, "Hi"));
         let pm = rasterize(&dl);
         assert_eq!(pixel_rgba(&pm, 0, 0).3, 0);
@@ -1121,7 +1121,7 @@ mod tests {
     fn rasterize_text_handles_multibyte_utf8() {
         // Portuguese "Olá" — multi-byte UTF-8. Render must not panic and must
         // paint pixels.
-        let mut dl = DrawList::new(100.0, 40.0);
+        let mut dl = Scene::new(100.0, 40.0);
         dl.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Olá"));
         let pm = rasterize(&dl);
         assert!(count_opaque_pixels(&pm) > 30, "expected text pixels");
@@ -1131,9 +1131,9 @@ mod tests {
     fn rasterize_text_underline_adds_pixels() {
         // Same text twice — once with underline and once without. Underline
         // should produce strictly more painted pixels.
-        let mut without = DrawList::new(100.0, 40.0);
+        let mut without = Scene::new(100.0, 40.0);
         without.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
-        let mut with = DrawList::new(100.0, 40.0);
+        let mut with = Scene::new(100.0, 40.0);
         let mut node = text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi");
         node.underline = true;
         with.text(node);
@@ -1146,7 +1146,7 @@ mod tests {
     #[test]
     fn rasterize_text_empty_renders_nothing() {
         // Empty string + valid box should leave the canvas transparent.
-        let mut dl = DrawList::new(10.0, 10.0);
+        let mut dl = Scene::new(10.0, 10.0);
         dl.text(text_node(5.0, 5.0, 10.0, 10.0, 24.0, ""));
         let pm = rasterize(&dl);
         assert_eq!(count_opaque_pixels(&pm), 0);
@@ -1155,9 +1155,9 @@ mod tests {
     #[test]
     fn scale_to_fit_preserves_aspect() {
         // 200×100 input + 50×50 target → fit width: scale=0.25 → 50×25 output.
-        let mut dl = DrawList::new(200.0, 100.0);
+        let mut dl = Scene::new(200.0, 100.0);
         rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0);
-        let pm = rasterize_draw_list_dl(&dl, Some((50, 50)), 1.0).expect("pixmap");
+        let pm = rasterize_scene(&dl, Some((50, 50)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 50);
         assert_eq!(pm.height(), 25);
         assert_eq!(pixel_rgba(&pm, 25, 12), (0, 0, 255, 255));
@@ -1166,9 +1166,9 @@ mod tests {
     #[test]
     fn scale_to_fit_does_not_upscale() {
         // Tiny 10×10 image + huge 1000×1000 target should keep native dims.
-        let mut dl = DrawList::new(10.0, 10.0);
+        let mut dl = Scene::new(10.0, 10.0);
         rect_path(&mut dl, solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0);
-        let pm = rasterize_draw_list_dl(&dl, Some((1000, 1000)), 1.0).expect("pixmap");
+        let pm = rasterize_scene(&dl, Some((1000, 1000)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 10);
         assert_eq!(pm.height(), 10);
     }
@@ -1176,9 +1176,9 @@ mod tests {
     #[test]
     fn scale_to_fit_height_constrained() {
         // 100×200 input + 200×50 target → fit height: scale=0.25 → 25×50 output.
-        let mut dl = DrawList::new(100.0, 200.0);
+        let mut dl = Scene::new(100.0, 200.0);
         rect_path(&mut dl, solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0);
-        let pm = rasterize_draw_list_dl(&dl, Some((200, 50)), 1.0).expect("pixmap");
+        let pm = rasterize_scene(&dl, Some((200, 50)), 1.0).expect("pixmap");
         assert_eq!(pm.width(), 25);
         assert_eq!(pm.height(), 50);
     }
@@ -1189,17 +1189,17 @@ mod tests {
         // ~native screen pixels: 100 px → P_w = 100/8 ≈ 12 image px. With the
         // old cap of 1.0 the pixmap was 100×100, which painted 100 cols × 50
         // cell rows on screen — way bigger than the native logical size.
-        let mut dl = DrawList::new(100.0, 100.0);
+        let mut dl = Scene::new(100.0, 100.0);
         rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
         // target is the half-blocks bounding box for an 80×24 terminal.
-        let pm = rasterize_draw_list_dl(&dl, Some((80, 48)), 1.0 / 8.0).expect("pixmap");
+        let pm = rasterize_scene(&dl, Some((80, 48)), 1.0 / 8.0).expect("pixmap");
         assert!(pm.width() <= 13, "got width {}", pm.width());
         assert!(pm.height() <= 13, "got height {}", pm.height());
     }
 
     #[test]
     fn text_blocks_renders_some_pixels() {
-        let mut dl = DrawList::new(4.0, 4.0);
+        let mut dl = Scene::new(4.0, 4.0);
         rect_path(&mut dl, solid(255, 0, 0), 0.0, 0.0, 4.0, 4.0);
         let pm = rasterize(&dl);
         let mut buf: Vec<u8> = Vec::new();
@@ -1211,7 +1211,7 @@ mod tests {
 
     #[test]
     fn text_blocks_uses_truecolor_codes() {
-        let mut dl = DrawList::new(2.0, 2.0);
+        let mut dl = Scene::new(2.0, 2.0);
         rect_path(&mut dl, solid(0, 0, 255), 0.0, 0.0, 2.0, 2.0);
         let pm = rasterize(&dl);
         let mut buf: Vec<u8> = Vec::new();
@@ -1225,7 +1225,7 @@ mod tests {
     #[test]
     fn text_blocks_handles_odd_height() {
         // 3×3: last cell row has no bottom pixel and must default to black.
-        let mut dl = DrawList::new(3.0, 3.0);
+        let mut dl = Scene::new(3.0, 3.0);
         rect_path(&mut dl, solid(255, 255, 255), 0.0, 0.0, 3.0, 3.0);
         let pm = rasterize(&dl);
         let mut buf: Vec<u8> = Vec::new();
@@ -1247,14 +1247,14 @@ mod tests {
     // Gradient + dash rendering
     // -----------------------------------------------------------------------
 
-    use crate::ir::{LinearGradient, RadialGradient, Stop};
+    use crate::scene::{LinearGradient, RadialGradient, Stop};
 
     #[test]
     fn rasterize_linear_gradient_left_to_right() {
         // 40×10 rect, linear gradient from black (x=0) to white (x=40). The
         // leftmost pixel should be ≈ black, the rightmost ≈ white, and the
         // middle a clearly-different gray in between.
-        let mut dl = DrawList::new(40.0, 10.0);
+        let mut dl = Scene::new(40.0, 10.0);
         let style = PathStyle {
             fill: IrPaint::Linear(LinearGradient {
                 x0: 0.0,
@@ -1302,7 +1302,7 @@ mod tests {
     fn rasterize_radial_gradient_center_bright_edge_dark() {
         // 40×40, radial gradient centered at (20, 20) radius 20: white at
         // center, transparent at the edge.
-        let mut dl = DrawList::new(40.0, 40.0);
+        let mut dl = Scene::new(40.0, 40.0);
         let style = PathStyle {
             fill: IrPaint::Radial(RadialGradient {
                 cx: 20.0,
@@ -1346,16 +1346,16 @@ mod tests {
         // tiles like an even mirror over t periods of length 2. Pixel at
         // x=10 sits at t=0.5 (mid-axis, gray). Pixel at x=30 sits at t=1.5,
         // which Pad clamps to white but Reflect folds back to t=0.5 (gray).
-        let mut dl = DrawList::new(80.0, 10.0);
+        let mut dl = Scene::new(80.0, 10.0);
         let style = PathStyle {
-            fill: IrPaint::Linear(crate::ir::LinearGradient {
+            fill: IrPaint::Linear(crate::scene::LinearGradient {
                 x0: 0.0,
                 y0: 0.0,
                 x1: 20.0,
                 y1: 0.0,
-                spread: crate::ir::SpreadMode::Reflect,
+                spread: crate::scene::SpreadMode::Reflect,
                 stops: vec![
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 0.0,
                         color: Rgba {
                             r: 0,
@@ -1364,7 +1364,7 @@ mod tests {
                             a: 1.0,
                         },
                     },
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 1.0,
                         color: Rgba {
                             r: 255,
@@ -1399,7 +1399,7 @@ mod tests {
         // Horizontal stroke from (5,10) to (95,10) with a [10, 10] dash.
         // Sample on the line: x=10 sits inside an "on" segment (opaque); x=20
         // sits inside an "off" segment (transparent).
-        let mut dl = DrawList::new(100.0, 20.0);
+        let mut dl = Scene::new(100.0, 20.0);
         {
             let mut p = dl.begin_path(PathStyle {
                 stroke: IrPaint::rgba(255, 0, 0, 1.0),

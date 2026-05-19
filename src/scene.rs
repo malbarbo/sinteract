@@ -398,7 +398,7 @@ pub mod verb {
 ///
 /// `verbs[i]` pulls 2 (move/line), 4 (quad), or 6 (cubic) floats from
 /// `coords` in order. The pair always agrees in length — frontends build
-/// it via [`DrawList::begin_path`] and the [`PathBuilder`] returned, and the
+/// it via [`Scene::begin_path`] and the [`PathBuilder`] returned, and the
 /// wire decoder rejects mismatched paths.
 #[derive(Clone, Debug, Default)]
 pub struct Path {
@@ -407,7 +407,7 @@ pub struct Path {
     pub coords: Vec<f32>,
 }
 
-/// One node of a [`DrawList`]. A path bundles all its segments; the rest
+/// One node of a [`Scene`]. A path bundles all its segments; the rest
 /// are leaf operations (clip stack manipulation, a text run, a bitmap blit).
 #[derive(Clone, Debug)]
 pub enum DrawNode {
@@ -435,7 +435,7 @@ pub enum DrawNode {
 /// renderers only see line / quad / cubic primitives — same surface as the
 /// text-format parser in [`crate::parse`].
 #[derive(Clone, Debug, Default)]
-pub struct DrawList {
+pub struct Scene {
     pub width: f32,
     pub height: f32,
     pub nodes: Vec<DrawNode>,
@@ -444,7 +444,7 @@ pub struct DrawList {
 /// Tolerance for SVG arc → cubic conversion. Matches [`crate::parse`].
 const ARC_TOLERANCE: f64 = 0.1;
 
-impl DrawList {
+impl Scene {
     pub fn new(width: f32, height: f32) -> Self {
         Self {
             width,
@@ -536,13 +536,13 @@ impl DrawList {
     }
 }
 
-/// Path geometry accumulator returned by [`DrawList::begin_path`]. Holds the
+/// Path geometry accumulator returned by [`Scene::begin_path`]. Holds the
 /// style and the in-flight verb/coord buffers; on drop, commits a
-/// [`DrawNode::Path`] to the parent [`DrawList`] (or discards if no geometry
+/// [`DrawNode::Path`] to the parent [`Scene`] (or discards if no geometry
 /// was recorded).
 #[must_use = "PathBuilder commits the path on drop; bind it so geometry methods can run"]
 pub struct PathBuilder<'a> {
-    dl: &'a mut DrawList,
+    dl: &'a mut Scene,
     style: PathStyle,
     verbs: Vec<u8>,
     coords: Vec<f32>,
@@ -647,26 +647,26 @@ impl<'a> Drop for PathBuilder<'a> {
     }
 }
 
-/// Active clip scope returned by [`DrawList::push_clip`] /
-/// [`DrawList::push_clip_rect`]. `Deref`s to the parent [`DrawList`] so all
+/// Active clip scope returned by [`Scene::push_clip`] /
+/// [`Scene::push_clip_rect`]. `Deref`s to the parent [`Scene`] so all
 /// draw methods remain reachable through the guard; on drop, emits the
 /// matching `ClipPop`. Nested clips work because each `push_clip` call on the
 /// guard creates a fresh `ClipGuard` whose lifetime is contained within the
 /// outer one.
 #[must_use = "ClipGuard pops the clip on drop; bind it where the clip should end"]
 pub struct ClipGuard<'a> {
-    dl: &'a mut DrawList,
+    dl: &'a mut Scene,
 }
 
 impl<'a> std::ops::Deref for ClipGuard<'a> {
-    type Target = DrawList;
-    fn deref(&self) -> &DrawList {
+    type Target = Scene;
+    fn deref(&self) -> &Scene {
         self.dl
     }
 }
 
 impl<'a> std::ops::DerefMut for ClipGuard<'a> {
-    fn deref_mut(&mut self) -> &mut DrawList {
+    fn deref_mut(&mut self) -> &mut Scene {
         self.dl
     }
 }

@@ -6,7 +6,7 @@
 //! [`encode_frame`], [`encode_event`], [`encode_asset`], [`encode_close`],
 //! and [`decode`] entry points. They:
 //!
-//!   * convert between the typed IR ([`crate::ir`], [`crate::event`]) and
+//!   * convert between the typed scene ([`crate::scene`], [`crate::event`]) and
 //!     the Cap'n Proto messages;
 //!   * use `capnp::serialize::write_message` / `read_message`, the
 //!     spec-conformant length-prefixed message format every Cap'n Proto
@@ -23,8 +23,8 @@ use capnp::serialize;
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
-use crate::ir::{
-    BitmapNode, ClipPath, DrawList, DrawNode, FillRule, FontStyle, LineCap, LineJoin,
+use crate::scene::{
+    BitmapNode, ClipPath, Scene, DrawNode, FillRule, FontStyle, LineCap, LineJoin,
     LinearGradient, Paint, Path, PathStyle, RadialGradient, Rgba, SpreadMode, Stop, TextNode, verb,
 };
 
@@ -106,7 +106,7 @@ pub enum Decoded {
         blob: Vec<u8>,
         mime: Option<String>,
     },
-    Frame(DrawList),
+    Frame(Scene),
     Event(InputEvent),
     Close,
 }
@@ -122,12 +122,12 @@ fn finish(builder: MessageBuilder<capnp::message::HeapAllocator>) -> Vec<u8> {
 }
 
 /// Encode a draw list as `Message::Frame`.
-pub fn encode_frame(dl: &DrawList) -> Vec<u8> {
+pub fn encode_frame(dl: &Scene) -> Vec<u8> {
     let mut builder = MessageBuilder::new_default();
     {
         let msg = builder.init_root::<message::Builder>();
         let frame = msg.init_frame();
-        write_drawlist(frame, dl);
+        write_scene(frame, dl);
     }
     finish(builder)
 }
@@ -194,7 +194,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, Error> {
                 mime,
             })
         }
-        message::Frame(f) => Ok(Decoded::Frame(read_drawlist(f?)?)),
+        message::Frame(f) => Ok(Decoded::Frame(read_scene(f?)?)),
         message::Event(e) => Ok(Decoded::Event(read_input_event(e?)?)),
         message::SessionClose(()) => Ok(Decoded::Close),
     }
@@ -526,7 +526,7 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
 }
 
 // ---------------------------------------------------------------------------
-// DrawList <-> wire
+// Scene <-> wire
 // ---------------------------------------------------------------------------
 
 /// Number of floats consumed by each verb. Used both to validate paths on
@@ -595,7 +595,7 @@ fn write_drawnode(mut b: draw_node::Builder<'_>, node: &DrawNode) {
     }
 }
 
-fn write_drawlist(mut b: draw_list::Builder<'_>, dl: &DrawList) {
+fn write_scene(mut b: draw_list::Builder<'_>, dl: &Scene) {
     b.set_width(dl.width);
     b.set_height(dl.height);
     let mut nodes = b.init_nodes(dl.nodes.len() as u32);
@@ -604,7 +604,7 @@ fn write_drawlist(mut b: draw_list::Builder<'_>, dl: &DrawList) {
     }
 }
 
-fn read_drawnode(node: draw_node::Reader<'_>, out: &mut DrawList) -> Result<(), Error> {
+fn read_drawnode(node: draw_node::Reader<'_>, out: &mut Scene) -> Result<(), Error> {
     use draw_node::Which;
     match node.which()? {
         Which::Path(p) => {
@@ -619,8 +619,8 @@ fn read_drawnode(node: draw_node::Reader<'_>, out: &mut DrawList) -> Result<(), 
     Ok(())
 }
 
-fn read_drawlist(r: draw_list::Reader<'_>) -> Result<DrawList, Error> {
-    let mut out = DrawList::new(r.get_width(), r.get_height());
+fn read_scene(r: draw_list::Reader<'_>) -> Result<Scene, Error> {
+    let mut out = Scene::new(r.get_width(), r.get_height());
     if r.has_nodes() {
         for node in r.get_nodes()?.iter() {
             read_drawnode(node, &mut out)?;
@@ -694,8 +694,8 @@ pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -
 mod tests {
     use super::*;
 
-    fn sample_drawlist() -> DrawList {
-        let mut dl = DrawList::new(120.0, 80.0);
+    fn sample_scene() -> Scene {
+        let mut dl = Scene::new(120.0, 80.0);
         {
             let mut p = dl.begin_path(PathStyle {
                 fill: Paint::rgba(10, 20, 30, 0.5),
@@ -721,7 +721,7 @@ mod tests {
                     b: 0,
                     a: 1.0,
                 },
-                transform: crate::ir::text_box_affine(
+                transform: crate::scene::text_box_affine(
                     "Liberation Sans",
                     700,
                     FontStyle::Italic,
@@ -744,13 +744,13 @@ mod tests {
             clip.bitmap(BitmapNode {
                 id: 7,
                 // 64×64 asset, mirrored horizontally, rotated 90°, centred at (70, 40).
-                transform: crate::ir::bitmap_box_affine(64, 64, 70.0, 40.0, -32.0, 32.0, 90.0),
+                transform: crate::scene::bitmap_box_affine(64, 64, 70.0, 40.0, -32.0, 32.0, 90.0),
             });
         }
         dl
     }
 
-    fn assert_drawlist_eq(a: &DrawList, b: &DrawList) {
+    fn assert_scene_eq(a: &Scene, b: &Scene) {
         assert_eq!(a.width, b.width);
         assert_eq!(a.height, b.height);
         assert_eq!(a.nodes.len(), b.nodes.len(), "node count");
@@ -761,17 +761,17 @@ mod tests {
 
     #[test]
     fn frame_round_trip_preserves_drawlist() {
-        let dl = sample_drawlist();
+        let dl = sample_scene();
         let bytes = encode_frame(&dl);
         match decode(&bytes).expect("decode") {
-            Decoded::Frame(d) => assert_drawlist_eq(&dl, &d),
+            Decoded::Frame(d) => assert_scene_eq(&dl, &d),
             other => panic!("expected Frame, got {other:?}"),
         }
     }
 
     #[test]
     fn empty_drawlist_round_trips() {
-        let dl = DrawList::new(640.0, 480.0);
+        let dl = Scene::new(640.0, 480.0);
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
@@ -880,7 +880,7 @@ mod tests {
 
     #[test]
     fn dash_and_miter_round_trip() {
-        let mut dl = DrawList::new(100.0, 50.0);
+        let mut dl = Scene::new(100.0, 50.0);
         {
             let mut p = dl.begin_path(PathStyle {
                 stroke: Paint::rgba(0, 0, 0, 1.0),
@@ -910,7 +910,7 @@ mod tests {
 
     #[test]
     fn linear_gradient_paint_round_trips() {
-        let mut dl = DrawList::new(50.0, 50.0);
+        let mut dl = Scene::new(50.0, 50.0);
         let gradient = LinearGradient {
             x0: 0.0,
             y0: 0.0,
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn radial_gradient_paint_round_trips() {
-        let mut dl = DrawList::new(50.0, 50.0);
+        let mut dl = Scene::new(50.0, 50.0);
         let gradient = RadialGradient {
             cx: 25.0,
             cy: 25.0,
@@ -1021,7 +1021,7 @@ mod tests {
     fn gradient_spread_mode_round_trips() {
         // Linear with Reflect and Radial with Repeat — both should survive
         // a wire round-trip.
-        let mut dl = DrawList::new(50.0, 50.0);
+        let mut dl = Scene::new(50.0, 50.0);
         let linear = LinearGradient {
             x0: 0.0,
             y0: 0.0,
@@ -1107,7 +1107,7 @@ mod tests {
         // Build a clip path directly (not via clip_rect) with a quadratic
         // segment + even-odd rule to exercise verb walking and fill-rule
         // preservation across the wire.
-        let mut dl = DrawList::new(50.0, 50.0);
+        let mut dl = Scene::new(50.0, 50.0);
         drop(dl.push_clip(ClipPath {
             verbs: vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE],
             coords: vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0],
@@ -1169,7 +1169,7 @@ mod tests {
         // Encode/decode with all defaults: paint should be Solid(transparent),
         // dash empty, miter_limit at SVG default. Guards against future
         // accidental changes to Default.
-        let mut dl = DrawList::new(10.0, 10.0);
+        let mut dl = Scene::new(10.0, 10.0);
         {
             let mut p = dl.begin_path(PathStyle::default());
             p.move_to(0.0, 0.0);
@@ -1184,7 +1184,7 @@ mod tests {
                 assert_eq!(p.style.stroke, Paint::Solid(Rgba::default()));
                 assert!(p.style.dash_array.is_empty());
                 assert_eq!(p.style.dash_offset, 0.0);
-                assert_eq!(p.style.miter_limit, crate::ir::DEFAULT_MITER_LIMIT);
+                assert_eq!(p.style.miter_limit, crate::scene::DEFAULT_MITER_LIMIT);
             }
             _ => panic!(),
         }

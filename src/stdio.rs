@@ -2,7 +2,7 @@
 //! stdin/stdout. Used when an engine host (`spython --server` /
 //! `sgleam --server`) is launched as a subprocess of a game server: the
 //! server feeds [`crate::event::InputEvent`]s on stdin and reads
-//! [`crate::ir::DrawList`] frames from stdout.
+//! [`crate::scene::Scene`] frames from stdout.
 //!
 //! ## Framing
 //!
@@ -33,7 +33,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::event::InputEvent;
-use crate::ir::DrawList;
+use crate::scene::Scene;
 use crate::wire::{self, Decoded, FILE_IDENTIFIER};
 
 /// Maximum payload size we will accept on the read side. Hard cap so a
@@ -84,7 +84,7 @@ impl StdioFrontend {
 
     /// Send a frame to stdout. `flush` is performed so the consuming server
     /// sees the bytes immediately.
-    pub fn present(&mut self, dl: &DrawList) {
+    pub fn present(&mut self, dl: &Scene) {
         let bytes = wire::encode_frame(dl);
         self.write_framed(&bytes);
     }
@@ -201,7 +201,7 @@ impl Default for StdioFrontend {
 mod tests {
     use super::*;
     use crate::event::{KeyEvent as IrKeyEvent, KeyKind};
-    use crate::ir::{Paint, PathStyle};
+    use crate::scene::{Paint, PathStyle};
     use std::io::Cursor;
     use std::sync::{Arc, Mutex as StdMutex};
 
@@ -236,7 +236,7 @@ mod tests {
             written.clone(),
         );
 
-        let mut dl = DrawList::new(10.0, 10.0);
+        let mut dl = Scene::new(10.0, 10.0);
         {
             let mut p = dl.begin_path(PathStyle {
                 fill: Paint::rgba(1, 2, 3, 1.0),
@@ -331,7 +331,7 @@ mod tests {
             written.clone(),
         );
         fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"));
-        fr.present(&DrawList::new(8.0, 8.0));
+        fr.present(&Scene::new(8.0, 8.0));
         let buf = written.0.lock().unwrap().clone();
         // Two framed messages back-to-back.
         assert!(buf.len() > 16);

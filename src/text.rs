@@ -24,7 +24,7 @@ use std::sync::{Mutex, OnceLock};
 
 use ttf_parser::{Face, GlyphId};
 
-use crate::ir::FontStyle;
+use crate::scene::FontStyle;
 
 // ---------------------------------------------------------------------------
 // Embedded fonts

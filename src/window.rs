@@ -1,4 +1,4 @@
-//! Window display backend — paints [`crate::ir::DrawList`]s into a native
+//! Window display backend — paints [`crate::scene::Scene`]s into a native
 //! OS window via `winit` + `softbuffer`. Peer of [`crate::terminal`] for
 //! environments where the terminal is not graphics-capable (or when the
 //! user prefers a real window).
@@ -24,7 +24,7 @@
 //!
 //! ## DPI and resize
 //!
-//! The window is created with a logical size matching the [`crate::ir::DrawList`]
+//! The window is created with a logical size matching the [`crate::scene::Scene`]
 //! dimensions. On every present we rasterize the draw list to the *physical*
 //! surface size, so HiDPI scaling and user resizes are handled by re-rendering
 //! at the surface resolution while preserving aspect ratio (letterboxed).
@@ -300,7 +300,7 @@ pub fn closed() -> bool {
 /// so window resize / DPI changes take effect on the same frame, and
 /// lazily creates the window using `dl.width` / `dl.height` on the first
 /// call.
-pub fn show_image_dl(dl: &crate::ir::DrawList) {
+pub fn show_image_dl(dl: &crate::scene::Scene) {
     let dl_size = (
         dl.width.ceil().max(1.0) as u32,
         dl.height.ceil().max(1.0) as u32,
@@ -339,7 +339,7 @@ pub fn show_image_dl(dl: &crate::ir::DrawList) {
         }
 
         let target_px = (w.get(), h.get());
-        let pixmap = match crate::terminal::rasterize_draw_list_dl(dl, Some(target_px), 32.0) {
+        let pixmap = match crate::terminal::rasterize_scene(dl, Some(target_px), 32.0) {
             Some(p) => p,
             None => return,
         };
@@ -356,7 +356,7 @@ pub fn show_image_dl(dl: &crate::ir::DrawList) {
 /// Copy a [`tiny_skia::Pixmap`] into a softbuffer `0RGB` u32 buffer.
 ///
 /// The pixmap is centered + letterboxed if smaller than the buffer (which
-/// happens because `rasterize_draw_list_dl` is shrink-only — when the
+/// happens because `rasterize_scene` is shrink-only — when the
 /// window is bigger than the draw list, the pixmap stays at native size
 /// and we paint the surrounding area black).
 fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {

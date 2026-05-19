@@ -1,13 +1,13 @@
 //! `simage` — typed-IR 2D graphics with terminal and PDF outputs.
 //!
-//! Front ends build a [`ir::DrawList`] via builder methods and replay it
+//! Front ends build a [`scene::Scene`] via builder methods and replay it
 //! through a [`sink::DrawSink`]. The crate ships two sinks: `PixmapSink`
 //! (terminal raster, in [`terminal`]) and `PdfSink` (PDF byte stream,
 //! in [`pdf`]).
 //!
 //! Native targets compile the full pipeline:
 //! - [`text`] — Liberation Sans embedded, glyph measurement and outline.
-//! - [`pdf`] — render a [`ir::DrawList`] directly to PDF (text as outlined paths).
+//! - [`pdf`] — render a [`scene::Scene`] directly to PDF (text as outlined paths).
 //! - [`sixel`] — encode a `Pixmap` as DEC Sixel.
 //! - [`term_query`] — synchronous Kitty / Sixel capability probe.
 //! - [`terminal`] — terminal renderer (Kitty / Sixel / half-blocks),
@@ -22,7 +22,7 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 pub mod event;
-pub mod ir;
+pub mod scene;
 pub mod sink;
 pub mod wire;
 

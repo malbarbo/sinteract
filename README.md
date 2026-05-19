@@ -1,8 +1,8 @@
 # simage
 
-A small 2D graphics library built around a typed draw-list IR and a
-`DrawSink` trait. Front ends build a `simage::ir::DrawList` via builder
-methods; renderers replay it through the trait.
+A small 2D graphics library built around a typed `Scene` (draw list) and a
+`DrawSink` trait. Front ends build a `simage::scene::Scene` via RAII
+builders; renderers replay it through the trait.
 
 Outputs:
 
@@ -21,38 +21,40 @@ images: originally extracted from
 ## Pipeline
 
 ```
-front end         simage::ir::DrawList            simage::sink::DrawSink
+front end         simage::scene::Scene            simage::sink::DrawSink
 ─────────         ────────────────────            ──────────────────────
 build via    →    Vec<DrawNode>            →     PixmapSink   (terminal)
-builder           (Path, ClipPush, Text, ...)     PdfSink      (PDF)
-methods                                           your sink    (custom)
+RAII guards       (Path, ClipPush, Text, ...)     PdfSink      (PDF)
+                                                  your sink    (custom)
 ```
 
 A `Path` carries `(style, verbs, coords)` — `verbs` is a flat byte stream
 (0=move, 1=line, 2=quad, 3=cubic) consuming 2/2/4/6 floats per verb from
-`coords`. Arcs are pre-expanded to cubics in `DrawList::arc_to`, so every
-renderer only sees move / line / quad / cubic primitives. Paths are
-committed implicitly — there is no explicit `path_end`; the next
-`path_begin`, `clip_push`, `clip_pop`, `text`, `bitmap`, or playback
-flushes the in-flight path.
+`coords`. Arcs are pre-expanded to cubics in `PathBuilder::arc_to`, so every
+renderer only sees move / line / quad / cubic primitives. Paths and clip
+scopes are RAII: `Scene::begin_path` returns a `PathBuilder` that commits
+the path on drop; `Scene::push_clip` / `push_clip_rect` return a `ClipGuard`
+that emits the matching `ClipPop` on drop.
 
 ## Example
 
 ```rust
-use simage::ir::{DrawList, PathStyle, Rgba};
+use simage::scene::{Scene, PathStyle, Rgba};
 
-let mut dl = DrawList::new(40.0, 30.0);
-dl.path_begin(PathStyle {
-    fill: Rgba { r: 0, g: 0, b: 255, a: 1.0 },
-    ..PathStyle::default()
-});
-dl.move_to(0.0, 0.0);
-dl.line_to(40.0, 0.0);
-dl.line_to(40.0, 30.0);
-dl.line_to(0.0, 30.0);
+let mut scene = Scene::new(40.0, 30.0);
+{
+    let mut p = scene.begin_path(PathStyle {
+        fill: Rgba { r: 0, g: 0, b: 255, a: 1.0 },
+        ..PathStyle::default()
+    });
+    p.move_to(0.0, 0.0);
+    p.line_to(40.0, 0.0);
+    p.line_to(40.0, 30.0);
+    p.line_to(0.0, 30.0);
+}
 
-simage::terminal::show_image_dl(&dl);            // terminal
-let pdf: Vec<u8> = simage::pdf::render_to_pdf_dl(&dl);
+simage::terminal::show_image_dl(&scene);          // terminal
+let pdf: Vec<u8> = simage::pdf::render_to_pdf_dl(&scene);
 ```
 
 ## License

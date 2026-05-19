@@ -1,7 +1,7 @@
-//! Render a [`crate::ir::DrawList`] to a PDF byte stream. Native-only;
+//! Render a [`crate::scene::Scene`] to a PDF byte stream. Native-only;
 //! the WASM build does not link against `pdf-writer`.
 //!
-//! The draw list is replayed via [`crate::ir::DrawList::play_into`]; this
+//! The draw list is replayed via [`crate::scene::Scene::play_into`]; this
 //! module implements [`PdfSink`] which translates each command into PDF
 //! content-stream operators.
 //!
@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::ir::{
+use crate::scene::{
     BitmapNode, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
     RadialGradient, Rgba, Stop, TextNode, verb,
 };
@@ -398,8 +398,8 @@ fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
     }
 }
 
-/// Render a [`crate::ir::DrawList`] to PDF bytes.
-pub fn render_to_pdf_dl(dl: &crate::ir::DrawList) -> Vec<u8> {
+/// Render a [`crate::scene::Scene`] to PDF bytes.
+pub fn render_to_pdf_dl(dl: &crate::scene::Scene) -> Vec<u8> {
     let mut sink = PdfSink::new();
     dl.play_into(&mut sink);
     finish_pdf(sink)
@@ -826,16 +826,16 @@ impl crate::text::OutlineBuilder for PdfOutline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::DrawList;
+    use crate::scene::Scene;
 
     fn red_fill(a: f32) -> PathStyle {
         PathStyle {
-            fill: crate::ir::Paint::rgba(255, 0, 0, a),
+            fill: crate::scene::Paint::rgba(255, 0, 0, a),
             ..PathStyle::default()
         }
     }
 
-    fn rect(dl: &mut DrawList, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
+    fn rect(dl: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
         let mut p = dl.begin_path(style);
         p.move_to(x, y);
         p.line_to(x + w, y);
@@ -845,7 +845,7 @@ mod tests {
 
     #[test]
     fn header_only_emits_pdf_marker() {
-        let dl = DrawList::new(100.0, 50.0);
+        let dl = Scene::new(100.0, 50.0);
         let out = render_to_pdf_dl(&dl);
         assert!(out.starts_with(b"%PDF-"), "missing PDF header");
         assert!(out.windows(5).any(|w| w == b"%%EOF"), "missing PDF trailer");
@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn rect_path_emits_fill_op() {
-        let mut dl = DrawList::new(100.0, 50.0);
+        let mut dl = Scene::new(100.0, 50.0);
         rect(&mut dl, red_fill(1.0), 0.0, 0.0, 100.0, 50.0);
         let out = render_to_pdf_dl(&dl);
         assert!(out.starts_with(b"%PDF-"));
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn text_emits_some_path_data() {
-        let mut dl = DrawList::new(100.0, 30.0);
+        let mut dl = Scene::new(100.0, 30.0);
         dl.text(TextNode {
             fill: Rgba {
                 r: 0,
@@ -879,10 +879,10 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            transform: crate::ir::text_box_affine(
+            transform: crate::scene::text_box_affine(
                 "",
                 400,
-                crate::ir::FontStyle::Normal,
+                crate::scene::FontStyle::Normal,
                 16.0,
                 "Hi",
                 50.0,
@@ -903,7 +903,7 @@ mod tests {
 
     #[test]
     fn alpha_creates_extgstate_resource() {
-        let mut dl = DrawList::new(100.0, 50.0);
+        let mut dl = Scene::new(100.0, 50.0);
         rect(&mut dl, red_fill(0.5), 0.0, 0.0, 100.0, 50.0);
         let out = render_to_pdf_dl(&dl);
         let s = String::from_utf8_lossy(&out);
@@ -915,9 +915,9 @@ mod tests {
     fn dash_pattern_emits_d_operator() {
         // A stroked rect with dash_array [3, 2] dash_offset 1 should produce
         // the PDF `d` operator with the same numbers in the content stream.
-        let mut dl = DrawList::new(100.0, 50.0);
+        let mut dl = Scene::new(100.0, 50.0);
         let style = PathStyle {
-            stroke: crate::ir::Paint::rgba(0, 0, 0, 1.0),
+            stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 1.0,
             dash_array: vec![3.0, 2.0],
             dash_offset: 1.0,
@@ -934,9 +934,9 @@ mod tests {
     #[test]
     fn miter_limit_emits_m_operator() {
         // Miter joins with non-default miter_limit should emit the `M` op.
-        let mut dl = DrawList::new(50.0, 50.0);
+        let mut dl = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            stroke: crate::ir::Paint::rgba(0, 0, 0, 1.0),
+            stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 4.0,
             miter_limit: 12.0,
             line_join: LineJoin::Miter,
@@ -955,15 +955,15 @@ mod tests {
         //  - one FunctionShading (ShadingType 2 = axial) referencing it,
         //  - one ShadingPattern,
         //  - the content stream using `cs /Pattern\n /P0 scn` for the fill.
-        let mut dl = DrawList::new(50.0, 50.0);
+        let mut dl = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            fill: crate::ir::Paint::Linear(crate::ir::LinearGradient {
+            fill: crate::scene::Paint::Linear(crate::scene::LinearGradient {
                 x0: 0.0,
                 y0: 0.0,
                 x1: 50.0,
                 y1: 0.0,
                 stops: vec![
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 0.0,
                         color: Rgba {
                             r: 255,
@@ -972,7 +972,7 @@ mod tests {
                             a: 1.0,
                         },
                     },
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 1.0,
                         color: Rgba {
                             r: 0,
@@ -982,7 +982,7 @@ mod tests {
                         },
                     },
                 ],
-                ..crate::ir::LinearGradient::default()
+                ..crate::scene::LinearGradient::default()
             }),
             ..PathStyle::default()
         };
@@ -1007,14 +1007,14 @@ mod tests {
 
     #[test]
     fn radial_gradient_emits_radial_shading() {
-        let mut dl = DrawList::new(50.0, 50.0);
+        let mut dl = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            fill: crate::ir::Paint::Radial(crate::ir::RadialGradient {
+            fill: crate::scene::Paint::Radial(crate::scene::RadialGradient {
                 cx: 25.0,
                 cy: 25.0,
                 radius: 20.0,
                 stops: vec![
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 0.0,
                         color: Rgba {
                             r: 255,
@@ -1023,7 +1023,7 @@ mod tests {
                             a: 1.0,
                         },
                     },
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 1.0,
                         color: Rgba {
                             r: 0,
@@ -1033,7 +1033,7 @@ mod tests {
                         },
                     },
                 ],
-                ..crate::ir::RadialGradient::default()
+                ..crate::scene::RadialGradient::default()
             }),
             ..PathStyle::default()
         };
@@ -1051,15 +1051,15 @@ mod tests {
     fn multi_stop_gradient_uses_stitching_function() {
         // 3 stops should produce a Type 3 (stitching) function wrapping two
         // Type 2 sub-functions.
-        let mut dl = DrawList::new(60.0, 10.0);
+        let mut dl = Scene::new(60.0, 10.0);
         let style = PathStyle {
-            fill: crate::ir::Paint::Linear(crate::ir::LinearGradient {
+            fill: crate::scene::Paint::Linear(crate::scene::LinearGradient {
                 x0: 0.0,
                 y0: 0.0,
                 x1: 60.0,
                 y1: 0.0,
                 stops: vec![
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 0.0,
                         color: Rgba {
                             r: 255,
@@ -1068,7 +1068,7 @@ mod tests {
                             a: 1.0,
                         },
                     },
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 0.5,
                         color: Rgba {
                             r: 0,
@@ -1077,7 +1077,7 @@ mod tests {
                             a: 1.0,
                         },
                     },
-                    crate::ir::Stop {
+                    crate::scene::Stop {
                         offset: 1.0,
                         color: Rgba {
                             r: 0,
@@ -1087,7 +1087,7 @@ mod tests {
                         },
                     },
                 ],
-                ..crate::ir::LinearGradient::default()
+                ..crate::scene::LinearGradient::default()
             }),
             ..PathStyle::default()
         };
