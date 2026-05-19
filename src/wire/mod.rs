@@ -31,10 +31,10 @@ use crate::scene::{
 use crate::frame_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, KeyKind as WKeyKind, LineCap as WLineCap,
     LineJoin as WLineJoin, SpreadMode as WSpreadMode, bitmap_node, clip_path as wire_clip_path,
-    element, input_event, key_event as wire_key_event, linear_gradient as wire_linear_gradient,
-    message, paint as wire_paint, path as wire_path, path_style as wire_path_style,
-    radial_gradient as wire_radial_gradient, rgba as wire_rgba, scene as wire_scene,
-    stop as wire_stop, text_node,
+    clipped as wire_clipped, element, input_event, key_event as wire_key_event,
+    linear_gradient as wire_linear_gradient, message, paint as wire_paint, path as wire_path,
+    path_style as wire_path_style, radial_gradient as wire_radial_gradient, rgba as wire_rgba,
+    scene as wire_scene, stop as wire_stop, text_node,
 };
 
 /// Stdio-framing magic. Cap'n Proto's own `serialize::write_message` already
@@ -585,46 +585,60 @@ fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
     })
 }
 
-fn write_element(mut b: element::Builder<'_>, node: &Element) {
+fn write_element(b: element::Builder<'_>, node: &Element) {
     match node {
         Element::Path(p) => write_path_parts(b.init_path(), &p.style, &p.verbs, &p.coords),
-        Element::ClipPush(c) => write_clip_path(b.init_clip_push(), c),
-        Element::ClipPop => b.set_clip_pop(()),
+        Element::Clipped { clip, elements } => write_clipped(b.init_clipped(), clip, elements),
         Element::Text(t) => write_text_node(b.init_text(), t),
         Element::Bitmap(n) => write_bitmap(b.init_bitmap(), n),
+    }
+}
+
+fn write_clipped(mut b: wire_clipped::Builder<'_>, clip: &ClipPath, elements: &[Element]) {
+    write_clip_path(b.reborrow().init_clip(), clip);
+    write_element_list(b.init_elements(elements.len() as u32), elements);
+}
+
+fn write_element_list(
+    mut list: capnp::struct_list::Builder<'_, element::Owned>,
+    elements: &[Element],
+) {
+    for (i, node) in elements.iter().enumerate() {
+        write_element(list.reborrow().get(i as u32), node);
     }
 }
 
 fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
     b.set_width(scene.width);
     b.set_height(scene.height);
-    let mut nodes = b.init_elements(scene.elements.len() as u32);
-    for (i, node) in scene.elements.iter().enumerate() {
-        write_element(nodes.reborrow().get(i as u32), node);
-    }
+    write_element_list(b.init_elements(scene.elements.len() as u32), &scene.elements);
 }
 
-fn read_element(node: element::Reader<'_>, out: &mut Scene) -> Result<(), Error> {
+fn read_element(node: element::Reader<'_>) -> Result<Element, Error> {
     use element::Which;
-    match node.which()? {
-        Which::Path(p) => {
-            let path = read_path(p?)?;
-            out.push_path(path);
+    Ok(match node.which()? {
+        Which::Path(p) => Element::Path(read_path(p?)?),
+        Which::Clipped(c) => {
+            let c = c?;
+            let clip = read_clip_path(c.get_clip()?)?;
+            let elements = read_element_list(c.get_elements()?)?;
+            Element::Clipped { clip, elements }
         }
-        Which::ClipPush(c) => out.elements.push(Element::ClipPush(read_clip_path(c?)?)),
-        Which::ClipPop(()) => out.elements.push(Element::ClipPop),
-        Which::Text(t) => out.text(read_text_node(t?)?),
-        Which::Bitmap(n) => out.bitmap(read_bitmap(n?)),
-    }
-    Ok(())
+        Which::Text(t) => Element::Text(Box::new(read_text_node(t?)?)),
+        Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?)),
+    })
+}
+
+fn read_element_list(
+    list: capnp::struct_list::Reader<'_, element::Owned>,
+) -> Result<Vec<Element>, Error> {
+    list.iter().map(read_element).collect()
 }
 
 fn read_scene(r: wire_scene::Reader<'_>) -> Result<Scene, Error> {
     let mut out = Scene::new(r.get_width(), r.get_height());
     if r.has_elements() {
-        for node in r.get_elements()?.iter() {
-            read_element(node, &mut out)?;
-        }
+        out.elements = read_element_list(r.get_elements()?)?;
     }
     Ok(out)
 }
@@ -1106,29 +1120,36 @@ mod tests {
     fn clip_path_round_trips() {
         // Build a clip path directly (not via clip_rect) with a quadratic
         // segment + even-odd rule to exercise verb walking and fill-rule
-        // preservation across the wire.
+        // preservation across the wire. Also drop a child element inside the
+        // clip so the nested elements list is non-trivial.
         let mut scene = Scene::new(50.0, 50.0);
-        drop(scene.push_clip(ClipPath {
-            verbs: vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE],
-            coords: vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0],
-            fill_rule: FillRule::EvenOdd,
-        }));
+        {
+            let mut clip = scene.push_clip(ClipPath {
+                verbs: vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE],
+                coords: vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0],
+                fill_rule: FillRule::EvenOdd,
+            });
+            let mut p = clip.begin_path(PathStyle::default());
+            p.move_to(0.0, 0.0);
+            p.line_to(10.0, 10.0);
+        }
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let Element::ClipPush(c) = &d.elements[0] else {
-                    panic!("expected ClipPush, got {:?}", d.elements[0]);
+                let Element::Clipped { clip, elements } = &d.elements[0] else {
+                    panic!("expected Clipped, got {:?}", d.elements[0]);
                 };
                 assert_eq!(
-                    c.verbs,
+                    clip.verbs,
                     vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE]
                 );
                 assert_eq!(
-                    c.coords,
+                    clip.coords,
                     vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0]
                 );
-                assert_eq!(c.fill_rule, FillRule::EvenOdd);
-                assert!(matches!(&d.elements[1], Element::ClipPop));
+                assert_eq!(clip.fill_rule, FillRule::EvenOdd);
+                assert_eq!(elements.len(), 1);
+                assert!(matches!(&elements[0], Element::Path(_)));
             }
             _ => panic!(),
         }
@@ -1136,15 +1157,17 @@ mod tests {
 
     #[test]
     fn malformed_clip_path_is_rejected() {
-        // Hand-build a ClipPath with CUBIC (needs 6 floats) and only 2 coords;
-        // decoder must reject it the same way it rejects malformed Paths.
+        // Hand-build a Clipped whose clip carries CUBIC (needs 6 floats) but
+        // only 2 coords; decoder must reject it the same way it rejects
+        // malformed Paths.
         let mut builder = MessageBuilder::new_default();
         {
             let msg = builder.init_root::<message::Builder>();
             let frame = msg.init_frame();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
-            let mut c = node.init_clip_push();
+            let clipped = node.init_clipped();
+            let mut c = clipped.init_clip();
             c.set_verbs(&[verb::CUBIC]);
             let mut coords = c.init_coords(2);
             coords.set(0, 0.0);
@@ -1162,6 +1185,49 @@ mod tests {
             ),
             "got {err:?}",
         );
+    }
+
+    #[test]
+    fn nested_clips_round_trip() {
+        // Two levels of clip with elements at each depth; structure should
+        // come back identical.
+        let mut scene = Scene::new(100.0, 100.0);
+        {
+            let mut outer = scene.push_clip_rect(50.0, 50.0, 80.0, 80.0, 0.0, FillRule::NonZero);
+            let mut p = outer.begin_path(PathStyle::default());
+            p.move_to(0.0, 0.0);
+            p.line_to(100.0, 100.0);
+            drop(p);
+            let mut inner = outer.push_clip_rect(50.0, 50.0, 40.0, 40.0, 0.0, FillRule::EvenOdd);
+            let mut p = inner.begin_path(PathStyle::default());
+            p.move_to(10.0, 10.0);
+            p.line_to(20.0, 20.0);
+        }
+        let bytes = encode_frame(&scene);
+        match decode(&bytes).unwrap() {
+            Decoded::Frame(d) => {
+                assert_eq!(d.elements.len(), 1);
+                let Element::Clipped {
+                    clip: _,
+                    elements: outer_els,
+                } = &d.elements[0]
+                else {
+                    panic!("expected outer Clipped");
+                };
+                assert_eq!(outer_els.len(), 2, "outer should hold path + inner clip");
+                assert!(matches!(&outer_els[0], Element::Path(_)));
+                let Element::Clipped {
+                    clip: _,
+                    elements: inner_els,
+                } = &outer_els[1]
+                else {
+                    panic!("expected inner Clipped, got {:?}", outer_els[1]);
+                };
+                assert_eq!(inner_els.len(), 1);
+                assert!(matches!(&inner_els[0], Element::Path(_)));
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]

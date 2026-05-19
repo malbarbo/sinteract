@@ -407,13 +407,15 @@ pub struct Path {
     pub coords: Vec<f32>,
 }
 
-/// One node of a [`Scene`]. A path bundles all its segments; the rest
-/// are leaf operations (clip stack manipulation, a text run, a bitmap blit).
+/// One node of a [`Scene`]. A path bundles all its segments; clips wrap the
+/// nested elements they apply to; text and bitmap are leaves.
 #[derive(Clone, Debug)]
 pub enum Element {
     Path(Path),
-    ClipPush(ClipPath),
-    ClipPop,
+    Clipped {
+        clip: ClipPath,
+        elements: Vec<Element>,
+    },
     Text(Box<TextNode>),
     Bitmap(BitmapNode),
 }
@@ -421,15 +423,15 @@ pub enum Element {
 /// Materialized event log produced by Python (or any other front end) and
 /// consumed by every renderer. Built via RAII guards — [`Self::begin_path`]
 /// returns a [`PathBuilder`] that commits the path on drop, and
-/// [`Self::push_clip`] / [`Self::push_clip_rect`] return a [`ClipGuard`] that
-/// emits the matching `ClipPop` on drop. The list is replayed once via
-/// [`Self::play_into`].
+/// [`Self::push_clip`] / [`Self::push_clip_rect`] return a [`ClipBuilder`]
+/// that accumulates its own nested elements and commits an [`Element::Clipped`]
+/// on drop. The list is replayed once via [`Self::play_into`].
 ///
-/// Because path geometry only flows through `PathBuilder` and clip nesting is
-/// scoped by `ClipGuard`, several footguns of the older flat API are
-/// statically impossible: you cannot append path verbs without an open path,
-/// commit an empty path, unbalance the clip stack, or interleave a clip with
-/// a half-built path.
+/// Because path geometry only flows through `PathBuilder` and clip scope is
+/// captured by `ClipBuilder`'s own element vector, several footguns of the
+/// older flat API are statically impossible: you cannot append path verbs
+/// without an open path, commit an empty path, unbalance the clip stack
+/// (there is no separate pop), or interleave a clip with a half-built path.
 ///
 /// Arcs entered via [`PathBuilder::arc_to`] are pre-expanded to cubics so
 /// renderers only see line / quad / cubic primitives — same surface as the
@@ -467,17 +469,23 @@ impl Scene {
         }
     }
 
-    /// Push an arbitrary clip path. Returns a [`ClipGuard`] that emits the
-    /// matching `ClipPop` on drop; nested clips just call [`Self::push_clip`]
-    /// through the guard's `Deref` and pop in the right order.
-    pub fn push_clip(&mut self, clip: ClipPath) -> ClipGuard<'_> {
-        self.elements.push(Element::ClipPush(clip));
-        ClipGuard { scene: self }
+    /// Push an arbitrary clip path. Returns a [`ClipBuilder`] that accumulates
+    /// its own nested elements; on drop, commits an [`Element::Clipped`] to
+    /// the parent scene. The builder `Deref`s to a fresh inner [`Scene`] so
+    /// all draw methods remain reachable; nested clips just call
+    /// [`Self::push_clip`] through that `Deref` and commit in the right order.
+    pub fn push_clip(&mut self, clip: ClipPath) -> ClipBuilder<'_> {
+        let inner = Scene::new(self.width, self.height);
+        ClipBuilder {
+            parent: self,
+            clip: Some(clip),
+            inner,
+        }
     }
 
     /// Push an axis-aligned-or-rotated rectangular clip — the common case.
     /// Builds the 4-corner `ClipPath` (rotated by `angle_deg` around the
-    /// centre) and returns the guard.
+    /// centre) and returns the builder.
     pub fn push_clip_rect(
         &mut self,
         cx: f32,
@@ -486,7 +494,7 @@ impl Scene {
         h: f32,
         angle_deg: f32,
         fill_rule: FillRule,
-    ) -> ClipGuard<'_> {
+    ) -> ClipBuilder<'_> {
         let hw = w / 2.0;
         let hh = h / 2.0;
         let theta = angle_deg * std::f32::consts::PI / 180.0;
@@ -512,27 +520,30 @@ impl Scene {
         self.elements.push(Element::Bitmap(node));
     }
 
-    /// Append a fully-built path. Used by the wire decoder; lets us bypass
-    /// the `begin_path / move_to / …` guard for paths whose verbs/coords
-    /// were already validated.
-    pub(crate) fn push_path(&mut self, path: Path) {
-        self.elements.push(Element::Path(path));
-    }
-
     /// Replay every node into `sink`. Wraps `sink.begin()` and `sink.end()`
-    /// around the dispatch loop so callers don't have to.
+    /// around the dispatch loop so callers don't have to. The scene tree is
+    /// nested but the [`crate::renderer::Renderer`] trait stays flat — clip
+    /// scopes are emitted as a balanced `clip_push` / `clip_pop` pair around
+    /// the recursive walk of their inner elements.
     pub fn play_into(&self, sink: &mut dyn crate::renderer::Renderer) {
         sink.begin(self.width, self.height);
-        for node in &self.elements {
-            match node {
-                Element::Path(p) => play_path(&p.style, &p.verbs, &p.coords, sink),
-                Element::ClipPush(b) => sink.clip_push(b),
-                Element::ClipPop => sink.clip_pop(),
-                Element::Text(t) => sink.text(t),
-                Element::Bitmap(b) => sink.bitmap(b),
-            }
-        }
+        play_elements(&self.elements, sink);
         sink.end();
+    }
+}
+
+fn play_elements(elements: &[Element], sink: &mut dyn crate::renderer::Renderer) {
+    for node in elements {
+        match node {
+            Element::Path(p) => play_path(&p.style, &p.verbs, &p.coords, sink),
+            Element::Clipped { clip, elements } => {
+                sink.clip_push(clip);
+                play_elements(elements, sink);
+                sink.clip_pop();
+            }
+            Element::Text(t) => sink.text(t),
+            Element::Bitmap(b) => sink.bitmap(b),
+        }
     }
 }
 
@@ -648,32 +659,43 @@ impl<'a> Drop for PathBuilder<'a> {
 }
 
 /// Active clip scope returned by [`Scene::push_clip`] /
-/// [`Scene::push_clip_rect`]. `Deref`s to the parent [`Scene`] so all
-/// draw methods remain reachable through the guard; on drop, emits the
-/// matching `ClipPop`. Nested clips work because each `push_clip` call on the
-/// guard creates a fresh `ClipGuard` whose lifetime is contained within the
-/// outer one.
-#[must_use = "ClipGuard pops the clip on drop; bind it where the clip should end"]
-pub struct ClipGuard<'a> {
-    scene: &'a mut Scene,
+/// [`Scene::push_clip_rect`]. Owns a fresh inner [`Scene`] that collects
+/// elements drawn inside the clip; `Deref`s to it so all draw methods remain
+/// reachable through the builder. On drop, commits an [`Element::Clipped`]
+/// to the parent scene with the accumulated elements — the structure itself
+/// guarantees balanced clip nesting (no separate pop).
+///
+/// Nested clips work the usual way: calling [`Scene::push_clip`] through the
+/// builder's `Deref` returns a child `ClipBuilder` borrowing the inner scene,
+/// and committing inside-out leaves a well-formed tree.
+#[must_use = "ClipBuilder commits the clip on drop; bind it where the clip should end"]
+pub struct ClipBuilder<'a> {
+    parent: &'a mut Scene,
+    clip: Option<ClipPath>,
+    inner: Scene,
 }
 
-impl<'a> std::ops::Deref for ClipGuard<'a> {
+impl<'a> std::ops::Deref for ClipBuilder<'a> {
     type Target = Scene;
     fn deref(&self) -> &Scene {
-        self.scene
+        &self.inner
     }
 }
 
-impl<'a> std::ops::DerefMut for ClipGuard<'a> {
+impl<'a> std::ops::DerefMut for ClipBuilder<'a> {
     fn deref_mut(&mut self) -> &mut Scene {
-        self.scene
+        &mut self.inner
     }
 }
 
-impl<'a> Drop for ClipGuard<'a> {
+impl<'a> Drop for ClipBuilder<'a> {
     fn drop(&mut self) {
-        self.scene.elements.push(Element::ClipPop);
+        let clip = self
+            .clip
+            .take()
+            .expect("ClipBuilder.clip is set at construction");
+        let elements = std::mem::take(&mut self.inner.elements);
+        self.parent.elements.push(Element::Clipped { clip, elements });
     }
 }
 

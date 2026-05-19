@@ -24,7 +24,7 @@ images: originally extracted from
 front end         simage::scene::Scene            simage::renderer::Renderer
 ─────────         ────────────────────            ──────────────────────────
 build via    →    Vec<Element>             →     PixmapRenderer (terminal)
-RAII guards       (Path, ClipPush, Text, ...)     PdfRenderer    (PDF)
+RAII guards       (Path, Clipped, Text, ...)      PdfRenderer    (PDF)
                                                   your impl      (custom)
 ```
 
@@ -33,8 +33,10 @@ A `Path` carries `(style, verbs, coords)` — `verbs` is a flat byte stream
 `coords`. Arcs are pre-expanded to cubics in `PathBuilder::arc_to`, so every
 renderer only sees move / line / quad / cubic primitives. Paths and clip
 scopes are RAII: `Scene::begin_path` returns a `PathBuilder` that commits
-the path on drop; `Scene::push_clip` / `push_clip_rect` return a `ClipGuard`
-that emits the matching `ClipPop` on drop.
+the path on drop; `Scene::push_clip` / `push_clip_rect` return a `ClipBuilder`
+that accumulates the elements drawn inside the clip and commits a single
+`Element::Clipped { clip, elements }` on drop — balanced nesting is
+structural, not bookkeeping.
 
 ## Example
 

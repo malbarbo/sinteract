@@ -184,15 +184,23 @@ struct Path {
 }
 
 # ----- Scene element — union is native in Cap'n Proto, no wrapper struct. -----
+#
+# A `clipped` element nests its own list of elements inside the clip region;
+# the structure itself guarantees balanced push/pop, so no separate ClipPop
+# variant is needed.
 
 struct Element {
     union {
-        path     @0 :Path;
-        clipPush @1 :ClipPath;
-        clipPop  @2 :Void;
-        text     @3 :TextNode;
-        bitmap   @4 :BitmapNode;
+        path    @0 :Path;
+        clipped @1 :Clipped;
+        text    @2 :TextNode;
+        bitmap  @3 :BitmapNode;
     }
+}
+
+struct Clipped {
+    clip     @0 :ClipPath;
+    elements @1 :List(Element);
 }
 
 struct Scene {
