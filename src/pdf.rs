@@ -18,14 +18,15 @@
 //! used the system fontconfig font, not Liberation Sans, and positions did
 //! not line up).
 
-#![cfg(not(target_arch = "wasm32"))]
-
 use std::collections::BTreeMap;
 
-use pdf_writer::types::{LineCapStyle, LineJoinStyle};
+use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::ir::{BitmapNode, ClipBox, FillRule, LineCap, LineJoin, PathStyle, Rgba, TextNode};
+use crate::ir::{
+    BitmapNode, ClipBox, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
+    RadialGradient, Rgba, Stop, TextNode,
+};
 use crate::sink::DrawSink;
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -59,12 +60,23 @@ struct PendingPath {
     last_point: Option<(f32, f32)>,
 }
 
+/// A gradient encountered during draw-list playback. Kept around until
+/// [`finish_pdf`] writes out the function/shading/pattern indirect objects.
+#[derive(Clone)]
+enum GradientShape {
+    Linear(LinearGradient),
+    Radial(RadialGradient),
+}
+
 struct PdfSink {
     width: f32,
     height: f32,
     content: Content,
     /// (fill_alpha_key, stroke_alpha_key) -> graphics-state index.
     gstates: BTreeMap<(u16, u16), u32>,
+    /// Gradients seen so far; the index in this vec is the `/P{n}` name
+    /// used in the content stream and the Resources/Pattern dictionary.
+    gradients: Vec<GradientShape>,
     pending: Option<PendingPath>,
 }
 
@@ -75,8 +87,16 @@ impl PdfSink {
             height: 0.0,
             content: Content::new(),
             gstates: BTreeMap::new(),
+            gradients: Vec::new(),
             pending: None,
         }
+    }
+
+    /// Register a gradient and return its content-stream pattern name `Pn`.
+    fn push_gradient(&mut self, shape: GradientShape) -> String {
+        let idx = self.gradients.len();
+        self.gradients.push(shape);
+        format!("P{idx}")
     }
 
     /// Ensure an ExtGState resource exists for `(fa, sa)` and emit `/GSn gs`.
@@ -101,36 +121,115 @@ impl PdfSink {
         if p.ops.is_empty() {
             return;
         }
-        let do_fill = p.style.fill.a > 0.0;
-        let do_stroke = p.style.stroke.a > 0.0 && p.style.stroke_width > 0.0;
+        // For solid paints: alpha rides the path. For gradients: PDF
+        // gradients here are RGB-only; per-stop alpha is dropped, and a
+        // uniform alpha is taken from the first stop (best-effort — a soft-
+        // mask would be the next step).
+        let do_fill = p.style.fill.is_visible();
+        let do_stroke = p.style.stroke.is_visible() && p.style.stroke_width > 0.0;
         if !do_fill && !do_stroke {
             return;
         }
 
         self.content.save_state();
-        self.apply_alpha(
-            if do_fill { p.style.fill.a } else { 1.0 },
-            if do_stroke { p.style.stroke.a } else { 1.0 },
-        );
-        if do_fill {
-            let Rgba { r, g, b, .. } = p.style.fill;
-            self.content
-                .set_fill_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
-        }
+        let fill_alpha = if do_fill {
+            p.style.fill.primary_color().a
+        } else {
+            1.0
+        };
+        let stroke_alpha = if do_stroke {
+            p.style.stroke.primary_color().a
+        } else {
+            1.0
+        };
+        self.apply_alpha(fill_alpha, stroke_alpha);
+
+        // Allocate any pattern names *before* writing the path ops so the
+        // `cs /Pattern\n /Pn scn` operators land in the right order.
+        let fill_pattern = if do_fill {
+            self.bind_fill_paint(&p.style.fill)
+        } else {
+            None
+        };
+        let stroke_pattern = if do_stroke {
+            self.bind_stroke_paint(&p.style.stroke)
+        } else {
+            None
+        };
+
         if do_stroke {
-            let Rgba { r, g, b, .. } = p.style.stroke;
-            self.content
-                .set_stroke_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
             self.content.set_line_width(p.style.stroke_width);
             self.content.set_line_cap(pdf_line_cap(p.style.line_cap));
             self.content.set_line_join(pdf_line_join(p.style.line_join));
+            if p.style.line_join == LineJoin::Miter {
+                self.content.set_miter_limit(p.style.miter_limit);
+            }
+            if !p.style.dash_array.is_empty() {
+                self.content
+                    .set_dash_pattern(p.style.dash_array.iter().copied(), p.style.dash_offset);
+            }
         }
         emit_path_ops(&p.ops, &mut self.content);
         if p.style.closed {
             self.content.close_path();
         }
         paint(&mut self.content, do_fill, do_stroke, p.style.fill_rule);
+        // Pattern color spaces persist on the gstate, so restore_state below
+        // is what cleans them up — no explicit reset needed.
         self.content.restore_state();
+        let _ = (fill_pattern, stroke_pattern);
+    }
+
+    /// Decide what to emit for the fill paint. Solid → `set_fill_rgb`; gradient
+    /// → `cs /Pattern\n scn /Pn`. Returns the pattern name for diagnostics.
+    fn bind_fill_paint(&mut self, paint: &IrPaint) -> Option<String> {
+        match paint {
+            IrPaint::Solid(c) => {
+                let Rgba { r, g, b, .. } = *c;
+                self.content
+                    .set_fill_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+                None
+            }
+            IrPaint::Linear(g) => {
+                let name = self.push_gradient(GradientShape::Linear(g.clone()));
+                self.content
+                    .set_fill_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
+                self.content.set_fill_pattern(None, Name(name.as_bytes()));
+                Some(name)
+            }
+            IrPaint::Radial(g) => {
+                let name = self.push_gradient(GradientShape::Radial(g.clone()));
+                self.content
+                    .set_fill_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
+                self.content.set_fill_pattern(None, Name(name.as_bytes()));
+                Some(name)
+            }
+        }
+    }
+
+    fn bind_stroke_paint(&mut self, paint: &IrPaint) -> Option<String> {
+        match paint {
+            IrPaint::Solid(c) => {
+                let Rgba { r, g, b, .. } = *c;
+                self.content
+                    .set_stroke_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+                None
+            }
+            IrPaint::Linear(g) => {
+                let name = self.push_gradient(GradientShape::Linear(g.clone()));
+                self.content
+                    .set_stroke_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
+                self.content.set_stroke_pattern(None, Name(name.as_bytes()));
+                Some(name)
+            }
+            IrPaint::Radial(g) => {
+                let name = self.push_gradient(GradientShape::Radial(g.clone()));
+                self.content
+                    .set_stroke_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
+                self.content.set_stroke_pattern(None, Name(name.as_bytes()));
+                Some(name)
+            }
+        }
     }
 }
 
@@ -151,7 +250,7 @@ impl DrawSink for PdfSink {
     fn path_begin(&mut self, style: &PathStyle) {
         self.flush_path();
         self.pending = Some(PendingPath {
-            style: *style,
+            style: style.clone(),
             ops: Vec::new(),
             last_point: None,
         });
@@ -266,10 +365,22 @@ pub fn render_to_pdf_dl(dl: &crate::ir::DrawList) -> Vec<u8> {
     finish_pdf(sink)
 }
 
+/// Layout of one gradient as PDF indirect objects: a list of sub-function
+/// refs (≥ 1; the last one is the entry function — either an exponential or
+/// a stitching), the shading ref, and the pattern ref.
+struct GradientRefs {
+    /// All function refs in dependency order; the last entry is the function
+    /// referenced by the shading dictionary.
+    functions: Vec<Ref>,
+    shading: Ref,
+    pattern: Ref,
+}
+
 fn finish_pdf(mut sink: PdfSink) -> Vec<u8> {
     let w = sink.width;
     let h = sink.height;
     let gstates = std::mem::take(&mut sink.gstates);
+    let gradients = std::mem::take(&mut sink.gradients);
     let buf = sink.content.finish();
 
     // Indirect-reference IDs.
@@ -278,12 +389,41 @@ fn finish_pdf(mut sink: PdfSink) -> Vec<u8> {
     let page_id = Ref::new(3);
     let content_id = Ref::new(4);
     let mut next_id: i32 = 5;
+    let mut alloc = || {
+        let r = Ref::new(next_id);
+        next_id += 1;
+        r
+    };
+
     let gstate_refs: Vec<((u16, u16), Ref, u32)> = gstates
         .iter()
-        .map(|(&(fk, sk), &idx)| {
-            let r = Ref::new(next_id);
-            next_id += 1;
-            ((fk, sk), r, idx)
+        .map(|(&(fk, sk), &idx)| ((fk, sk), alloc(), idx))
+        .collect();
+
+    // Allocate function/shading/pattern refs for each gradient.
+    let gradient_refs: Vec<GradientRefs> = gradients
+        .iter()
+        .map(|shape| {
+            let stops = match shape {
+                GradientShape::Linear(g) => &g.stops,
+                GradientShape::Radial(g) => &g.stops,
+            };
+            let prepared = prepare_stops(stops);
+            // (stops-1) subfunctions when stitching, or 1 exponential when
+            // there are exactly 2 stops.
+            let n_subfns = if prepared.len() <= 2 {
+                1
+            } else {
+                prepared.len() - 1
+            };
+            let need_stitch = prepared.len() > 2;
+            let n_fn_refs = n_subfns + if need_stitch { 1 } else { 0 };
+            let functions: Vec<Ref> = (0..n_fn_refs).map(|_| alloc()).collect();
+            GradientRefs {
+                functions,
+                shading: alloc(),
+                pattern: alloc(),
+            }
         })
         .collect();
 
@@ -300,17 +440,27 @@ fn finish_pdf(mut sink: PdfSink) -> Vec<u8> {
         page.parent(pages_id);
         page.media_box(Rect::new(0.0, 0.0, w * PX_TO_PT, h * PX_TO_PT));
         page.contents(content_id);
-        if !gstate_refs.is_empty() {
+        let need_resources = !gstate_refs.is_empty() || !gradient_refs.is_empty();
+        if need_resources {
             let mut resources = page.resources();
-            let mut gs_dict = resources.ext_g_states();
-            for ((_fk, _sk), r, idx) in &gstate_refs {
-                let name = format!("Gs{idx}");
-                gs_dict.pair(Name(name.as_bytes()), *r);
+            if !gstate_refs.is_empty() {
+                let mut gs_dict = resources.ext_g_states();
+                for ((_fk, _sk), r, idx) in &gstate_refs {
+                    let name = format!("Gs{idx}");
+                    gs_dict.pair(Name(name.as_bytes()), *r);
+                }
+                gs_dict.finish();
             }
-            gs_dict.finish();
+            if !gradient_refs.is_empty() {
+                let mut pat_dict = resources.patterns();
+                for (i, gr) in gradient_refs.iter().enumerate() {
+                    let name = format!("P{i}");
+                    pat_dict.pair(Name(name.as_bytes()), gr.pattern);
+                }
+                pat_dict.finish();
+            }
             resources.finish();
         } else {
-            // Empty Resources is required for a valid page.
             page.resources();
         }
         page.finish();
@@ -329,7 +479,156 @@ fn finish_pdf(mut sink: PdfSink) -> Vec<u8> {
         gs.finish();
     }
 
+    for (shape, refs) in gradients.iter().zip(gradient_refs.iter()) {
+        emit_gradient_objects(&mut pdf, shape, refs);
+    }
+
     pdf.finish()
+}
+
+/// Normalize stops so they cover [0, 1] and there is at least 2 entries:
+///   * Empty stops produce a single black stop at 0 (the caller already
+///     filtered out invisible paints, so this should be unreachable; kept
+///     defensive).
+///   * Single stop: duplicate it so we have a [0, 1] constant gradient.
+///   * If the first/last stop is not at 0/1, pad with the boundary color
+///     so colors extend past the gradient axis (CSS/SVG semantics).
+///   * Force monotonic non-decreasing offsets clamped to [0, 1].
+fn prepare_stops(stops: &[Stop]) -> Vec<Stop> {
+    let mut out: Vec<Stop> = stops
+        .iter()
+        .map(|s| Stop {
+            offset: s.offset.clamp(0.0, 1.0),
+            color: s.color,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.offset
+            .partial_cmp(&b.offset)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if out.is_empty() {
+        out.push(Stop {
+            offset: 0.0,
+            color: Rgba::default(),
+        });
+    }
+    if out.len() == 1 {
+        let only = out[0];
+        out = vec![
+            Stop {
+                offset: 0.0,
+                ..only
+            },
+            Stop {
+                offset: 1.0,
+                ..only
+            },
+        ];
+    }
+    let first = out[0];
+    if first.offset > 0.0 {
+        out.insert(
+            0,
+            Stop {
+                offset: 0.0,
+                color: first.color,
+            },
+        );
+    }
+    let last = *out.last().unwrap();
+    if last.offset < 1.0 {
+        out.push(Stop {
+            offset: 1.0,
+            color: last.color,
+        });
+    }
+    out
+}
+
+fn rgb_components(c: Rgba) -> [f32; 3] {
+    [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
+}
+
+fn emit_gradient_objects(pdf: &mut Pdf, shape: &GradientShape, refs: &GradientRefs) {
+    let stops = match shape {
+        GradientShape::Linear(g) => prepare_stops(&g.stops),
+        GradientShape::Radial(g) => prepare_stops(&g.stops),
+    };
+
+    // 1. Subfunctions + (optional) stitching function.
+    let main_fn_ref = if stops.len() == 2 {
+        // Single exponential c0 → c1 over [0, 1].
+        let r = refs.functions[0];
+        let mut f = pdf.exponential_function(r);
+        f.domain([0.0, 1.0]);
+        f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+        f.c0(rgb_components(stops[0].color));
+        f.c1(rgb_components(stops[1].color));
+        f.n(1.0);
+        f.finish();
+        r
+    } else {
+        // (N-1) sub-exponentials + 1 stitching function. The last ref in
+        // `functions` is the stitch; the first (N-1) are sub-exps.
+        let n_subfns = stops.len() - 1;
+        debug_assert_eq!(refs.functions.len(), n_subfns + 1);
+        for i in 0..n_subfns {
+            let r = refs.functions[i];
+            let mut f = pdf.exponential_function(r);
+            f.domain([0.0, 1.0]);
+            f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+            f.c0(rgb_components(stops[i].color));
+            f.c1(rgb_components(stops[i + 1].color));
+            f.n(1.0);
+            f.finish();
+        }
+        let stitch_ref = *refs.functions.last().unwrap();
+        let mut stitch = pdf.stitching_function(stitch_ref);
+        stitch.domain([0.0, 1.0]);
+        stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+        stitch.functions(refs.functions[..n_subfns].iter().copied());
+        // Bounds: interior stop offsets (exclude first and last).
+        stitch.bounds(stops[1..stops.len() - 1].iter().map(|s| s.offset));
+        // Encode: each sub-function consumes its slice of [0, 1] and maps
+        // it back to its own [0, 1] domain.
+        let encode: Vec<f32> = (0..n_subfns).flat_map(|_| [0.0, 1.0]).collect();
+        stitch.encode(encode);
+        stitch.finish();
+        stitch_ref
+    };
+
+    // 2. Shading dictionary.
+    {
+        let mut sh = pdf.function_shading(refs.shading);
+        sh.color_space().device_rgb();
+        match shape {
+            GradientShape::Linear(g) => {
+                sh.shading_type(FunctionShadingType::Axial);
+                sh.coords([g.x0, g.y0, g.x1, g.y1]);
+            }
+            GradientShape::Radial(g) => {
+                sh.shading_type(FunctionShadingType::Radial);
+                // (cx0, cy0, r0, cx1, cy1, r1) — SVG-style single center +
+                // radius: r0 = 0, r1 = radius, both centers equal.
+                sh.coords([g.cx, g.cy, 0.0, g.cx, g.cy, g.radius]);
+            }
+        }
+        // PDF Type 2/3 shadings only support pad-or-transparent via /Extend.
+        // Honoring Reflect/Repeat would require a Type 4 PostScript function
+        // that folds/wraps t and inlines color interpolation — punt for now;
+        // wire round-trip preserves the mode but PDF renders it as Pad.
+        sh.extend([true, true]);
+        sh.function(main_fn_ref);
+        sh.finish();
+    }
+
+    // 3. Shading pattern dictionary.
+    {
+        let mut pat = pdf.shading_pattern(refs.pattern);
+        pat.shading_ref(refs.shading);
+        pat.finish();
+    }
 }
 
 fn emit_path_ops(ops: &[PathOp], content: &mut Content) {
@@ -499,12 +798,7 @@ mod tests {
 
     fn red_fill(a: f32) -> PathStyle {
         PathStyle {
-            fill: Rgba {
-                r: 255,
-                g: 0,
-                b: 0,
-                a,
-            },
+            fill: crate::ir::Paint::rgba(255, 0, 0, a),
             ..PathStyle::default()
         }
     }
@@ -575,5 +869,197 @@ mod tests {
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("ExtGState"), "expected ExtGState resource");
         assert!(s.contains("/Gs0"), "expected gs name reference");
+    }
+
+    #[test]
+    fn dash_pattern_emits_d_operator() {
+        // A stroked rect with dash_array [3, 2] dash_offset 1 should produce
+        // the PDF `d` operator with the same numbers in the content stream.
+        let mut dl = DrawList::new(100.0, 50.0);
+        let style = PathStyle {
+            stroke: crate::ir::Paint::rgba(0, 0, 0, 1.0),
+            stroke_width: 1.0,
+            dash_array: vec![3.0, 2.0],
+            dash_offset: 1.0,
+            ..PathStyle::default()
+        };
+        rect(&mut dl, style, 0.0, 0.0, 100.0, 50.0);
+        let out = render_to_pdf_dl(&dl);
+        let s = String::from_utf8_lossy(&out);
+        // `set_dash_pattern` emits `[a b] off d`.
+        assert!(s.contains(" d\n") || s.contains(" d\r"), "no `d` op: {s}");
+        assert!(s.contains("[3 2]"), "dash array not found: {s}");
+    }
+
+    #[test]
+    fn miter_limit_emits_m_operator() {
+        // Miter joins with non-default miter_limit should emit the `M` op.
+        let mut dl = DrawList::new(50.0, 50.0);
+        let style = PathStyle {
+            stroke: crate::ir::Paint::rgba(0, 0, 0, 1.0),
+            stroke_width: 4.0,
+            miter_limit: 12.0,
+            line_join: LineJoin::Miter,
+            ..PathStyle::default()
+        };
+        rect(&mut dl, style, 5.0, 5.0, 40.0, 40.0);
+        let out = render_to_pdf_dl(&dl);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("12 M"), "expected miter limit op: {s}");
+    }
+
+    #[test]
+    fn linear_gradient_emits_axial_shading() {
+        // 2-stop linear gradient should emit:
+        //  - one ExponentialFunction with the two colors,
+        //  - one FunctionShading (ShadingType 2 = axial) referencing it,
+        //  - one ShadingPattern,
+        //  - the content stream using `cs /Pattern\n /P0 scn` for the fill.
+        let mut dl = DrawList::new(50.0, 50.0);
+        let style = PathStyle {
+            fill: crate::ir::Paint::Linear(crate::ir::LinearGradient {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 50.0,
+                y1: 0.0,
+                stops: vec![
+                    crate::ir::Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 0,
+                            b: 0,
+                            a: 1.0,
+                        },
+                    },
+                    crate::ir::Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                ],
+                ..crate::ir::LinearGradient::default()
+            }),
+            ..PathStyle::default()
+        };
+        rect(&mut dl, style, 0.0, 0.0, 50.0, 50.0);
+        let out = render_to_pdf_dl(&dl);
+        let s = String::from_utf8_lossy(&out);
+        // ShadingType 2 = axial gradient.
+        assert!(
+            s.contains("/ShadingType 2") || s.contains("/ShadingType  2"),
+            "axial shading missing: {s}"
+        );
+        // FunctionType 2 = exponential interpolation.
+        assert!(
+            s.contains("/FunctionType 2") || s.contains("/FunctionType  2"),
+            "exponential function missing"
+        );
+        // Pattern resource registered as /P0.
+        assert!(s.contains("/P0"), "pattern name missing: {s}");
+        // Content stream switches to Pattern colorspace then names /P0.
+        assert!(s.contains("/Pattern cs"), "missing pattern colorspace: {s}");
+    }
+
+    #[test]
+    fn radial_gradient_emits_radial_shading() {
+        let mut dl = DrawList::new(50.0, 50.0);
+        let style = PathStyle {
+            fill: crate::ir::Paint::Radial(crate::ir::RadialGradient {
+                cx: 25.0,
+                cy: 25.0,
+                radius: 20.0,
+                stops: vec![
+                    crate::ir::Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                    crate::ir::Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 1.0,
+                        },
+                    },
+                ],
+                ..crate::ir::RadialGradient::default()
+            }),
+            ..PathStyle::default()
+        };
+        rect(&mut dl, style, 0.0, 0.0, 50.0, 50.0);
+        let out = render_to_pdf_dl(&dl);
+        let s = String::from_utf8_lossy(&out);
+        // ShadingType 3 = radial gradient.
+        assert!(
+            s.contains("/ShadingType 3") || s.contains("/ShadingType  3"),
+            "radial shading missing: {s}"
+        );
+    }
+
+    #[test]
+    fn multi_stop_gradient_uses_stitching_function() {
+        // 3 stops should produce a Type 3 (stitching) function wrapping two
+        // Type 2 sub-functions.
+        let mut dl = DrawList::new(60.0, 10.0);
+        let style = PathStyle {
+            fill: crate::ir::Paint::Linear(crate::ir::LinearGradient {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 60.0,
+                y1: 0.0,
+                stops: vec![
+                    crate::ir::Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 0,
+                            b: 0,
+                            a: 1.0,
+                        },
+                    },
+                    crate::ir::Stop {
+                        offset: 0.5,
+                        color: Rgba {
+                            r: 0,
+                            g: 255,
+                            b: 0,
+                            a: 1.0,
+                        },
+                    },
+                    crate::ir::Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                ],
+                ..crate::ir::LinearGradient::default()
+            }),
+            ..PathStyle::default()
+        };
+        rect(&mut dl, style, 0.0, 0.0, 60.0, 10.0);
+        let out = render_to_pdf_dl(&dl);
+        let s = String::from_utf8_lossy(&out);
+        // Stitching function present (FunctionType 3).
+        assert!(
+            s.contains("/FunctionType 3") || s.contains("/FunctionType  3"),
+            "stitching function missing: {s}"
+        );
+        // The interior bound 0.5 should appear in the /Bounds array.
+        assert!(s.contains("/Bounds [0.5]"), "bounds missing: {s}");
     }
 }

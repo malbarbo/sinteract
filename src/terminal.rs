@@ -30,11 +30,14 @@ use base64::engine::general_purpose::STANDARD as B64;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, event, execute, queue, terminal};
 use tiny_skia::{
-    FillRule as SkFillRule, LineCap as SkLineCap, LineJoin as SkLineJoin, Mask, Paint, PathBuilder,
-    Pixmap, Stroke, Transform,
+    Color as SkColor, FillRule as SkFillRule, GradientStop as SkStop, LineCap as SkLineCap,
+    LineJoin as SkLineJoin, Mask, Paint, PathBuilder, Pixmap, Point as SkPoint, Shader as SkShader,
+    SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::ir::{BitmapNode, ClipBox, FillRule, LineCap, LineJoin, PathStyle, Rgba, TextNode};
+use crate::ir::{
+    BitmapNode, ClipBox, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, TextNode,
+};
 use crate::sink::DrawSink;
 use crate::sixel;
 
@@ -193,15 +196,12 @@ impl PixmapSink {
         };
         let mask = self.clip_stack.last();
 
-        if p.style.fill.a > 0.0 {
-            let mut paint = Paint::default();
-            paint.set_color_rgba8(
-                p.style.fill.r,
-                p.style.fill.g,
-                p.style.fill.b,
-                (p.style.fill.a * 255.0).round().clamp(0.0, 255.0) as u8,
-            );
-            paint.anti_alias = true;
+        if p.style.fill.is_visible() {
+            let paint = Paint {
+                shader: paint_to_shader(&p.style.fill),
+                anti_alias: true,
+                ..Paint::default()
+            };
             pixmap.fill_path(
                 &path,
                 &paint,
@@ -210,21 +210,23 @@ impl PixmapSink {
                 mask,
             );
         }
-        if p.style.stroke.a > 0.0 && p.style.stroke_width > 0.0 {
-            let mut paint = Paint::default();
-            paint.set_color_rgba8(
-                p.style.stroke.r,
-                p.style.stroke.g,
-                p.style.stroke.b,
-                (p.style.stroke.a * 255.0).round().clamp(0.0, 255.0) as u8,
-            );
-            paint.anti_alias = true;
+        if p.style.stroke.is_visible() && p.style.stroke_width > 0.0 {
+            let paint = Paint {
+                shader: paint_to_shader(&p.style.stroke),
+                anti_alias: true,
+                ..Paint::default()
+            };
+            let dash = if p.style.dash_array.is_empty() {
+                None
+            } else {
+                StrokeDash::new(p.style.dash_array.clone(), p.style.dash_offset)
+            };
             let stroke = Stroke {
                 width: p.style.stroke_width,
                 line_cap: sk_line_cap(p.style.line_cap),
                 line_join: sk_line_join(p.style.line_join),
-                miter_limit: 10.0,
-                dash: None,
+                miter_limit: p.style.miter_limit,
+                dash,
             };
             pixmap.stroke_path(&path, &paint, &stroke, self.base, mask);
         }
@@ -250,7 +252,7 @@ impl DrawSink for PixmapSink {
         self.flush_path();
         self.pending = Some(PendingPath {
             builder: PathBuilder::new(),
-            style: *style,
+            style: style.clone(),
             has_points: false,
         });
     }
@@ -379,6 +381,59 @@ fn sk_line_join(j: LineJoin) -> SkLineJoin {
         LineJoin::Round => SkLineJoin::Round,
         LineJoin::Bevel => SkLineJoin::Bevel,
         LineJoin::Miter => SkLineJoin::Miter,
+    }
+}
+
+fn sk_color(c: Rgba) -> SkColor {
+    SkColor::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8)
+}
+
+fn sk_stops(stops: &[crate::ir::Stop]) -> Vec<SkStop> {
+    stops
+        .iter()
+        .map(|s| SkStop::new(s.offset, sk_color(s.color)))
+        .collect()
+}
+
+fn sk_spread(s: crate::ir::SpreadMode) -> SkSpread {
+    match s {
+        crate::ir::SpreadMode::Pad => SkSpread::Pad,
+        crate::ir::SpreadMode::Reflect => SkSpread::Reflect,
+        crate::ir::SpreadMode::Repeat => SkSpread::Repeat,
+    }
+}
+
+/// Convert an IR [`IrPaint`] to a tiny-skia [`SkShader`]. Gradients that fail
+/// to construct (e.g. degenerate line, missing stops) collapse to the paint's
+/// primary color so the draw still produces output.
+fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
+    match p {
+        IrPaint::Solid(c) => SkShader::SolidColor(sk_color(*c)),
+        IrPaint::Linear(g) => {
+            let stops = sk_stops(&g.stops);
+            tiny_skia::LinearGradient::new(
+                SkPoint::from_xy(g.x0, g.y0),
+                SkPoint::from_xy(g.x1, g.y1),
+                stops,
+                sk_spread(g.spread),
+                Transform::identity(),
+            )
+            .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
+        }
+        IrPaint::Radial(g) => {
+            let center = SkPoint::from_xy(g.cx, g.cy);
+            let stops = sk_stops(&g.stops);
+            tiny_skia::RadialGradient::new(
+                center,
+                0.0,
+                center,
+                g.radius,
+                stops,
+                sk_spread(g.spread),
+                Transform::identity(),
+            )
+            .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
+        }
     }
 }
 
@@ -906,7 +961,7 @@ mod tests {
 
     fn solid(r: u8, g: u8, b: u8) -> PathStyle {
         PathStyle {
-            fill: Rgba { r, g, b, a: 1.0 },
+            fill: IrPaint::rgba(r, g, b, 1.0),
             ..PathStyle::default()
         }
     }
@@ -1149,5 +1204,177 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
         assert_eq!(lines, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Gradient + dash rendering
+    // -----------------------------------------------------------------------
+
+    use crate::ir::{LinearGradient, RadialGradient, Stop};
+
+    #[test]
+    fn rasterize_linear_gradient_left_to_right() {
+        // 40×10 rect, linear gradient from black (x=0) to white (x=40). The
+        // leftmost pixel should be ≈ black, the rightmost ≈ white, and the
+        // middle a clearly-different gray in between.
+        let mut dl = DrawList::new(40.0, 10.0);
+        let style = PathStyle {
+            fill: IrPaint::Linear(LinearGradient {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 40.0,
+                y1: 0.0,
+                stops: vec![
+                    Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 1.0,
+                        },
+                    },
+                    Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                ],
+                ..LinearGradient::default()
+            }),
+            ..PathStyle::default()
+        };
+        rect_path(&mut dl, style, 0.0, 0.0, 40.0, 10.0);
+        let pm = rasterize(&dl);
+        let left = pixel_rgba(&pm, 1, 5).0;
+        let mid = pixel_rgba(&pm, 20, 5).0;
+        let right = pixel_rgba(&pm, 38, 5).0;
+        assert!(left < 32, "left pixel too bright: {left}");
+        assert!(right > 223, "right pixel too dark: {right}");
+        assert!(
+            mid > left + 64 && mid + 64 < right,
+            "mid pixel not between: left={left} mid={mid} right={right}"
+        );
+    }
+
+    #[test]
+    fn rasterize_radial_gradient_center_bright_edge_dark() {
+        // 40×40, radial gradient centered at (20, 20) radius 20: white at
+        // center, transparent at the edge.
+        let mut dl = DrawList::new(40.0, 40.0);
+        let style = PathStyle {
+            fill: IrPaint::Radial(RadialGradient {
+                cx: 20.0,
+                cy: 20.0,
+                radius: 20.0,
+                stops: vec![
+                    Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                    Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 0.0,
+                        },
+                    },
+                ],
+                ..RadialGradient::default()
+            }),
+            ..PathStyle::default()
+        };
+        rect_path(&mut dl, style, 0.0, 0.0, 40.0, 40.0);
+        let pm = rasterize(&dl);
+        let center_a = pixel_rgba(&pm, 20, 20).3;
+        let edge_a = pixel_rgba(&pm, 0, 20).3;
+        assert!(center_a > 200, "center too dim: {center_a}");
+        assert!(edge_a < 40, "edge too opaque: {edge_a}");
+    }
+
+    #[test]
+    fn rasterize_linear_gradient_reflect_mirrors_past_axis() {
+        // 80×10 rect, gradient axis (0,0)→(20,0): with Reflect, the gradient
+        // tiles like an even mirror over t periods of length 2. Pixel at
+        // x=10 sits at t=0.5 (mid-axis, gray). Pixel at x=30 sits at t=1.5,
+        // which Pad clamps to white but Reflect folds back to t=0.5 (gray).
+        let mut dl = DrawList::new(80.0, 10.0);
+        let style = PathStyle {
+            fill: IrPaint::Linear(crate::ir::LinearGradient {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 20.0,
+                y1: 0.0,
+                spread: crate::ir::SpreadMode::Reflect,
+                stops: vec![
+                    crate::ir::Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 1.0,
+                        },
+                    },
+                    crate::ir::Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                ],
+            }),
+            ..PathStyle::default()
+        };
+        rect_path(&mut dl, style, 0.0, 0.0, 80.0, 10.0);
+        let pm = rasterize(&dl);
+        let mid_axis = pixel_rgba(&pm, 10, 5).0; // t = 0.5 → ~gray
+        let pad_zone = pixel_rgba(&pm, 30, 5).0; // t = 1.5 → reflect → ~gray
+        let pad_far = pixel_rgba(&pm, 50, 5).0; // t = 2.5 → reflect → mid again
+        // With Pad these would all clamp to white past x=20; with Reflect they
+        // should mirror back into the gradient.
+        assert!(
+            (mid_axis as i32 - pad_zone as i32).abs() < 30,
+            "expected mirror near t=1.5; got mid={mid_axis} reflected={pad_zone}"
+        );
+        assert!(
+            (mid_axis as i32 - pad_far as i32).abs() < 30,
+            "expected period 2; got mid={mid_axis} two-periods-out={pad_far}"
+        );
+    }
+
+    #[test]
+    fn rasterize_dash_stroke_has_gaps() {
+        // Horizontal stroke from (5,10) to (95,10) with a [10, 10] dash.
+        // Sample on the line: x=10 sits inside an "on" segment (opaque); x=20
+        // sits inside an "off" segment (transparent).
+        let mut dl = DrawList::new(100.0, 20.0);
+        dl.path_begin(PathStyle {
+            stroke: IrPaint::rgba(255, 0, 0, 1.0),
+            stroke_width: 3.0,
+            dash_array: vec![10.0, 10.0],
+            ..PathStyle::default()
+        });
+        dl.move_to(5.0, 10.0);
+        dl.line_to(95.0, 10.0);
+        let pm = rasterize(&dl);
+        let on = pixel_rgba(&pm, 10, 10).3;
+        let off = pixel_rgba(&pm, 20, 10).3;
+        assert!(on > 200, "on-segment expected opaque: {on}");
+        assert!(off < 40, "off-segment expected transparent: {off}");
     }
 }

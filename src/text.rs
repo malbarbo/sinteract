@@ -20,8 +20,6 @@
 //! WASM targets do not use this module: the JS frontend measures text via
 //! `OffscreenCanvas` and supplies metrics through the env imports.
 
-#![cfg(not(target_arch = "wasm32"))]
-
 use std::sync::{Mutex, OnceLock};
 
 use ttf_parser::{Face, GlyphId};

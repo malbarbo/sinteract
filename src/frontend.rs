@@ -29,7 +29,6 @@ use crate::event::{
 };
 use crate::ir::DrawList;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::stdio::StdioFrontend;
 
 /// Convenience: build a [`Duration`] period from a frequency in Hz. Each
@@ -43,11 +42,8 @@ const fn period_from_hz(hz: u32) -> Duration {
 /// [`Frontend::window`], or [`Frontend::stdio`]; the host then drives it
 /// for the whole session.
 pub enum Frontend {
-    #[cfg(not(target_arch = "wasm32"))]
     Terminal(TerminalFrontend),
-    #[cfg(not(target_arch = "wasm32"))]
     Window(WindowFrontend),
-    #[cfg(not(target_arch = "wasm32"))]
     Stdio(StdioFrontend),
 }
 
@@ -57,7 +53,6 @@ impl Frontend {
     /// that need explicit control should call the per-variant constructors.
     /// `title` is used only when the chosen backend is a window — terminals
     /// inherit their title from the shell.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn pick_native(title: &str) -> Self {
         // Defer to the existing terminal capability probe — same heuristic
         // spython has been using.
@@ -71,39 +66,30 @@ impl Frontend {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn terminal() -> Self {
         Frontend::Terminal(TerminalFrontend::new())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn window(title: &str) -> Self {
         Frontend::Window(WindowFrontend::new(title))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn stdio() -> Self {
         Frontend::Stdio(StdioFrontend::new())
     }
 
     pub fn enter(&mut self) {
         match self {
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Terminal(f) => f.enter(),
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Window(f) => f.enter(),
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Stdio(f) => f.enter(),
         }
     }
 
     pub fn exit(&mut self) {
         match self {
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Terminal(f) => f.exit(),
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Window(f) => f.exit(),
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Stdio(f) => f.exit(),
         }
     }
@@ -113,11 +99,8 @@ impl Frontend {
     /// down (window closed, stdin EOF) — callers treat that as terminal.
     pub fn wait_event(&mut self, deadline: Option<Instant>) -> Option<InputEvent> {
         match self {
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Terminal(f) => f.wait_event(deadline),
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Window(f) => f.wait_event(deadline),
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Stdio(f) => f.wait_event(deadline),
         }
     }
@@ -125,11 +108,8 @@ impl Frontend {
     /// Render `dl` to the active output.
     pub fn present(&mut self, dl: &DrawList) {
         match self {
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Terminal(f) => f.present(dl),
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Window(f) => f.present(dl),
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Stdio(f) => f.present(dl),
         }
     }
@@ -138,9 +118,7 @@ impl Frontend {
     /// do not support bitmaps (terminal, pdf, current window) ignore this.
     pub fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) {
         match self {
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Terminal(_) | Frontend::Window(_) => {}
-            #[cfg(not(target_arch = "wasm32"))]
             Frontend::Stdio(f) => f.push_asset(id, blob, mime),
         }
     }
@@ -238,13 +216,11 @@ pub(crate) fn key_event_from_legacy(event_type: i32, key: String, flags: [bool; 
 // TerminalFrontend
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_arch = "wasm32"))]
 pub struct TerminalFrontend {
     clock: VsyncClock,
     entered: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl TerminalFrontend {
     /// Vsync cadence in the terminal. There is no hardware refresh to sync
     /// against; 60 Hz is enough for smooth half-block animation without
@@ -307,7 +283,6 @@ impl TerminalFrontend {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Default for TerminalFrontend {
     fn default() -> Self {
         Self::new()
@@ -318,14 +293,12 @@ impl Default for TerminalFrontend {
 // WindowFrontend
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_arch = "wasm32"))]
 pub struct WindowFrontend {
     title: String,
     clock: VsyncClock,
     entered: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl WindowFrontend {
     /// Software-timed vsync cadence used by the current window stub. Once
     /// the window switches to a real swap chain (winit + wgpu present), the

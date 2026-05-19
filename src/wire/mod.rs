@@ -24,15 +24,17 @@ use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
 use crate::ir::{
-    BitmapNode, ClipBox, DrawList, DrawNode, FillRule, FontStyle, LineCap, LineJoin, Path,
-    PathStyle, Rgba, TextNode, verb,
+    BitmapNode, ClipBox, DrawList, DrawNode, FillRule, FontStyle, LineCap, LineJoin,
+    LinearGradient, Paint, Path, PathStyle, RadialGradient, Rgba, SpreadMode, Stop, TextNode, verb,
 };
 
 use crate::frame_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, KeyKind as WKeyKind, LineCap as WLineCap,
-    LineJoin as WLineJoin, bitmap_node, clip_box as wire_clip_box, draw_list, draw_node,
-    input_event, key_event as wire_key_event, message, path as wire_path,
-    path_style as wire_path_style, rgba as wire_rgba, text_node,
+    LineJoin as WLineJoin, SpreadMode as WSpreadMode, bitmap_node, clip_box as wire_clip_box,
+    draw_list, draw_node, input_event, key_event as wire_key_event,
+    linear_gradient as wire_linear_gradient, message, paint as wire_paint, path as wire_path,
+    path_style as wire_path_style, radial_gradient as wire_radial_gradient, rgba as wire_rgba,
+    stop as wire_stop, text_node,
 };
 
 /// Stdio-framing magic. Cap'n Proto's own `serialize::write_message` already
@@ -264,6 +266,22 @@ fn font_style_from_wire(s: WFontStyle) -> FontStyle {
     }
 }
 
+fn spread_to_wire(s: SpreadMode) -> WSpreadMode {
+    match s {
+        SpreadMode::Pad => WSpreadMode::Pad,
+        SpreadMode::Reflect => WSpreadMode::Reflect,
+        SpreadMode::Repeat => WSpreadMode::Repeat,
+    }
+}
+
+fn spread_from_wire(s: WSpreadMode) -> SpreadMode {
+    match s {
+        WSpreadMode::Reflect => SpreadMode::Reflect,
+        WSpreadMode::Repeat => SpreadMode::Repeat,
+        _ => SpreadMode::Pad,
+    }
+}
+
 fn key_kind_to_wire(k: KeyKind) -> WKeyKind {
     match k {
         KeyKind::Press => WKeyKind::Press,
@@ -300,25 +318,126 @@ fn read_rgba(r: wire_rgba::Reader<'_>) -> Rgba {
     }
 }
 
+fn write_stop(mut b: wire_stop::Builder<'_>, s: Stop) {
+    b.set_offset(s.offset);
+    write_rgba(b.reborrow().init_color(), s.color);
+}
+
+fn read_stop(r: wire_stop::Reader<'_>) -> Result<Stop, Error> {
+    Ok(Stop {
+        offset: r.get_offset(),
+        color: read_rgba(r.get_color()?),
+    })
+}
+
+fn write_linear_gradient(mut b: wire_linear_gradient::Builder<'_>, g: &LinearGradient) {
+    b.set_x0(g.x0);
+    b.set_y0(g.y0);
+    b.set_x1(g.x1);
+    b.set_y1(g.y1);
+    b.set_spread(spread_to_wire(g.spread));
+    let mut stops = b.init_stops(g.stops.len() as u32);
+    for (i, s) in g.stops.iter().enumerate() {
+        write_stop(stops.reborrow().get(i as u32), *s);
+    }
+}
+
+fn read_linear_gradient(r: wire_linear_gradient::Reader<'_>) -> Result<LinearGradient, Error> {
+    let mut stops = Vec::new();
+    if r.has_stops() {
+        for s in r.get_stops()?.iter() {
+            stops.push(read_stop(s)?);
+        }
+    }
+    Ok(LinearGradient {
+        x0: r.get_x0(),
+        y0: r.get_y0(),
+        x1: r.get_x1(),
+        y1: r.get_y1(),
+        stops,
+        spread: spread_from_wire(r.get_spread()?),
+    })
+}
+
+fn write_radial_gradient(mut b: wire_radial_gradient::Builder<'_>, g: &RadialGradient) {
+    b.set_cx(g.cx);
+    b.set_cy(g.cy);
+    b.set_radius(g.radius);
+    b.set_spread(spread_to_wire(g.spread));
+    let mut stops = b.init_stops(g.stops.len() as u32);
+    for (i, s) in g.stops.iter().enumerate() {
+        write_stop(stops.reborrow().get(i as u32), *s);
+    }
+}
+
+fn read_radial_gradient(r: wire_radial_gradient::Reader<'_>) -> Result<RadialGradient, Error> {
+    let mut stops = Vec::new();
+    if r.has_stops() {
+        for s in r.get_stops()?.iter() {
+            stops.push(read_stop(s)?);
+        }
+    }
+    Ok(RadialGradient {
+        cx: r.get_cx(),
+        cy: r.get_cy(),
+        radius: r.get_radius(),
+        stops,
+        spread: spread_from_wire(r.get_spread()?),
+    })
+}
+
+fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
+    match p {
+        Paint::Solid(c) => write_rgba(b.init_solid(), *c),
+        Paint::Linear(g) => write_linear_gradient(b.init_linear(), g),
+        Paint::Radial(g) => write_radial_gradient(b.init_radial(), g),
+    }
+}
+
+fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, Error> {
+    use wire_paint::Which;
+    Ok(match r.which()? {
+        Which::Solid(c) => Paint::Solid(read_rgba(c?)),
+        Which::Linear(g) => Paint::Linear(read_linear_gradient(g?)?),
+        Which::Radial(g) => Paint::Radial(read_radial_gradient(g?)?),
+    })
+}
+
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
-    write_rgba(b.reborrow().init_fill(), s.fill);
-    write_rgba(b.reborrow().init_stroke(), s.stroke);
+    write_paint(b.reborrow().init_fill(), &s.fill);
+    write_paint(b.reborrow().init_stroke(), &s.stroke);
     b.set_stroke_width(s.stroke_width);
     b.set_line_cap(line_cap_to_wire(s.line_cap));
     b.set_line_join(line_join_to_wire(s.line_join));
     b.set_fill_rule(fill_rule_to_wire(s.fill_rule));
     b.set_closed(s.closed);
+    b.set_miter_limit(s.miter_limit);
+    b.set_dash_offset(s.dash_offset);
+    if !s.dash_array.is_empty() {
+        let mut out = b.init_dash_array(s.dash_array.len() as u32);
+        for (i, v) in s.dash_array.iter().enumerate() {
+            out.set(i as u32, *v);
+        }
+    }
 }
 
 fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
+    let dash_array = if r.has_dash_array() {
+        r.get_dash_array()?.iter().collect()
+    } else {
+        Vec::new()
+    };
     Ok(PathStyle {
-        fill: read_rgba(r.get_fill()?),
-        stroke: read_rgba(r.get_stroke()?),
+        fill: read_paint(r.get_fill()?)?,
+        stroke: read_paint(r.get_stroke()?)?,
         stroke_width: r.get_stroke_width(),
         line_cap: line_cap_from_wire(r.get_line_cap()?),
         line_join: line_join_from_wire(r.get_line_join()?),
         fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
         closed: r.get_closed(),
+        miter_limit: r.get_miter_limit(),
+        dash_array,
+        dash_offset: r.get_dash_offset(),
     })
 }
 
@@ -588,23 +707,14 @@ mod tests {
     fn sample_drawlist() -> DrawList {
         let mut dl = DrawList::new(120.0, 80.0);
         dl.path_begin(PathStyle {
-            fill: Rgba {
-                r: 10,
-                g: 20,
-                b: 30,
-                a: 0.5,
-            },
-            stroke: Rgba {
-                r: 200,
-                g: 0,
-                b: 0,
-                a: 1.0,
-            },
+            fill: Paint::rgba(10, 20, 30, 0.5),
+            stroke: Paint::rgba(200, 0, 0, 1.0),
             stroke_width: 2.5,
             line_cap: LineCap::Round,
             line_join: LineJoin::Bevel,
             fill_rule: FillRule::EvenOdd,
             closed: true,
+            ..PathStyle::default()
         });
         dl.move_to(0.0, 0.0);
         dl.line_to(10.0, 0.0);
@@ -804,5 +914,243 @@ mod tests {
             ),
             "got {err:?}",
         );
+    }
+
+    #[test]
+    fn dash_and_miter_round_trip() {
+        let mut dl = DrawList::new(100.0, 50.0);
+        dl.path_begin(PathStyle {
+            stroke: Paint::rgba(0, 0, 0, 1.0),
+            stroke_width: 2.0,
+            miter_limit: 7.5,
+            dash_array: vec![4.0, 2.0, 1.0],
+            dash_offset: 1.5,
+            ..PathStyle::default()
+        });
+        dl.move_to(0.0, 0.0);
+        dl.line_to(50.0, 50.0);
+        let bytes = encode_frame(&dl);
+        match decode(&bytes).unwrap() {
+            Decoded::Frame(d) => {
+                let node = d.nodes.first().expect("one node");
+                let DrawNode::Path(p) = node else {
+                    panic!("expected path");
+                };
+                assert_eq!(p.style.miter_limit, 7.5);
+                assert_eq!(p.style.dash_array, vec![4.0, 2.0, 1.0]);
+                assert_eq!(p.style.dash_offset, 1.5);
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn linear_gradient_paint_round_trips() {
+        let mut dl = DrawList::new(50.0, 50.0);
+        let gradient = LinearGradient {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 50.0,
+            y1: 0.0,
+            stops: vec![
+                Stop {
+                    offset: 0.0,
+                    color: Rgba {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 1.0,
+                    },
+                },
+                Stop {
+                    offset: 0.5,
+                    color: Rgba {
+                        r: 0,
+                        g: 255,
+                        b: 0,
+                        a: 0.8,
+                    },
+                },
+                Stop {
+                    offset: 1.0,
+                    color: Rgba {
+                        r: 0,
+                        g: 0,
+                        b: 255,
+                        a: 1.0,
+                    },
+                },
+            ],
+            ..LinearGradient::default()
+        };
+        dl.path_begin(PathStyle {
+            fill: Paint::Linear(gradient.clone()),
+            ..PathStyle::default()
+        });
+        dl.move_to(0.0, 0.0);
+        dl.line_to(50.0, 0.0);
+        dl.line_to(50.0, 50.0);
+        let bytes = encode_frame(&dl);
+        match decode(&bytes).unwrap() {
+            Decoded::Frame(d) => {
+                let DrawNode::Path(p) = d.nodes.first().unwrap() else {
+                    panic!();
+                };
+                assert_eq!(p.style.fill, Paint::Linear(gradient));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn radial_gradient_paint_round_trips() {
+        let mut dl = DrawList::new(50.0, 50.0);
+        let gradient = RadialGradient {
+            cx: 25.0,
+            cy: 25.0,
+            radius: 20.0,
+            stops: vec![
+                Stop {
+                    offset: 0.0,
+                    color: Rgba {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 1.0,
+                    },
+                },
+                Stop {
+                    offset: 1.0,
+                    color: Rgba {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 0.0,
+                    },
+                },
+            ],
+            ..RadialGradient::default()
+        };
+        dl.path_begin(PathStyle {
+            fill: Paint::Radial(gradient.clone()),
+            ..PathStyle::default()
+        });
+        dl.move_to(0.0, 0.0);
+        dl.line_to(50.0, 50.0);
+        let bytes = encode_frame(&dl);
+        match decode(&bytes).unwrap() {
+            Decoded::Frame(d) => {
+                let DrawNode::Path(p) = d.nodes.first().unwrap() else {
+                    panic!();
+                };
+                assert_eq!(p.style.fill, Paint::Radial(gradient));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn gradient_spread_mode_round_trips() {
+        // Linear with Reflect and Radial with Repeat — both should survive
+        // a wire round-trip.
+        let mut dl = DrawList::new(50.0, 50.0);
+        let linear = LinearGradient {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 25.0,
+            y1: 0.0,
+            spread: SpreadMode::Reflect,
+            stops: vec![
+                Stop {
+                    offset: 0.0,
+                    color: Rgba {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 1.0,
+                    },
+                },
+                Stop {
+                    offset: 1.0,
+                    color: Rgba {
+                        r: 0,
+                        g: 0,
+                        b: 255,
+                        a: 1.0,
+                    },
+                },
+            ],
+        };
+        dl.path_begin(PathStyle {
+            fill: Paint::Linear(linear.clone()),
+            ..PathStyle::default()
+        });
+        dl.move_to(0.0, 0.0);
+        dl.line_to(50.0, 50.0);
+        let radial = RadialGradient {
+            cx: 25.0,
+            cy: 25.0,
+            radius: 10.0,
+            spread: SpreadMode::Repeat,
+            stops: vec![
+                Stop {
+                    offset: 0.0,
+                    color: Rgba {
+                        r: 0,
+                        g: 255,
+                        b: 0,
+                        a: 1.0,
+                    },
+                },
+                Stop {
+                    offset: 1.0,
+                    color: Rgba::default(),
+                },
+            ],
+        };
+        dl.path_begin(PathStyle {
+            fill: Paint::Radial(radial.clone()),
+            ..PathStyle::default()
+        });
+        dl.move_to(0.0, 0.0);
+        dl.line_to(50.0, 50.0);
+        let bytes = encode_frame(&dl);
+        match decode(&bytes).unwrap() {
+            Decoded::Frame(d) => {
+                let DrawNode::Path(p0) = &d.nodes[0] else {
+                    panic!();
+                };
+                assert_eq!(p0.style.fill, Paint::Linear(linear));
+                let DrawNode::Path(p1) = &d.nodes[1] else {
+                    panic!();
+                };
+                assert_eq!(p1.style.fill, Paint::Radial(radial));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn default_style_uses_solid_transparent_paint() {
+        // Encode/decode with all defaults: paint should be Solid(transparent),
+        // dash empty, miter_limit at SVG default. Guards against future
+        // accidental changes to Default.
+        let mut dl = DrawList::new(10.0, 10.0);
+        dl.path_begin(PathStyle::default());
+        dl.move_to(0.0, 0.0);
+        let bytes = encode_frame(&dl);
+        match decode(&bytes).unwrap() {
+            Decoded::Frame(d) => {
+                let DrawNode::Path(p) = d.nodes.first().unwrap() else {
+                    panic!();
+                };
+                assert_eq!(p.style.fill, Paint::Solid(Rgba::default()));
+                assert_eq!(p.style.stroke, Paint::Solid(Rgba::default()));
+                assert!(p.style.dash_array.is_empty());
+                assert_eq!(p.style.dash_offset, 0.0);
+                assert_eq!(p.style.miter_limit, crate::ir::DEFAULT_MITER_LIMIT);
+            }
+            _ => panic!(),
+        }
     }
 }

@@ -28,8 +28,6 @@
 //! integration (CLI flag, world.run wiring) lives in `spython` / `sgleam`
 //! and is intentionally deferred — see `simage/PLAN.md`, fase 5.
 
-#![cfg(not(target_arch = "wasm32"))]
-
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -203,7 +201,7 @@ impl Default for StdioFrontend {
 mod tests {
     use super::*;
     use crate::event::{KeyEvent as IrKeyEvent, KeyKind};
-    use crate::ir::{PathStyle, Rgba};
+    use crate::ir::{Paint, PathStyle};
     use std::io::Cursor;
     use std::sync::{Arc, Mutex as StdMutex};
 
@@ -240,12 +238,7 @@ mod tests {
 
         let mut dl = DrawList::new(10.0, 10.0);
         dl.path_begin(PathStyle {
-            fill: Rgba {
-                r: 1,
-                g: 2,
-                b: 3,
-                a: 1.0,
-            },
+            fill: Paint::rgba(1, 2, 3, 1.0),
             ..PathStyle::default()
         });
         dl.move_to(0.0, 0.0);

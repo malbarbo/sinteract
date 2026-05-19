@@ -38,7 +38,6 @@ pub mod frontend;
 pub mod pdf;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sixel;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod stdio;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod term_query;

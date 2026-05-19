@@ -1,8 +1,7 @@
 //! Value types shared by the [`crate::sink::DrawSink`] trait and its
-//! implementations. These mirror the fields of the line-oriented draw-list
-//! format, but in typed form so renderers do not each parse strings.
+//! implementations.
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rgba {
     pub r: u8,
     pub g: u8,
@@ -10,15 +9,136 @@ pub struct Rgba {
     pub a: f32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+/// One color stop in a gradient. `offset` is in [0, 1].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stop {
+    pub offset: f32,
+    pub color: Rgba,
+}
+
+/// How a gradient extends past its defined axis (CSS/SVG `spreadMethod`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SpreadMode {
+    /// Hold the boundary stop colors past the axis.
+    #[default]
+    Pad = 0,
+    /// Mirror the gradient around each axis end.
+    Reflect = 1,
+    /// Tile the gradient periodically.
+    Repeat = 2,
+}
+
+impl SpreadMode {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Reflect,
+            2 => Self::Repeat,
+            _ => Self::Pad,
+        }
+    }
+}
+
+/// Linear gradient from (x0, y0) to (x1, y1) in path-local coordinates.
+/// The paint is rendered along the line; `stops` are pre-sorted by offset.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LinearGradient {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub stops: Vec<Stop>,
+    pub spread: SpreadMode,
+}
+
+/// Radial gradient centred at (cx, cy) with the given radius.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RadialGradient {
+    pub cx: f32,
+    pub cy: f32,
+    pub radius: f32,
+    pub stops: Vec<Stop>,
+    pub spread: SpreadMode,
+}
+
+/// Fill or stroke paint — solid color or gradient.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Paint {
+    Solid(Rgba),
+    Linear(LinearGradient),
+    Radial(RadialGradient),
+}
+
+impl Default for Paint {
+    fn default() -> Self {
+        Self::Solid(Rgba::default())
+    }
+}
+
+impl Paint {
+    /// Convenience: solid paint from raw bytes.
+    pub fn rgba(r: u8, g: u8, b: u8, a: f32) -> Self {
+        Self::Solid(Rgba { r, g, b, a })
+    }
+
+    /// Whether this paint would draw at least one visible pixel. Used by
+    /// renderers as a fast cull (skip both the fill and stroke when neither
+    /// would mark the canvas).
+    pub fn is_visible(&self) -> bool {
+        match self {
+            Self::Solid(c) => c.a > 0.0,
+            Self::Linear(g) => !g.stops.is_empty(),
+            Self::Radial(g) => !g.stops.is_empty(),
+        }
+    }
+
+    /// First stop's color for gradients, or the solid color. Used as the
+    /// fallback when a renderer cannot honor gradients (or as a tint for
+    /// effects keyed on a single color).
+    pub fn primary_color(&self) -> Rgba {
+        match self {
+            Self::Solid(c) => *c,
+            Self::Linear(g) => g.stops.first().map(|s| s.color).unwrap_or_default(),
+            Self::Radial(g) => g.stops.first().map(|s| s.color).unwrap_or_default(),
+        }
+    }
+}
+
+/// SVG `stroke-miterlimit` default. Joins with computed miter length above
+/// this threshold (relative to stroke width) fall back to bevel.
+pub const DEFAULT_MITER_LIMIT: f32 = 4.0;
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct PathStyle {
-    pub fill: Rgba,
-    pub stroke: Rgba,
+    pub fill: Paint,
+    pub stroke: Paint,
     pub stroke_width: f32,
     pub line_cap: LineCap,
     pub line_join: LineJoin,
     pub fill_rule: FillRule,
     pub closed: bool,
+    pub miter_limit: f32,
+    /// Empty = solid stroke. Otherwise on/off lengths in path units; the
+    /// pattern repeats when consumed.
+    pub dash_array: Vec<f32>,
+    pub dash_offset: f32,
+}
+
+impl Default for PathStyle {
+    fn default() -> Self {
+        Self {
+            fill: Paint::default(),
+            stroke: Paint::default(),
+            stroke_width: 0.0,
+            line_cap: LineCap::default(),
+            line_join: LineJoin::default(),
+            fill_rule: FillRule::default(),
+            closed: false,
+            miter_limit: DEFAULT_MITER_LIMIT,
+            dash_array: Vec::new(),
+            dash_offset: 0.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

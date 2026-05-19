@@ -61,16 +61,61 @@ enum KeyKind {
     up    @2;
 }
 
+# ----- Paint — fill/stroke can be solid or a gradient. -----
+#
+# `stops` is a list of (offset, color) pairs with offset in [0, 1], sorted
+# ascending. Renderers that do not understand gradients fall back to the
+# first stop's color as a solid.
+
+struct Stop {
+    offset @0 :Float32;
+    color  @1 :Rgba;
+}
+
+enum SpreadMode {
+    pad     @0;
+    reflect @1;
+    repeat  @2;
+}
+
+struct LinearGradient {
+    x0     @0 :Float32;
+    y0     @1 :Float32;
+    x1     @2 :Float32;
+    y1     @3 :Float32;
+    stops  @4 :List(Stop);
+    spread @5 :SpreadMode;
+}
+
+struct RadialGradient {
+    cx     @0 :Float32;
+    cy     @1 :Float32;
+    radius @2 :Float32;
+    stops  @3 :List(Stop);
+    spread @4 :SpreadMode;
+}
+
+struct Paint {
+    union {
+        solid  @0 :Rgba;
+        linear @1 :LinearGradient;
+        radial @2 :RadialGradient;
+    }
+}
+
 # ----- Path / clip / text / bitmap nodes -----
 
 struct PathStyle {
-    fill        @0 :Rgba;
-    stroke      @1 :Rgba;
+    fill        @0 :Paint;
+    stroke      @1 :Paint;
     strokeWidth @2 :Float32;
     lineCap     @3 :LineCap;
     lineJoin    @4 :LineJoin;
     fillRule    @5 :FillRule;
     closed      @6 :Bool;
+    miterLimit  @7 :Float32;
+    dashArray   @8 :List(Float32);
+    dashOffset  @9 :Float32;
 }
 
 struct ClipBox {
