@@ -1,15 +1,15 @@
 # simage
 
 A small 2D graphics library built around a typed `Scene` (draw list) and a
-`DrawSink` trait. Front ends build a `simage::scene::Scene` via RAII
+`Renderer` trait. Front ends build a `simage::scene::Scene` via RAII
 builders; renderers replay it through the trait.
 
 Outputs:
 
-- **Raster** — `tiny_skia::Pixmap` via `PixmapSink` (in `terminal`).
+- **Raster** — `tiny_skia::Pixmap` via `PixmapRenderer` (in `terminal`).
 - **Terminal display** — Kitty graphics protocol, DEC Sixel, or 24-bit
   ANSI half-blocks (`▀`), chosen automatically per the active terminal.
-- **PDF** — vector path output via `PdfSink`, with text rendered as
+- **PDF** — vector path output via `PdfRenderer`, with text rendered as
   outlined glyph paths.
 - **Animation** — terminal alt-screen + raw-mode driver with key polling.
 
@@ -21,11 +21,11 @@ images: originally extracted from
 ## Pipeline
 
 ```
-front end         simage::scene::Scene            simage::sink::DrawSink
-─────────         ────────────────────            ──────────────────────
-build via    →    Vec<DrawNode>            →     PixmapSink   (terminal)
-RAII guards       (Path, ClipPush, Text, ...)     PdfSink      (PDF)
-                                                  your sink    (custom)
+front end         simage::scene::Scene            simage::renderer::Renderer
+─────────         ────────────────────            ──────────────────────────
+build via    →    Vec<Element>             →     PixmapRenderer (terminal)
+RAII guards       (Path, ClipPush, Text, ...)     PdfRenderer    (PDF)
+                                                  your impl      (custom)
 ```
 
 A `Path` carries `(style, verbs, coords)` — `verbs` is a flat byte stream

@@ -1,8 +1,8 @@
 //! `simage` — typed-IR 2D graphics with terminal and PDF outputs.
 //!
 //! Front ends build a [`scene::Scene`] via builder methods and replay it
-//! through a [`sink::DrawSink`]. The crate ships two sinks: `PixmapSink`
-//! (terminal raster, in [`terminal`]) and `PdfSink` (PDF byte stream,
+//! through a [`renderer::Renderer`]. The crate ships two sinks: `PixmapRenderer`
+//! (terminal raster, in [`terminal`]) and `PdfRenderer` (PDF byte stream,
 //! in [`pdf`]).
 //!
 //! Native targets compile the full pipeline:
@@ -22,8 +22,8 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 pub mod event;
+pub mod renderer;
 pub mod scene;
-pub mod sink;
 pub mod wire;
 
 // VERB_* constants are emitted for non-Rust hosts (JS, Python); Rust uses

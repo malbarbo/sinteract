@@ -24,16 +24,16 @@ use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
 use crate::scene::{
-    BitmapNode, ClipPath, Scene, DrawNode, FillRule, FontStyle, LineCap, LineJoin,
-    LinearGradient, Paint, Path, PathStyle, RadialGradient, Rgba, SpreadMode, Stop, TextNode, verb,
+    BitmapNode, ClipPath, Element, FillRule, FontStyle, LineCap, LineJoin, LinearGradient, Paint,
+    Path, PathStyle, RadialGradient, Rgba, Scene, SpreadMode, Stop, TextNode, verb,
 };
 
 use crate::frame_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, KeyKind as WKeyKind, LineCap as WLineCap,
     LineJoin as WLineJoin, SpreadMode as WSpreadMode, bitmap_node, clip_path as wire_clip_path,
-    draw_list, draw_node, input_event, key_event as wire_key_event,
-    linear_gradient as wire_linear_gradient, message, paint as wire_paint, path as wire_path,
-    path_style as wire_path_style, radial_gradient as wire_radial_gradient, rgba as wire_rgba,
+    element, input_event, key_event as wire_key_event, linear_gradient as wire_linear_gradient,
+    message, paint as wire_paint, path as wire_path, path_style as wire_path_style,
+    radial_gradient as wire_radial_gradient, rgba as wire_rgba, scene as wire_scene,
     stop as wire_stop, text_node,
 };
 
@@ -585,45 +585,45 @@ fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
     })
 }
 
-fn write_drawnode(mut b: draw_node::Builder<'_>, node: &DrawNode) {
+fn write_element(mut b: element::Builder<'_>, node: &Element) {
     match node {
-        DrawNode::Path(p) => write_path_parts(b.init_path(), &p.style, &p.verbs, &p.coords),
-        DrawNode::ClipPush(c) => write_clip_path(b.init_clip_push(), c),
-        DrawNode::ClipPop => b.set_clip_pop(()),
-        DrawNode::Text(t) => write_text_node(b.init_text(), t),
-        DrawNode::Bitmap(n) => write_bitmap(b.init_bitmap(), n),
+        Element::Path(p) => write_path_parts(b.init_path(), &p.style, &p.verbs, &p.coords),
+        Element::ClipPush(c) => write_clip_path(b.init_clip_push(), c),
+        Element::ClipPop => b.set_clip_pop(()),
+        Element::Text(t) => write_text_node(b.init_text(), t),
+        Element::Bitmap(n) => write_bitmap(b.init_bitmap(), n),
     }
 }
 
-fn write_scene(mut b: draw_list::Builder<'_>, dl: &Scene) {
+fn write_scene(mut b: wire_scene::Builder<'_>, dl: &Scene) {
     b.set_width(dl.width);
     b.set_height(dl.height);
-    let mut nodes = b.init_nodes(dl.nodes.len() as u32);
-    for (i, node) in dl.nodes.iter().enumerate() {
-        write_drawnode(nodes.reborrow().get(i as u32), node);
+    let mut nodes = b.init_elements(dl.elements.len() as u32);
+    for (i, node) in dl.elements.iter().enumerate() {
+        write_element(nodes.reborrow().get(i as u32), node);
     }
 }
 
-fn read_drawnode(node: draw_node::Reader<'_>, out: &mut Scene) -> Result<(), Error> {
-    use draw_node::Which;
+fn read_element(node: element::Reader<'_>, out: &mut Scene) -> Result<(), Error> {
+    use element::Which;
     match node.which()? {
         Which::Path(p) => {
             let path = read_path(p?)?;
             out.push_path(path);
         }
-        Which::ClipPush(c) => out.nodes.push(DrawNode::ClipPush(read_clip_path(c?)?)),
-        Which::ClipPop(()) => out.nodes.push(DrawNode::ClipPop),
+        Which::ClipPush(c) => out.elements.push(Element::ClipPush(read_clip_path(c?)?)),
+        Which::ClipPop(()) => out.elements.push(Element::ClipPop),
         Which::Text(t) => out.text(read_text_node(t?)?),
         Which::Bitmap(n) => out.bitmap(read_bitmap(n?)),
     }
     Ok(())
 }
 
-fn read_scene(r: draw_list::Reader<'_>) -> Result<Scene, Error> {
+fn read_scene(r: wire_scene::Reader<'_>) -> Result<Scene, Error> {
     let mut out = Scene::new(r.get_width(), r.get_height());
-    if r.has_nodes() {
-        for node in r.get_nodes()?.iter() {
-            read_drawnode(node, &mut out)?;
+    if r.has_elements() {
+        for node in r.get_elements()?.iter() {
+            read_element(node, &mut out)?;
         }
     }
     Ok(out)
@@ -753,8 +753,8 @@ mod tests {
     fn assert_scene_eq(a: &Scene, b: &Scene) {
         assert_eq!(a.width, b.width);
         assert_eq!(a.height, b.height);
-        assert_eq!(a.nodes.len(), b.nodes.len(), "node count");
-        for (i, (x, y)) in a.nodes.iter().zip(b.nodes.iter()).enumerate() {
+        assert_eq!(a.elements.len(), b.elements.len(), "node count");
+        for (i, (x, y)) in a.elements.iter().zip(b.elements.iter()).enumerate() {
             assert_eq!(format!("{x:?}"), format!("{y:?}"), "node {i}");
         }
     }
@@ -777,7 +777,7 @@ mod tests {
             Decoded::Frame(d) => {
                 assert_eq!(d.width, 640.0);
                 assert_eq!(d.height, 480.0);
-                assert!(d.nodes.is_empty());
+                assert!(d.elements.is_empty());
             }
             _ => panic!(),
         }
@@ -853,7 +853,7 @@ mod tests {
         {
             let msg = builder.init_root::<message::Builder>();
             let frame = msg.init_frame();
-            let mut nodes = frame.init_nodes(1);
+            let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
             // style left default
@@ -896,8 +896,8 @@ mod tests {
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let node = d.nodes.first().expect("one node");
-                let DrawNode::Path(p) = node else {
+                let node = d.elements.first().expect("one node");
+                let Element::Path(p) = node else {
                     panic!("expected path");
                 };
                 assert_eq!(p.style.miter_limit, 7.5);
@@ -959,7 +959,7 @@ mod tests {
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let DrawNode::Path(p) = d.nodes.first().unwrap() else {
+                let Element::Path(p) = d.elements.first().unwrap() else {
                     panic!();
                 };
                 assert_eq!(p.style.fill, Paint::Linear(gradient));
@@ -1008,7 +1008,7 @@ mod tests {
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let DrawNode::Path(p) = d.nodes.first().unwrap() else {
+                let Element::Path(p) = d.elements.first().unwrap() else {
                     panic!();
                 };
                 assert_eq!(p.style.fill, Paint::Radial(gradient));
@@ -1089,11 +1089,11 @@ mod tests {
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let DrawNode::Path(p0) = &d.nodes[0] else {
+                let Element::Path(p0) = &d.elements[0] else {
                     panic!();
                 };
                 assert_eq!(p0.style.fill, Paint::Linear(linear));
-                let DrawNode::Path(p1) = &d.nodes[1] else {
+                let Element::Path(p1) = &d.elements[1] else {
                     panic!();
                 };
                 assert_eq!(p1.style.fill, Paint::Radial(radial));
@@ -1116,8 +1116,8 @@ mod tests {
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let DrawNode::ClipPush(c) = &d.nodes[0] else {
-                    panic!("expected ClipPush, got {:?}", d.nodes[0]);
+                let Element::ClipPush(c) = &d.elements[0] else {
+                    panic!("expected ClipPush, got {:?}", d.elements[0]);
                 };
                 assert_eq!(
                     c.verbs,
@@ -1128,7 +1128,7 @@ mod tests {
                     vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0]
                 );
                 assert_eq!(c.fill_rule, FillRule::EvenOdd);
-                assert!(matches!(&d.nodes[1], DrawNode::ClipPop));
+                assert!(matches!(&d.elements[1], Element::ClipPop));
             }
             _ => panic!(),
         }
@@ -1142,7 +1142,7 @@ mod tests {
         {
             let msg = builder.init_root::<message::Builder>();
             let frame = msg.init_frame();
-            let mut nodes = frame.init_nodes(1);
+            let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut c = node.init_clip_push();
             c.set_verbs(&[verb::CUBIC]);
@@ -1177,7 +1177,7 @@ mod tests {
         let bytes = encode_frame(&dl);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let DrawNode::Path(p) = d.nodes.first().unwrap() else {
+                let Element::Path(p) = d.elements.first().unwrap() else {
                     panic!();
                 };
                 assert_eq!(p.style.fill, Paint::Solid(Rgba::default()));

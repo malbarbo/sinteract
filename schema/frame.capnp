@@ -183,9 +183,9 @@ struct Path {
     coords @2 :List(Float32);
 }
 
-# ----- Draw node — union is native in Cap'n Proto, no wrapper struct. -----
+# ----- Scene element — union is native in Cap'n Proto, no wrapper struct. -----
 
-struct DrawNode {
+struct Element {
     union {
         path     @0 :Path;
         clipPush @1 :ClipPath;
@@ -195,10 +195,10 @@ struct DrawNode {
     }
 }
 
-struct DrawList {
-    width  @0 :Float32;
-    height @1 :Float32;
-    nodes  @2 :List(DrawNode);
+struct Scene {
+    width    @0 :Float32;
+    height   @1 :Float32;
+    elements @2 :List(Element);
 }
 
 # ----- Input events (client → server) -----
@@ -238,7 +238,7 @@ struct AssetMsg {
 struct Message {
     union {
         asset        @0 :AssetMsg;
-        frame        @1 :DrawList;
+        frame        @1 :Scene;
         event        @2 :InputEvent;
         sessionClose @3 :Void;
     }

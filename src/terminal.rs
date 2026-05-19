@@ -35,11 +35,11 @@ use tiny_skia::{
     SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
+use crate::renderer::Renderer;
 use crate::scene::{
     BitmapNode, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, TextNode,
     verb,
 };
-use crate::sink::DrawSink;
 use crate::sixel;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
@@ -139,10 +139,10 @@ pub fn kitty_supported() -> bool {
 }
 
 // -----------------------------------------------------------------------------
-// PixmapSink — DrawSink → tiny-skia raster
+// PixmapRenderer — Renderer → tiny-skia raster
 // -----------------------------------------------------------------------------
 
-struct PixmapSink {
+struct PixmapRenderer {
     /// Target output box in pixels (`None` = render at native size).
     target_px: Option<(u32, u32)>,
     /// Upper bound on the rasterizer's uniform scale factor — depends on
@@ -164,7 +164,7 @@ struct PendingPath {
     has_points: bool,
 }
 
-impl PixmapSink {
+impl PixmapRenderer {
     fn new(target_px: Option<(u32, u32)>, max_scale: f32) -> Self {
         Self {
             target_px,
@@ -234,7 +234,7 @@ impl PixmapSink {
     }
 }
 
-impl DrawSink for PixmapSink {
+impl Renderer for PixmapRenderer {
     fn begin(&mut self, width: f32, height: f32) {
         let w = width.ceil().max(1.0) as u32;
         let h = height.ceil().max(1.0) as u32;
@@ -471,7 +471,7 @@ pub(crate) fn rasterize_scene(
     target_px: Option<(u32, u32)>,
     max_scale: f32,
 ) -> Option<Pixmap> {
-    let mut sink = PixmapSink::new(target_px, max_scale);
+    let mut sink = PixmapRenderer::new(target_px, max_scale);
     dl.play_into(&mut sink);
     sink.pixmap
 }

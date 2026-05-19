@@ -5269,7 +5269,7 @@ pub mod path {
     }
 }
 
-pub mod draw_node {
+pub mod element {
     pub use self::Which::{Bitmap, ClipPop, ClipPush, Path, Text};
 
     #[derive(Copy, Clone)]
@@ -5664,21 +5664,21 @@ pub mod draw_node {
     mod _private {
         pub(crate) static ENCODED_NODE: [::capnp::Word; 94] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
-            ::capnp::word(122, 229, 117, 145, 14, 14, 122, 207),
+            ::capnp::word(224, 24, 75, 101, 96, 165, 51, 249),
             ::capnp::word(12, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(138, 184, 200, 167, 69, 217, 106, 158),
             ::capnp::word(1, 0, 7, 0, 0, 0, 5, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(116, 19, 0, 0, 46, 20, 0, 0),
-            ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
+            ::capnp::word(120, 19, 0, 0, 49, 20, 0, 0),
+            ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(25, 0, 0, 0, 31, 1, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(102, 114, 97, 109, 101, 46, 99, 97),
-            ::capnp::word(112, 110, 112, 58, 68, 114, 97, 119),
-            ::capnp::word(78, 111, 100, 101, 0, 0, 0, 0),
+            ::capnp::word(112, 110, 112, 58, 69, 108, 101, 109),
+            ::capnp::word(101, 110, 116, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(20, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 255, 255, 0, 0, 0, 0),
@@ -5786,7 +5786,7 @@ pub mod draw_node {
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[];
         pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[0, 1, 2, 3, 4];
         pub(crate) static MEMBERS_BY_NAME: &[u16] = &[4, 2, 1, 0, 3];
-        pub(crate) const TYPE_ID: u64 = 0xcf7a_0e0e_9175_e57a;
+        pub(crate) const TYPE_ID: u64 = 0xf933_a560_654b_18e0;
     }
     pub enum Which<A0, A1, A2, A3> {
         Path(A0),
@@ -5809,7 +5809,7 @@ pub mod draw_node {
     >;
 }
 
-pub mod draw_list {
+pub mod scene {
     #[derive(Copy, Clone)]
     pub struct Owned(());
     impl ::capnp::introspect::Introspect for Owned {
@@ -5917,9 +5917,9 @@ pub mod draw_list {
             self.reader.get_data_field::<f32>(1)
         }
         #[inline]
-        pub fn get_nodes(
+        pub fn get_elements(
             self,
-        ) -> ::capnp::Result<::capnp::struct_list::Reader<'a, crate::frame_capnp::draw_node::Owned>>
+        ) -> ::capnp::Result<::capnp::struct_list::Reader<'a, crate::frame_capnp::element::Owned>>
         {
             ::capnp::traits::FromPointerReader::get_from_pointer(
                 &self.reader.get_pointer_field(0),
@@ -5927,7 +5927,7 @@ pub mod draw_list {
             )
         }
         #[inline]
-        pub fn has_nodes(&self) -> bool {
+        pub fn has_elements(&self) -> bool {
             !self.reader.get_pointer_field(0).is_null()
         }
     }
@@ -6035,9 +6035,9 @@ pub mod draw_list {
             self.builder.set_data_field::<f32>(1, value);
         }
         #[inline]
-        pub fn get_nodes(
+        pub fn get_elements(
             self,
-        ) -> ::capnp::Result<::capnp::struct_list::Builder<'a, crate::frame_capnp::draw_node::Owned>>
+        ) -> ::capnp::Result<::capnp::struct_list::Builder<'a, crate::frame_capnp::element::Owned>>
         {
             ::capnp::traits::FromPointerBuilder::get_from_pointer(
                 self.builder.get_pointer_field(0),
@@ -6045,9 +6045,9 @@ pub mod draw_list {
             )
         }
         #[inline]
-        pub fn set_nodes(
+        pub fn set_elements(
             &mut self,
-            value: ::capnp::struct_list::Reader<'_, crate::frame_capnp::draw_node::Owned>,
+            value: ::capnp::struct_list::Reader<'_, crate::frame_capnp::element::Owned>,
         ) -> ::capnp::Result<()> {
             ::capnp::traits::SetterInput::set_pointer_builder(
                 self.builder.reborrow().get_pointer_field(0),
@@ -6056,17 +6056,17 @@ pub mod draw_list {
             )
         }
         #[inline]
-        pub fn init_nodes(
+        pub fn init_elements(
             self,
             size: u32,
-        ) -> ::capnp::struct_list::Builder<'a, crate::frame_capnp::draw_node::Owned> {
+        ) -> ::capnp::struct_list::Builder<'a, crate::frame_capnp::element::Owned> {
             ::capnp::traits::FromPointerBuilder::init_pointer(
                 self.builder.get_pointer_field(0),
                 size,
             )
         }
         #[inline]
-        pub fn has_nodes(&self) -> bool {
+        pub fn has_elements(&self) -> bool {
             !self.builder.is_pointer_field_null(0)
         }
     }
@@ -6083,23 +6083,23 @@ pub mod draw_list {
     }
     impl Pipeline {}
     mod _private {
-        pub(crate) static ENCODED_NODE: [::capnp::Word; 67] = [
+        pub(crate) static ENCODED_NODE: [::capnp::Word; 68] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
-            ::capnp::word(192, 204, 73, 89, 244, 215, 161, 200),
+            ::capnp::word(67, 13, 167, 3, 218, 167, 178, 161),
             ::capnp::word(12, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(138, 184, 200, 167, 69, 217, 106, 158),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(48, 20, 0, 0, 146, 20, 0, 0),
-            ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
+            ::capnp::word(51, 20, 0, 0, 151, 20, 0, 0),
+            ::capnp::word(21, 0, 0, 0, 146, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(25, 0, 0, 0, 175, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(102, 114, 97, 109, 101, 46, 99, 97),
-            ::capnp::word(112, 110, 112, 58, 68, 114, 97, 119),
-            ::capnp::word(76, 105, 115, 116, 0, 0, 0, 0),
+            ::capnp::word(112, 110, 112, 58, 83, 99, 101, 110),
+            ::capnp::word(101, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(12, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -6119,10 +6119,10 @@ pub mod draw_list {
             ::capnp::word(2, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 2, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(77, 0, 0, 0, 50, 0, 0, 0),
+            ::capnp::word(77, 0, 0, 0, 74, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(72, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(100, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(76, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(104, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(119, 105, 100, 116, 104, 0, 0, 0),
             ::capnp::word(10, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -6139,13 +6139,14 @@ pub mod draw_list {
             ::capnp::word(10, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(110, 111, 100, 101, 115, 0, 0, 0),
+            ::capnp::word(101, 108, 101, 109, 101, 110, 116, 115),
+            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(14, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 3, 0, 1, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(122, 229, 117, 145, 14, 14, 122, 207),
+            ::capnp::word(224, 24, 75, 101, 96, 165, 51, 249),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(14, 0, 0, 0, 0, 0, 0, 0),
@@ -6156,7 +6157,7 @@ pub mod draw_list {
             match index {
                 0 => <f32 as ::capnp::introspect::Introspect>::introspect(),
                 1 => <f32 as ::capnp::introspect::Introspect>::introspect(),
-                2 => <::capnp::struct_list::Owned<crate::frame_capnp::draw_node::Owned> as ::capnp::introspect::Introspect>::introspect(),
+                2 => <::capnp::struct_list::Owned<crate::frame_capnp::element::Owned> as ::capnp::introspect::Introspect>::introspect(),
                 _ => ::capnp::introspect::panic_invalid_field_index(index),
             }
         }
@@ -6177,8 +6178,8 @@ pub mod draw_list {
             );
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[0, 1, 2];
         pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[];
-        pub(crate) static MEMBERS_BY_NAME: &[u16] = &[1, 2, 0];
-        pub(crate) const TYPE_ID: u64 = 0xc8a1_d7f4_5949_ccc0;
+        pub(crate) static MEMBERS_BY_NAME: &[u16] = &[2, 1, 0];
+        pub(crate) const TYPE_ID: u64 = 0xa1b2_a7da_03a7_0d43;
     }
 }
 
@@ -6453,7 +6454,7 @@ pub mod key_event {
             ::capnp::word(138, 184, 200, 167, 69, 217, 106, 158),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(196, 20, 0, 0, 35, 21, 0, 0),
+            ::capnp::word(201, 20, 0, 0, 40, 21, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -6819,7 +6820,7 @@ pub mod input_event {
             ::capnp::word(138, 184, 200, 167, 69, 217, 106, 158),
             ::capnp::word(1, 0, 7, 0, 0, 0, 3, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(37, 21, 0, 0, 152, 21, 0, 0),
+            ::capnp::word(42, 21, 0, 0, 157, 21, 0, 0),
             ::capnp::word(21, 0, 0, 0, 186, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -7199,7 +7200,7 @@ pub mod asset_msg {
             ::capnp::word(138, 184, 200, 167, 69, 217, 106, 158),
             ::capnp::word(2, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(124, 22, 0, 0, 20, 23, 0, 0),
+            ::capnp::word(129, 22, 0, 0, 25, 23, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -7549,7 +7550,7 @@ pub mod message {
         #[inline]
         pub fn set_frame(
             &mut self,
-            value: crate::frame_capnp::draw_list::Reader<'_>,
+            value: crate::frame_capnp::scene::Reader<'_>,
         ) -> ::capnp::Result<()> {
             self.builder.set_data_field::<u16>(0, 1);
             ::capnp::traits::SetterInput::set_pointer_builder(
@@ -7559,7 +7560,7 @@ pub mod message {
             )
         }
         #[inline]
-        pub fn init_frame(self) -> crate::frame_capnp::draw_list::Builder<'a> {
+        pub fn init_frame(self) -> crate::frame_capnp::scene::Builder<'a> {
             self.builder.set_data_field::<u16>(0, 1);
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
         }
@@ -7644,7 +7645,7 @@ pub mod message {
             ::capnp::word(138, 184, 200, 167, 69, 217, 106, 158),
             ::capnp::word(1, 0, 7, 0, 0, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(22, 23, 0, 0, 196, 23, 0, 0),
+            ::capnp::word(27, 23, 0, 0, 198, 23, 0, 0),
             ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -7694,7 +7695,7 @@ pub mod message {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(102, 114, 97, 109, 101, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(192, 204, 73, 89, 244, 215, 161, 200),
+            ::capnp::word(67, 13, 167, 3, 218, 167, 178, 161),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
@@ -7721,7 +7722,7 @@ pub mod message {
         pub(crate) fn get_field_types(index: u16) -> ::capnp::introspect::Type {
             match index {
                 0 => <crate::frame_capnp::asset_msg::Owned as ::capnp::introspect::Introspect>::introspect(),
-                1 => <crate::frame_capnp::draw_list::Owned as ::capnp::introspect::Introspect>::introspect(),
+                1 => <crate::frame_capnp::scene::Owned as ::capnp::introspect::Introspect>::introspect(),
                 2 => <crate::frame_capnp::input_event::Owned as ::capnp::introspect::Introspect>::introspect(),
                 3 => <() as ::capnp::introspect::Introspect>::introspect(),
                 _ => ::capnp::introspect::panic_invalid_field_index(index),
@@ -7755,12 +7756,12 @@ pub mod message {
     }
     pub type WhichReader<'a> = Which<
         ::capnp::Result<crate::frame_capnp::asset_msg::Reader<'a>>,
-        ::capnp::Result<crate::frame_capnp::draw_list::Reader<'a>>,
+        ::capnp::Result<crate::frame_capnp::scene::Reader<'a>>,
         ::capnp::Result<crate::frame_capnp::input_event::Reader<'a>>,
     >;
     pub type WhichBuilder<'a> = Which<
         ::capnp::Result<crate::frame_capnp::asset_msg::Builder<'a>>,
-        ::capnp::Result<crate::frame_capnp::draw_list::Builder<'a>>,
+        ::capnp::Result<crate::frame_capnp::scene::Builder<'a>>,
         ::capnp::Result<crate::frame_capnp::input_event::Builder<'a>>,
     >;
 }

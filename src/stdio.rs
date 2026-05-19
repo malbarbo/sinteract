@@ -256,7 +256,7 @@ mod tests {
         match wire::decode(&buf[8..]).expect("decode") {
             Decoded::Frame(d) => {
                 assert_eq!(d.width, 10.0);
-                assert!(!d.nodes.is_empty());
+                assert!(!d.elements.is_empty());
             }
             other => panic!("expected Frame, got {other:?}"),
         }

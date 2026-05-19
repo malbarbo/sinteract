@@ -1,4 +1,4 @@
-//! Value types shared by the [`crate::sink::DrawSink`] trait and its
+//! Value types shared by the [`crate::renderer::Renderer`] trait and its
 //! implementations.
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -410,7 +410,7 @@ pub struct Path {
 /// One node of a [`Scene`]. A path bundles all its segments; the rest
 /// are leaf operations (clip stack manipulation, a text run, a bitmap blit).
 #[derive(Clone, Debug)]
-pub enum DrawNode {
+pub enum Element {
     Path(Path),
     ClipPush(ClipPath),
     ClipPop,
@@ -438,7 +438,7 @@ pub enum DrawNode {
 pub struct Scene {
     pub width: f32,
     pub height: f32,
-    pub nodes: Vec<DrawNode>,
+    pub elements: Vec<Element>,
 }
 
 /// Tolerance for SVG arc → cubic conversion. Matches [`crate::parse`].
@@ -449,13 +449,13 @@ impl Scene {
         Self {
             width,
             height,
-            nodes: Vec::new(),
+            elements: Vec::new(),
         }
     }
 
     /// Begin a new path. Returns a [`PathBuilder`] whose `move_to` / `line_to`
     /// / `quad_to` / `cubic_to` / `arc_to` methods append verbs; the path is
-    /// committed to [`Self::nodes`] on drop, or discarded if no geometry was
+    /// committed to [`Self::elements`] on drop, or discarded if no geometry was
     /// recorded.
     pub fn begin_path(&mut self, style: PathStyle) -> PathBuilder<'_> {
         PathBuilder {
@@ -471,7 +471,7 @@ impl Scene {
     /// matching `ClipPop` on drop; nested clips just call [`Self::push_clip`]
     /// through the guard's `Deref` and pop in the right order.
     pub fn push_clip(&mut self, clip: ClipPath) -> ClipGuard<'_> {
-        self.nodes.push(DrawNode::ClipPush(clip));
+        self.elements.push(Element::ClipPush(clip));
         ClipGuard { dl: self }
     }
 
@@ -505,31 +505,31 @@ impl Scene {
     }
 
     pub fn text(&mut self, node: TextNode) {
-        self.nodes.push(DrawNode::Text(Box::new(node)));
+        self.elements.push(Element::Text(Box::new(node)));
     }
 
     pub fn bitmap(&mut self, node: BitmapNode) {
-        self.nodes.push(DrawNode::Bitmap(node));
+        self.elements.push(Element::Bitmap(node));
     }
 
     /// Append a fully-built path. Used by the wire decoder; lets us bypass
     /// the `begin_path / move_to / …` guard for paths whose verbs/coords
     /// were already validated.
     pub(crate) fn push_path(&mut self, path: Path) {
-        self.nodes.push(DrawNode::Path(path));
+        self.elements.push(Element::Path(path));
     }
 
     /// Replay every node into `sink`. Wraps `sink.begin()` and `sink.end()`
     /// around the dispatch loop so callers don't have to.
-    pub fn play_into(&self, sink: &mut dyn crate::sink::DrawSink) {
+    pub fn play_into(&self, sink: &mut dyn crate::renderer::Renderer) {
         sink.begin(self.width, self.height);
-        for node in &self.nodes {
+        for node in &self.elements {
             match node {
-                DrawNode::Path(p) => play_path(&p.style, &p.verbs, &p.coords, sink),
-                DrawNode::ClipPush(b) => sink.clip_push(b),
-                DrawNode::ClipPop => sink.clip_pop(),
-                DrawNode::Text(t) => sink.text(t),
-                DrawNode::Bitmap(b) => sink.bitmap(b),
+                Element::Path(p) => play_path(&p.style, &p.verbs, &p.coords, sink),
+                Element::ClipPush(b) => sink.clip_push(b),
+                Element::ClipPop => sink.clip_pop(),
+                Element::Text(t) => sink.text(t),
+                Element::Bitmap(b) => sink.bitmap(b),
             }
         }
         sink.end();
@@ -538,7 +538,7 @@ impl Scene {
 
 /// Path geometry accumulator returned by [`Scene::begin_path`]. Holds the
 /// style and the in-flight verb/coord buffers; on drop, commits a
-/// [`DrawNode::Path`] to the parent [`Scene`] (or discards if no geometry
+/// [`Element::Path`] to the parent [`Scene`] (or discards if no geometry
 /// was recorded).
 #[must_use = "PathBuilder commits the path on drop; bind it so geometry methods can run"]
 pub struct PathBuilder<'a> {
@@ -639,7 +639,7 @@ impl<'a> Drop for PathBuilder<'a> {
         if self.verbs.is_empty() {
             return;
         }
-        self.dl.nodes.push(DrawNode::Path(Path {
+        self.dl.elements.push(Element::Path(Path {
             style: std::mem::take(&mut self.style),
             verbs: std::mem::take(&mut self.verbs),
             coords: std::mem::take(&mut self.coords),
@@ -673,7 +673,7 @@ impl<'a> std::ops::DerefMut for ClipGuard<'a> {
 
 impl<'a> Drop for ClipGuard<'a> {
     fn drop(&mut self) {
-        self.dl.nodes.push(DrawNode::ClipPop);
+        self.dl.elements.push(Element::ClipPop);
     }
 }
 
@@ -681,7 +681,7 @@ fn play_path(
     style: &PathStyle,
     verbs: &[u8],
     coords: &[f32],
-    sink: &mut dyn crate::sink::DrawSink,
+    sink: &mut dyn crate::renderer::Renderer,
 ) {
     sink.path_begin(style);
     let mut i = 0usize;

@@ -7,7 +7,7 @@
 //! ultimate fallback being Liberation Sans.
 //!
 //! Used by:
-//!   - the CLI terminal renderer (`terminal::rasterize_draw_list`),
+//!   - the CLI terminal renderer (`terminal::rasterize_scene`),
 //!   - the PDF renderer (`pdf::render_text`),
 //!   - tests / hosts that need to lay out text without a renderer.
 //!

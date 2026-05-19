@@ -1,4 +1,4 @@
-//! [`DrawSink`] — the trait every renderer implements.
+//! [`Renderer`] — the trait every renderer implements.
 //!
 //! The parser in [`crate::parse`] walks a draw-list once and dispatches each
 //! command to a sink. Each sink (raster, PDF, future SVG) is responsible only
@@ -11,7 +11,7 @@
 
 use crate::scene::{BitmapNode, ClipPath, PathStyle, TextNode};
 
-pub trait DrawSink {
+pub trait Renderer {
     /// Called once with the canvas dimensions before any draw command. May be
     /// used by the sink to allocate output buffers (e.g. a [`tiny_skia::Pixmap`]).
     fn begin(&mut self, width: f32, height: f32);

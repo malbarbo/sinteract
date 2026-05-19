@@ -2,7 +2,7 @@
 //! the WASM build does not link against `pdf-writer`.
 //!
 //! The draw list is replayed via [`crate::scene::Scene::play_into`]; this
-//! module implements [`PdfSink`] which translates each command into PDF
+//! module implements [`PdfRenderer`] which translates each command into PDF
 //! content-stream operators.
 //!
 //! Coordinate system: PDF native space is y-up with the origin at the
@@ -23,11 +23,11 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
+use crate::renderer::Renderer;
 use crate::scene::{
     BitmapNode, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
     RadialGradient, Rgba, Stop, TextNode, verb,
 };
-use crate::sink::DrawSink;
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
 /// matching the canvas/SVG renderer) to PDF points: 1 px = 1/96 in,
@@ -68,7 +68,7 @@ enum GradientShape {
     Radial(RadialGradient),
 }
 
-struct PdfSink {
+struct PdfRenderer {
     width: f32,
     height: f32,
     content: Content,
@@ -80,7 +80,7 @@ struct PdfSink {
     pending: Option<PendingPath>,
 }
 
-impl PdfSink {
+impl PdfRenderer {
     fn new() -> Self {
         Self {
             width: 0.0,
@@ -233,7 +233,7 @@ impl PdfSink {
     }
 }
 
-impl DrawSink for PdfSink {
+impl Renderer for PdfRenderer {
     fn begin(&mut self, width: f32, height: f32) {
         self.width = width.max(1.0);
         self.height = height.max(1.0);
@@ -400,7 +400,7 @@ fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
 
 /// Render a [`crate::scene::Scene`] to PDF bytes.
 pub fn render_to_pdf_dl(dl: &crate::scene::Scene) -> Vec<u8> {
-    let mut sink = PdfSink::new();
+    let mut sink = PdfRenderer::new();
     dl.play_into(&mut sink);
     finish_pdf(sink)
 }
@@ -416,7 +416,7 @@ struct GradientRefs {
     pattern: Ref,
 }
 
-fn finish_pdf(mut sink: PdfSink) -> Vec<u8> {
+fn finish_pdf(mut sink: PdfRenderer) -> Vec<u8> {
     let w = sink.width;
     let h = sink.height;
     let gstates = std::mem::take(&mut sink.gstates);
@@ -714,7 +714,7 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
 }
 
 #[allow(clippy::similar_names)]
-fn render_text(node: &TextNode, sink: &mut PdfSink) {
+fn render_text(node: &TextNode, sink: &mut PdfRenderer) {
     let size_i = node.size as i32;
     if size_i <= 0 || node.text.is_empty() {
         return;
