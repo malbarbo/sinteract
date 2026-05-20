@@ -28,13 +28,17 @@ RAII guards       (Path, Clipped, Text, ...)      PdfRenderer    (PDF)
                                                   your impl      (custom)
 ```
 
-A `Path` carries `(style, verbs, coords)` — `verbs` is a flat byte stream
-(0=move, 1=line, 2=quad, 3=cubic) consuming 2/2/4/6 floats per verb from
-`coords`. Arcs are pre-expanded to cubics in `PathBuilder::arc_to`, so every
-renderer only sees move / line / quad / cubic primitives. Paths and clip
-scopes are RAII: `Scene::begin_path` returns a `PathBuilder` that commits
-the path on drop; `Scene::push_clip` / `push_clip_rect` return a `ClipBuilder`
-that accumulates the elements drawn inside the clip and commits a single
+A `Path` carries `(style, verbs, coords)` — `verbs` is a `Vec<Verb>` (a
+`#[repr(u8)]` enum: `Move=0, Line=1, Quad=2, Cubic=3`) consuming 2/2/4/6
+floats per verb from `coords`. The wire format carries the same bytes
+(`verbMove`/`verbLine`/`verbQuad`/`verbCubic` in `schema/frame.capnp`);
+the boundary parses them back into typed verbs and rejects unknown bytes.
+
+Arcs are pre-expanded to cubics in `PathBuilder::arc_to`, so every renderer
+only sees move / line / quad / cubic primitives. Paths and clip scopes are
+RAII: `Scene::path` returns a `PathBuilder` that commits the path on drop;
+`Scene::clip` / `Scene::clip_rect` return a `ClipBuilder` that accumulates
+the elements drawn inside the clip and commits a single
 `Element::Clipped { clip, elements }` on drop — balanced nesting is
 structural, not bookkeeping.
 
@@ -45,7 +49,7 @@ use simage::scene::{Scene, PathStyle, Rgba};
 
 let mut scene = Scene::new(40.0, 30.0);
 {
-    let mut p = scene.begin_path(PathStyle {
+    let mut p = scene.path(PathStyle {
         fill: Rgba { r: 0, g: 0, b: 255, a: 1.0 },
         ..PathStyle::default()
     });

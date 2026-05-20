@@ -1,6 +1,8 @@
 //! Value types shared by the [`crate::renderer::Renderer`] trait and its
 //! implementations.
 
+use crate::renderer::Renderer;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rgba {
     pub r: u8,
@@ -202,7 +204,7 @@ impl FillRule {
 /// which sub-regions count as "inside".
 #[derive(Clone, Debug, Default)]
 pub struct ClipPath {
-    pub verbs: Vec<u8>,
+    pub verbs: Vec<Verb>,
     pub coords: Vec<f32>,
     pub fill_rule: FillRule,
 }
@@ -331,12 +333,12 @@ pub fn text_box_affine(
 /// See [`bitmap_box_affine`] for the canonical "fit in a rotated box"
 /// helper.
 #[derive(Clone, Copy, Debug)]
-pub struct BitmapNode {
+pub struct Bitmap {
     pub id: u32,
     pub transform: [f32; 6],
 }
 
-impl Default for BitmapNode {
+impl Default for Bitmap {
     fn default() -> Self {
         Self {
             id: 0,
@@ -383,14 +385,40 @@ pub fn bitmap_box_affine(
     [a, b, c, d, e, f]
 }
 
-/// Path verb byte. Each verb in [`Path::verbs`] picks how many floats to
-/// consume from [`Path::coords`]. Mirrors the wire constants in
-/// `schema/frame.capnp`.
-pub mod verb {
-    pub const MOVE: u8 = 0;
-    pub const LINE: u8 = 1;
-    pub const QUAD: u8 = 2;
-    pub const CUBIC: u8 = 3;
+/// One segment in a [`Path`]. Each verb consumes a fixed number of floats
+/// from [`Path::coords`] (see [`Self::coords`]). The discriminants are
+/// stable: they match the byte values used in the wire format
+/// (`verbMove`/`verbLine`/`verbQuad`/`verbCubic` in `schema/frame.capnp`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Verb {
+    Move = 0,
+    Line = 1,
+    Quad = 2,
+    Cubic = 3,
+}
+
+impl Verb {
+    /// Decode a wire byte. Returns `None` on an unknown verb — callers at
+    /// the wire boundary surface this as `wire::Error::UnknownVerb`.
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Move),
+            1 => Some(Self::Line),
+            2 => Some(Self::Quad),
+            3 => Some(Self::Cubic),
+            _ => None,
+        }
+    }
+
+    /// Number of floats this verb pulls from [`Path::coords`].
+    pub fn coords(self) -> usize {
+        match self {
+            Self::Move | Self::Line => 2,
+            Self::Quad => 4,
+            Self::Cubic => 6,
+        }
+    }
 }
 
 /// A materialized 2D path: a style plus a flat verb stream and its
@@ -398,12 +426,12 @@ pub mod verb {
 ///
 /// `verbs[i]` pulls 2 (move/line), 4 (quad), or 6 (cubic) floats from
 /// `coords` in order. The pair always agrees in length — frontends build
-/// it via [`Scene::begin_path`] and the [`PathBuilder`] returned, and the
-/// wire decoder rejects mismatched paths.
+/// it via [`Scene::path`] and the [`PathBuilder`] returned, and the wire
+/// decoder rejects mismatched paths.
 #[derive(Clone, Debug, Default)]
 pub struct Path {
     pub style: PathStyle,
-    pub verbs: Vec<u8>,
+    pub verbs: Vec<Verb>,
     pub coords: Vec<f32>,
 }
 
@@ -417,15 +445,15 @@ pub enum Element {
         elements: Vec<Element>,
     },
     Text(Box<TextNode>),
-    Bitmap(BitmapNode),
+    Bitmap(Bitmap),
 }
 
 /// Materialized event log produced by Python (or any other front end) and
-/// consumed by every renderer. Built via RAII guards — [`Self::begin_path`]
+/// consumed by every renderer. Built via RAII guards — [`Self::path`]
 /// returns a [`PathBuilder`] that commits the path on drop, and
-/// [`Self::push_clip`] / [`Self::push_clip_rect`] return a [`ClipBuilder`]
-/// that accumulates its own nested elements and commits an [`Element::Clipped`]
-/// on drop. The list is replayed once via [`Self::play_into`].
+/// [`Self::clip`] / [`Self::clip_rect`] return a [`ClipBuilder`] that
+/// accumulates its own nested elements and commits an [`Element::Clipped`]
+/// on drop. The list is replayed once via [`Self::render`].
 ///
 /// Because path geometry only flows through `PathBuilder` and clip scope is
 /// captured by `ClipBuilder`'s own element vector, several footguns of the
@@ -434,8 +462,7 @@ pub enum Element {
 /// (there is no separate pop), or interleave a clip with a half-built path.
 ///
 /// Arcs entered via [`PathBuilder::arc_to`] are pre-expanded to cubics so
-/// renderers only see line / quad / cubic primitives — same surface as the
-/// text-format parser in [`crate::parse`].
+/// renderers only see line / quad / cubic primitives.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
     pub width: f32,
@@ -443,7 +470,7 @@ pub struct Scene {
     pub elements: Vec<Element>,
 }
 
-/// Tolerance for SVG arc → cubic conversion. Matches [`crate::parse`].
+/// Tolerance for SVG arc → cubic conversion.
 const ARC_TOLERANCE: f64 = 0.1;
 
 impl Scene {
@@ -459,7 +486,7 @@ impl Scene {
     /// / `quad_to` / `cubic_to` / `arc_to` methods append verbs; the path is
     /// committed to [`Self::elements`] on drop, or discarded if no geometry was
     /// recorded.
-    pub fn begin_path(&mut self, style: PathStyle) -> PathBuilder<'_> {
+    pub fn path(&mut self, style: PathStyle) -> PathBuilder<'_> {
         PathBuilder {
             scene: self,
             style,
@@ -473,12 +500,12 @@ impl Scene {
     /// its own nested elements; on drop, commits an [`Element::Clipped`] to
     /// the parent scene. The builder `Deref`s to a fresh inner [`Scene`] so
     /// all draw methods remain reachable; nested clips just call
-    /// [`Self::push_clip`] through that `Deref` and commit in the right order.
-    pub fn push_clip(&mut self, clip: ClipPath) -> ClipBuilder<'_> {
+    /// [`Self::clip`] through that `Deref` and commit in the right order.
+    pub fn clip(&mut self, clip: ClipPath) -> ClipBuilder<'_> {
         let inner = Scene::new(self.width, self.height);
         ClipBuilder {
             parent: self,
-            clip: Some(clip),
+            clip,
             inner,
         }
     }
@@ -486,7 +513,7 @@ impl Scene {
     /// Push an axis-aligned-or-rotated rectangular clip — the common case.
     /// Builds the 4-corner `ClipPath` (rotated by `angle_deg` around the
     /// centre) and returns the builder.
-    pub fn push_clip_rect(
+    pub fn clip_rect(
         &mut self,
         cx: f32,
         cy: f32,
@@ -505,8 +532,8 @@ impl Scene {
         let p1 = corner(hw, -hh);
         let p2 = corner(hw, hh);
         let p3 = corner(-hw, hh);
-        self.push_clip(ClipPath {
-            verbs: vec![verb::MOVE, verb::LINE, verb::LINE, verb::LINE],
+        self.clip(ClipPath {
+            verbs: vec![Verb::Move, Verb::Line, Verb::Line, Verb::Line],
             coords: vec![p0.0, p0.1, p1.0, p1.1, p2.0, p2.1, p3.0, p3.1],
             fill_rule,
         })
@@ -516,67 +543,48 @@ impl Scene {
         self.elements.push(Element::Text(Box::new(node)));
     }
 
-    pub fn bitmap(&mut self, node: BitmapNode) {
+    pub fn bitmap(&mut self, node: Bitmap) {
         self.elements.push(Element::Bitmap(node));
     }
 
-    /// Replay every node into `sink`. Wraps `sink.begin()` and `sink.end()`
-    /// around the dispatch loop so callers don't have to. The scene tree is
-    /// nested but the [`crate::renderer::Renderer`] trait stays flat — clip
-    /// scopes are emitted as a balanced `clip_push` / `clip_pop` pair around
-    /// the recursive walk of their inner elements.
-    pub fn play_into(&self, sink: &mut dyn crate::renderer::Renderer) {
-        sink.begin(self.width, self.height);
-        play_elements(&self.elements, sink);
-        sink.end();
+    /// Replay every node into `renderer`. Thin alias for
+    /// [`Renderer::render_scene`] (the canonical entry point); both work and
+    /// pick whichever reads more naturally at the call site.
+    pub fn render(&self, renderer: &mut dyn Renderer) {
+        renderer.render_scene(self);
     }
 }
 
-fn play_elements(elements: &[Element], sink: &mut dyn crate::renderer::Renderer) {
-    for node in elements {
-        match node {
-            Element::Path(p) => play_path(&p.style, &p.verbs, &p.coords, sink),
-            Element::Clipped { clip, elements } => {
-                sink.clip_push(clip);
-                play_elements(elements, sink);
-                sink.clip_pop();
-            }
-            Element::Text(t) => sink.text(t),
-            Element::Bitmap(b) => sink.bitmap(b),
-        }
-    }
-}
-
-/// Path geometry accumulator returned by [`Scene::begin_path`]. Holds the
-/// style and the in-flight verb/coord buffers; on drop, commits a
+/// Path geometry accumulator returned by [`Scene::path`]. Holds the style
+/// and the in-flight verb/coord buffers; on drop, commits a
 /// [`Element::Path`] to the parent [`Scene`] (or discards if no geometry
 /// was recorded).
 #[must_use = "PathBuilder commits the path on drop; bind it so geometry methods can run"]
 pub struct PathBuilder<'a> {
     scene: &'a mut Scene,
     style: PathStyle,
-    verbs: Vec<u8>,
+    verbs: Vec<Verb>,
     coords: Vec<f32>,
     last_point: Option<(f32, f32)>,
 }
 
 impl<'a> PathBuilder<'a> {
     pub fn move_to(&mut self, x: f32, y: f32) -> &mut Self {
-        self.verbs.push(verb::MOVE);
+        self.verbs.push(Verb::Move);
         self.coords.extend([x, y]);
         self.last_point = Some((x, y));
         self
     }
 
     pub fn line_to(&mut self, x: f32, y: f32) -> &mut Self {
-        self.verbs.push(verb::LINE);
+        self.verbs.push(Verb::Line);
         self.coords.extend([x, y]);
         self.last_point = Some((x, y));
         self
     }
 
     pub fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) -> &mut Self {
-        self.verbs.push(verb::QUAD);
+        self.verbs.push(Verb::Quad);
         self.coords.extend([cx, cy, x, y]);
         self.last_point = Some((x, y));
         self
@@ -591,7 +599,7 @@ impl<'a> PathBuilder<'a> {
         x: f32,
         y: f32,
     ) -> &mut Self {
-        self.verbs.push(verb::CUBIC);
+        self.verbs.push(Verb::Cubic);
         self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
         self.last_point = Some((x, y));
         self
@@ -626,7 +634,7 @@ impl<'a> PathBuilder<'a> {
             Some(arc) => {
                 for el in arc.append_iter(ARC_TOLERANCE) {
                     if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
-                        self.verbs.push(verb::CUBIC);
+                        self.verbs.push(Verb::Cubic);
                         self.coords.extend([
                             p1.x as f32,
                             p1.y as f32,
@@ -658,20 +666,20 @@ impl<'a> Drop for PathBuilder<'a> {
     }
 }
 
-/// Active clip scope returned by [`Scene::push_clip`] /
-/// [`Scene::push_clip_rect`]. Owns a fresh inner [`Scene`] that collects
-/// elements drawn inside the clip; `Deref`s to it so all draw methods remain
-/// reachable through the builder. On drop, commits an [`Element::Clipped`]
-/// to the parent scene with the accumulated elements — the structure itself
-/// guarantees balanced clip nesting (no separate pop).
+/// Active clip scope returned by [`Scene::clip`] / [`Scene::clip_rect`].
+/// Owns a fresh inner [`Scene`] that collects elements drawn inside the
+/// clip; `Deref`s to it so all draw methods remain reachable through the
+/// builder. On drop, commits an [`Element::Clipped`] to the parent scene
+/// with the accumulated elements — the structure itself guarantees
+/// balanced clip nesting (no separate pop).
 ///
-/// Nested clips work the usual way: calling [`Scene::push_clip`] through the
-/// builder's `Deref` returns a child `ClipBuilder` borrowing the inner scene,
-/// and committing inside-out leaves a well-formed tree.
+/// Nested clips work the usual way: calling [`Scene::clip`] through the
+/// builder's `Deref` returns a child `ClipBuilder` borrowing the inner
+/// scene, and committing inside-out leaves a well-formed tree.
 #[must_use = "ClipBuilder commits the clip on drop; bind it where the clip should end"]
 pub struct ClipBuilder<'a> {
     parent: &'a mut Scene,
-    clip: Option<ClipPath>,
+    clip: ClipPath,
     inner: Scene,
 }
 
@@ -690,53 +698,11 @@ impl<'a> std::ops::DerefMut for ClipBuilder<'a> {
 
 impl<'a> Drop for ClipBuilder<'a> {
     fn drop(&mut self) {
-        let clip = self
-            .clip
-            .take()
-            .expect("ClipBuilder.clip is set at construction");
+        let clip = std::mem::take(&mut self.clip);
         let elements = std::mem::take(&mut self.inner.elements);
-        self.parent.elements.push(Element::Clipped { clip, elements });
+        self.parent
+            .elements
+            .push(Element::Clipped { clip, elements });
     }
 }
 
-fn play_path(
-    style: &PathStyle,
-    verbs: &[u8],
-    coords: &[f32],
-    sink: &mut dyn crate::renderer::Renderer,
-) {
-    sink.path_begin(style);
-    let mut i = 0usize;
-    for &v in verbs {
-        match v {
-            verb::MOVE if coords.len() >= i + 2 => {
-                sink.move_to(coords[i], coords[i + 1]);
-                i += 2;
-            }
-            verb::LINE if coords.len() >= i + 2 => {
-                sink.line_to(coords[i], coords[i + 1]);
-                i += 2;
-            }
-            verb::QUAD if coords.len() >= i + 4 => {
-                sink.quad_to(coords[i], coords[i + 1], coords[i + 2], coords[i + 3]);
-                i += 4;
-            }
-            verb::CUBIC if coords.len() >= i + 6 => {
-                sink.cubic_to(
-                    coords[i],
-                    coords[i + 1],
-                    coords[i + 2],
-                    coords[i + 3],
-                    coords[i + 4],
-                    coords[i + 5],
-                );
-                i += 6;
-            }
-            // Truncated coords or unknown verb: stop walking; sink already
-            // got a path_begin and will get path_end. Decoders reject this
-            // up front, so we only reach it on a malformed in-process IR.
-            _ => break,
-        }
-    }
-    sink.path_end();
-}

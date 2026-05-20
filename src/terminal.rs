@@ -35,10 +35,10 @@ use tiny_skia::{
     SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::renderer::Renderer;
+use crate::renderer::{Renderer, RendererToken};
 use crate::scene::{
-    BitmapNode, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, TextNode,
-    verb,
+    Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, TextNode,
+    Verb,
 };
 use crate::sixel;
 
@@ -249,7 +249,7 @@ impl Renderer for PixmapRenderer {
         });
     }
 
-    fn path_begin(&mut self, style: &PathStyle) {
+    fn path_begin(&mut self, _: RendererToken, style: &PathStyle) {
         self.flush_path();
         self.pending = Some(PendingPath {
             builder: PathBuilder::new(),
@@ -258,75 +258,76 @@ impl Renderer for PixmapRenderer {
         });
     }
 
-    fn move_to(&mut self, x: f32, y: f32) {
+    fn move_to(&mut self, _: RendererToken, x: f32, y: f32) {
         if let Some(p) = self.pending.as_mut() {
             p.builder.move_to(x, y);
             p.has_points = true;
         }
     }
 
-    fn line_to(&mut self, x: f32, y: f32) {
+    fn line_to(&mut self, _: RendererToken, x: f32, y: f32) {
         if let Some(p) = self.pending.as_mut() {
             p.builder.line_to(x, y);
             p.has_points = true;
         }
     }
 
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+    fn quad_to(&mut self, _: RendererToken, cx: f32, cy: f32, x: f32, y: f32) {
         if let Some(p) = self.pending.as_mut() {
             p.builder.quad_to(cx, cy, x, y);
             p.has_points = true;
         }
     }
 
-    fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+    fn cubic_to(
+        &mut self,
+        _: RendererToken,
+        c1x: f32,
+        c1y: f32,
+        c2x: f32,
+        c2y: f32,
+        x: f32,
+        y: f32,
+    ) {
         if let Some(p) = self.pending.as_mut() {
             p.builder.cubic_to(c1x, c1y, c2x, c2y, x, y);
             p.has_points = true;
         }
     }
 
-    fn path_end(&mut self) {
+    fn path_end(&mut self, _: RendererToken) {
         self.flush_path();
     }
 
-    fn clip_push(&mut self, clip: &ClipPath) {
+    fn clip_push(&mut self, _: RendererToken, clip: &ClipPath) {
         self.flush_path();
         let parent = self.clip_stack.last();
         let mut builder = PathBuilder::new();
         let mut i = 0usize;
         for &v in &clip.verbs {
-            match v {
-                verb::MOVE if clip.coords.len() >= i + 2 => {
-                    builder.move_to(clip.coords[i], clip.coords[i + 1]);
-                    i += 2;
-                }
-                verb::LINE if clip.coords.len() >= i + 2 => {
-                    builder.line_to(clip.coords[i], clip.coords[i + 1]);
-                    i += 2;
-                }
-                verb::QUAD if clip.coords.len() >= i + 4 => {
-                    builder.quad_to(
-                        clip.coords[i],
-                        clip.coords[i + 1],
-                        clip.coords[i + 2],
-                        clip.coords[i + 3],
-                    );
-                    i += 4;
-                }
-                verb::CUBIC if clip.coords.len() >= i + 6 => {
-                    builder.cubic_to(
-                        clip.coords[i],
-                        clip.coords[i + 1],
-                        clip.coords[i + 2],
-                        clip.coords[i + 3],
-                        clip.coords[i + 4],
-                        clip.coords[i + 5],
-                    );
-                    i += 6;
-                }
-                _ => break,
+            let need = v.coords();
+            if clip.coords.len() < i + need {
+                break;
             }
+            match v {
+                Verb::Move => builder.move_to(clip.coords[i], clip.coords[i + 1]),
+                Verb::Line => builder.line_to(clip.coords[i], clip.coords[i + 1]),
+                Verb::Quad => builder.quad_to(
+                    clip.coords[i],
+                    clip.coords[i + 1],
+                    clip.coords[i + 2],
+                    clip.coords[i + 3],
+                ),
+                Verb::Cubic => builder.cubic_to(
+                    clip.coords[i],
+                    clip.coords[i + 1],
+                    clip.coords[i + 2],
+                    clip.coords[i + 3],
+                    clip.coords[i + 4],
+                    clip.coords[i + 5],
+                ),
+            }
+            i += need;
         }
         // SVG `<clipPath>` semantics: sub-paths are filled, so close before
         // intersecting. tiny_skia tolerates an explicit close on an already-
@@ -355,7 +356,7 @@ impl Renderer for PixmapRenderer {
         self.clip_stack.push(mask);
     }
 
-    fn clip_pop(&mut self) {
+    fn clip_pop(&mut self, _: RendererToken) {
         self.flush_path();
         self.clip_stack.pop();
     }
@@ -368,7 +369,7 @@ impl Renderer for PixmapRenderer {
         render_text(node, pixmap, self.clip_stack.last(), self.base);
     }
 
-    fn bitmap(&mut self, _node: &BitmapNode) {
+    fn bitmap(&mut self, _node: &Bitmap) {
         self.flush_path();
         let mut s = STATE.lock().unwrap();
         if !s.warned_bitmap {
@@ -471,9 +472,9 @@ pub(crate) fn rasterize_scene(
     target_px: Option<(u32, u32)>,
     max_scale: f32,
 ) -> Option<Pixmap> {
-    let mut sink = PixmapRenderer::new(target_px, max_scale);
-    scene.play_into(&mut sink);
-    sink.pixmap
+    let mut renderer = PixmapRenderer::new(target_px, max_scale);
+    scene.render(&mut renderer);
+    renderer.pixmap
 }
 
 /// Uniform scale factor to fit `(w, h)` inside `target` (both in pixels),
@@ -1029,7 +1030,7 @@ mod tests {
     }
 
     fn rect_path(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        let mut p = scene.begin_path(style);
+        let mut p = scene.path(style);
         p.move_to(x, y);
         p.line_to(x + w, y);
         p.line_to(x + w, y + h);
@@ -1050,7 +1051,7 @@ mod tests {
     fn rasterize_filled_circle_center_is_red() {
         let mut scene = Scene::new(40.0, 40.0);
         {
-            let mut p = scene.begin_path(solid(255, 0, 0));
+            let mut p = scene.path(solid(255, 0, 0));
             p.move_to(40.0, 20.0);
             p.arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0);
             p.arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0);
@@ -1066,7 +1067,7 @@ mod tests {
         // (35, 25) would lie outside the clip if the full rect made it through.
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let mut clip = scene.push_clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
+            let mut clip = scene.clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
             rect_path(&mut clip, solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0);
         }
         let pm = rasterize(&scene);
@@ -1401,7 +1402,7 @@ mod tests {
         // sits inside an "off" segment (transparent).
         let mut scene = Scene::new(100.0, 20.0);
         {
-            let mut p = scene.begin_path(PathStyle {
+            let mut p = scene.path(PathStyle {
                 stroke: IrPaint::rgba(255, 0, 0, 1.0),
                 stroke_width: 3.0,
                 dash_array: vec![10.0, 10.0],
@@ -1415,5 +1416,119 @@ mod tests {
         let off = pixel_rgba(&pm, 20, 10).3;
         assert!(on > 200, "on-segment expected opaque: {on}");
         assert!(off < 40, "off-segment expected transparent: {off}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Renderer builder API + streaming entry points
+    // -----------------------------------------------------------------------
+
+    use crate::scene::{ClipPath, Verb};
+
+    #[test]
+    fn builder_api_paints_rectangle() {
+        // Push commands straight to a PixmapRenderer via the builder API —
+        // no Scene materialization. The PathScope drops at the end of the
+        // block and runs path_end, committing the rect.
+        let mut r = PixmapRenderer::new(None, 1.0);
+        r.begin(20.0, 20.0);
+        {
+            let mut p = r.path(solid(0, 255, 0));
+            p.move_to(0.0, 0.0)
+                .line_to(20.0, 0.0)
+                .line_to(20.0, 20.0)
+                .line_to(0.0, 20.0);
+        }
+        r.end();
+        let pm = r.pixmap.expect("pixmap");
+        assert_eq!(pixel_rgba(&pm, 10, 10), (0, 255, 0, 255));
+    }
+
+    #[test]
+    fn builder_clip_scope_excludes_outside() {
+        // ClipScope derefs to the renderer so nested draws run with the
+        // clip active; the scope's drop pops the clip.
+        let mut r = PixmapRenderer::new(None, 1.0);
+        r.begin(20.0, 20.0);
+        {
+            let clip = ClipPath {
+                verbs: vec![Verb::Move, Verb::Line, Verb::Line, Verb::Line],
+                coords: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+                fill_rule: FillRule::NonZero,
+            };
+            let mut c = r.clip(clip);
+            let mut p = c.path(solid(0, 0, 255));
+            p.move_to(0.0, 0.0)
+                .line_to(20.0, 0.0)
+                .line_to(20.0, 20.0)
+                .line_to(0.0, 20.0);
+        }
+        r.end();
+        let pm = r.pixmap.expect("pixmap");
+        // Inside the clip box: blue. Outside (e.g. 15,15): transparent.
+        assert_eq!(pixel_rgba(&pm, 5, 5), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(&pm, 15, 15).3, 0);
+    }
+
+    #[test]
+    fn render_scene_stream_matches_render_scene_for_flat_path() {
+        // Build a scene with a single red square, encode it as a capnp Frame,
+        // feed the bytes to render_scene_stream — pixel result must match
+        // the atomic render_scene path.
+        let mut scene = Scene::new(10.0, 10.0);
+        rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+        let bytes = crate::wire::encode_frame(&scene);
+
+        let mut atomic = PixmapRenderer::new(None, 1.0);
+        atomic.render_scene(&scene);
+        let pm_atomic = atomic.pixmap.expect("pixmap");
+
+        let mut streamed = PixmapRenderer::new(None, 1.0);
+        streamed
+            .render_scene_stream(&bytes[..])
+            .expect("decode + render");
+        let pm_streamed = streamed.pixmap.expect("pixmap");
+
+        for y in 0..10 {
+            for x in 0..10 {
+                assert_eq!(
+                    pixel_rgba(&pm_atomic, x, y),
+                    pixel_rgba(&pm_streamed, x, y),
+                    "mismatch at ({x}, {y})"
+                );
+            }
+        }
+        assert_eq!(pixel_rgba(&pm_streamed, 5, 5), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn render_scene_stream_handles_nested_clip() {
+        // Capnp Frame with a Clipped subtree: clip_push streams through to
+        // the renderer's primitive, the nested path is dispatched inside,
+        // clip_pop after.
+        let mut scene = Scene::new(20.0, 20.0);
+        {
+            let clip = ClipPath {
+                verbs: vec![Verb::Move, Verb::Line, Verb::Line, Verb::Line],
+                coords: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+                fill_rule: FillRule::NonZero,
+            };
+            let mut clip_scope = scene.clip(clip);
+            rect_path(&mut clip_scope, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);
+        }
+        let bytes = crate::wire::encode_frame(&scene);
+
+        let mut r = PixmapRenderer::new(None, 1.0);
+        r.render_scene_stream(&bytes[..]).expect("decode + render");
+        let pm = r.pixmap.expect("pixmap");
+        assert_eq!(pixel_rgba(&pm, 5, 5), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(&pm, 15, 15).3, 0);
+    }
+
+    #[test]
+    fn render_scene_stream_rejects_non_frame_message() {
+        let bytes = crate::wire::encode_close();
+        let mut r = PixmapRenderer::new(None, 1.0);
+        let err = r.render_scene_stream(&bytes[..]).expect_err("not a frame");
+        assert!(matches!(err, crate::wire::Error::WrongMessageKind));
     }
 }

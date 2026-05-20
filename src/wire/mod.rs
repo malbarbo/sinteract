@@ -23,9 +23,10 @@ use capnp::serialize;
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
+use crate::renderer::{Renderer, RendererToken};
 use crate::scene::{
-    BitmapNode, ClipPath, Element, FillRule, FontStyle, LineCap, LineJoin, LinearGradient, Paint,
-    Path, PathStyle, RadialGradient, Rgba, Scene, SpreadMode, Stop, TextNode, verb,
+    Bitmap, ClipPath, Element, FillRule, FontStyle, LineCap, LineJoin, LinearGradient, Paint, Path,
+    PathStyle, RadialGradient, Rgba, Scene, SpreadMode, Stop, TextNode, Verb,
 };
 
 use crate::frame_capnp::{
@@ -58,6 +59,9 @@ pub enum Error {
     PathLengthMismatch { verbs: usize, coords: usize },
     /// A `Path` carried a verb byte we don't know how to consume.
     UnknownVerb(u8),
+    /// [`render_scene_stream`] saw a `Message` whose union arm was not
+    /// `Frame` (e.g. `Asset`, `Event`, `SessionClose`).
+    WrongMessageKind,
 }
 
 impl std::fmt::Display for Error {
@@ -73,6 +77,9 @@ impl std::fmt::Display for Error {
                 )
             }
             Error::UnknownVerb(v) => write!(f, "unknown path verb byte: {v}"),
+            Error::WrongMessageKind => {
+                write!(f, "expected Message::Frame, got a different union arm")
+            }
         }
     }
 }
@@ -442,7 +449,7 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
 }
 
 fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
-    b.set_verbs(&c.verbs);
+    b.set_verbs(&verbs_to_bytes(&c.verbs));
     b.set_fill_rule(fill_rule_to_wire(c.fill_rule));
     let mut out = b.init_coords(c.coords.len() as u32);
     for (i, &v) in c.coords.iter().enumerate() {
@@ -451,9 +458,8 @@ fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
 }
 
 fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, Error> {
-    let verbs = r.get_verbs()?.to_vec();
     let coords: Vec<f32> = r.get_coords()?.iter().collect();
-    validate_path_lengths(&verbs, coords.len())?;
+    let verbs = parse_verbs(r.get_verbs()?, coords.len())?;
     Ok(ClipPath {
         verbs,
         coords,
@@ -461,7 +467,7 @@ fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, Error> {
     })
 }
 
-fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &BitmapNode) {
+fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &Bitmap) {
     b.set_id(n.id);
     b.set_m0(n.transform[0]);
     b.set_m1(n.transform[1]);
@@ -471,8 +477,8 @@ fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &BitmapNode) {
     b.set_m5(n.transform[5]);
 }
 
-fn read_bitmap(r: bitmap_node::Reader<'_>) -> BitmapNode {
-    BitmapNode {
+fn read_bitmap(r: bitmap_node::Reader<'_>) -> Bitmap {
+    Bitmap {
         id: r.get_id(),
         transform: [
             r.get_m0(),
@@ -529,44 +535,42 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
 // Scene <-> wire
 // ---------------------------------------------------------------------------
 
-/// Number of floats consumed by each verb. Used both to validate paths on
-/// decode and to size the `coords` list on encode.
-const fn coords_per_verb(v: u8) -> Option<usize> {
-    match v {
-        verb::MOVE | verb::LINE => Some(2),
-        verb::QUAD => Some(4),
-        verb::CUBIC => Some(6),
-        _ => None,
-    }
-}
-
-/// Walk `verbs` and confirm `coords.len()` matches the sum required, and
-/// every byte is a known verb. Returns Ok(()) or the appropriate error.
-fn validate_path_lengths(verbs: &[u8], coords_len: usize) -> Result<(), Error> {
+/// Parse the wire byte stream into typed verbs, validating against
+/// `coords_len` at the same time. Rejects unknown verb bytes and verb/coord
+/// length disagreement; the verb enum makes both errors structurally absent
+/// past this point.
+fn parse_verbs(bytes: &[u8], coords_len: usize) -> Result<Vec<Verb>, Error> {
+    let mut verbs = Vec::with_capacity(bytes.len());
     let mut needed = 0usize;
-    for &v in verbs {
-        match coords_per_verb(v) {
-            Some(n) => needed += n,
-            None => return Err(Error::UnknownVerb(v)),
-        }
+    for &b in bytes {
+        let v = Verb::from_u8(b).ok_or(Error::UnknownVerb(b))?;
+        needed += v.coords();
+        verbs.push(v);
     }
     if needed != coords_len {
         return Err(Error::PathLengthMismatch {
-            verbs: verbs.len(),
+            verbs: bytes.len(),
             coords: coords_len,
         });
     }
-    Ok(())
+    Ok(verbs)
+}
+
+/// Pack a typed verb stream into the byte representation the wire uses. One
+/// small allocation per encoded path; the `Verb` discriminants are the wire
+/// bytes by construction, so this is `repr(u8)` cast on each element.
+fn verbs_to_bytes(verbs: &[Verb]) -> Vec<u8> {
+    verbs.iter().map(|&v| v as u8).collect()
 }
 
 fn write_path_parts(
     mut b: wire_path::Builder<'_>,
     style: &PathStyle,
-    verbs: &[u8],
+    verbs: &[Verb],
     coords: &[f32],
 ) {
     write_path_style(b.reborrow().init_style(), style);
-    b.set_verbs(verbs);
+    b.set_verbs(&verbs_to_bytes(verbs));
     let mut out = b.init_coords(coords.len() as u32);
     for (i, &c) in coords.iter().enumerate() {
         out.set(i as u32, c);
@@ -575,9 +579,8 @@ fn write_path_parts(
 
 fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
     let style = read_path_style(r.get_style()?)?;
-    let verbs = r.get_verbs()?.to_vec();
     let coords: Vec<f32> = r.get_coords()?.iter().collect();
-    validate_path_lengths(&verbs, coords.len())?;
+    let verbs = parse_verbs(r.get_verbs()?, coords.len())?;
     Ok(Path {
         style,
         verbs,
@@ -611,7 +614,10 @@ fn write_element_list(
 fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
     b.set_width(scene.width);
     b.set_height(scene.height);
-    write_element_list(b.init_elements(scene.elements.len() as u32), &scene.elements);
+    write_element_list(
+        b.init_elements(scene.elements.len() as u32),
+        &scene.elements,
+    );
 }
 
 fn read_element(node: element::Reader<'_>) -> Result<Element, Error> {
@@ -701,6 +707,131 @@ pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -
 }
 
 // ---------------------------------------------------------------------------
+// Streaming entry point — capnp Reader → Renderer primitives
+// ---------------------------------------------------------------------------
+
+/// Decode exactly one `Message::Frame` from `reader` and dispatch the draw
+/// list through `renderer`'s streaming primitives. The Cap'n Proto reader
+/// is walked lazily — `List(Element)` is iterated without materializing a
+/// `Vec<Element>`, and `Clipped` subtrees recurse via `clip_push`/
+/// `clip_pop`. Per-path `PathStyle` (and per-clip `ClipPath`) is still
+/// materialized while the path is being emitted, bounded by one path at a
+/// time.
+///
+/// Non-`Frame` messages (`Asset`, `Event`, `SessionClose`) return
+/// [`Error::WrongMessageKind`] — peek the kind separately or use
+/// [`decode`] for those.
+pub fn render_scene_stream<R: std::io::Read, T: Renderer + ?Sized>(
+    renderer: &mut T,
+    reader: R,
+) -> Result<(), Error> {
+    let msg = serialize::read_message(reader, ReaderOptions::new())?;
+    let m: message::Reader = msg.get_root()?;
+    match m.which()? {
+        message::Frame(f) => stream_frame(renderer, f?),
+        message::Asset(_) | message::Event(_) | message::SessionClose(()) => {
+            Err(Error::WrongMessageKind)
+        }
+    }
+}
+
+fn stream_frame<T: Renderer + ?Sized>(
+    renderer: &mut T,
+    frame: wire_scene::Reader<'_>,
+) -> Result<(), Error> {
+    renderer.begin(frame.get_width(), frame.get_height());
+    let tok = RendererToken::new();
+    if frame.has_elements() {
+        stream_elements(renderer, frame.get_elements()?, tok)?;
+    }
+    renderer.end();
+    Ok(())
+}
+
+fn stream_elements<T: Renderer + ?Sized>(
+    renderer: &mut T,
+    list: capnp::struct_list::Reader<'_, element::Owned>,
+    tok: RendererToken,
+) -> Result<(), Error> {
+    use element::Which;
+    for node in list.iter() {
+        match node.which()? {
+            Which::Path(p) => stream_path(renderer, p?, tok)?,
+            Which::Clipped(c) => {
+                let c = c?;
+                let clip = read_clip_path(c.get_clip()?)?;
+                renderer.clip_push(tok, &clip);
+                stream_elements(renderer, c.get_elements()?, tok)?;
+                renderer.clip_pop(tok);
+            }
+            Which::Text(t) => {
+                let t = read_text_node(t?)?;
+                renderer.text(&t);
+            }
+            Which::Bitmap(b) => {
+                let b = read_bitmap(b?);
+                renderer.bitmap(&b);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn stream_path<T: Renderer + ?Sized>(
+    renderer: &mut T,
+    p: wire_path::Reader<'_>,
+    tok: RendererToken,
+) -> Result<(), Error> {
+    let style = read_path_style(p.get_style()?)?;
+    let verbs = p.get_verbs()?;
+    let coords = p.get_coords()?;
+    // Pre-validate verb/coord agreement up-front to avoid emitting
+    // `path_begin` for a path we'd then have to abort mid-stream — same
+    // contract as `decode`. parse_verbs only enforces the count match;
+    // we redo it here against the lazy `coords` reader length.
+    let mut needed: usize = 0;
+    for &vb in verbs.iter() {
+        let v = Verb::from_u8(vb).ok_or(Error::UnknownVerb(vb))?;
+        needed += v.coords();
+    }
+    if needed != coords.len() as usize {
+        return Err(Error::PathLengthMismatch {
+            verbs: needed,
+            coords: coords.len() as usize,
+        });
+    }
+
+    renderer.path_begin(tok, &style);
+    let mut i: u32 = 0;
+    for &vb in verbs.iter() {
+        let v = Verb::from_u8(vb).expect("verbs pre-validated");
+        match v {
+            Verb::Move => renderer.move_to(tok, coords.get(i), coords.get(i + 1)),
+            Verb::Line => renderer.line_to(tok, coords.get(i), coords.get(i + 1)),
+            Verb::Quad => renderer.quad_to(
+                tok,
+                coords.get(i),
+                coords.get(i + 1),
+                coords.get(i + 2),
+                coords.get(i + 3),
+            ),
+            Verb::Cubic => renderer.cubic_to(
+                tok,
+                coords.get(i),
+                coords.get(i + 1),
+                coords.get(i + 2),
+                coords.get(i + 3),
+                coords.get(i + 4),
+                coords.get(i + 5),
+            ),
+        }
+        i += v.coords() as u32;
+    }
+    renderer.path_end(tok);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -711,7 +842,7 @@ mod tests {
     fn sample_scene() -> Scene {
         let mut scene = Scene::new(120.0, 80.0);
         {
-            let mut p = scene.begin_path(PathStyle {
+            let mut p = scene.path(PathStyle {
                 fill: Paint::rgba(10, 20, 30, 0.5),
                 stroke: Paint::rgba(200, 0, 0, 1.0),
                 stroke_width: 2.5,
@@ -727,7 +858,7 @@ mod tests {
             p.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
         }
         {
-            let mut clip = scene.push_clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
+            let mut clip = scene.clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
             clip.text(TextNode {
                 fill: Rgba {
                     r: 0,
@@ -755,7 +886,7 @@ mod tests {
                 text: "Olá".into(),
                 ..TextNode::default()
             });
-            clip.bitmap(BitmapNode {
+            clip.bitmap(Bitmap {
                 id: 7,
                 // 64×64 asset, mirrored horizontally, rotated 90°, centred at (70, 40).
                 transform: crate::scene::bitmap_box_affine(64, 64, 70.0, 40.0, -32.0, 32.0, 90.0),
@@ -872,7 +1003,7 @@ mod tests {
             let mut p = node.init_path();
             // style left default
             let _ = p.reborrow().init_style();
-            p.set_verbs(&[verb::CUBIC]);
+            p.set_verbs(&[Verb::Cubic as u8]);
             let mut coords = p.init_coords(4);
             for i in 0..4 {
                 coords.set(i, i as f32);
@@ -896,7 +1027,7 @@ mod tests {
     fn dash_and_miter_round_trip() {
         let mut scene = Scene::new(100.0, 50.0);
         {
-            let mut p = scene.begin_path(PathStyle {
+            let mut p = scene.path(PathStyle {
                 stroke: Paint::rgba(0, 0, 0, 1.0),
                 stroke_width: 2.0,
                 miter_limit: 7.5,
@@ -962,7 +1093,7 @@ mod tests {
             ..LinearGradient::default()
         };
         {
-            let mut p = scene.begin_path(PathStyle {
+            let mut p = scene.path(PathStyle {
                 fill: Paint::Linear(gradient.clone()),
                 ..PathStyle::default()
             });
@@ -1012,7 +1143,7 @@ mod tests {
             ..RadialGradient::default()
         };
         {
-            let mut p = scene.begin_path(PathStyle {
+            let mut p = scene.path(PathStyle {
                 fill: Paint::Radial(gradient.clone()),
                 ..PathStyle::default()
             });
@@ -1064,7 +1195,7 @@ mod tests {
             ],
         };
         {
-            let mut p = scene.begin_path(PathStyle {
+            let mut p = scene.path(PathStyle {
                 fill: Paint::Linear(linear.clone()),
                 ..PathStyle::default()
             });
@@ -1093,7 +1224,7 @@ mod tests {
             ],
         };
         {
-            let mut p = scene.begin_path(PathStyle {
+            let mut p = scene.path(PathStyle {
                 fill: Paint::Radial(radial.clone()),
                 ..PathStyle::default()
             });
@@ -1124,12 +1255,12 @@ mod tests {
         // clip so the nested elements list is non-trivial.
         let mut scene = Scene::new(50.0, 50.0);
         {
-            let mut clip = scene.push_clip(ClipPath {
-                verbs: vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE],
+            let mut clip = scene.clip(ClipPath {
+                verbs: vec![Verb::Move, Verb::Line, Verb::Quad, Verb::Line],
                 coords: vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0],
                 fill_rule: FillRule::EvenOdd,
             });
-            let mut p = clip.begin_path(PathStyle::default());
+            let mut p = clip.path(PathStyle::default());
             p.move_to(0.0, 0.0);
             p.line_to(10.0, 10.0);
         }
@@ -1141,7 +1272,7 @@ mod tests {
                 };
                 assert_eq!(
                     clip.verbs,
-                    vec![verb::MOVE, verb::LINE, verb::QUAD, verb::LINE]
+                    vec![Verb::Move, Verb::Line, Verb::Quad, Verb::Line]
                 );
                 assert_eq!(
                     clip.coords,
@@ -1168,7 +1299,7 @@ mod tests {
             let node = nodes.reborrow().get(0);
             let clipped = node.init_clipped();
             let mut c = clipped.init_clip();
-            c.set_verbs(&[verb::CUBIC]);
+            c.set_verbs(&[Verb::Cubic as u8]);
             let mut coords = c.init_coords(2);
             coords.set(0, 0.0);
             coords.set(1, 0.0);
@@ -1193,13 +1324,13 @@ mod tests {
         // come back identical.
         let mut scene = Scene::new(100.0, 100.0);
         {
-            let mut outer = scene.push_clip_rect(50.0, 50.0, 80.0, 80.0, 0.0, FillRule::NonZero);
-            let mut p = outer.begin_path(PathStyle::default());
+            let mut outer = scene.clip_rect(50.0, 50.0, 80.0, 80.0, 0.0, FillRule::NonZero);
+            let mut p = outer.path(PathStyle::default());
             p.move_to(0.0, 0.0);
             p.line_to(100.0, 100.0);
             drop(p);
-            let mut inner = outer.push_clip_rect(50.0, 50.0, 40.0, 40.0, 0.0, FillRule::EvenOdd);
-            let mut p = inner.begin_path(PathStyle::default());
+            let mut inner = outer.clip_rect(50.0, 50.0, 40.0, 40.0, 0.0, FillRule::EvenOdd);
+            let mut p = inner.path(PathStyle::default());
             p.move_to(10.0, 10.0);
             p.line_to(20.0, 20.0);
         }
@@ -1237,7 +1368,7 @@ mod tests {
         // accidental changes to Default.
         let mut scene = Scene::new(10.0, 10.0);
         {
-            let mut p = scene.begin_path(PathStyle::default());
+            let mut p = scene.path(PathStyle::default());
             p.move_to(0.0, 0.0);
         }
         let bytes = encode_frame(&scene);

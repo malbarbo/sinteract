@@ -1,7 +1,7 @@
 //! Render a [`crate::scene::Scene`] to a PDF byte stream. Native-only;
 //! the WASM build does not link against `pdf-writer`.
 //!
-//! The draw list is replayed via [`crate::scene::Scene::play_into`]; this
+//! The draw list is replayed via [`crate::scene::Scene::render`]; this
 //! module implements [`PdfRenderer`] which translates each command into PDF
 //! content-stream operators.
 //!
@@ -23,10 +23,10 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::renderer::Renderer;
+use crate::renderer::{Renderer, RendererToken};
 use crate::scene::{
-    BitmapNode, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
-    RadialGradient, Rgba, Stop, TextNode, verb,
+    Bitmap, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
+    RadialGradient, Rgba, Stop, TextNode, Verb,
 };
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -247,7 +247,7 @@ impl Renderer for PdfRenderer {
             .transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
     }
 
-    fn path_begin(&mut self, style: &PathStyle) {
+    fn path_begin(&mut self, _: RendererToken, style: &PathStyle) {
         self.flush_path();
         self.pending = Some(PendingPath {
             style: style.clone(),
@@ -256,21 +256,21 @@ impl Renderer for PdfRenderer {
         });
     }
 
-    fn move_to(&mut self, x: f32, y: f32) {
+    fn move_to(&mut self, _: RendererToken, x: f32, y: f32) {
         if let Some(p) = self.pending.as_mut() {
             p.ops.push(PathOp::Move(x, y));
             p.last_point = Some((x, y));
         }
     }
 
-    fn line_to(&mut self, x: f32, y: f32) {
+    fn line_to(&mut self, _: RendererToken, x: f32, y: f32) {
         if let Some(p) = self.pending.as_mut() {
             p.ops.push(PathOp::Line(x, y));
             p.last_point = Some((x, y));
         }
     }
 
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+    fn quad_to(&mut self, _: RendererToken, cx: f32, cy: f32, x: f32, y: f32) {
         let Some(p) = self.pending.as_mut() else {
             return;
         };
@@ -286,37 +286,48 @@ impl Renderer for PdfRenderer {
         p.last_point = Some((x, y));
     }
 
-    fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+    fn cubic_to(
+        &mut self,
+        _: RendererToken,
+        c1x: f32,
+        c1y: f32,
+        c2x: f32,
+        c2y: f32,
+        x: f32,
+        y: f32,
+    ) {
         if let Some(p) = self.pending.as_mut() {
             p.ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
             p.last_point = Some((x, y));
         }
     }
 
-    fn path_end(&mut self) {
+    fn path_end(&mut self, _: RendererToken) {
         self.flush_path();
     }
 
-    fn clip_push(&mut self, clip: &ClipPath) {
+    fn clip_push(&mut self, _: RendererToken, clip: &ClipPath) {
         self.flush_path();
         self.content.save_state();
         let mut last_point: Option<(f32, f32)> = None;
         let mut i = 0usize;
         for &v in &clip.verbs {
+            let need = v.coords();
+            if clip.coords.len() < i + need {
+                break;
+            }
             match v {
-                verb::MOVE if clip.coords.len() >= i + 2 => {
+                Verb::Move => {
                     let (x, y) = (clip.coords[i], clip.coords[i + 1]);
                     self.content.move_to(x, y);
                     last_point = Some((x, y));
-                    i += 2;
                 }
-                verb::LINE if clip.coords.len() >= i + 2 => {
+                Verb::Line => {
                     let (x, y) = (clip.coords[i], clip.coords[i + 1]);
                     self.content.line_to(x, y);
                     last_point = Some((x, y));
-                    i += 2;
                 }
-                verb::QUAD if clip.coords.len() >= i + 4 => {
+                Verb::Quad => {
                     let (cx, cy, x, y) = (
                         clip.coords[i],
                         clip.coords[i + 1],
@@ -331,9 +342,8 @@ impl Renderer for PdfRenderer {
                         self.content.cubic_to(c1x, c1y, c2x, c2y, x, y);
                     }
                     last_point = Some((x, y));
-                    i += 4;
                 }
-                verb::CUBIC if clip.coords.len() >= i + 6 => {
+                Verb::Cubic => {
                     let (c1x, c1y, c2x, c2y, x, y) = (
                         clip.coords[i],
                         clip.coords[i + 1],
@@ -344,10 +354,9 @@ impl Renderer for PdfRenderer {
                     );
                     self.content.cubic_to(c1x, c1y, c2x, c2y, x, y);
                     last_point = Some((x, y));
-                    i += 6;
                 }
-                _ => break,
             }
+            i += need;
         }
         self.content.close_path();
         match clip.fill_rule {
@@ -361,7 +370,7 @@ impl Renderer for PdfRenderer {
         self.content.end_path();
     }
 
-    fn clip_pop(&mut self) {
+    fn clip_pop(&mut self, _: RendererToken) {
         self.flush_path();
         self.content.restore_state();
     }
@@ -371,7 +380,7 @@ impl Renderer for PdfRenderer {
         render_text(node, self);
     }
 
-    fn bitmap(&mut self, _node: &BitmapNode) {
+    fn bitmap(&mut self, _node: &Bitmap) {
         // Bitmaps are not supported in PDF v1 (consistent with the
         // terminal renderer); silently skip.
         self.flush_path();
@@ -400,9 +409,9 @@ fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
 
 /// Render a [`crate::scene::Scene`] to PDF bytes.
 pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
-    let mut sink = PdfRenderer::new();
-    scene.play_into(&mut sink);
-    finish_pdf(sink)
+    let mut renderer = PdfRenderer::new();
+    scene.render(&mut renderer);
+    finish_pdf(renderer)
 }
 
 /// Layout of one gradient as PDF indirect objects: a list of sub-function
@@ -416,12 +425,12 @@ struct GradientRefs {
     pattern: Ref,
 }
 
-fn finish_pdf(mut sink: PdfRenderer) -> Vec<u8> {
-    let w = sink.width;
-    let h = sink.height;
-    let gstates = std::mem::take(&mut sink.gstates);
-    let gradients = std::mem::take(&mut sink.gradients);
-    let buf = sink.content.finish();
+fn finish_pdf(mut renderer: PdfRenderer) -> Vec<u8> {
+    let w = renderer.width;
+    let h = renderer.height;
+    let gstates = std::mem::take(&mut renderer.gstates);
+    let gradients = std::mem::take(&mut renderer.gradients);
+    let buf = renderer.content.finish();
 
     // Indirect-reference IDs.
     let catalog_id = Ref::new(1);
@@ -714,7 +723,7 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
 }
 
 #[allow(clippy::similar_names)]
-fn render_text(node: &TextNode, sink: &mut PdfRenderer) {
+fn render_text(node: &TextNode, renderer: &mut PdfRenderer) {
     let size_i = node.size as i32;
     if size_i <= 0 || node.text.is_empty() {
         return;
@@ -738,35 +747,35 @@ fn render_text(node: &TextNode, sink: &mut PdfRenderer) {
         return;
     }
 
-    sink.content.save_state();
-    sink.apply_alpha(
+    renderer.content.save_state();
+    renderer.apply_alpha(
         if do_fill { node.fill.a } else { 1.0 },
         if do_stroke { node.stroke.a } else { 1.0 },
     );
     if do_fill {
-        sink.content.set_fill_rgb(
+        renderer.content.set_fill_rgb(
             node.fill.r as f32 / 255.0,
             node.fill.g as f32 / 255.0,
             node.fill.b as f32 / 255.0,
         );
     }
     if do_stroke {
-        sink.content.set_stroke_rgb(
+        renderer.content.set_stroke_rgb(
             node.stroke.r as f32 / 255.0,
             node.stroke.g as f32 / 255.0,
             node.stroke.b as f32 / 255.0,
         );
-        sink.content.set_line_width(node.stroke_width);
+        renderer.content.set_line_width(node.stroke_width);
         // Cap/join intentionally omitted: text outlines are closed contours
         // on smooth curves, so the PDF defaults (butt cap, miter join) are
         // visually identical to anything the producer might pick.
     }
     // `node.transform` is already in the PDF `cm` convention.
-    sink.content.transform(node.transform);
+    renderer.content.transform(node.transform);
 
     let mut adapter = PdfOutline { ops: Vec::new() };
     crate::text::outline_with(face, &node.text, size_i, &mut adapter);
-    emit_path_ops(&adapter.ops, &mut sink.content);
+    emit_path_ops(&adapter.ops, &mut renderer.content);
 
     if node.underline {
         let face_units = face.units_per_em() as f32;
@@ -780,15 +789,15 @@ fn render_text(node: &TextNode, sink: &mut PdfRenderer) {
         let y_bot = y_top + thickness;
         let x_l = x_left;
         let x_r = x_l + original_w;
-        sink.content.move_to(x_l, y_top);
-        sink.content.line_to(x_r, y_top);
-        sink.content.line_to(x_r, y_bot);
-        sink.content.line_to(x_l, y_bot);
-        sink.content.close_path();
+        renderer.content.move_to(x_l, y_top);
+        renderer.content.line_to(x_r, y_top);
+        renderer.content.line_to(x_r, y_bot);
+        renderer.content.line_to(x_l, y_bot);
+        renderer.content.close_path();
     }
 
-    paint(&mut sink.content, do_fill, do_stroke, FillRule::NonZero);
-    sink.content.restore_state();
+    paint(&mut renderer.content, do_fill, do_stroke, FillRule::NonZero);
+    renderer.content.restore_state();
 }
 
 struct PdfOutline {
@@ -836,7 +845,7 @@ mod tests {
     }
 
     fn rect(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        let mut p = scene.begin_path(style);
+        let mut p = scene.path(style);
         p.move_to(x, y);
         p.line_to(x + w, y);
         p.line_to(x + w, y + h);

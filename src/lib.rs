@@ -1,9 +1,9 @@
 //! `simage` — typed-IR 2D graphics with terminal and PDF outputs.
 //!
 //! Front ends build a [`scene::Scene`] via builder methods and replay it
-//! through a [`renderer::Renderer`]. The crate ships two sinks: `PixmapRenderer`
-//! (terminal raster, in [`terminal`]) and `PdfRenderer` (PDF byte stream,
-//! in [`pdf`]).
+//! through a [`renderer::Renderer`]. The crate ships two renderers:
+//! `PixmapRenderer` (terminal raster, in [`terminal`]) and `PdfRenderer`
+//! (PDF byte stream, in [`pdf`]).
 //!
 //! Native targets compile the full pipeline:
 //! - [`text`] — Liberation Sans embedded, glyph measurement and outline.
@@ -27,7 +27,7 @@ pub mod scene;
 pub mod wire;
 
 // VERB_* constants are emitted for non-Rust hosts (JS, Python); Rust uses
-// `ir::verb` directly.
+// the `scene::Verb` enum directly.
 #[path = "wire/frame_capnp.rs"]
 #[allow(dead_code)]
 mod frame_capnp;

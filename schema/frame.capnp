@@ -252,7 +252,7 @@ struct Message {
     }
 }
 
-# Verb constants (mirrored in simage::ir::verb on the Rust side).
+# Verb constants (mirrored in simage::scene::Verb on the Rust side).
 const verbMove  :UInt8 = 0;
 const verbLine  :UInt8 = 1;
 const verbQuad  :UInt8 = 2;

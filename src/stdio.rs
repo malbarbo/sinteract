@@ -238,7 +238,7 @@ mod tests {
 
         let mut scene = Scene::new(10.0, 10.0);
         {
-            let mut p = scene.begin_path(PathStyle {
+            let mut p = scene.path(PathStyle {
                 fill: Paint::rgba(1, 2, 3, 1.0),
                 ..PathStyle::default()
             });
