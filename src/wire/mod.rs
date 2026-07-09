@@ -449,22 +449,42 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
 }
 
 fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
-    b.set_verbs(&verbs_to_bytes(&c.verbs));
+    b.set_verbs(&verbs_to_bytes(c.verbs()));
     b.set_fill_rule(fill_rule_to_wire(c.fill_rule));
-    let mut out = b.init_coords(c.coords.len() as u32);
-    for (i, &v) in c.coords.iter().enumerate() {
+    let coords = c.coords();
+    let mut out = b.init_coords(coords.len() as u32);
+    for (i, &v) in coords.iter().enumerate() {
         out.set(i as u32, v);
     }
 }
 
 fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, Error> {
-    let coords: Vec<f32> = r.get_coords()?.iter().collect();
-    let verbs = parse_verbs(r.get_verbs()?, coords.len())?;
-    Ok(ClipPath {
-        verbs,
-        coords,
-        fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
-    })
+    let coords = r.get_coords()?;
+    let verbs = parse_verbs(r.get_verbs()?, coords.len() as usize)?;
+    let mut b = ClipPath::builder(fill_rule_from_wire(r.get_fill_rule()?));
+    let mut i = 0u32;
+    for v in verbs {
+        b = match v {
+            Verb::Move => b.move_to(coords.get(i), coords.get(i + 1)),
+            Verb::Line => b.line_to(coords.get(i), coords.get(i + 1)),
+            Verb::Quad => b.quad_to(
+                coords.get(i),
+                coords.get(i + 1),
+                coords.get(i + 2),
+                coords.get(i + 3),
+            ),
+            Verb::Cubic => b.cubic_to(
+                coords.get(i),
+                coords.get(i + 1),
+                coords.get(i + 2),
+                coords.get(i + 3),
+                coords.get(i + 4),
+                coords.get(i + 5),
+            ),
+        };
+        i += v.coords() as u32;
+    }
+    Ok(b.build())
 }
 
 fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &Bitmap) {
@@ -579,18 +599,37 @@ fn write_path_parts(
 
 fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
     let style = read_path_style(r.get_style()?)?;
-    let coords: Vec<f32> = r.get_coords()?.iter().collect();
-    let verbs = parse_verbs(r.get_verbs()?, coords.len())?;
-    Ok(Path {
-        style,
-        verbs,
-        coords,
-    })
+    let coords = r.get_coords()?;
+    let verbs = parse_verbs(r.get_verbs()?, coords.len() as usize)?;
+    let mut b = Path::builder(style);
+    let mut i = 0u32;
+    for v in verbs {
+        b = match v {
+            Verb::Move => b.move_to(coords.get(i), coords.get(i + 1)),
+            Verb::Line => b.line_to(coords.get(i), coords.get(i + 1)),
+            Verb::Quad => b.quad_to(
+                coords.get(i),
+                coords.get(i + 1),
+                coords.get(i + 2),
+                coords.get(i + 3),
+            ),
+            Verb::Cubic => b.cubic_to(
+                coords.get(i),
+                coords.get(i + 1),
+                coords.get(i + 2),
+                coords.get(i + 3),
+                coords.get(i + 4),
+                coords.get(i + 5),
+            ),
+        };
+        i += v.coords() as u32;
+    }
+    Ok(b.build())
 }
 
 fn write_element(b: element::Builder<'_>, node: &Element) {
     match node {
-        Element::Path(p) => write_path_parts(b.init_path(), &p.style, &p.verbs, &p.coords),
+        Element::Path(p) => write_path_parts(b.init_path(), &p.style, p.verbs(), p.coords()),
         Element::Clipped { clip, elements } => write_clipped(b.init_clipped(), clip, elements),
         Element::Text(t) => write_text_node(b.init_text(), t),
         Element::Bitmap(n) => write_bitmap(b.init_bitmap(), n),
@@ -1255,11 +1294,14 @@ mod tests {
         // clip so the nested elements list is non-trivial.
         let mut scene = Scene::new(50.0, 50.0);
         {
-            let mut clip = scene.clip(ClipPath {
-                verbs: vec![Verb::Move, Verb::Line, Verb::Quad, Verb::Line],
-                coords: vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0],
-                fill_rule: FillRule::EvenOdd,
-            });
+            let mut clip = scene.clip(
+                ClipPath::builder(FillRule::EvenOdd)
+                    .move_to(0.0, 0.0)
+                    .line_to(30.0, 0.0)
+                    .quad_to(40.0, 25.0, 30.0, 40.0)
+                    .line_to(0.0, 40.0)
+                    .build(),
+            );
             let mut p = clip.path(PathStyle::default());
             p.move_to(0.0, 0.0);
             p.line_to(10.0, 10.0);
@@ -1271,12 +1313,12 @@ mod tests {
                     panic!("expected Clipped, got {:?}", d.elements[0]);
                 };
                 assert_eq!(
-                    clip.verbs,
-                    vec![Verb::Move, Verb::Line, Verb::Quad, Verb::Line]
+                    clip.verbs(),
+                    [Verb::Move, Verb::Line, Verb::Quad, Verb::Line]
                 );
                 assert_eq!(
-                    clip.coords,
-                    vec![0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0]
+                    clip.coords(),
+                    [0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0]
                 );
                 assert_eq!(clip.fill_rule, FillRule::EvenOdd);
                 assert_eq!(elements.len(), 1);

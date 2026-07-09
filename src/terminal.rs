@@ -37,8 +37,8 @@ use tiny_skia::{
 
 use crate::renderer::{Renderer, RendererToken};
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, TextNode,
-    Verb,
+    Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, Segment,
+    TextNode,
 };
 use crate::sixel;
 
@@ -303,31 +303,20 @@ impl Renderer for PixmapRenderer {
         self.flush_path();
         let parent = self.clip_stack.last();
         let mut builder = PathBuilder::new();
-        let mut i = 0usize;
-        for &v in &clip.verbs {
-            let need = v.coords();
-            if clip.coords.len() < i + need {
-                break;
+        for seg in clip.segments() {
+            match seg {
+                Segment::Move { x, y } => builder.move_to(x, y),
+                Segment::Line { x, y } => builder.line_to(x, y),
+                Segment::Quad { cx, cy, x, y } => builder.quad_to(cx, cy, x, y),
+                Segment::Cubic {
+                    c1x,
+                    c1y,
+                    c2x,
+                    c2y,
+                    x,
+                    y,
+                } => builder.cubic_to(c1x, c1y, c2x, c2y, x, y),
             }
-            match v {
-                Verb::Move => builder.move_to(clip.coords[i], clip.coords[i + 1]),
-                Verb::Line => builder.line_to(clip.coords[i], clip.coords[i + 1]),
-                Verb::Quad => builder.quad_to(
-                    clip.coords[i],
-                    clip.coords[i + 1],
-                    clip.coords[i + 2],
-                    clip.coords[i + 3],
-                ),
-                Verb::Cubic => builder.cubic_to(
-                    clip.coords[i],
-                    clip.coords[i + 1],
-                    clip.coords[i + 2],
-                    clip.coords[i + 3],
-                    clip.coords[i + 4],
-                    clip.coords[i + 5],
-                ),
-            }
-            i += need;
         }
         // SVG `<clipPath>` semantics: sub-paths are filled, so close before
         // intersecting. tiny_skia tolerates an explicit close on an already-
@@ -1422,7 +1411,7 @@ mod tests {
     // Renderer builder API + streaming entry points
     // -----------------------------------------------------------------------
 
-    use crate::scene::{ClipPath, Verb};
+    use crate::scene::ClipPath;
 
     #[test]
     fn builder_api_paints_rectangle() {
@@ -1450,11 +1439,12 @@ mod tests {
         let mut r = PixmapRenderer::new(None, 1.0);
         r.begin(20.0, 20.0);
         {
-            let clip = ClipPath {
-                verbs: vec![Verb::Move, Verb::Line, Verb::Line, Verb::Line],
-                coords: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
-                fill_rule: FillRule::NonZero,
-            };
+            let clip = ClipPath::builder(FillRule::NonZero)
+                .move_to(0.0, 0.0)
+                .line_to(10.0, 0.0)
+                .line_to(10.0, 10.0)
+                .line_to(0.0, 10.0)
+                .build();
             let mut c = r.clip(clip);
             let mut p = c.path(solid(0, 0, 255));
             p.move_to(0.0, 0.0)
@@ -1507,11 +1497,12 @@ mod tests {
         // clip_pop after.
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let clip = ClipPath {
-                verbs: vec![Verb::Move, Verb::Line, Verb::Line, Verb::Line],
-                coords: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
-                fill_rule: FillRule::NonZero,
-            };
+            let clip = ClipPath::builder(FillRule::NonZero)
+                .move_to(0.0, 0.0)
+                .line_to(10.0, 0.0)
+                .line_to(10.0, 10.0)
+                .line_to(0.0, 10.0)
+                .build();
             let mut clip_scope = scene.clip(clip);
             rect_path(&mut clip_scope, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);
         }

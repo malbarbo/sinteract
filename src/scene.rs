@@ -202,11 +202,40 @@ impl FillRule {
 /// [`Path`]). Sub-paths are treated as implicitly closed — callers do not
 /// have to add a final line back to the starting point. `fill_rule` decides
 /// which sub-regions count as "inside".
+///
+/// `verbs`/`coords` are private and always agree in length — the only way to
+/// build one is [`ClipPath::builder`], which pushes verbs and coords together
+/// so a mismatch is structurally impossible. Read the geometry back via
+/// [`ClipPath::segments`].
 #[derive(Clone, Debug, Default)]
 pub struct ClipPath {
-    pub verbs: Vec<Verb>,
-    pub coords: Vec<f32>,
+    verbs: Vec<Verb>,
+    coords: Vec<f32>,
     pub fill_rule: FillRule,
+}
+
+impl ClipPath {
+    /// Start building a clip with the given fill rule. Each geometry method
+    /// pushes a verb and its coordinates together, so the pair can never fall
+    /// out of sync.
+    pub fn builder(fill_rule: FillRule) -> ClipPathBuilder {
+        ClipPathBuilder::new(fill_rule)
+    }
+
+    /// Raw wire verbs. Kept in lock-step with [`Self::coords`].
+    pub fn verbs(&self) -> &[Verb] {
+        &self.verbs
+    }
+
+    /// Raw coordinate stream. Read [`Self::segments`] for a typed walk.
+    pub fn coords(&self) -> &[f32] {
+        &self.coords
+    }
+
+    /// Typed segment walk over the verb/coord streams.
+    pub fn segments(&self) -> Segments<'_> {
+        Segments::new(&self.verbs, &self.coords)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -411,7 +440,7 @@ impl Verb {
         }
     }
 
-    /// Number of floats this verb pulls from [`Path::coords`].
+    /// Number of floats this verb pulls from the coord stream.
     pub fn coords(self) -> usize {
         match self {
             Self::Move | Self::Line => 2,
@@ -421,18 +450,167 @@ impl Verb {
     }
 }
 
+/// One decoded path segment — a verb paired with its coordinates. Yielded by
+/// [`Path::segments`] / [`ClipPath::segments`] so backends walk typed geometry
+/// instead of indexing parallel `verbs`/`coords` arrays.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Segment {
+    Move {
+        x: f32,
+        y: f32,
+    },
+    Line {
+        x: f32,
+        y: f32,
+    },
+    Quad {
+        cx: f32,
+        cy: f32,
+        x: f32,
+        y: f32,
+    },
+    Cubic {
+        c1x: f32,
+        c1y: f32,
+        c2x: f32,
+        c2y: f32,
+        x: f32,
+        y: f32,
+    },
+}
+
+/// Iterator over a verb/coord pair, yielding one [`Segment`] per verb. Only
+/// constructed from a [`Path`]/[`ClipPath`] whose streams already agree in
+/// length, so the coord slicing never goes out of bounds.
+#[must_use = "Segments yields nothing unless iterated"]
+pub struct Segments<'a> {
+    verbs: std::slice::Iter<'a, Verb>,
+    coords: &'a [f32],
+    i: usize,
+}
+
+impl<'a> Segments<'a> {
+    fn new(verbs: &'a [Verb], coords: &'a [f32]) -> Self {
+        Self {
+            verbs: verbs.iter(),
+            coords,
+            i: 0,
+        }
+    }
+}
+
+impl Iterator for Segments<'_> {
+    type Item = Segment;
+
+    fn next(&mut self) -> Option<Segment> {
+        let &v = self.verbs.next()?;
+        let c = &self.coords[self.i..];
+        let seg = match v {
+            Verb::Move => Segment::Move { x: c[0], y: c[1] },
+            Verb::Line => Segment::Line { x: c[0], y: c[1] },
+            Verb::Quad => Segment::Quad {
+                cx: c[0],
+                cy: c[1],
+                x: c[2],
+                y: c[3],
+            },
+            Verb::Cubic => Segment::Cubic {
+                c1x: c[0],
+                c1y: c[1],
+                c2x: c[2],
+                c2y: c[3],
+                x: c[4],
+                y: c[5],
+            },
+        };
+        self.i += v.coords();
+        Some(seg)
+    }
+}
+
+/// Expand an SVG endpoint arc from `(x1, y1)` to `(x, y)` into cubic segments,
+/// appending `Cubic` verbs and their coords in lock-step. Returns `false` for
+/// a degenerate arc — the caller emits a line instead. Shared by the path and
+/// clip builders so the kurbo expansion lives in one place.
+#[allow(clippy::too_many_arguments)]
+fn push_arc_cubics(
+    verbs: &mut Vec<Verb>,
+    coords: &mut Vec<f32>,
+    x1: f32,
+    y1: f32,
+    rx: f32,
+    ry: f32,
+    rotation_deg: f32,
+    large_arc: bool,
+    sweep: bool,
+    x: f32,
+    y: f32,
+) -> bool {
+    let svg_arc = kurbo::SvgArc {
+        from: kurbo::Point::new(x1 as f64, y1 as f64),
+        to: kurbo::Point::new(x as f64, y as f64),
+        radii: kurbo::Vec2::new(rx as f64, ry as f64),
+        x_rotation: (rotation_deg as f64).to_radians(),
+        large_arc,
+        sweep,
+    };
+    let Some(arc) = kurbo::Arc::from_svg_arc(&svg_arc) else {
+        return false;
+    };
+    for el in arc.append_iter(ARC_TOLERANCE) {
+        if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
+            verbs.push(Verb::Cubic);
+            coords.extend([
+                p1.x as f32,
+                p1.y as f32,
+                p2.x as f32,
+                p2.y as f32,
+                p3.x as f32,
+                p3.y as f32,
+            ]);
+        }
+    }
+    true
+}
+
 /// A materialized 2D path: a style plus a flat verb stream and its
 /// floating-point arguments.
 ///
 /// `verbs[i]` pulls 2 (move/line), 4 (quad), or 6 (cubic) floats from
-/// `coords` in order. The pair always agrees in length — frontends build
-/// it via [`Scene::path`] and the [`PathBuilder`] returned, and the wire
-/// decoder rejects mismatched paths.
+/// `coords` in order. `verbs`/`coords` are private and always agree in length
+/// — the only way to build one is a [`PathBuilder`] (via [`Path::builder`] or
+/// the [`Scene::path`] scope), which pushes verbs and coords together so a
+/// mismatch is structurally impossible. Read the geometry back via
+/// [`Path::segments`].
 #[derive(Clone, Debug, Default)]
 pub struct Path {
     pub style: PathStyle,
-    pub verbs: Vec<Verb>,
-    pub coords: Vec<f32>,
+    verbs: Vec<Verb>,
+    coords: Vec<f32>,
+}
+
+impl Path {
+    /// Start building a path with the given style. Each geometry method pushes
+    /// a verb and its coordinates together, so the pair can never fall out of
+    /// sync.
+    pub fn builder(style: PathStyle) -> PathBuilder {
+        PathBuilder::new(style)
+    }
+
+    /// Raw wire verbs. Kept in lock-step with [`Self::coords`].
+    pub fn verbs(&self) -> &[Verb] {
+        &self.verbs
+    }
+
+    /// Raw coordinate stream. Read [`Self::segments`] for a typed walk.
+    pub fn coords(&self) -> &[f32] {
+        &self.coords
+    }
+
+    /// Typed segment walk over the verb/coord streams.
+    pub fn segments(&self) -> Segments<'_> {
+        Segments::new(&self.verbs, &self.coords)
+    }
 }
 
 /// One node of a [`Scene`]. A path bundles all its segments; clips wrap the
@@ -450,18 +628,18 @@ pub enum Element {
 
 /// Materialized event log produced by Python (or any other front end) and
 /// consumed by every renderer. Built via RAII guards — [`Self::path`]
-/// returns a [`PathBuilder`] that commits the path on drop, and
-/// [`Self::clip`] / [`Self::clip_rect`] return a [`ClipBuilder`] that
+/// returns a [`PathScope`] that commits the path on drop, and
+/// [`Self::clip`] / [`Self::clip_rect`] return a [`ClipScope`] that
 /// accumulates its own nested elements and commits an [`Element::Clipped`]
 /// on drop. The list is replayed once via [`Self::render`].
 ///
-/// Because path geometry only flows through `PathBuilder` and clip scope is
-/// captured by `ClipBuilder`'s own element vector, several footguns of the
+/// Because path geometry only flows through `PathScope` and clip scope is
+/// captured by `ClipScope`'s own element vector, several footguns of the
 /// older flat API are statically impossible: you cannot append path verbs
 /// without an open path, commit an empty path, unbalance the clip stack
 /// (there is no separate pop), or interleave a clip with a half-built path.
 ///
-/// Arcs entered via [`PathBuilder::arc_to`] are pre-expanded to cubics so
+/// Arcs entered via [`PathScope::arc_to`] are pre-expanded to cubics so
 /// renderers only see line / quad / cubic primitives.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
@@ -482,28 +660,25 @@ impl Scene {
         }
     }
 
-    /// Begin a new path. Returns a [`PathBuilder`] whose `move_to` / `line_to`
+    /// Begin a new path. Returns a [`PathScope`] whose `move_to` / `line_to`
     /// / `quad_to` / `cubic_to` / `arc_to` methods append verbs; the path is
     /// committed to [`Self::elements`] on drop, or discarded if no geometry was
     /// recorded.
-    pub fn path(&mut self, style: PathStyle) -> PathBuilder<'_> {
-        PathBuilder {
+    pub fn path(&mut self, style: PathStyle) -> PathScope<'_> {
+        PathScope {
             scene: self,
-            style,
-            verbs: Vec::new(),
-            coords: Vec::new(),
-            last_point: None,
+            builder: PathBuilder::new(style),
         }
     }
 
-    /// Push an arbitrary clip path. Returns a [`ClipBuilder`] that accumulates
+    /// Push an arbitrary clip path. Returns a [`ClipScope`] that accumulates
     /// its own nested elements; on drop, commits an [`Element::Clipped`] to
     /// the parent scene. The builder `Deref`s to a fresh inner [`Scene`] so
     /// all draw methods remain reachable; nested clips just call
     /// [`Self::clip`] through that `Deref` and commit in the right order.
-    pub fn clip(&mut self, clip: ClipPath) -> ClipBuilder<'_> {
+    pub fn clip(&mut self, clip: ClipPath) -> ClipScope<'_> {
         let inner = Scene::new(self.width, self.height);
-        ClipBuilder {
+        ClipScope {
             parent: self,
             clip,
             inner,
@@ -521,7 +696,7 @@ impl Scene {
         h: f32,
         angle_deg: f32,
         fill_rule: FillRule,
-    ) -> ClipBuilder<'_> {
+    ) -> ClipScope<'_> {
         let hw = w / 2.0;
         let hh = h / 2.0;
         let theta = angle_deg * std::f32::consts::PI / 180.0;
@@ -532,11 +707,14 @@ impl Scene {
         let p1 = corner(hw, -hh);
         let p2 = corner(hw, hh);
         let p3 = corner(-hw, hh);
-        self.clip(ClipPath {
-            verbs: vec![Verb::Move, Verb::Line, Verb::Line, Verb::Line],
-            coords: vec![p0.0, p0.1, p1.0, p1.1, p2.0, p2.1, p3.0, p3.1],
-            fill_rule,
-        })
+        self.clip(
+            ClipPath::builder(fill_rule)
+                .move_to(p0.0, p0.1)
+                .line_to(p1.0, p1.1)
+                .line_to(p2.0, p2.1)
+                .line_to(p3.0, p3.1)
+                .build(),
+        )
     }
 
     pub fn text(&mut self, node: TextNode) {
@@ -555,38 +733,31 @@ impl Scene {
     }
 }
 
-/// Path geometry accumulator returned by [`Scene::path`]. Holds the style
-/// and the in-flight verb/coord buffers; on drop, commits a
-/// [`Element::Path`] to the parent [`Scene`] (or discards if no geometry
-/// was recorded).
-#[must_use = "PathBuilder commits the path on drop; bind it so geometry methods can run"]
-pub struct PathBuilder<'a> {
+/// Active path scope returned by [`Scene::path`]. Wraps a [`PathBuilder`] and
+/// a borrow of the parent [`Scene`]; its `&mut self` geometry methods let a
+/// path be built imperatively (across statements and loops), and on drop it
+/// commits the finished [`Element::Path`] to the scene (or discards it if no
+/// geometry was recorded). Each method just forwards to the wrapped by-value
+/// [`PathBuilder`], so the atomic verb/coord push lives only there.
+#[must_use = "PathScope commits the path on drop; bind it so geometry methods can run"]
+pub struct PathScope<'a> {
     scene: &'a mut Scene,
-    style: PathStyle,
-    verbs: Vec<Verb>,
-    coords: Vec<f32>,
-    last_point: Option<(f32, f32)>,
+    builder: PathBuilder,
 }
 
-impl<'a> PathBuilder<'a> {
+impl PathScope<'_> {
     pub fn move_to(&mut self, x: f32, y: f32) -> &mut Self {
-        self.verbs.push(Verb::Move);
-        self.coords.extend([x, y]);
-        self.last_point = Some((x, y));
+        self.builder = std::mem::take(&mut self.builder).move_to(x, y);
         self
     }
 
     pub fn line_to(&mut self, x: f32, y: f32) -> &mut Self {
-        self.verbs.push(Verb::Line);
-        self.coords.extend([x, y]);
-        self.last_point = Some((x, y));
+        self.builder = std::mem::take(&mut self.builder).line_to(x, y);
         self
     }
 
     pub fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) -> &mut Self {
-        self.verbs.push(Verb::Quad);
-        self.coords.extend([cx, cy, x, y]);
-        self.last_point = Some((x, y));
+        self.builder = std::mem::take(&mut self.builder).quad_to(cx, cy, x, y);
         self
     }
 
@@ -599,15 +770,10 @@ impl<'a> PathBuilder<'a> {
         x: f32,
         y: f32,
     ) -> &mut Self {
-        self.verbs.push(Verb::Cubic);
-        self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
-        self.last_point = Some((x, y));
+        self.builder = std::mem::take(&mut self.builder).cubic_to(c1x, c1y, c2x, c2y, x, y);
         self
     }
 
-    /// Append an SVG endpoint arc, pre-expanding to cubic segments. Mirrors
-    /// the text parser's `A` handling: with no current point, falls back to
-    /// `move_to(x, y)`; degenerate arcs collapse to a line.
     #[allow(clippy::too_many_arguments)]
     pub fn arc_to(
         &mut self,
@@ -619,50 +785,18 @@ impl<'a> PathBuilder<'a> {
         x: f32,
         y: f32,
     ) -> &mut Self {
-        let Some((x1, y1)) = self.last_point else {
-            return self.move_to(x, y);
-        };
-        let svg_arc = kurbo::SvgArc {
-            from: kurbo::Point::new(x1 as f64, y1 as f64),
-            to: kurbo::Point::new(x as f64, y as f64),
-            radii: kurbo::Vec2::new(rx as f64, ry as f64),
-            x_rotation: (rotation_deg as f64).to_radians(),
-            large_arc,
-            sweep,
-        };
-        match kurbo::Arc::from_svg_arc(&svg_arc) {
-            Some(arc) => {
-                for el in arc.append_iter(ARC_TOLERANCE) {
-                    if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
-                        self.verbs.push(Verb::Cubic);
-                        self.coords.extend([
-                            p1.x as f32,
-                            p1.y as f32,
-                            p2.x as f32,
-                            p2.y as f32,
-                            p3.x as f32,
-                            p3.y as f32,
-                        ]);
-                    }
-                }
-                self.last_point = Some((x, y));
-                self
-            }
-            None => self.line_to(x, y),
-        }
+        self.builder =
+            std::mem::take(&mut self.builder).arc_to(rx, ry, rotation_deg, large_arc, sweep, x, y);
+        self
     }
 }
 
-impl<'a> Drop for PathBuilder<'a> {
+impl Drop for PathScope<'_> {
     fn drop(&mut self) {
-        if self.verbs.is_empty() {
-            return;
+        let builder = std::mem::take(&mut self.builder);
+        if !builder.verbs.is_empty() {
+            self.scene.elements.push(Element::Path(builder.build()));
         }
-        self.scene.elements.push(Element::Path(Path {
-            style: std::mem::take(&mut self.style),
-            verbs: std::mem::take(&mut self.verbs),
-            coords: std::mem::take(&mut self.coords),
-        }));
     }
 }
 
@@ -674,29 +808,29 @@ impl<'a> Drop for PathBuilder<'a> {
 /// balanced clip nesting (no separate pop).
 ///
 /// Nested clips work the usual way: calling [`Scene::clip`] through the
-/// builder's `Deref` returns a child `ClipBuilder` borrowing the inner
+/// builder's `Deref` returns a child `ClipScope` borrowing the inner
 /// scene, and committing inside-out leaves a well-formed tree.
-#[must_use = "ClipBuilder commits the clip on drop; bind it where the clip should end"]
-pub struct ClipBuilder<'a> {
+#[must_use = "ClipScope commits the clip on drop; bind it where the clip should end"]
+pub struct ClipScope<'a> {
     parent: &'a mut Scene,
     clip: ClipPath,
     inner: Scene,
 }
 
-impl<'a> std::ops::Deref for ClipBuilder<'a> {
+impl<'a> std::ops::Deref for ClipScope<'a> {
     type Target = Scene;
     fn deref(&self) -> &Scene {
         &self.inner
     }
 }
 
-impl<'a> std::ops::DerefMut for ClipBuilder<'a> {
+impl<'a> std::ops::DerefMut for ClipScope<'a> {
     fn deref_mut(&mut self) -> &mut Scene {
         &mut self.inner
     }
 }
 
-impl<'a> Drop for ClipBuilder<'a> {
+impl<'a> Drop for ClipScope<'a> {
     fn drop(&mut self) {
         let clip = std::mem::take(&mut self.clip);
         let elements = std::mem::take(&mut self.inner.elements);
@@ -706,3 +840,304 @@ impl<'a> Drop for ClipBuilder<'a> {
     }
 }
 
+/// Owned builder for a [`Path`], returned by [`Path::builder`]. Each geometry
+/// method consumes and returns `self`, appending a verb and its coordinates
+/// together so the verb/coord streams cannot fall out of sync; [`Self::build`]
+/// moves the parts into the finished path. Arcs entered via [`Self::arc_to`]
+/// are pre-expanded to cubics. [`Scene::path`] drives one to commit straight
+/// into a scene.
+#[derive(Default)]
+#[must_use = "PathBuilder yields a Path only when build() is called"]
+pub struct PathBuilder {
+    style: PathStyle,
+    verbs: Vec<Verb>,
+    coords: Vec<f32>,
+    last_point: Option<(f32, f32)>,
+}
+
+impl PathBuilder {
+    fn new(style: PathStyle) -> Self {
+        Self {
+            style,
+            verbs: Vec::new(),
+            coords: Vec::new(),
+            last_point: None,
+        }
+    }
+
+    pub fn move_to(mut self, x: f32, y: f32) -> Self {
+        self.verbs.push(Verb::Move);
+        self.coords.extend([x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn line_to(mut self, x: f32, y: f32) -> Self {
+        self.verbs.push(Verb::Line);
+        self.coords.extend([x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
+        self.verbs.push(Verb::Quad);
+        self.coords.extend([cx, cy, x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
+        self.verbs.push(Verb::Cubic);
+        self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    /// Append an SVG endpoint arc, pre-expanding to cubic segments. Mirrors
+    /// the text parser's `A` handling: with no current point, falls back to
+    /// `move_to(x, y)`; degenerate arcs collapse to a line.
+    #[allow(clippy::too_many_arguments)]
+    pub fn arc_to(
+        mut self,
+        rx: f32,
+        ry: f32,
+        rotation_deg: f32,
+        large_arc: bool,
+        sweep: bool,
+        x: f32,
+        y: f32,
+    ) -> Self {
+        let Some((x1, y1)) = self.last_point else {
+            return self.move_to(x, y);
+        };
+        if push_arc_cubics(
+            &mut self.verbs,
+            &mut self.coords,
+            x1,
+            y1,
+            rx,
+            ry,
+            rotation_deg,
+            large_arc,
+            sweep,
+            x,
+            y,
+        ) {
+            self.last_point = Some((x, y));
+            self
+        } else {
+            self.line_to(x, y)
+        }
+    }
+
+    pub fn build(self) -> Path {
+        Path {
+            style: self.style,
+            verbs: self.verbs,
+            coords: self.coords,
+        }
+    }
+}
+
+/// Owned builder for a [`ClipPath`], returned by [`ClipPath::builder`]. Each
+/// geometry method consumes and returns `self`, appending a verb and its
+/// coordinates together so the verb/coord streams cannot fall out of sync;
+/// [`Self::build`] moves the parts into the finished clip. Sub-paths are
+/// implicitly closed by the renderers, so no closing line is required.
+#[must_use = "ClipPathBuilder yields a ClipPath only when build() is called"]
+pub struct ClipPathBuilder {
+    verbs: Vec<Verb>,
+    coords: Vec<f32>,
+    fill_rule: FillRule,
+    last_point: Option<(f32, f32)>,
+}
+
+impl ClipPathBuilder {
+    fn new(fill_rule: FillRule) -> Self {
+        Self {
+            verbs: Vec::new(),
+            coords: Vec::new(),
+            fill_rule,
+            last_point: None,
+        }
+    }
+
+    pub fn move_to(mut self, x: f32, y: f32) -> Self {
+        self.verbs.push(Verb::Move);
+        self.coords.extend([x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn line_to(mut self, x: f32, y: f32) -> Self {
+        self.verbs.push(Verb::Line);
+        self.coords.extend([x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
+        self.verbs.push(Verb::Quad);
+        self.coords.extend([cx, cy, x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
+        self.verbs.push(Verb::Cubic);
+        self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
+        self.last_point = Some((x, y));
+        self
+    }
+
+    /// Append an SVG endpoint arc, pre-expanding to cubics — mirrors
+    /// [`PathBuilder::arc_to`]. With no current point, falls back to
+    /// `move_to(x, y)`; degenerate arcs collapse to a line.
+    #[allow(clippy::too_many_arguments)]
+    pub fn arc_to(
+        mut self,
+        rx: f32,
+        ry: f32,
+        rotation_deg: f32,
+        large_arc: bool,
+        sweep: bool,
+        x: f32,
+        y: f32,
+    ) -> Self {
+        let Some((x1, y1)) = self.last_point else {
+            return self.move_to(x, y);
+        };
+        if push_arc_cubics(
+            &mut self.verbs,
+            &mut self.coords,
+            x1,
+            y1,
+            rx,
+            ry,
+            rotation_deg,
+            large_arc,
+            sweep,
+            x,
+            y,
+        ) {
+            self.last_point = Some((x, y));
+            self
+        } else {
+            self.line_to(x, y)
+        }
+    }
+
+    pub fn build(self) -> ClipPath {
+        ClipPath {
+            verbs: self.verbs,
+            coords: self.coords,
+            fill_rule: self.fill_rule,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Total floats a verb stream consumes — the invariant every builder must
+    /// preserve.
+    fn coords_arity(verbs: &[Verb]) -> usize {
+        verbs.iter().map(|v| v.coords()).sum()
+    }
+
+    #[test]
+    fn builders_keep_streams_in_lockstep() {
+        let clip = ClipPath::builder(FillRule::EvenOdd)
+            .move_to(0.0, 0.0)
+            .line_to(10.0, 0.0)
+            .quad_to(15.0, 5.0, 10.0, 10.0)
+            .cubic_to(8.0, 8.0, 4.0, 6.0, 0.0, 10.0)
+            .build();
+        assert_eq!(
+            clip.verbs(),
+            [Verb::Move, Verb::Line, Verb::Quad, Verb::Cubic]
+        );
+        assert_eq!(coords_arity(clip.verbs()), clip.coords().len());
+        assert_eq!(clip.fill_rule, FillRule::EvenOdd);
+    }
+
+    #[test]
+    fn segments_decodes_each_verb() {
+        let clip = ClipPath::builder(FillRule::NonZero)
+            .move_to(1.0, 2.0)
+            .line_to(3.0, 4.0)
+            .quad_to(5.0, 6.0, 7.0, 8.0)
+            .cubic_to(9.0, 10.0, 11.0, 12.0, 13.0, 14.0)
+            .build();
+        let segs: Vec<_> = clip.segments().collect();
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Move { x: 1.0, y: 2.0 },
+                Segment::Line { x: 3.0, y: 4.0 },
+                Segment::Quad {
+                    cx: 5.0,
+                    cy: 6.0,
+                    x: 7.0,
+                    y: 8.0
+                },
+                Segment::Cubic {
+                    c1x: 9.0,
+                    c1y: 10.0,
+                    c2x: 11.0,
+                    c2y: 12.0,
+                    x: 13.0,
+                    y: 14.0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn clip_builder_arc_to_expands_to_cubics_in_lockstep() {
+        let clip = ClipPath::builder(FillRule::NonZero)
+            .move_to(0.0, 0.0)
+            .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0)
+            .build();
+        // Arc after a current point expands to at least one cubic; the streams
+        // stay balanced regardless of how many the tolerance produced.
+        assert!(clip.verbs().contains(&Verb::Cubic));
+        assert_eq!(coords_arity(clip.verbs()), clip.coords().len());
+    }
+
+    #[test]
+    fn clip_builder_arc_to_without_current_point_moves() {
+        // No prior point: arc_to degrades to a bare move, no cubics.
+        let clip = ClipPath::builder(FillRule::NonZero)
+            .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 10.0)
+            .build();
+        assert_eq!(clip.verbs(), [Verb::Move]);
+        assert_eq!(clip.coords(), [10.0, 10.0]);
+    }
+
+    #[test]
+    fn standalone_path_builder_builds_agreeing_path() {
+        let p = Path::builder(PathStyle::default())
+            .move_to(0.0, 0.0)
+            .line_to(10.0, 0.0)
+            .quad_to(15.0, 5.0, 10.0, 10.0)
+            .build();
+        assert_eq!(p.verbs(), [Verb::Move, Verb::Line, Verb::Quad]);
+        assert_eq!(coords_arity(p.verbs()), p.coords().len());
+    }
+
+    #[test]
+    fn scene_path_builder_commits_agreeing_geometry() {
+        let mut scene = Scene::new(10.0, 10.0);
+        scene
+            .path(PathStyle::default())
+            .move_to(0.0, 0.0)
+            .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0);
+        let Element::Path(p) = &scene.elements[0] else {
+            panic!("expected a path");
+        };
+        // arc_to expands to cubics; whatever the count, the streams agree.
+        assert_eq!(coords_arity(p.verbs()), p.coords().len());
+    }
+}

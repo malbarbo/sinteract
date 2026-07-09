@@ -26,7 +26,7 @@ use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 use crate::renderer::{Renderer, RendererToken};
 use crate::scene::{
     Bitmap, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
-    RadialGradient, Rgba, Stop, TextNode, Verb,
+    RadialGradient, Rgba, Segment, Stop, TextNode,
 };
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -310,30 +310,17 @@ impl Renderer for PdfRenderer {
         self.flush_path();
         self.content.save_state();
         let mut last_point: Option<(f32, f32)> = None;
-        let mut i = 0usize;
-        for &v in &clip.verbs {
-            let need = v.coords();
-            if clip.coords.len() < i + need {
-                break;
-            }
-            match v {
-                Verb::Move => {
-                    let (x, y) = (clip.coords[i], clip.coords[i + 1]);
+        for seg in clip.segments() {
+            match seg {
+                Segment::Move { x, y } => {
                     self.content.move_to(x, y);
                     last_point = Some((x, y));
                 }
-                Verb::Line => {
-                    let (x, y) = (clip.coords[i], clip.coords[i + 1]);
+                Segment::Line { x, y } => {
                     self.content.line_to(x, y);
                     last_point = Some((x, y));
                 }
-                Verb::Quad => {
-                    let (cx, cy, x, y) = (
-                        clip.coords[i],
-                        clip.coords[i + 1],
-                        clip.coords[i + 2],
-                        clip.coords[i + 3],
-                    );
+                Segment::Quad { cx, cy, x, y } => {
                     if let Some((p0x, p0y)) = last_point {
                         let c1x = p0x + 2.0 / 3.0 * (cx - p0x);
                         let c1y = p0y + 2.0 / 3.0 * (cy - p0y);
@@ -343,20 +330,18 @@ impl Renderer for PdfRenderer {
                     }
                     last_point = Some((x, y));
                 }
-                Verb::Cubic => {
-                    let (c1x, c1y, c2x, c2y, x, y) = (
-                        clip.coords[i],
-                        clip.coords[i + 1],
-                        clip.coords[i + 2],
-                        clip.coords[i + 3],
-                        clip.coords[i + 4],
-                        clip.coords[i + 5],
-                    );
+                Segment::Cubic {
+                    c1x,
+                    c1y,
+                    c2x,
+                    c2y,
+                    x,
+                    y,
+                } => {
                     self.content.cubic_to(c1x, c1y, c2x, c2y, x, y);
                     last_point = Some((x, y));
                 }
             }
-            i += need;
         }
         self.content.close_path();
         match clip.fill_rule {

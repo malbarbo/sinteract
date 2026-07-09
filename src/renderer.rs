@@ -22,7 +22,7 @@
 //!   `renderer.path(style)` returns a [`PathScope`] that brackets
 //!   `path_begin`/`path_end`; `renderer.clip(c)` returns a [`ClipScope`]
 //!   that brackets `clip_push`/`clip_pop`. Same shape as
-//!   [`crate::scene::PathBuilder`]/[`crate::scene::ClipBuilder`] on the
+//!   [`crate::scene::PathScope`]/[`crate::scene::ClipScope`] on the
 //!   scene side.
 //!
 //! ## Backend surface (implementor-only)
@@ -38,7 +38,7 @@
 
 use std::io::Read;
 
-use crate::scene::{Bitmap, ClipPath, Element, Path, PathStyle, Scene, TextNode, Verb};
+use crate::scene::{Bitmap, ClipPath, Element, Path, PathStyle, Scene, Segment, TextNode};
 
 /// Proof-of-call witness for the token-gated streaming primitives. The
 /// type is `pub` so it can appear in trait method signatures, but its
@@ -136,27 +136,27 @@ pub trait Renderer {
         ClipScope { renderer: self }
     }
 
-    /// Replay a complete [`Path`] through the streaming primitives. Walks
-    /// `path.verbs`/`path.coords`, calling `path_begin`/`*_to`/`path_end`
-    /// with internally-minted tokens. Malformed runs (coords too short for
-    /// a verb) stop at the offending verb; `path_end` still runs.
+    /// Replay a complete [`Path`] through the streaming primitives, calling
+    /// `path_begin`/`*_to`/`path_end` with internally-minted tokens. The
+    /// path's verb/coord streams agree by construction, so the walk cannot
+    /// desync.
     fn draw_path(&mut self, path: &Path) {
         let tok = RendererToken::new();
         self.path_begin(tok, &path.style);
-        let mut i = 0usize;
-        for &v in &path.verbs {
-            let need = v.coords();
-            if path.coords.len() < i + need {
-                break;
+        for seg in path.segments() {
+            match seg {
+                Segment::Move { x, y } => self.move_to(tok, x, y),
+                Segment::Line { x, y } => self.line_to(tok, x, y),
+                Segment::Quad { cx, cy, x, y } => self.quad_to(tok, cx, cy, x, y),
+                Segment::Cubic {
+                    c1x,
+                    c1y,
+                    c2x,
+                    c2y,
+                    x,
+                    y,
+                } => self.cubic_to(tok, c1x, c1y, c2x, c2y, x, y),
             }
-            let c = &path.coords[i..];
-            match v {
-                Verb::Move => self.move_to(tok, c[0], c[1]),
-                Verb::Line => self.line_to(tok, c[0], c[1]),
-                Verb::Quad => self.quad_to(tok, c[0], c[1], c[2], c[3]),
-                Verb::Cubic => self.cubic_to(tok, c[0], c[1], c[2], c[3], c[4], c[5]),
-            }
-            i += need;
         }
         self.path_end(tok);
     }
