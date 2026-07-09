@@ -15,18 +15,20 @@ kurbo = { version = "0.13", default-features = false, features = ["std"] }
 # the regen command) and committed in `src/wire/frame_capnp.rs` so we do not
 # depend on the Cap'n Proto CLI at build time.
 capnp = "0.25"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Pure-computation deps — no syscalls, so they build for wasm too and let the
+# `text`/`pdf` pipelines run in a browser client.
 ttf-parser = { version = "0.25", default-features = false, features = [
     "std",
     "opentype-layout",
     "glyph-names",
 ] }
+pdf-writer = "0.14"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # System font discovery for fonts the embedded Sans/Serif/Mono families
 # don't cover. Lazy: only consulted when the caller asks for an exact
 # family name that does not match an embedded one.
 fontdb = "0.23"
-pdf-writer = "0.14"
 crossterm = "0.29"
 base64 = "0.22"
 winit = { version = "0.30", default-features = false, features = [

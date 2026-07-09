@@ -319,10 +319,6 @@ impl Default for TextNode {
 /// negative `bh` mirrors vertically. Empty or zero-sized text returns the
 /// identity-translated-to-`(cx, cy)` matrix — the renderer short-circuits
 /// at the same gate, so the choice is cosmetic.
-///
-/// Native-only: WASM frontends measure text via `OffscreenCanvas` (see
-/// `text.rs` module docs) and build the affine on the JS side.
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 pub fn text_box_affine(
     family: &str,

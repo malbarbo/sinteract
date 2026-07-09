@@ -1,10 +1,11 @@
-//! Native text measurement and outline extraction.
+//! Text measurement and outline extraction.
 //!
 //! Three font families are embedded — Liberation Sans, Serif, and Mono, in
 //! Regular / Bold / Italic / BoldItalic. Aliases (`sans-serif`, `serif`,
 //! `monospace`, `mono`, "Liberation X") map to the embedded variants.
-//! Anything else falls back to a [`fontdb`] system query, with the
-//! ultimate fallback being Liberation Sans.
+//! Anything else falls back to a [`fontdb`] system query (native only, since
+//! wasm has no font directory), with the ultimate fallback being Liberation
+//! Sans — so the embedded-font path measures identically on every target.
 //!
 //! Used by:
 //!   - the CLI terminal renderer (`terminal::rasterize_scene`),
@@ -16,11 +17,10 @@
 //! coordinates. The caller composes
 //! `translate(cx, cy) * rotate(angle) * scale(sx, sy)` to place the text
 //! in world coordinates.
-//!
-//! WASM targets do not use this module: the JS frontend measures text via
-//! `OffscreenCanvas` and supplies metrics through the env imports.
 
-use std::sync::{Mutex, OnceLock};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use ttf_parser::{Face, GlyphId};
 
@@ -143,6 +143,7 @@ pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
         return embedded(&family_arr[v]);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(font) = system_font(family, weight, style) {
         return font;
     }
@@ -159,9 +160,10 @@ fn embedded(f: &'static EmbeddedFont) -> ResolvedFont {
 }
 
 // ---------------------------------------------------------------------------
-// System font lookup (via fontdb)
+// System font lookup (via fontdb) — native only; wasm has no font directory
 // ---------------------------------------------------------------------------
 
+#[cfg(not(target_arch = "wasm32"))]
 fn font_db() -> &'static fontdb::Database {
     static DB: OnceLock<fontdb::Database> = OnceLock::new();
     DB.get_or_init(|| {
@@ -176,11 +178,13 @@ fn font_db() -> &'static fontdb::Database {
 /// the resulting `Face<'static>` matches the embedded fonts' lifetime
 /// shape. The number of unique fonts a process touches is bounded, so the
 /// leak is benign.
+#[cfg(not(target_arch = "wasm32"))]
 fn system_cache() -> &'static Mutex<Vec<(fontdb::ID, ResolvedFont)>> {
     static CACHE: OnceLock<Mutex<Vec<(fontdb::ID, ResolvedFont)>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFont> {
     let db = font_db();
     let style_db = match style {

@@ -5,19 +5,20 @@
 //! `PixmapRenderer` (terminal raster, in [`terminal`]) and `PdfRenderer`
 //! (PDF byte stream, in [`pdf`]).
 //!
-//! Native targets compile the full pipeline:
-//! - [`text`] — Liberation Sans embedded, glyph measurement and outline.
+//! Pure-computation modules build everywhere, including `wasm32`, so a
+//! browser client can measure text and emit PDF without a native host:
+//! - [`text`] — embedded Liberation families, glyph measurement and outline
+//!   (system-font lookup is native-only).
 //! - [`pdf`] — render a [`scene::Scene`] directly to PDF (text as outlined paths).
 //! - [`sixel`] — encode a `Pixmap` as DEC Sixel.
+//!
+//! Native-only modules need a tty, an OS window, or platform FFI:
 //! - [`term_query`] — synchronous Kitty / Sixel capability probe.
 //! - [`terminal`] — terminal renderer (Kitty / Sixel / half-blocks),
 //!   animation lifecycle, key polling.
 //! - [`window`] — native OS window renderer (winit + softbuffer), with the
 //!   same lifecycle shape as `terminal`.
-//!
-//! On `wasm32`, this crate compiles to (approximately) nothing — terminal
-//! and PDF pipelines do not apply, and the host (e.g. a browser frontend)
-//! is expected to render via its own canvas.
+//! - [`frontend`] — the unified native driver over terminal / window / stdio.
 
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
@@ -32,20 +33,17 @@ pub mod wire;
 #[allow(dead_code)]
 mod frame_capnp;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub mod frontend;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod pdf;
-#[cfg(not(target_arch = "wasm32"))]
 mod pixel;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod sixel;
 pub mod stdio;
+pub mod text;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod frontend;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod term_query;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod terminal;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod text;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod window;

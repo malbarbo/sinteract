@@ -21,7 +21,9 @@ use tiny_skia::Pixmap;
 /// Whether the terminal supports DEC Sixel. Asks the terminal directly via
 /// a Device Attributes (DA1) query (see `term_query`); env-based heuristics
 /// are unreliable across SSH and terminal multiplexers, and the probe is
-/// cached so the cost is paid at most once per process.
+/// cached so the cost is paid at most once per process. Native-only — the
+/// probe reads a tty; the encoder itself builds anywhere.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sixel_supported() -> bool {
     crate::term_query::graphics_caps().sixel
 }
