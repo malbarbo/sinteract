@@ -482,9 +482,10 @@ pub enum Segment {
     },
 }
 
-/// Iterator over a verb/coord pair, yielding one [`Segment`] per verb. Only
-/// constructed from a [`Path`]/[`ClipPath`] whose streams already agree in
-/// length, so the coord slicing never goes out of bounds.
+/// Iterator over a verb/coord pair, yielding one [`Segment`] per verb.
+/// Constructed from a [`Path`]/[`ClipPath`] whose streams agree in length by
+/// construction; even so, [`Self::next`] slices defensively — if the coord
+/// stream runs short it stops (`None`) instead of panicking.
 #[must_use = "Segments yields nothing unless iterated"]
 pub struct Segments<'a> {
     verbs: std::slice::Iter<'a, Verb>,
@@ -507,7 +508,9 @@ impl Iterator for Segments<'_> {
 
     fn next(&mut self) -> Option<Segment> {
         let &v = self.verbs.next()?;
-        let c = &self.coords[self.i..];
+        // One bounds check for the whole verb; `c` then has exactly `v.coords()`
+        // elements, so the fixed indices below cannot go out of range.
+        let c = self.coords.get(self.i..self.i + v.coords())?;
         let seg = match v {
             Verb::Move => Segment::Move { x: c[0], y: c[1] },
             Verb::Line => Segment::Line { x: c[0], y: c[1] },
@@ -1109,6 +1112,18 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn segments_stops_on_short_coords() {
+        // Degenerate streams (unreachable through the builders, but the iterator
+        // must not panic if handed one): the Move decodes, then the Cubic wants
+        // six coords and only finds none, so next() ends the walk with None.
+        let verbs = [Verb::Move, Verb::Cubic];
+        let coords = [1.0, 2.0];
+        let mut segs = Segments::new(&verbs, &coords);
+        assert_eq!(segs.next(), Some(Segment::Move { x: 1.0, y: 2.0 }));
+        assert_eq!(segs.next(), None);
     }
 
     #[test]
