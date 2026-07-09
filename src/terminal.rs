@@ -79,6 +79,9 @@ struct State {
     next_oneshot_id: u32,
     warned_bitmap: bool,
     text_blocks_lines: u16,
+    /// Set when the user hits Ctrl-C during an animation; surfaced to the
+    /// host as [`InputEvent::Close`] instead of killing the process.
+    closed: bool,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -88,6 +91,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     next_oneshot_id: KITTY_ONESHOT_ID_BASE,
     warned_bitmap: false,
     text_blocks_lines: 0,
+    closed: false,
 });
 
 /// Best-effort detection of terminals that report 24-bit truecolor support
@@ -832,6 +836,9 @@ pub fn enter_animation() {
     if state.in_animation {
         return;
     }
+    // Clear any close from a prior session before the setup early-returns, so a
+    // stale Ctrl-C can't make the next session report closed with no user action.
+    state.closed = false;
     if !kitty_supported() && !sixel::sixel_supported() && !text_blocks_supported() {
         eprintln!(
             "[spython] terminal does not advertise graphics support; \
@@ -923,16 +930,13 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
         return None;
     };
 
-    // Ctrl-C in the animation should exit cleanly.
-    //
-    // TODO(fase 5): once hosts drive the terminal through
-    // `crate::frontend::Frontend`, surface Ctrl-C as `InputEvent::Close`
-    // instead of killing the process. The current behavior pre-dates
-    // `Frontend` and matches `simage::window`'s `CloseRequested` handler;
-    // both should change together.
+    // Ctrl-C flags the session closed; `TerminalFrontend::wait_event` turns
+    // that into `InputEvent::Close` so the host loop unwinds and tears the
+    // terminal down through `exit()` — no `process::exit`, which would kill a
+    // server hosting other sessions. Mirrors `window`'s `CloseRequested`.
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
-        exit_animation();
-        std::process::exit(130);
+        STATE.lock().unwrap().closed = true;
+        return None;
     }
 
     // Most terminals only emit Press; Release requires the kitty keyboard
@@ -949,6 +953,13 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
     let meta = modifiers.contains(KeyModifiers::SUPER);
     let repeat = matches!(kind, KeyEventKind::Repeat);
     Some((event_type, key, [alt, ctrl, shift, meta, repeat]))
+}
+
+/// Whether the user hit Ctrl-C since [`enter_animation`]. Mirrors
+/// [`crate::window::closed`]; `TerminalFrontend` polls it to emit
+/// [`crate::event::InputEvent::Close`].
+pub fn closed() -> bool {
+    STATE.lock().unwrap().closed
 }
 
 /// Install a panic hook so a crashed animation does not leave the terminal

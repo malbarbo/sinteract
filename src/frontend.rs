@@ -271,6 +271,9 @@ impl TerminalFrontend {
             if self.clock.is_due(now) {
                 return Some(self.clock.fire());
             }
+            if crate::terminal::closed() {
+                return Some(InputEvent::Close);
+            }
             if let Some(legacy) = crate::terminal::poll_key_event() {
                 let (et, key, flags) = legacy;
                 return Some(key_event_from_legacy(et, key, flags));
