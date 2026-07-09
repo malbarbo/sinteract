@@ -177,28 +177,15 @@ fn quantize(pixmap: &Pixmap, bg: (u8, u8, u8)) -> (Vec<(u8, u8, u8)>, Vec<u8>) {
     let mut palette: Vec<(u8, u8, u8)> = Vec::new();
     let mut indices: Vec<u8> = Vec::with_capacity(w * h);
 
-    let raw = pixmap.data();
+    let pixels = pixmap.pixels();
     for y in 0..h {
         for x in 0..w {
-            let off = (y * w + x) * 4;
-            let r = raw[off];
-            let g = raw[off + 1];
-            let b = raw[off + 2];
-            let a = raw[off + 3];
-
-            // tiny-skia stores pixels premultiplied; demultiply before
-            // compositing against the background.
-            let (r, g, b) = if a == 0 {
-                bg
-            } else if a == 255 {
-                (r, g, b)
-            } else {
-                let af = f32::from(a) / 255.0;
-                let dr = (f32::from(r) / af).round().clamp(0.0, 255.0) as u8;
-                let dg = (f32::from(g) / af).round().clamp(0.0, 255.0) as u8;
-                let db = (f32::from(b) / af).round().clamp(0.0, 255.0) as u8;
-                composite(dr, dg, db, a, bg)
-            };
+            let p = pixels[y * w + x];
+            // Demultiply to straight color, then composite over the
+            // background; `composite` handles the a==0 (→bg) and a==255
+            // (→straight) ends without special-casing them here.
+            let (sr, sg, sb) = crate::pixel::unpremultiply(p);
+            let (r, g, b) = composite(sr, sg, sb, p.alpha(), bg);
 
             let qr = quant6(r);
             let qg = quant6(g);

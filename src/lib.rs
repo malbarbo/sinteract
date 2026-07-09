@@ -37,6 +37,8 @@ pub mod frontend;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pdf;
 #[cfg(not(target_arch = "wasm32"))]
+mod pixel;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sixel;
 pub mod stdio;
 #[cfg(not(target_arch = "wasm32"))]

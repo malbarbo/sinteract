@@ -376,24 +376,9 @@ fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
         let src_row_start = (y as usize) * (pw as usize);
         let row_w = pw.min(bw - off_x.min(bw)) as usize;
         for x in 0..row_w {
-            let p = src[src_row_start + x];
-            // tiny-skia stores premultiplied RGBA8; softbuffer wants 0RGB
-            // (u32 packed as 0x00_RR_GG_BB). Demultiply only if alpha != 255
-            // — premultiplied colors with full alpha equal straight colors.
-            let a = p.alpha();
-            let (r, g, b) = if a == 255 {
-                (p.red(), p.green(), p.blue())
-            } else if a == 0 {
-                (0, 0, 0)
-            } else {
-                // Demultiply: c_straight = c_premult * 255 / alpha.
-                let a32 = a as u32;
-                (
-                    ((p.red() as u32 * 255) / a32).min(255) as u8,
-                    ((p.green() as u32 * 255) / a32).min(255) as u8,
-                    ((p.blue() as u32 * 255) / a32).min(255) as u8,
-                )
-            };
+            // softbuffer wants straight-alpha 0RGB (0x00_RR_GG_BB); alpha is
+            // dropped since the window has no transparency.
+            let (r, g, b) = crate::pixel::unpremultiply(src[src_row_start + x]);
             buffer[dst_row_start + x] = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
         }
     }
