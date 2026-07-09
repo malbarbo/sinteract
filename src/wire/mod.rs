@@ -23,7 +23,7 @@ use capnp::serialize;
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
-use crate::renderer::{Renderer, RendererToken};
+use crate::renderer::Renderer;
 use crate::scene::{
     Bitmap, ClipPath, Element, FillRule, FontStyle, LineCap, LineJoin, LinearGradient, Paint, Path,
     PathStyle, RadialGradient, Rgba, Scene, SpreadMode, Stop, TextNode, Verb,
@@ -749,18 +749,17 @@ pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -
 // Streaming entry point — capnp Reader → Renderer primitives
 // ---------------------------------------------------------------------------
 
-/// Decode exactly one `Message::Frame` from `reader` and dispatch the draw
-/// list through `renderer`'s streaming primitives. The Cap'n Proto reader
-/// is walked lazily — `List(Element)` is iterated without materializing a
-/// `Vec<Element>`, and `Clipped` subtrees recurse via `clip_push`/
-/// `clip_pop`. Per-path `PathStyle` (and per-clip `ClipPath`) is still
-/// materialized while the path is being emitted, bounded by one path at a
-/// time.
+/// Decode exactly one `Message::Frame` from `reader` and replay the draw
+/// list through `renderer`. The Cap'n Proto reader is walked lazily — the
+/// `List(Element)` is iterated without materializing a `Vec<Element>`, and
+/// `Clipped` subtrees recurse via [`Renderer::with_clip`]. Each path is
+/// decoded into a scratch [`Path`] (bounded by one path at a time) and handed
+/// to [`Renderer::draw_path`].
 ///
 /// Non-`Frame` messages (`Asset`, `Event`, `SessionClose`) return
 /// [`Error::WrongMessageKind`] — peek the kind separately or use
 /// [`decode`] for those.
-pub fn render_scene_stream<R: std::io::Read, T: Renderer + ?Sized>(
+pub fn render_scene_stream<R: std::io::Read, T: Renderer>(
     renderer: &mut T,
     reader: R,
 ) -> Result<(), Error> {
@@ -774,99 +773,56 @@ pub fn render_scene_stream<R: std::io::Read, T: Renderer + ?Sized>(
     }
 }
 
-fn stream_frame<T: Renderer + ?Sized>(
-    renderer: &mut T,
-    frame: wire_scene::Reader<'_>,
-) -> Result<(), Error> {
-    renderer.begin(frame.get_width(), frame.get_height());
-    let tok = RendererToken::new();
+fn stream_frame<T: Renderer>(renderer: &mut T, frame: wire_scene::Reader<'_>) -> Result<(), Error> {
+    // `frame` (a Cap'n Proto reader) is Copy and borrows the message arena,
+    // so it outlives the `frame()` call; the closure cannot return a Result,
+    // so a decode error mid-walk is parked in `result` and surfaced after the
+    // envelope closes (the backend still finalizes — its teardown is balanced).
+    let mut result = Ok(());
+    renderer.frame(frame.get_width(), frame.get_height(), |r| {
+        result = stream_frame_body(r, frame);
+    });
+    result
+}
+
+fn stream_frame_body<T: Renderer>(r: &mut T, frame: wire_scene::Reader<'_>) -> Result<(), Error> {
     if frame.has_elements() {
-        stream_elements(renderer, frame.get_elements()?, tok)?;
+        stream_elements(r, frame.get_elements()?)?;
     }
-    renderer.end();
     Ok(())
 }
 
-fn stream_elements<T: Renderer + ?Sized>(
-    renderer: &mut T,
+fn stream_elements<T: Renderer>(
+    r: &mut T,
     list: capnp::struct_list::Reader<'_, element::Owned>,
-    tok: RendererToken,
 ) -> Result<(), Error> {
     use element::Which;
     for node in list.iter() {
         match node.which()? {
-            Which::Path(p) => stream_path(renderer, p?, tok)?,
+            Which::Path(p) => {
+                let path = read_path(p?)?;
+                r.draw_path(&path);
+            }
             Which::Clipped(c) => {
                 let c = c?;
                 let clip = read_clip_path(c.get_clip()?)?;
-                renderer.clip_push(tok, &clip);
-                stream_elements(renderer, c.get_elements()?, tok)?;
-                renderer.clip_pop(tok);
+                let children = c.get_elements()?;
+                let mut inner = Ok(());
+                r.with_clip(&clip, |r2| {
+                    inner = stream_elements(r2, children);
+                });
+                inner?;
             }
             Which::Text(t) => {
                 let t = read_text_node(t?)?;
-                renderer.text(&t);
+                r.draw_text(&t);
             }
             Which::Bitmap(b) => {
                 let b = read_bitmap(b?);
-                renderer.bitmap(&b);
+                r.draw_bitmap(&b);
             }
         }
     }
-    Ok(())
-}
-
-fn stream_path<T: Renderer + ?Sized>(
-    renderer: &mut T,
-    p: wire_path::Reader<'_>,
-    tok: RendererToken,
-) -> Result<(), Error> {
-    let style = read_path_style(p.get_style()?)?;
-    let verbs = p.get_verbs()?;
-    let coords = p.get_coords()?;
-    // Pre-validate verb/coord agreement up-front to avoid emitting
-    // `path_begin` for a path we'd then have to abort mid-stream — same
-    // contract as `decode`. parse_verbs only enforces the count match;
-    // we redo it here against the lazy `coords` reader length.
-    let mut needed: usize = 0;
-    for &vb in verbs.iter() {
-        let v = Verb::from_u8(vb).ok_or(Error::UnknownVerb(vb))?;
-        needed += v.coords();
-    }
-    if needed != coords.len() as usize {
-        return Err(Error::PathLengthMismatch {
-            verbs: needed,
-            coords: coords.len() as usize,
-        });
-    }
-
-    renderer.path_begin(tok, &style);
-    let mut i: u32 = 0;
-    for &vb in verbs.iter() {
-        let v = Verb::from_u8(vb).expect("verbs pre-validated");
-        match v {
-            Verb::Move => renderer.move_to(tok, coords.get(i), coords.get(i + 1)),
-            Verb::Line => renderer.line_to(tok, coords.get(i), coords.get(i + 1)),
-            Verb::Quad => renderer.quad_to(
-                tok,
-                coords.get(i),
-                coords.get(i + 1),
-                coords.get(i + 2),
-                coords.get(i + 3),
-            ),
-            Verb::Cubic => renderer.cubic_to(
-                tok,
-                coords.get(i),
-                coords.get(i + 1),
-                coords.get(i + 2),
-                coords.get(i + 3),
-                coords.get(i + 4),
-                coords.get(i + 5),
-            ),
-        }
-        i += v.coords() as u32;
-    }
-    renderer.path_end(tok);
     Ok(())
 }
 

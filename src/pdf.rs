@@ -23,9 +23,9 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::renderer::{Renderer, RendererToken};
+use crate::renderer::Renderer;
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, PathStyle,
+    Bitmap, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, Path,
     RadialGradient, Rgba, Segment, Stop, TextNode,
 };
 
@@ -54,12 +54,6 @@ enum PathOp {
     Close,
 }
 
-struct PendingPath {
-    style: PathStyle,
-    ops: Vec<PathOp>,
-    last_point: Option<(f32, f32)>,
-}
-
 /// A gradient encountered during draw-list playback. Kept around until
 /// [`finish_pdf`] writes out the function/shading/pattern indirect objects.
 #[derive(Clone)]
@@ -77,7 +71,6 @@ struct PdfRenderer {
     /// Gradients seen so far; the index in this vec is the `/P{n}` name
     /// used in the content stream and the Resources/Pattern dictionary.
     gradients: Vec<GradientShape>,
-    pending: Option<PendingPath>,
 }
 
 impl PdfRenderer {
@@ -88,7 +81,6 @@ impl PdfRenderer {
             content: Content::new(),
             gstates: BTreeMap::new(),
             gradients: Vec::new(),
-            pending: None,
         }
     }
 
@@ -114,70 +106,49 @@ impl PdfRenderer {
         self.content.set_parameters(Name(name.as_bytes()));
     }
 
-    fn flush_path(&mut self) {
-        let Some(p) = self.pending.take() else {
-            return;
-        };
-        if p.ops.is_empty() {
-            return;
-        }
-        // For solid paints: alpha rides the path. For gradients: PDF
-        // gradients here are RGB-only; per-stop alpha is dropped, and a
-        // uniform alpha is taken from the first stop (best-effort — a soft-
-        // mask would be the next step).
-        let do_fill = p.style.fill.is_visible();
-        let do_stroke = p.style.stroke.is_visible() && p.style.stroke_width > 0.0;
-        if !do_fill && !do_stroke {
-            return;
-        }
-
-        self.content.save_state();
-        let fill_alpha = if do_fill {
-            p.style.fill.primary_color().a
-        } else {
-            1.0
-        };
-        let stroke_alpha = if do_stroke {
-            p.style.stroke.primary_color().a
-        } else {
-            1.0
-        };
-        self.apply_alpha(fill_alpha, stroke_alpha);
-
-        // Allocate any pattern names *before* writing the path ops so the
-        // `cs /Pattern\n /Pn scn` operators land in the right order.
-        let fill_pattern = if do_fill {
-            self.bind_fill_paint(&p.style.fill)
-        } else {
-            None
-        };
-        let stroke_pattern = if do_stroke {
-            self.bind_stroke_paint(&p.style.stroke)
-        } else {
-            None
-        };
-
-        if do_stroke {
-            self.content.set_line_width(p.style.stroke_width);
-            self.content.set_line_cap(pdf_line_cap(p.style.line_cap));
-            self.content.set_line_join(pdf_line_join(p.style.line_join));
-            if p.style.line_join == LineJoin::Miter {
-                self.content.set_miter_limit(p.style.miter_limit);
-            }
-            if !p.style.dash_array.is_empty() {
-                self.content
-                    .set_dash_pattern(p.style.dash_array.iter().copied(), p.style.dash_offset);
+    /// Walk `path.segments()` into a list of PDF path ops, converting quads to
+    /// cubics (PDF has no quadratic operator) against the running current
+    /// point.
+    fn path_ops(path: &Path) -> Vec<PathOp> {
+        let mut ops = Vec::new();
+        let mut last_point: Option<(f32, f32)> = None;
+        for seg in path.segments() {
+            match seg {
+                Segment::Move { x, y } => {
+                    ops.push(PathOp::Move(x, y));
+                    last_point = Some((x, y));
+                }
+                Segment::Line { x, y } => {
+                    ops.push(PathOp::Line(x, y));
+                    last_point = Some((x, y));
+                }
+                Segment::Quad { cx, cy, x, y } => {
+                    // A quad with no current point is dropped, and (matching the
+                    // old per-vertex path) leaves the current point unset — a
+                    // path that opens on a quad is malformed and has no anchor.
+                    if let Some((p0x, p0y)) = last_point {
+                        let c1x = p0x + 2.0 / 3.0 * (cx - p0x);
+                        let c1y = p0y + 2.0 / 3.0 * (cy - p0y);
+                        let c2x = x + 2.0 / 3.0 * (cx - x);
+                        let c2y = y + 2.0 / 3.0 * (cy - y);
+                        ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
+                        last_point = Some((x, y));
+                    }
+                }
+                Segment::Cubic {
+                    c1x,
+                    c1y,
+                    c2x,
+                    c2y,
+                    x,
+                    y,
+                } => {
+                    ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
+                    last_point = Some((x, y));
+                }
             }
         }
-        emit_path_ops(&p.ops, &mut self.content);
-        if p.style.closed {
-            self.content.close_path();
-        }
-        paint(&mut self.content, do_fill, do_stroke, p.style.fill_rule);
-        // Pattern color spaces persist on the gstate, so restore_state below
-        // is what cleans them up — no explicit reset needed.
-        self.content.restore_state();
-        let _ = (fill_pattern, stroke_pattern);
+        ops
     }
 
     /// Decide what to emit for the fill paint. Solid → `set_fill_rgb`; gradient
@@ -233,8 +204,21 @@ impl PdfRenderer {
     }
 }
 
+/// Emits `restore_state` on scope exit — including on unwind — so a clip's
+/// `save_state` in [`Renderer::with_clip`] is always balanced even if the
+/// `inside` body panics.
+struct RestoreGuard<'a> {
+    renderer: &'a mut PdfRenderer,
+}
+
+impl Drop for RestoreGuard<'_> {
+    fn drop(&mut self) {
+        self.renderer.content.restore_state();
+    }
+}
+
 impl Renderer for PdfRenderer {
-    fn begin(&mut self, width: f32, height: f32) {
+    fn frame(&mut self, width: f32, height: f32, mut body: impl FnMut(&mut Self)) {
         self.width = width.max(1.0);
         self.height = height.max(1.0);
         // Combined transform: y-flip and px→pt scale. Draw-list coords are CSS
@@ -245,69 +229,86 @@ impl Renderer for PdfRenderer {
         let s = PX_TO_PT;
         self.content
             .transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
+        // No teardown: the content stream is drained by `finish_pdf` after
+        // render returns, so no drop-guard is needed at the frame level.
+        body(self);
     }
 
-    fn path_begin(&mut self, _: RendererToken, style: &PathStyle) {
-        self.flush_path();
-        self.pending = Some(PendingPath {
-            style: style.clone(),
-            ops: Vec::new(),
-            last_point: None,
-        });
-    }
-
-    fn move_to(&mut self, _: RendererToken, x: f32, y: f32) {
-        if let Some(p) = self.pending.as_mut() {
-            p.ops.push(PathOp::Move(x, y));
-            p.last_point = Some((x, y));
-        }
-    }
-
-    fn line_to(&mut self, _: RendererToken, x: f32, y: f32) {
-        if let Some(p) = self.pending.as_mut() {
-            p.ops.push(PathOp::Line(x, y));
-            p.last_point = Some((x, y));
-        }
-    }
-
-    fn quad_to(&mut self, _: RendererToken, cx: f32, cy: f32, x: f32, y: f32) {
-        let Some(p) = self.pending.as_mut() else {
+    fn draw_path(&mut self, path: &Path) {
+        // For solid paints: alpha rides the path. For gradients: PDF
+        // gradients here are RGB-only; per-stop alpha is dropped, and a
+        // uniform alpha is taken from the first stop (best-effort — a soft-
+        // mask would be the next step).
+        let style = &path.style;
+        let do_fill = style.fill.is_visible();
+        let do_stroke = style.stroke.is_visible() && style.stroke_width > 0.0;
+        if !do_fill && !do_stroke {
             return;
-        };
-        let Some((p0x, p0y)) = p.last_point else {
-            return;
-        };
-        // PDF has no quadratic operator; convert to a cubic.
-        let c1x = p0x + 2.0 / 3.0 * (cx - p0x);
-        let c1y = p0y + 2.0 / 3.0 * (cy - p0y);
-        let c2x = x + 2.0 / 3.0 * (cx - x);
-        let c2y = y + 2.0 / 3.0 * (cy - y);
-        p.ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
-        p.last_point = Some((x, y));
-    }
-
-    fn cubic_to(
-        &mut self,
-        _: RendererToken,
-        c1x: f32,
-        c1y: f32,
-        c2x: f32,
-        c2y: f32,
-        x: f32,
-        y: f32,
-    ) {
-        if let Some(p) = self.pending.as_mut() {
-            p.ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
-            p.last_point = Some((x, y));
         }
+        let ops = Self::path_ops(path);
+        if ops.is_empty() {
+            return;
+        }
+
+        self.content.save_state();
+        let fill_alpha = if do_fill {
+            style.fill.primary_color().a
+        } else {
+            1.0
+        };
+        let stroke_alpha = if do_stroke {
+            style.stroke.primary_color().a
+        } else {
+            1.0
+        };
+        self.apply_alpha(fill_alpha, stroke_alpha);
+
+        // Allocate any pattern names *before* writing the path ops so the
+        // `cs /Pattern\n /Pn scn` operators land in the right order.
+        let fill_pattern = if do_fill {
+            self.bind_fill_paint(&style.fill)
+        } else {
+            None
+        };
+        let stroke_pattern = if do_stroke {
+            self.bind_stroke_paint(&style.stroke)
+        } else {
+            None
+        };
+
+        if do_stroke {
+            self.content.set_line_width(style.stroke_width);
+            self.content.set_line_cap(pdf_line_cap(style.line_cap));
+            self.content.set_line_join(pdf_line_join(style.line_join));
+            if style.line_join == LineJoin::Miter {
+                self.content.set_miter_limit(style.miter_limit);
+            }
+            if !style.dash_array.is_empty() {
+                self.content
+                    .set_dash_pattern(style.dash_array.iter().copied(), style.dash_offset);
+            }
+        }
+        emit_path_ops(&ops, &mut self.content);
+        if style.closed {
+            self.content.close_path();
+        }
+        paint(&mut self.content, do_fill, do_stroke, style.fill_rule);
+        // Pattern color spaces persist on the gstate, so restore_state below
+        // is what cleans them up — no explicit reset needed.
+        self.content.restore_state();
+        let _ = (fill_pattern, stroke_pattern);
     }
 
-    fn path_end(&mut self, _: RendererToken) {
-        self.flush_path();
+    fn draw_text(&mut self, node: &TextNode) {
+        render_text(node, self);
     }
 
-    fn clip_push(&mut self, _: RendererToken, clip: &ClipPath) {
-        self.flush_path();
+    fn draw_bitmap(&mut self, _node: &Bitmap) {
+        // Bitmaps are not supported in PDF v1 (consistent with the
+        // terminal renderer); silently skip.
+    }
+
+    fn with_clip(&mut self, clip: &ClipPath, mut inside: impl FnMut(&mut Self)) {
         self.content.save_state();
         let mut last_point: Option<(f32, f32)> = None;
         for seg in clip.segments() {
@@ -353,26 +354,10 @@ impl Renderer for PdfRenderer {
             }
         }
         self.content.end_path();
-    }
-
-    fn clip_pop(&mut self, _: RendererToken) {
-        self.flush_path();
-        self.content.restore_state();
-    }
-
-    fn text(&mut self, node: &TextNode) {
-        self.flush_path();
-        render_text(node, self);
-    }
-
-    fn bitmap(&mut self, _node: &Bitmap) {
-        // Bitmaps are not supported in PDF v1 (consistent with the
-        // terminal renderer); silently skip.
-        self.flush_path();
-    }
-
-    fn end(&mut self) {
-        self.flush_path();
+        // save_state above is unconditional, so the restore is always
+        // balanced; the guard also fires it on unwind.
+        let guard = RestoreGuard { renderer: self };
+        inside(&mut *guard.renderer);
     }
 }
 
@@ -820,7 +805,7 @@ impl crate::text::OutlineBuilder for PdfOutline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Scene;
+    use crate::scene::{PathStyle, Scene};
 
     fn red_fill(a: f32) -> PathStyle {
         PathStyle {

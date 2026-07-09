@@ -35,10 +35,9 @@ use tiny_skia::{
     SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::renderer::{Renderer, RendererToken};
+use crate::renderer::Renderer;
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, PathStyle, Rgba, Segment,
-    TextNode,
+    Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Segment, TextNode,
 };
 use crate::sixel;
 
@@ -155,13 +154,6 @@ struct PixmapRenderer {
     clip_stack: Vec<Mask>,
     out_w: u32,
     out_h: u32,
-    pending: Option<PendingPath>,
-}
-
-struct PendingPath {
-    builder: PathBuilder,
-    style: PathStyle,
-    has_points: bool,
 }
 
 impl PixmapRenderer {
@@ -174,133 +166,14 @@ impl PixmapRenderer {
             clip_stack: Vec::new(),
             out_w: 0,
             out_h: 0,
-            pending: None,
         }
     }
 
-    fn flush_path(&mut self) {
-        let Some(p) = self.pending.take() else {
-            return;
-        };
-        let Some(pixmap) = self.pixmap.as_mut() else {
-            return;
-        };
-        if !p.has_points {
-            return;
-        }
-        let mut builder = p.builder;
-        if p.style.closed {
-            builder.close();
-        }
-        let Some(path) = builder.finish() else {
-            return;
-        };
-        let mask = self.clip_stack.last();
-
-        if p.style.fill.is_visible() {
-            let paint = Paint {
-                shader: paint_to_shader(&p.style.fill),
-                anti_alias: true,
-                ..Paint::default()
-            };
-            pixmap.fill_path(
-                &path,
-                &paint,
-                sk_fill_rule(p.style.fill_rule),
-                self.base,
-                mask,
-            );
-        }
-        if p.style.stroke.is_visible() && p.style.stroke_width > 0.0 {
-            let paint = Paint {
-                shader: paint_to_shader(&p.style.stroke),
-                anti_alias: true,
-                ..Paint::default()
-            };
-            let dash = if p.style.dash_array.is_empty() {
-                None
-            } else {
-                StrokeDash::new(p.style.dash_array.clone(), p.style.dash_offset)
-            };
-            let stroke = Stroke {
-                width: p.style.stroke_width,
-                line_cap: sk_line_cap(p.style.line_cap),
-                line_join: sk_line_join(p.style.line_join),
-                miter_limit: p.style.miter_limit,
-                dash,
-            };
-            pixmap.stroke_path(&path, &paint, &stroke, self.base, mask);
-        }
-    }
-}
-
-impl Renderer for PixmapRenderer {
-    fn begin(&mut self, width: f32, height: f32) {
-        let w = width.ceil().max(1.0) as u32;
-        let h = height.ceil().max(1.0) as u32;
-        let s = compute_scale(w, h, self.target_px, self.max_scale);
-        self.out_w = ((w as f32) * s).ceil().max(1.0) as u32;
-        self.out_h = ((h as f32) * s).ceil().max(1.0) as u32;
-        self.base = Transform::from_scale(s, s);
-        self.pixmap = Pixmap::new(self.out_w, self.out_h).map(|mut pm| {
-            // Transparent background: the terminal background shows through.
-            pm.fill(tiny_skia::Color::TRANSPARENT);
-            pm
-        });
-    }
-
-    fn path_begin(&mut self, _: RendererToken, style: &PathStyle) {
-        self.flush_path();
-        self.pending = Some(PendingPath {
-            builder: PathBuilder::new(),
-            style: style.clone(),
-            has_points: false,
-        });
-    }
-
-    fn move_to(&mut self, _: RendererToken, x: f32, y: f32) {
-        if let Some(p) = self.pending.as_mut() {
-            p.builder.move_to(x, y);
-            p.has_points = true;
-        }
-    }
-
-    fn line_to(&mut self, _: RendererToken, x: f32, y: f32) {
-        if let Some(p) = self.pending.as_mut() {
-            p.builder.line_to(x, y);
-            p.has_points = true;
-        }
-    }
-
-    fn quad_to(&mut self, _: RendererToken, cx: f32, cy: f32, x: f32, y: f32) {
-        if let Some(p) = self.pending.as_mut() {
-            p.builder.quad_to(cx, cy, x, y);
-            p.has_points = true;
-        }
-    }
-
-    fn cubic_to(
-        &mut self,
-        _: RendererToken,
-        c1x: f32,
-        c1y: f32,
-        c2x: f32,
-        c2y: f32,
-        x: f32,
-        y: f32,
-    ) {
-        if let Some(p) = self.pending.as_mut() {
-            p.builder.cubic_to(c1x, c1y, c2x, c2y, x, y);
-            p.has_points = true;
-        }
-    }
-
-    fn path_end(&mut self, _: RendererToken) {
-        self.flush_path();
-    }
-
-    fn clip_push(&mut self, _: RendererToken, clip: &ClipPath) {
-        self.flush_path();
+    /// Build a clip mask from `clip`, intersect it with the current one, and
+    /// push it. Returns whether a mask was actually pushed — an empty or
+    /// unbuildable clip pushes nothing, and [`Renderer::with_clip`]'s guard
+    /// pops only what was pushed (so the stack stays balanced regardless).
+    fn push_clip(&mut self, clip: &ClipPath) -> bool {
         let parent = self.clip_stack.last();
         let mut builder = PathBuilder::new();
         for seg in clip.segments() {
@@ -322,7 +195,9 @@ impl Renderer for PixmapRenderer {
         // intersecting. tiny_skia tolerates an explicit close on an already-
         // closed contour.
         builder.close();
-        let Some(path) = builder.finish() else { return };
+        let Some(path) = builder.finish() else {
+            return false;
+        };
         let Some(mut mask) = (match parent {
             Some(m) => Some(m.clone()),
             None => Mask::new(self.out_w, self.out_h).map(|mut m| {
@@ -339,27 +214,125 @@ impl Renderer for PixmapRenderer {
                 m
             }),
         }) else {
-            return;
+            return false;
         };
         mask.intersect_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
         self.clip_stack.push(mask);
+        true
+    }
+}
+
+/// Pops the clip pushed by [`Renderer::with_clip`] on scope exit — including
+/// on unwind — so the clip stack cannot leak if the `inside` body panics.
+struct ClipGuard<'a> {
+    renderer: &'a mut PixmapRenderer,
+    pushed: bool,
+}
+
+impl Drop for ClipGuard<'_> {
+    fn drop(&mut self) {
+        if self.pushed {
+            self.renderer.clip_stack.pop();
+        }
+    }
+}
+
+impl Renderer for PixmapRenderer {
+    fn frame(&mut self, width: f32, height: f32, mut body: impl FnMut(&mut Self)) {
+        let w = width.ceil().max(1.0) as u32;
+        let h = height.ceil().max(1.0) as u32;
+        let s = compute_scale(w, h, self.target_px, self.max_scale);
+        self.out_w = ((w as f32) * s).ceil().max(1.0) as u32;
+        self.out_h = ((h as f32) * s).ceil().max(1.0) as u32;
+        self.base = Transform::from_scale(s, s);
+        self.pixmap = Pixmap::new(self.out_w, self.out_h).map(|mut pm| {
+            // Transparent background: the terminal background shows through.
+            pm.fill(tiny_skia::Color::TRANSPARENT);
+            pm
+        });
+        // No teardown: the caller reads `pixmap` back directly, so there is
+        // nothing to flush and no drop-guard is needed here.
+        body(self);
     }
 
-    fn clip_pop(&mut self, _: RendererToken) {
-        self.flush_path();
-        self.clip_stack.pop();
+    fn draw_path(&mut self, path: &Path) {
+        let style = &path.style;
+        let mut builder = PathBuilder::new();
+        let mut has_points = false;
+        for seg in path.segments() {
+            match seg {
+                Segment::Move { x, y } => builder.move_to(x, y),
+                Segment::Line { x, y } => builder.line_to(x, y),
+                Segment::Quad { cx, cy, x, y } => builder.quad_to(cx, cy, x, y),
+                Segment::Cubic {
+                    c1x,
+                    c1y,
+                    c2x,
+                    c2y,
+                    x,
+                    y,
+                } => builder.cubic_to(c1x, c1y, c2x, c2y, x, y),
+            }
+            has_points = true;
+        }
+        if !has_points {
+            return;
+        }
+        if style.closed {
+            builder.close();
+        }
+        let Some(sk_path) = builder.finish() else {
+            return;
+        };
+        let Some(pixmap) = self.pixmap.as_mut() else {
+            return;
+        };
+        let mask = self.clip_stack.last();
+
+        if style.fill.is_visible() {
+            let paint = Paint {
+                shader: paint_to_shader(&style.fill),
+                anti_alias: true,
+                ..Paint::default()
+            };
+            pixmap.fill_path(
+                &sk_path,
+                &paint,
+                sk_fill_rule(style.fill_rule),
+                self.base,
+                mask,
+            );
+        }
+        if style.stroke.is_visible() && style.stroke_width > 0.0 {
+            let paint = Paint {
+                shader: paint_to_shader(&style.stroke),
+                anti_alias: true,
+                ..Paint::default()
+            };
+            let dash = if style.dash_array.is_empty() {
+                None
+            } else {
+                StrokeDash::new(style.dash_array.clone(), style.dash_offset)
+            };
+            let stroke = Stroke {
+                width: style.stroke_width,
+                line_cap: sk_line_cap(style.line_cap),
+                line_join: sk_line_join(style.line_join),
+                miter_limit: style.miter_limit,
+                dash,
+            };
+            pixmap.stroke_path(&sk_path, &paint, &stroke, self.base, mask);
+        }
     }
 
-    fn text(&mut self, node: &TextNode) {
-        self.flush_path();
+    fn draw_text(&mut self, node: &TextNode) {
         let Some(pixmap) = self.pixmap.as_mut() else {
             return;
         };
         render_text(node, pixmap, self.clip_stack.last(), self.base);
     }
 
-    fn bitmap(&mut self, _node: &Bitmap) {
-        self.flush_path();
+    fn draw_bitmap(&mut self, _node: &Bitmap) {
         let mut s = STATE.lock().unwrap();
         if !s.warned_bitmap {
             eprintln!(
@@ -370,8 +343,13 @@ impl Renderer for PixmapRenderer {
         }
     }
 
-    fn end(&mut self) {
-        self.flush_path();
+    fn with_clip(&mut self, clip: &ClipPath, mut inside: impl FnMut(&mut Self)) {
+        let pushed = self.push_clip(clip);
+        let guard = ClipGuard {
+            renderer: self,
+            pushed,
+        };
+        inside(&mut *guard.renderer);
     }
 }
 
@@ -973,7 +951,7 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Scene;
+    use crate::scene::{PathStyle, Scene};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -1414,45 +1392,46 @@ mod tests {
     use crate::scene::ClipPath;
 
     #[test]
-    fn builder_api_paints_rectangle() {
-        // Push commands straight to a PixmapRenderer via the builder API —
-        // no Scene materialization. The PathScope drops at the end of the
-        // block and runs path_end, committing the rect.
+    fn draw_path_paints_rectangle() {
+        // Drive a PixmapRenderer directly through the scoped API — no Scene
+        // materialization. `frame` sets up the canvas, runs the body, and the
+        // pixmap is read back after.
         let mut r = PixmapRenderer::new(None, 1.0);
-        r.begin(20.0, 20.0);
-        {
-            let mut p = r.path(solid(0, 255, 0));
-            p.move_to(0.0, 0.0)
+        r.frame(20.0, 20.0, |r| {
+            let path = Path::builder(solid(0, 255, 0))
+                .move_to(0.0, 0.0)
                 .line_to(20.0, 0.0)
                 .line_to(20.0, 20.0)
-                .line_to(0.0, 20.0);
-        }
-        r.end();
+                .line_to(0.0, 20.0)
+                .build();
+            r.draw_path(&path);
+        });
         let pm = r.pixmap.expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 10, 10), (0, 255, 0, 255));
     }
 
     #[test]
-    fn builder_clip_scope_excludes_outside() {
-        // ClipScope derefs to the renderer so nested draws run with the
-        // clip active; the scope's drop pops the clip.
+    fn with_clip_excludes_outside() {
+        // The `inside` body runs with the clip active; the clip pops when the
+        // body returns.
         let mut r = PixmapRenderer::new(None, 1.0);
-        r.begin(20.0, 20.0);
-        {
+        r.frame(20.0, 20.0, |r| {
             let clip = ClipPath::builder(FillRule::NonZero)
                 .move_to(0.0, 0.0)
                 .line_to(10.0, 0.0)
                 .line_to(10.0, 10.0)
                 .line_to(0.0, 10.0)
                 .build();
-            let mut c = r.clip(clip);
-            let mut p = c.path(solid(0, 0, 255));
-            p.move_to(0.0, 0.0)
-                .line_to(20.0, 0.0)
-                .line_to(20.0, 20.0)
-                .line_to(0.0, 20.0);
-        }
-        r.end();
+            r.with_clip(&clip, |r| {
+                let path = Path::builder(solid(0, 0, 255))
+                    .move_to(0.0, 0.0)
+                    .line_to(20.0, 0.0)
+                    .line_to(20.0, 20.0)
+                    .line_to(0.0, 20.0)
+                    .build();
+                r.draw_path(&path);
+            });
+        });
         let pm = r.pixmap.expect("pixmap");
         // Inside the clip box: blue. Outside (e.g. 15,15): transparent.
         assert_eq!(pixel_rgba(&pm, 5, 5), (0, 0, 255, 255));

@@ -747,8 +747,10 @@ impl Scene {
 
     /// Replay every node into `renderer`. Thin alias for
     /// [`Renderer::render_scene`] (the canonical entry point); both work and
-    /// pick whichever reads more naturally at the call site.
-    pub fn render(&self, renderer: &mut dyn Renderer) {
+    /// pick whichever reads more naturally at the call site. Generic rather
+    /// than `&mut dyn` because [`Renderer`] is not object-safe (its scoped
+    /// closures take `&mut Self`).
+    pub fn render<R: Renderer>(&self, renderer: &mut R) {
         renderer.render_scene(self);
     }
 }
