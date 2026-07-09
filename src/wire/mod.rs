@@ -26,7 +26,7 @@ use crate::event::{
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
     Bitmap, ClipPath, Element, FillRule, FontStyle, LineCap, LineJoin, LinearGradient, Paint, Path,
-    PathStyle, RadialGradient, Rgba, Scene, SpreadMode, Stop, TextNode, Verb,
+    PathStyle, RadialGradient, Rgba, Scene, SegmentKind, SpreadMode, Stop, TextNode,
 };
 
 use crate::frame_capnp::{
@@ -471,15 +471,15 @@ fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, Error> {
     let mut i = 0u32;
     for v in verbs {
         b = match v {
-            Verb::Move => b.move_to(coords.get(i), coords.get(i + 1)),
-            Verb::Line => b.line_to(coords.get(i), coords.get(i + 1)),
-            Verb::Quad => b.quad_to(
+            SegmentKind::Move => b.move_to(coords.get(i), coords.get(i + 1)),
+            SegmentKind::Line => b.line_to(coords.get(i), coords.get(i + 1)),
+            SegmentKind::Quad => b.quad_to(
                 coords.get(i),
                 coords.get(i + 1),
                 coords.get(i + 2),
                 coords.get(i + 3),
             ),
-            Verb::Cubic => b.cubic_to(
+            SegmentKind::Cubic => b.cubic_to(
                 coords.get(i),
                 coords.get(i + 1),
                 coords.get(i + 2),
@@ -565,11 +565,11 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
 /// `coords_len` at the same time. Rejects unknown verb bytes and verb/coord
 /// length disagreement; the verb enum makes both errors structurally absent
 /// past this point.
-fn parse_verbs(bytes: &[u8], coords_len: usize) -> Result<Vec<Verb>, Error> {
+fn parse_verbs(bytes: &[u8], coords_len: usize) -> Result<Vec<SegmentKind>, Error> {
     let mut verbs = Vec::with_capacity(bytes.len());
     let mut needed = 0usize;
     for &b in bytes {
-        let v = Verb::from_u8(b).ok_or(Error::UnknownVerb(b))?;
+        let v = SegmentKind::from_u8(b).ok_or(Error::UnknownVerb(b))?;
         needed += v.coords();
         verbs.push(v);
     }
@@ -583,16 +583,16 @@ fn parse_verbs(bytes: &[u8], coords_len: usize) -> Result<Vec<Verb>, Error> {
 }
 
 /// Pack a typed verb stream into the byte representation the wire uses. One
-/// small allocation per encoded path; the `Verb` discriminants are the wire
+/// small allocation per encoded path; the `SegmentKind` discriminants are the wire
 /// bytes by construction, so this is `repr(u8)` cast on each element.
-fn verbs_to_bytes(verbs: &[Verb]) -> Vec<u8> {
+fn verbs_to_bytes(verbs: &[SegmentKind]) -> Vec<u8> {
     verbs.iter().map(|&v| v as u8).collect()
 }
 
 fn write_path_parts(
     mut b: wire_path::Builder<'_>,
     style: &PathStyle,
-    verbs: &[Verb],
+    verbs: &[SegmentKind],
     coords: &[f32],
 ) {
     write_path_style(b.reborrow().init_style(), style);
@@ -611,15 +611,15 @@ fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
     let mut i = 0u32;
     for v in verbs {
         b = match v {
-            Verb::Move => b.move_to(coords.get(i), coords.get(i + 1)),
-            Verb::Line => b.line_to(coords.get(i), coords.get(i + 1)),
-            Verb::Quad => b.quad_to(
+            SegmentKind::Move => b.move_to(coords.get(i), coords.get(i + 1)),
+            SegmentKind::Line => b.line_to(coords.get(i), coords.get(i + 1)),
+            SegmentKind::Quad => b.quad_to(
                 coords.get(i),
                 coords.get(i + 1),
                 coords.get(i + 2),
                 coords.get(i + 3),
             ),
-            Verb::Cubic => b.cubic_to(
+            SegmentKind::Cubic => b.cubic_to(
                 coords.get(i),
                 coords.get(i + 1),
                 coords.get(i + 2),
@@ -992,7 +992,7 @@ mod tests {
             let mut p = node.init_path();
             // style left default
             let _ = p.reborrow().init_style();
-            p.set_verbs(&[Verb::Cubic as u8]);
+            p.set_verbs(&[SegmentKind::Cubic as u8]);
             let mut coords = p.init_coords(4);
             for i in 0..4 {
                 coords.set(i, i as f32);
@@ -1264,7 +1264,12 @@ mod tests {
                 };
                 assert_eq!(
                     clip.verbs(),
-                    [Verb::Move, Verb::Line, Verb::Quad, Verb::Line]
+                    [
+                        SegmentKind::Move,
+                        SegmentKind::Line,
+                        SegmentKind::Quad,
+                        SegmentKind::Line
+                    ]
                 );
                 assert_eq!(
                     clip.coords(),
@@ -1291,7 +1296,7 @@ mod tests {
             let node = nodes.reborrow().get(0);
             let clipped = node.init_clipped();
             let mut c = clipped.init_clip();
-            c.set_verbs(&[Verb::Cubic as u8]);
+            c.set_verbs(&[SegmentKind::Cubic as u8]);
             let mut coords = c.init_coords(2);
             coords.set(0, 0.0);
             coords.set(1, 0.0);

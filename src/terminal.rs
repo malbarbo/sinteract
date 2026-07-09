@@ -38,7 +38,7 @@ use tiny_skia::{
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
     Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Scene, Segment,
-    TextNode,
+    Segments, TextNode,
 };
 use crate::sixel;
 
@@ -187,6 +187,30 @@ fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
     })
 }
 
+/// Append `segments` to a tiny-skia path builder. Returns whether any segment
+/// was emitted (a lone move counts). Shared by path fill/stroke and clip-mask
+/// construction so the segment→builder mapping lives in one place.
+fn append_segments(builder: &mut PathBuilder, segments: Segments<'_>) -> bool {
+    let mut any = false;
+    for seg in segments {
+        match seg {
+            Segment::Move { x, y } => builder.move_to(x, y),
+            Segment::Line { x, y } => builder.line_to(x, y),
+            Segment::Quad { cx, cy, x, y } => builder.quad_to(cx, cy, x, y),
+            Segment::Cubic {
+                c1x,
+                c1y,
+                c2x,
+                c2y,
+                x,
+                y,
+            } => builder.cubic_to(c1x, c1y, c2x, c2y, x, y),
+        }
+        any = true;
+    }
+    any
+}
+
 impl PixmapRenderer {
     /// Allocate a renderer whose surface fits `width × height` (scaled per
     /// `target_px`/`max_scale`). `None` if the surface cannot be allocated.
@@ -237,21 +261,7 @@ impl PixmapRenderer {
     fn push_clip(&mut self, clip: &ClipPath) -> bool {
         let parent = self.clip_stack.last();
         let mut builder = PathBuilder::new();
-        for seg in clip.segments() {
-            match seg {
-                Segment::Move { x, y } => builder.move_to(x, y),
-                Segment::Line { x, y } => builder.line_to(x, y),
-                Segment::Quad { cx, cy, x, y } => builder.quad_to(cx, cy, x, y),
-                Segment::Cubic {
-                    c1x,
-                    c1y,
-                    c2x,
-                    c2y,
-                    x,
-                    y,
-                } => builder.cubic_to(c1x, c1y, c2x, c2y, x, y),
-            }
-        }
+        append_segments(&mut builder, clip.segments());
         // SVG `<clipPath>` semantics: sub-paths are filled, so close before
         // intersecting. tiny_skia tolerates an explicit close on an already-
         // closed contour.
@@ -302,24 +312,7 @@ impl Paint for PixmapRenderer {
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
         let mut builder = PathBuilder::new();
-        let mut has_points = false;
-        for seg in path.segments() {
-            match seg {
-                Segment::Move { x, y } => builder.move_to(x, y),
-                Segment::Line { x, y } => builder.line_to(x, y),
-                Segment::Quad { cx, cy, x, y } => builder.quad_to(cx, cy, x, y),
-                Segment::Cubic {
-                    c1x,
-                    c1y,
-                    c2x,
-                    c2y,
-                    x,
-                    y,
-                } => builder.cubic_to(c1x, c1y, c2x, c2y, x, y),
-            }
-            has_points = true;
-        }
-        if !has_points {
+        if !append_segments(&mut builder, path.segments()) {
             return;
         }
         if style.closed {

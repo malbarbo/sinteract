@@ -27,7 +27,7 @@ pub mod scene;
 pub mod wire;
 
 // VERB_* constants are emitted for non-Rust hosts (JS, Python); Rust uses
-// the `scene::Verb` enum directly.
+// the `scene::SegmentKind` enum directly.
 #[path = "wire/frame_capnp.rs"]
 #[allow(dead_code)]
 mod frame_capnp;

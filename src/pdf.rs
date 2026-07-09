@@ -27,7 +27,7 @@ use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
     Bitmap, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, Path,
-    RadialGradient, Rgba, Scene, Segment, Stop, TextNode,
+    RadialGradient, Rgba, Scene, Segment, Segments, Stop, TextNode,
 };
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -140,13 +140,13 @@ impl PdfRenderer {
         self.content.set_parameters(Name(name.as_bytes()));
     }
 
-    /// Walk `path.segments()` into a list of PDF path ops, converting quads to
-    /// cubics (PDF has no quadratic operator) against the running current
-    /// point.
-    fn path_ops(path: &Path) -> Vec<PathOp> {
+    /// Walk `segments` into a list of PDF path ops, converting quads to cubics
+    /// (PDF has no quadratic operator) against the running current point.
+    /// Shared by fill/stroke paths and clip geometry.
+    fn path_ops(segments: Segments<'_>) -> Vec<PathOp> {
         let mut ops = Vec::new();
         let mut last_point: Option<(f32, f32)> = None;
-        for seg in path.segments() {
+        for seg in segments {
             match seg {
                 Segment::Move { x, y } => {
                     ops.push(PathOp::Move(x, y));
@@ -157,14 +157,11 @@ impl PdfRenderer {
                     last_point = Some((x, y));
                 }
                 Segment::Quad { cx, cy, x, y } => {
-                    // A quad with no current point is dropped, and (matching the
-                    // old per-vertex path) leaves the current point unset — a
-                    // path that opens on a quad is malformed and has no anchor.
-                    if let Some((p0x, p0y)) = last_point {
-                        let c1x = p0x + 2.0 / 3.0 * (cx - p0x);
-                        let c1y = p0y + 2.0 / 3.0 * (cy - p0y);
-                        let c2x = x + 2.0 / 3.0 * (cx - x);
-                        let c2y = y + 2.0 / 3.0 * (cy - y);
+                    // A quad with no current point is dropped and leaves the
+                    // point unset — geometry that opens on a quad is malformed
+                    // and has no anchor.
+                    if let Some(p0) = last_point {
+                        let (c1x, c1y, c2x, c2y) = quad_to_cubic(p0, cx, cy, x, y);
                         ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
                         last_point = Some((x, y));
                     }
@@ -263,7 +260,7 @@ impl Paint for PdfRenderer {
         if !do_fill && !do_stroke {
             return;
         }
-        let ops = Self::path_ops(path);
+        let ops = Self::path_ops(path.segments());
         if ops.is_empty() {
             return;
         }
@@ -328,40 +325,8 @@ impl Paint for PdfRenderer {
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
-        let mut last_point: Option<(f32, f32)> = None;
-        for seg in clip.segments() {
-            match seg {
-                Segment::Move { x, y } => {
-                    self.content.move_to(x, y);
-                    last_point = Some((x, y));
-                }
-                Segment::Line { x, y } => {
-                    self.content.line_to(x, y);
-                    last_point = Some((x, y));
-                }
-                Segment::Quad { cx, cy, x, y } => {
-                    if let Some((p0x, p0y)) = last_point {
-                        let c1x = p0x + 2.0 / 3.0 * (cx - p0x);
-                        let c1y = p0y + 2.0 / 3.0 * (cy - p0y);
-                        let c2x = x + 2.0 / 3.0 * (cx - x);
-                        let c2y = y + 2.0 / 3.0 * (cy - y);
-                        self.content.cubic_to(c1x, c1y, c2x, c2y, x, y);
-                    }
-                    last_point = Some((x, y));
-                }
-                Segment::Cubic {
-                    c1x,
-                    c1y,
-                    c2x,
-                    c2y,
-                    x,
-                    y,
-                } => {
-                    self.content.cubic_to(c1x, c1y, c2x, c2y, x, y);
-                    last_point = Some((x, y));
-                }
-            }
-        }
+        let ops = Self::path_ops(clip.segments());
+        emit_path_ops(&ops, &mut self.content);
         self.content.close_path();
         match clip.fill_rule {
             FillRule::NonZero => {
@@ -690,6 +655,19 @@ fn emit_gradient_objects(pdf: &mut Pdf, shape: &GradientShape, refs: &GradientRe
     }
 }
 
+/// Promote a quadratic Bézier — current point `p0`, control `(cx, cy)`,
+/// endpoint `(x, y)` — to a cubic's two control points. PDF has no quadratic
+/// path operator, so every quad the draw list carries is elevated here.
+fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32, f32, f32) {
+    let (p0x, p0y) = p0;
+    (
+        p0x + 2.0 / 3.0 * (cx - p0x),
+        p0y + 2.0 / 3.0 * (cy - p0y),
+        x + 2.0 / 3.0 * (cx - x),
+        y + 2.0 / 3.0 * (cy - y),
+    )
+}
+
 fn emit_path_ops(ops: &[PathOp], content: &mut Content) {
     for op in ops {
         match *op {
@@ -827,11 +805,7 @@ impl crate::text::OutlineBuilder for PdfOutline {
             PathOp::Cubic(_, _, _, _, x, y) => Some((x, y)),
             PathOp::Close => None,
         });
-        let (p0x, p0y) = p0.unwrap_or((x, y));
-        let c1x = p0x + 2.0 / 3.0 * (cx - p0x);
-        let c1y = p0y + 2.0 / 3.0 * (cy - p0y);
-        let c2x = x + 2.0 / 3.0 * (cx - x);
-        let c2y = y + 2.0 / 3.0 * (cy - y);
+        let (c1x, c1y, c2x, c2y) = quad_to_cubic(p0.unwrap_or((x, y)), cx, cy, x, y);
         self.ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {

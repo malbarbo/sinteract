@@ -207,7 +207,7 @@ impl FillRule {
 /// [`ClipPath::segments`].
 #[derive(Clone, Debug, Default)]
 pub struct ClipPath {
-    verbs: Vec<Verb>,
+    verbs: Vec<SegmentKind>,
     coords: Vec<f32>,
     pub fill_rule: FillRule,
 }
@@ -223,7 +223,7 @@ impl ClipPath {
     /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
     /// — only the wire codec touches the raw streams; read geometry through
     /// [`Self::segments`].
-    pub(crate) fn verbs(&self) -> &[Verb] {
+    pub(crate) fn verbs(&self) -> &[SegmentKind] {
         &self.verbs
     }
 
@@ -415,20 +415,21 @@ pub fn bitmap_box_affine(
     [a, b, c, d, e, f]
 }
 
-/// One segment in a [`Path`]. Each verb consumes a fixed number of floats
-/// from [`Path::coords`] (see [`Self::coords`]). The discriminants are
-/// stable: they match the byte values used in the wire format
+/// The kind of a path segment — its verb byte on the wire. Each kind consumes
+/// a fixed number of floats from [`Path::coords`] (see [`Self::coords`]); pair
+/// one with its coords to get a [`Segment`]. The discriminants are stable: they
+/// match the byte values used in the wire format
 /// (`verbMove`/`verbLine`/`verbQuad`/`verbCubic` in `schema/frame.capnp`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Verb {
+pub enum SegmentKind {
     Move = 0,
     Line = 1,
     Quad = 2,
     Cubic = 3,
 }
 
-impl Verb {
+impl SegmentKind {
     /// Decode a wire byte. Returns `None` on an unknown verb — callers at
     /// the wire boundary surface this as `wire::Error::UnknownVerb`.
     pub fn from_u8(v: u8) -> Option<Self> {
@@ -486,13 +487,13 @@ pub enum Segment {
 /// stream runs short it stops (`None`) instead of panicking.
 #[must_use = "Segments yields nothing unless iterated"]
 pub struct Segments<'a> {
-    verbs: std::slice::Iter<'a, Verb>,
+    verbs: std::slice::Iter<'a, SegmentKind>,
     coords: &'a [f32],
     i: usize,
 }
 
 impl<'a> Segments<'a> {
-    fn new(verbs: &'a [Verb], coords: &'a [f32]) -> Self {
+    fn new(verbs: &'a [SegmentKind], coords: &'a [f32]) -> Self {
         Self {
             verbs: verbs.iter(),
             coords,
@@ -510,15 +511,15 @@ impl Iterator for Segments<'_> {
         // elements, so the fixed indices below cannot go out of range.
         let c = self.coords.get(self.i..self.i + v.coords())?;
         let seg = match v {
-            Verb::Move => Segment::Move { x: c[0], y: c[1] },
-            Verb::Line => Segment::Line { x: c[0], y: c[1] },
-            Verb::Quad => Segment::Quad {
+            SegmentKind::Move => Segment::Move { x: c[0], y: c[1] },
+            SegmentKind::Line => Segment::Line { x: c[0], y: c[1] },
+            SegmentKind::Quad => Segment::Quad {
                 cx: c[0],
                 cy: c[1],
                 x: c[2],
                 y: c[3],
             },
-            Verb::Cubic => Segment::Cubic {
+            SegmentKind::Cubic => Segment::Cubic {
                 c1x: c[0],
                 c1y: c[1],
                 c2x: c[2],
@@ -538,7 +539,7 @@ impl Iterator for Segments<'_> {
 /// clip builders so the kurbo expansion lives in one place.
 #[allow(clippy::too_many_arguments)]
 fn push_arc_cubics(
-    verbs: &mut Vec<Verb>,
+    verbs: &mut Vec<SegmentKind>,
     coords: &mut Vec<f32>,
     x1: f32,
     y1: f32,
@@ -563,7 +564,7 @@ fn push_arc_cubics(
     };
     for el in arc.append_iter(ARC_TOLERANCE) {
         if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
-            verbs.push(Verb::Cubic);
+            verbs.push(SegmentKind::Cubic);
             coords.extend([
                 p1.x as f32,
                 p1.y as f32,
@@ -589,7 +590,7 @@ fn push_arc_cubics(
 #[derive(Clone, Debug, Default)]
 pub struct Path {
     pub style: PathStyle,
-    verbs: Vec<Verb>,
+    verbs: Vec<SegmentKind>,
     coords: Vec<f32>,
 }
 
@@ -604,7 +605,7 @@ impl Path {
     /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
     /// — only the wire codec touches the raw streams; read geometry through
     /// [`Self::segments`].
-    pub(crate) fn verbs(&self) -> &[Verb] {
+    pub(crate) fn verbs(&self) -> &[SegmentKind] {
         &self.verbs
     }
 
@@ -862,7 +863,7 @@ impl<'a> Drop for ClipScope<'a> {
 #[must_use = "PathBuilder yields a Path only when build() is called"]
 pub struct PathBuilder {
     style: PathStyle,
-    verbs: Vec<Verb>,
+    verbs: Vec<SegmentKind>,
     coords: Vec<f32>,
     last_point: Option<(f32, f32)>,
 }
@@ -878,28 +879,28 @@ impl PathBuilder {
     }
 
     pub fn move_to(mut self, x: f32, y: f32) -> Self {
-        self.verbs.push(Verb::Move);
+        self.verbs.push(SegmentKind::Move);
         self.coords.extend([x, y]);
         self.last_point = Some((x, y));
         self
     }
 
     pub fn line_to(mut self, x: f32, y: f32) -> Self {
-        self.verbs.push(Verb::Line);
+        self.verbs.push(SegmentKind::Line);
         self.coords.extend([x, y]);
         self.last_point = Some((x, y));
         self
     }
 
     pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
-        self.verbs.push(Verb::Quad);
+        self.verbs.push(SegmentKind::Quad);
         self.coords.extend([cx, cy, x, y]);
         self.last_point = Some((x, y));
         self
     }
 
     pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
-        self.verbs.push(Verb::Cubic);
+        self.verbs.push(SegmentKind::Cubic);
         self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
         self.last_point = Some((x, y));
         self
@@ -958,7 +959,7 @@ impl PathBuilder {
 /// implicitly closed by the renderers, so no closing line is required.
 #[must_use = "ClipPathBuilder yields a ClipPath only when build() is called"]
 pub struct ClipPathBuilder {
-    verbs: Vec<Verb>,
+    verbs: Vec<SegmentKind>,
     coords: Vec<f32>,
     fill_rule: FillRule,
     last_point: Option<(f32, f32)>,
@@ -975,28 +976,28 @@ impl ClipPathBuilder {
     }
 
     pub fn move_to(mut self, x: f32, y: f32) -> Self {
-        self.verbs.push(Verb::Move);
+        self.verbs.push(SegmentKind::Move);
         self.coords.extend([x, y]);
         self.last_point = Some((x, y));
         self
     }
 
     pub fn line_to(mut self, x: f32, y: f32) -> Self {
-        self.verbs.push(Verb::Line);
+        self.verbs.push(SegmentKind::Line);
         self.coords.extend([x, y]);
         self.last_point = Some((x, y));
         self
     }
 
     pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
-        self.verbs.push(Verb::Quad);
+        self.verbs.push(SegmentKind::Quad);
         self.coords.extend([cx, cy, x, y]);
         self.last_point = Some((x, y));
         self
     }
 
     pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
-        self.verbs.push(Verb::Cubic);
+        self.verbs.push(SegmentKind::Cubic);
         self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
         self.last_point = Some((x, y));
         self
@@ -1054,7 +1055,7 @@ mod tests {
 
     /// Total floats a verb stream consumes — the invariant every builder must
     /// preserve.
-    fn coords_arity(verbs: &[Verb]) -> usize {
+    fn coords_arity(verbs: &[SegmentKind]) -> usize {
         verbs.iter().map(|v| v.coords()).sum()
     }
 
@@ -1068,7 +1069,12 @@ mod tests {
             .build();
         assert_eq!(
             clip.verbs(),
-            [Verb::Move, Verb::Line, Verb::Quad, Verb::Cubic]
+            [
+                SegmentKind::Move,
+                SegmentKind::Line,
+                SegmentKind::Quad,
+                SegmentKind::Cubic
+            ]
         );
         assert_eq!(coords_arity(clip.verbs()), clip.coords().len());
         assert_eq!(clip.fill_rule, FillRule::EvenOdd);
@@ -1111,7 +1117,7 @@ mod tests {
         // Degenerate streams (unreachable through the builders, but the iterator
         // must not panic if handed one): the Move decodes, then the Cubic wants
         // six coords and only finds none, so next() ends the walk with None.
-        let verbs = [Verb::Move, Verb::Cubic];
+        let verbs = [SegmentKind::Move, SegmentKind::Cubic];
         let coords = [1.0, 2.0];
         let mut segs = Segments::new(&verbs, &coords);
         assert_eq!(segs.next(), Some(Segment::Move { x: 1.0, y: 2.0 }));
@@ -1126,7 +1132,7 @@ mod tests {
             .build();
         // Arc after a current point expands to at least one cubic; the streams
         // stay balanced regardless of how many the tolerance produced.
-        assert!(clip.verbs().contains(&Verb::Cubic));
+        assert!(clip.verbs().contains(&SegmentKind::Cubic));
         assert_eq!(coords_arity(clip.verbs()), clip.coords().len());
     }
 
@@ -1136,7 +1142,7 @@ mod tests {
         let clip = ClipPath::builder(FillRule::NonZero)
             .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 10.0)
             .build();
-        assert_eq!(clip.verbs(), [Verb::Move]);
+        assert_eq!(clip.verbs(), [SegmentKind::Move]);
         assert_eq!(clip.coords(), [10.0, 10.0]);
     }
 
@@ -1147,7 +1153,10 @@ mod tests {
             .line_to(10.0, 0.0)
             .quad_to(15.0, 5.0, 10.0, 10.0)
             .build();
-        assert_eq!(p.verbs(), [Verb::Move, Verb::Line, Verb::Quad]);
+        assert_eq!(
+            p.verbs(),
+            [SegmentKind::Move, SegmentKind::Line, SegmentKind::Quad]
+        );
         assert_eq!(coords_arity(p.verbs()), p.coords().len());
     }
 
@@ -1176,7 +1185,7 @@ mod tests {
         let Element::Path(p) = &scene.elements[0] else {
             panic!("expected a path");
         };
-        assert_eq!(p.verbs(), [Verb::Move, Verb::Line]);
+        assert_eq!(p.verbs(), [SegmentKind::Move, SegmentKind::Line]);
     }
 
     #[test]
