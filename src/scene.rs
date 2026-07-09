@@ -222,13 +222,16 @@ impl ClipPath {
         ClipPathBuilder::new(fill_rule)
     }
 
-    /// Raw wire verbs. Kept in lock-step with [`Self::coords`].
-    pub fn verbs(&self) -> &[Verb] {
+    /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
+    /// — only the wire codec touches the raw streams; read geometry through
+    /// [`Self::segments`].
+    pub(crate) fn verbs(&self) -> &[Verb] {
         &self.verbs
     }
 
-    /// Raw coordinate stream. Read [`Self::segments`] for a typed walk.
-    pub fn coords(&self) -> &[f32] {
+    /// Raw coordinate stream. Crate-internal; read [`Self::segments`] for a
+    /// typed walk.
+    pub(crate) fn coords(&self) -> &[f32] {
         &self.coords
     }
 
@@ -597,13 +600,16 @@ impl Path {
         PathBuilder::new(style)
     }
 
-    /// Raw wire verbs. Kept in lock-step with [`Self::coords`].
-    pub fn verbs(&self) -> &[Verb] {
+    /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
+    /// — only the wire codec touches the raw streams; read geometry through
+    /// [`Self::segments`].
+    pub(crate) fn verbs(&self) -> &[Verb] {
         &self.verbs
     }
 
-    /// Raw coordinate stream. Read [`Self::segments`] for a typed walk.
-    pub fn coords(&self) -> &[f32] {
+    /// Raw coordinate stream. Crate-internal; read [`Self::segments`] for a
+    /// typed walk.
+    pub(crate) fn coords(&self) -> &[f32] {
         &self.coords
     }
 
@@ -627,17 +633,19 @@ pub enum Element {
 }
 
 /// Materialized event log produced by Python (or any other front end) and
-/// consumed by every renderer. Built via RAII guards — [`Self::path`]
-/// returns a [`PathScope`] that commits the path on drop, and
-/// [`Self::clip`] / [`Self::clip_rect`] return a [`ClipScope`] that
-/// accumulates its own nested elements and commits an [`Element::Clipped`]
-/// on drop. The list is replayed once via [`Self::render`].
+/// consumed by every renderer. Built via [`Self::add_path`] for a ready
+/// [`Path`] plus RAII guards — [`Self::path`] returns a [`PathScope`] that
+/// commits the path on drop, and [`Self::clip`] / [`Self::clip_rect`] return
+/// a [`ClipScope`] that wraps every element drawn during its lifetime into an
+/// [`Element::Clipped`] on drop. The list is replayed once via [`Self::render`].
 ///
-/// Because path geometry only flows through `PathScope` and clip scope is
-/// captured by `ClipScope`'s own element vector, several footguns of the
-/// older flat API are statically impossible: you cannot append path verbs
-/// without an open path, commit an empty path, unbalance the clip stack
-/// (there is no separate pop), or interleave a clip with a half-built path.
+/// Because path geometry only flows through a builder and a clip's subtree is
+/// exactly the run of elements drawn while its `ClipScope` is alive, several
+/// footguns of the older flat API are statically impossible: you cannot append
+/// path verbs without an open path, unbalance the clip stack (there is no
+/// separate pop), or interleave a clip with a half-built path. A `PathScope`
+/// that recorded no geometry also discards itself; only [`Self::add_path`]
+/// (the explicit escape hatch for a ready [`Path`]) can enter an empty one.
 ///
 /// Arcs entered via [`PathScope::arc_to`] are pre-expanded to cubics so
 /// renderers only see line / quad / cubic primitives.
@@ -660,6 +668,14 @@ impl Scene {
         }
     }
 
+    /// Append an already-built [`Path`] as a leaf element. Use this when a
+    /// path is assembled away from the scene — decoded off the wire, shared,
+    /// or produced by [`Path::builder`]; use [`Self::path`] to build one in
+    /// place instead.
+    pub fn add_path(&mut self, path: Path) {
+        self.elements.push(Element::Path(path));
+    }
+
     /// Begin a new path. Returns a [`PathScope`] whose `move_to` / `line_to`
     /// / `quad_to` / `cubic_to` / `arc_to` methods append verbs; the path is
     /// committed to [`Self::elements`] on drop, or discarded if no geometry was
@@ -671,17 +687,18 @@ impl Scene {
         }
     }
 
-    /// Push an arbitrary clip path. Returns a [`ClipScope`] that accumulates
-    /// its own nested elements; on drop, commits an [`Element::Clipped`] to
-    /// the parent scene. The builder `Deref`s to a fresh inner [`Scene`] so
-    /// all draw methods remain reachable; nested clips just call
-    /// [`Self::clip`] through that `Deref` and commit in the right order.
+    /// Push an arbitrary clip path. Returns a [`ClipScope`] that marks the
+    /// current end of [`Self::elements`]; every element drawn through the
+    /// scope lands in the scene as usual, and on drop the scope wraps exactly
+    /// that trailing run into an [`Element::Clipped`]. The scope `Deref`s to
+    /// this same scene, so nested clips just call [`Self::clip`] through the
+    /// `Deref` and commit inside-out.
     pub fn clip(&mut self, clip: ClipPath) -> ClipScope<'_> {
-        let inner = Scene::new(self.width, self.height);
+        let mark = self.elements.len();
         ClipScope {
-            parent: self,
+            scene: self,
             clip,
-            inner,
+            mark,
         }
     }
 
@@ -801,40 +818,40 @@ impl Drop for PathScope<'_> {
 }
 
 /// Active clip scope returned by [`Scene::clip`] / [`Scene::clip_rect`].
-/// Owns a fresh inner [`Scene`] that collects elements drawn inside the
-/// clip; `Deref`s to it so all draw methods remain reachable through the
-/// builder. On drop, commits an [`Element::Clipped`] to the parent scene
-/// with the accumulated elements — the structure itself guarantees
-/// balanced clip nesting (no separate pop).
+/// Borrows the scene and remembers where its own elements begin (`mark`);
+/// `Deref`s to that same scene so draw methods append there directly. On
+/// drop, the trailing run `elements[mark..]` is lifted into an
+/// [`Element::Clipped`] pushed back in its place — the structure itself
+/// guarantees balanced clip nesting (no separate pop).
 ///
 /// Nested clips work the usual way: calling [`Scene::clip`] through the
-/// builder's `Deref` returns a child `ClipScope` borrowing the inner
-/// scene, and committing inside-out leaves a well-formed tree.
+/// `Deref` returns a child `ClipScope` with a later mark; dropping
+/// inside-out leaves a well-formed tree.
 #[must_use = "ClipScope commits the clip on drop; bind it where the clip should end"]
 pub struct ClipScope<'a> {
-    parent: &'a mut Scene,
+    scene: &'a mut Scene,
     clip: ClipPath,
-    inner: Scene,
+    mark: usize,
 }
 
 impl<'a> std::ops::Deref for ClipScope<'a> {
     type Target = Scene;
     fn deref(&self) -> &Scene {
-        &self.inner
+        self.scene
     }
 }
 
 impl<'a> std::ops::DerefMut for ClipScope<'a> {
     fn deref_mut(&mut self) -> &mut Scene {
-        &mut self.inner
+        self.scene
     }
 }
 
 impl<'a> Drop for ClipScope<'a> {
     fn drop(&mut self) {
         let clip = std::mem::take(&mut self.clip);
-        let elements = std::mem::take(&mut self.inner.elements);
-        self.parent
+        let elements = self.scene.elements.split_off(self.mark);
+        self.scene
             .elements
             .push(Element::Clipped { clip, elements });
     }
@@ -1139,5 +1156,96 @@ mod tests {
         };
         // arc_to expands to cubics; whatever the count, the streams agree.
         assert_eq!(coords_arity(p.verbs()), p.coords().len());
+    }
+
+    #[test]
+    fn add_path_appends_prebuilt_path() {
+        let mut scene = Scene::new(10.0, 10.0);
+        let p = Path::builder(PathStyle::default())
+            .move_to(0.0, 0.0)
+            .line_to(5.0, 5.0)
+            .build();
+        scene.add_path(p);
+        let Element::Path(p) = &scene.elements[0] else {
+            panic!("expected a path");
+        };
+        assert_eq!(p.verbs(), [Verb::Move, Verb::Line]);
+    }
+
+    #[test]
+    fn clip_wraps_only_elements_drawn_inside() {
+        // Draw before, inside, and after the clip: only the middle path is
+        // wrapped; the outer two stay as bare siblings.
+        let mut scene = Scene::new(20.0, 20.0);
+        scene.add_path(
+            Path::builder(PathStyle::default())
+                .move_to(0.0, 0.0)
+                .build(),
+        );
+        {
+            let mut c = scene.clip(
+                ClipPath::builder(FillRule::NonZero)
+                    .move_to(0.0, 0.0)
+                    .build(),
+            );
+            c.add_path(
+                Path::builder(PathStyle::default())
+                    .move_to(1.0, 1.0)
+                    .build(),
+            );
+        }
+        scene.add_path(
+            Path::builder(PathStyle::default())
+                .move_to(2.0, 2.0)
+                .build(),
+        );
+
+        assert!(matches!(scene.elements[0], Element::Path(_)));
+        assert!(matches!(scene.elements[2], Element::Path(_)));
+        let Element::Clipped { elements, .. } = &scene.elements[1] else {
+            panic!("expected the middle element to be clipped");
+        };
+        assert_eq!(elements.len(), 1);
+        let Element::Path(p) = &elements[0] else {
+            panic!("expected a path inside the clip");
+        };
+        assert_eq!(p.coords(), [1.0, 1.0]);
+    }
+
+    #[test]
+    fn nested_clips_wrap_inside_out() {
+        let mut scene = Scene::new(20.0, 20.0);
+        {
+            let mut outer = scene.clip(
+                ClipPath::builder(FillRule::NonZero)
+                    .move_to(0.0, 0.0)
+                    .build(),
+            );
+            outer.add_path(
+                Path::builder(PathStyle::default())
+                    .move_to(1.0, 1.0)
+                    .build(),
+            );
+            {
+                let mut inner = outer.clip(
+                    ClipPath::builder(FillRule::NonZero)
+                        .move_to(0.0, 0.0)
+                        .build(),
+                );
+                inner.add_path(
+                    Path::builder(PathStyle::default())
+                        .move_to(2.0, 2.0)
+                        .build(),
+                );
+            }
+        }
+        // scene = [ Clipped{ outer, [ Path(1,1), Clipped{ inner, [ Path(2,2) ] } ] } ]
+        assert_eq!(scene.elements.len(), 1);
+        let Element::Clipped { elements, .. } = &scene.elements[0] else {
+            panic!("expected outer clip");
+        };
+        assert_eq!(elements.len(), 2);
+        assert!(matches!(elements[0], Element::Path(_)));
+        assert!(matches!(elements[1], Element::Clipped { .. }));
     }
 }
