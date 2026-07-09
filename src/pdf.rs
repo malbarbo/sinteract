@@ -1,9 +1,10 @@
 //! Render a [`crate::scene::Scene`] to a PDF byte stream. Native-only;
 //! the WASM build does not link against `pdf-writer`.
 //!
-//! The draw list is replayed via [`crate::scene::Scene::render`]; this
-//! module implements [`PdfRenderer`] which translates each command into PDF
-//! content-stream operators.
+//! The draw list is replayed via [`Renderer::render`]; this module's
+//! [`PdfRenderer`] translates each element into PDF content-stream operators
+//! and then assembles a one-page document. The renderer is reusable across
+//! frames — it rebuilds a fresh content stream and output buffer per render.
 //!
 //! Coordinate system: PDF native space is y-up with the origin at the
 //! bottom-left, while the draw list uses y-down with the origin at the
@@ -23,10 +24,10 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::renderer::Renderer;
+use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
     Bitmap, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, Path,
-    RadialGradient, Rgba, Segment, Stop, TextNode,
+    RadialGradient, Rgba, Scene, Segment, Stop, TextNode,
 };
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -55,13 +56,17 @@ enum PathOp {
 }
 
 /// A gradient encountered during draw-list playback. Kept around until
-/// [`finish_pdf`] writes out the function/shading/pattern indirect objects.
+/// [`PdfRenderer::assemble`] writes out the function/shading/pattern indirect
+/// objects.
 #[derive(Clone)]
 enum GradientShape {
     Linear(LinearGradient),
     Radial(RadialGradient),
 }
 
+/// A reusable PDF renderer. Accumulates a content stream and its resources,
+/// then assembles a one-page document into `bytes` on each render. Reusable
+/// across frames; the content stream and output buffer are rebuilt per render.
 struct PdfRenderer {
     width: f32,
     height: f32,
@@ -71,17 +76,46 @@ struct PdfRenderer {
     /// Gradients seen so far; the index in this vec is the `/P{n}` name
     /// used in the content stream and the Resources/Pattern dictionary.
     gradients: Vec<GradientShape>,
+    /// Assembled document bytes from the most recent render.
+    bytes: Vec<u8>,
 }
 
 impl PdfRenderer {
     fn new() -> Self {
-        Self {
-            width: 0.0,
-            height: 0.0,
+        PdfRenderer {
+            width: 1.0,
+            height: 1.0,
             content: Content::new(),
             gstates: BTreeMap::new(),
             gradients: Vec::new(),
+            bytes: Vec::new(),
         }
+    }
+
+    /// Reset the content stream and resources for a fresh `width × height`
+    /// page and emit the base transform. PDF allocation never fails, so this
+    /// is infallible — the `Result` only matches the streaming resize hook.
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
+        self.width = width.max(1.0);
+        self.height = height.max(1.0);
+        self.gstates.clear();
+        self.gradients.clear();
+        // Combined transform: y-flip and px→pt scale. Draw-list coords are CSS
+        // pixels with y-down/top-left origin; PDF points are y-up/bottom-left.
+        // PDF's [a b c d e f] cm means [x' y' 1] = [x y 1] * [[a b 0][c d 0][e f 1]],
+        // so for x' = s*x and y' = -s*y + s*h (where s = PX_TO_PT) we need
+        // a=s, d=-s, f=s*h.
+        let s = PX_TO_PT;
+        let mut content = Content::new();
+        content.transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
+        self.content = content;
+        Ok(())
+    }
+
+    /// Consume the renderer and hand back the assembled document bytes (for
+    /// one-shot callers that want to move the result out rather than borrow).
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 
     /// Register a gradient and return its content-stream pattern name `Pn`.
@@ -205,35 +239,19 @@ impl PdfRenderer {
 }
 
 /// Emits `restore_state` on scope exit — including on unwind — so a clip's
-/// `save_state` in [`Renderer::with_clip`] is always balanced even if the
+/// `save_state` in [`Paint::with_clip`] is always balanced even if the
 /// `inside` body panics.
 struct RestoreGuard<'a> {
-    renderer: &'a mut PdfRenderer,
+    canvas: &'a mut PdfRenderer,
 }
 
 impl Drop for RestoreGuard<'_> {
     fn drop(&mut self) {
-        self.renderer.content.restore_state();
+        self.canvas.content.restore_state();
     }
 }
 
-impl Renderer for PdfRenderer {
-    fn frame(&mut self, width: f32, height: f32, mut body: impl FnMut(&mut Self)) {
-        self.width = width.max(1.0);
-        self.height = height.max(1.0);
-        // Combined transform: y-flip and px→pt scale. Draw-list coords are CSS
-        // pixels with y-down/top-left origin; PDF points are y-up/bottom-left.
-        // PDF's [a b c d e f] cm means [x' y' 1] = [x y 1] * [[a b 0][c d 0][e f 1]],
-        // so for x' = s*x and y' = -s*y + s*h (where s = PX_TO_PT) we need
-        // a=s, d=-s, f=s*h.
-        let s = PX_TO_PT;
-        self.content
-            .transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
-        // No teardown: the content stream is drained by `finish_pdf` after
-        // render returns, so no drop-guard is needed at the frame level.
-        body(self);
-    }
-
+impl Paint for PdfRenderer {
     fn draw_path(&mut self, path: &Path) {
         // For solid paints: alpha rides the path. For gradients: PDF
         // gradients here are RGB-only; per-stop alpha is dropped, and a
@@ -308,7 +326,7 @@ impl Renderer for PdfRenderer {
         // terminal renderer); silently skip.
     }
 
-    fn with_clip(&mut self, clip: &ClipPath, mut inside: impl FnMut(&mut Self)) {
+    fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
         let mut last_point: Option<(f32, f32)> = None;
         for seg in clip.segments() {
@@ -356,8 +374,23 @@ impl Renderer for PdfRenderer {
         self.content.end_path();
         // save_state above is unconditional, so the restore is always
         // balanced; the guard also fires it on unwind.
-        let guard = RestoreGuard { renderer: self };
-        inside(&mut *guard.renderer);
+        let guard = RestoreGuard { canvas: self };
+        inside(&mut *guard.canvas)
+    }
+}
+
+impl Renderer for PdfRenderer {
+    type Output<'a> = &'a [u8];
+
+    fn render(&mut self, scene: &Scene) -> Result<&[u8], crate::wire::Error> {
+        self.ensure_size(scene.width, scene.height)?;
+        self.paint_elements(&scene.elements);
+        Ok(self.assemble())
+    }
+
+    fn render_stream(&mut self, reader: impl std::io::Read) -> Result<&[u8], crate::wire::Error> {
+        crate::wire::stream_frame(self, reader, |s, w, h| s.ensure_size(w, h))?;
+        Ok(self.assemble())
     }
 }
 
@@ -380,8 +413,8 @@ fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
 /// Render a [`crate::scene::Scene`] to PDF bytes.
 pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
     let mut renderer = PdfRenderer::new();
-    scene.render(&mut renderer);
-    finish_pdf(renderer)
+    renderer.render(scene).expect("PDF rendering never fails");
+    renderer.into_bytes()
 }
 
 /// Layout of one gradient as PDF indirect objects: a list of sub-function
@@ -395,114 +428,121 @@ struct GradientRefs {
     pattern: Ref,
 }
 
-fn finish_pdf(mut renderer: PdfRenderer) -> Vec<u8> {
-    let w = renderer.width;
-    let h = renderer.height;
-    let gstates = std::mem::take(&mut renderer.gstates);
-    let gradients = std::mem::take(&mut renderer.gradients);
-    let buf = renderer.content.finish();
+impl PdfRenderer {
+    /// Assemble the accumulated content + resources into a one-page document,
+    /// store it in `self.bytes`, and borrow it out. Takes the content and
+    /// resource maps by value (leaving fresh empties), so the next render
+    /// starts clean.
+    fn assemble(&mut self) -> &[u8] {
+        let w = self.width;
+        let h = self.height;
+        let gstates = std::mem::take(&mut self.gstates);
+        let gradients = std::mem::take(&mut self.gradients);
+        let buf = std::mem::replace(&mut self.content, Content::new()).finish();
 
-    // Indirect-reference IDs.
-    let catalog_id = Ref::new(1);
-    let pages_id = Ref::new(2);
-    let page_id = Ref::new(3);
-    let content_id = Ref::new(4);
-    let mut next_id: i32 = 5;
-    let mut alloc = || {
-        let r = Ref::new(next_id);
-        next_id += 1;
-        r
-    };
+        // Indirect-reference IDs.
+        let catalog_id = Ref::new(1);
+        let pages_id = Ref::new(2);
+        let page_id = Ref::new(3);
+        let content_id = Ref::new(4);
+        let mut next_id: i32 = 5;
+        let mut alloc = || {
+            let r = Ref::new(next_id);
+            next_id += 1;
+            r
+        };
 
-    let gstate_refs: Vec<((u16, u16), Ref, u32)> = gstates
-        .iter()
-        .map(|(&(fk, sk), &idx)| ((fk, sk), alloc(), idx))
-        .collect();
+        let gstate_refs: Vec<((u16, u16), Ref, u32)> = gstates
+            .iter()
+            .map(|(&(fk, sk), &idx)| ((fk, sk), alloc(), idx))
+            .collect();
 
-    // Allocate function/shading/pattern refs for each gradient.
-    let gradient_refs: Vec<GradientRefs> = gradients
-        .iter()
-        .map(|shape| {
-            let stops = match shape {
-                GradientShape::Linear(g) => &g.stops,
-                GradientShape::Radial(g) => &g.stops,
-            };
-            let prepared = prepare_stops(stops);
-            // (stops-1) subfunctions when stitching, or 1 exponential when
-            // there are exactly 2 stops.
-            let n_subfns = if prepared.len() <= 2 {
-                1
+        // Allocate function/shading/pattern refs for each gradient.
+        let gradient_refs: Vec<GradientRefs> = gradients
+            .iter()
+            .map(|shape| {
+                let stops = match shape {
+                    GradientShape::Linear(g) => &g.stops,
+                    GradientShape::Radial(g) => &g.stops,
+                };
+                let prepared = prepare_stops(stops);
+                // (stops-1) subfunctions when stitching, or 1 exponential when
+                // there are exactly 2 stops.
+                let n_subfns = if prepared.len() <= 2 {
+                    1
+                } else {
+                    prepared.len() - 1
+                };
+                let need_stitch = prepared.len() > 2;
+                let n_fn_refs = n_subfns + if need_stitch { 1 } else { 0 };
+                let functions: Vec<Ref> = (0..n_fn_refs).map(|_| alloc()).collect();
+                GradientRefs {
+                    functions,
+                    shading: alloc(),
+                    pattern: alloc(),
+                }
+            })
+            .collect();
+
+        let mut pdf = Pdf::new();
+        // Match the LaTeX/tectonic default output level so embedded images don't
+        // trip "newer than current output PDF setting" warnings. We don't use
+        // anything that requires 1.6+.
+        pdf.set_version(1, 5);
+        pdf.catalog(catalog_id).pages(pages_id);
+        pdf.pages(pages_id).kids([page_id]).count(1);
+
+        {
+            let mut page = pdf.page(page_id);
+            page.parent(pages_id);
+            page.media_box(Rect::new(0.0, 0.0, w * PX_TO_PT, h * PX_TO_PT));
+            page.contents(content_id);
+            let need_resources = !gstate_refs.is_empty() || !gradient_refs.is_empty();
+            if need_resources {
+                let mut resources = page.resources();
+                if !gstate_refs.is_empty() {
+                    let mut gs_dict = resources.ext_g_states();
+                    for ((_fk, _sk), r, idx) in &gstate_refs {
+                        let name = format!("Gs{idx}");
+                        gs_dict.pair(Name(name.as_bytes()), *r);
+                    }
+                    gs_dict.finish();
+                }
+                if !gradient_refs.is_empty() {
+                    let mut pat_dict = resources.patterns();
+                    for (i, gr) in gradient_refs.iter().enumerate() {
+                        let name = format!("P{i}");
+                        pat_dict.pair(Name(name.as_bytes()), gr.pattern);
+                    }
+                    pat_dict.finish();
+                }
+                resources.finish();
             } else {
-                prepared.len() - 1
-            };
-            let need_stitch = prepared.len() > 2;
-            let n_fn_refs = n_subfns + if need_stitch { 1 } else { 0 };
-            let functions: Vec<Ref> = (0..n_fn_refs).map(|_| alloc()).collect();
-            GradientRefs {
-                functions,
-                shading: alloc(),
-                pattern: alloc(),
+                page.resources();
             }
-        })
-        .collect();
+            page.finish();
+        }
 
-    let mut pdf = Pdf::new();
-    // Match the LaTeX/tectonic default output level so embedded images don't
-    // trip "newer than current output PDF setting" warnings. We don't use
-    // anything that requires 1.6+.
-    pdf.set_version(1, 5);
-    pdf.catalog(catalog_id).pages(pages_id);
-    pdf.pages(pages_id).kids([page_id]).count(1);
+        pdf.stream(content_id, buf.as_slice());
 
-    {
-        let mut page = pdf.page(page_id);
-        page.parent(pages_id);
-        page.media_box(Rect::new(0.0, 0.0, w * PX_TO_PT, h * PX_TO_PT));
-        page.contents(content_id);
-        let need_resources = !gstate_refs.is_empty() || !gradient_refs.is_empty();
-        if need_resources {
-            let mut resources = page.resources();
-            if !gstate_refs.is_empty() {
-                let mut gs_dict = resources.ext_g_states();
-                for ((_fk, _sk), r, idx) in &gstate_refs {
-                    let name = format!("Gs{idx}");
-                    gs_dict.pair(Name(name.as_bytes()), *r);
-                }
-                gs_dict.finish();
+        for ((fk, sk), r, _idx) in &gstate_refs {
+            let mut gs = pdf.ext_graphics(*r);
+            if *fk != 1000 {
+                gs.non_stroking_alpha(alpha_value(*fk));
             }
-            if !gradient_refs.is_empty() {
-                let mut pat_dict = resources.patterns();
-                for (i, gr) in gradient_refs.iter().enumerate() {
-                    let name = format!("P{i}");
-                    pat_dict.pair(Name(name.as_bytes()), gr.pattern);
-                }
-                pat_dict.finish();
+            if *sk != 1000 {
+                gs.stroking_alpha(alpha_value(*sk));
             }
-            resources.finish();
-        } else {
-            page.resources();
+            gs.finish();
         }
-        page.finish();
-    }
 
-    pdf.stream(content_id, buf.as_slice());
-
-    for ((fk, sk), r, _idx) in &gstate_refs {
-        let mut gs = pdf.ext_graphics(*r);
-        if *fk != 1000 {
-            gs.non_stroking_alpha(alpha_value(*fk));
+        for (shape, refs) in gradients.iter().zip(gradient_refs.iter()) {
+            emit_gradient_objects(&mut pdf, shape, refs);
         }
-        if *sk != 1000 {
-            gs.stroking_alpha(alpha_value(*sk));
-        }
-        gs.finish();
-    }
 
-    for (shape, refs) in gradients.iter().zip(gradient_refs.iter()) {
-        emit_gradient_objects(&mut pdf, shape, refs);
+        self.bytes = pdf.finish();
+        &self.bytes
     }
-
-    pdf.finish()
 }
 
 /// Normalize stops so they cover [0, 1] and there is at least 2 entries:
@@ -693,7 +733,7 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
 }
 
 #[allow(clippy::similar_names)]
-fn render_text(node: &TextNode, renderer: &mut PdfRenderer) {
+fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
     let size_i = node.size as i32;
     if size_i <= 0 || node.text.is_empty() {
         return;
@@ -717,35 +757,35 @@ fn render_text(node: &TextNode, renderer: &mut PdfRenderer) {
         return;
     }
 
-    renderer.content.save_state();
-    renderer.apply_alpha(
+    canvas.content.save_state();
+    canvas.apply_alpha(
         if do_fill { node.fill.a } else { 1.0 },
         if do_stroke { node.stroke.a } else { 1.0 },
     );
     if do_fill {
-        renderer.content.set_fill_rgb(
+        canvas.content.set_fill_rgb(
             node.fill.r as f32 / 255.0,
             node.fill.g as f32 / 255.0,
             node.fill.b as f32 / 255.0,
         );
     }
     if do_stroke {
-        renderer.content.set_stroke_rgb(
+        canvas.content.set_stroke_rgb(
             node.stroke.r as f32 / 255.0,
             node.stroke.g as f32 / 255.0,
             node.stroke.b as f32 / 255.0,
         );
-        renderer.content.set_line_width(node.stroke_width);
+        canvas.content.set_line_width(node.stroke_width);
         // Cap/join intentionally omitted: text outlines are closed contours
         // on smooth curves, so the PDF defaults (butt cap, miter join) are
         // visually identical to anything the producer might pick.
     }
     // `node.transform` is already in the PDF `cm` convention.
-    renderer.content.transform(node.transform);
+    canvas.content.transform(node.transform);
 
     let mut adapter = PdfOutline { ops: Vec::new() };
     crate::text::outline_with(face, &node.text, size_i, &mut adapter);
-    emit_path_ops(&adapter.ops, &mut renderer.content);
+    emit_path_ops(&adapter.ops, &mut canvas.content);
 
     if node.underline {
         let face_units = face.units_per_em() as f32;
@@ -759,15 +799,15 @@ fn render_text(node: &TextNode, renderer: &mut PdfRenderer) {
         let y_bot = y_top + thickness;
         let x_l = x_left;
         let x_r = x_l + original_w;
-        renderer.content.move_to(x_l, y_top);
-        renderer.content.line_to(x_r, y_top);
-        renderer.content.line_to(x_r, y_bot);
-        renderer.content.line_to(x_l, y_bot);
-        renderer.content.close_path();
+        canvas.content.move_to(x_l, y_top);
+        canvas.content.line_to(x_r, y_top);
+        canvas.content.line_to(x_r, y_bot);
+        canvas.content.line_to(x_l, y_bot);
+        canvas.content.close_path();
     }
 
-    paint(&mut renderer.content, do_fill, do_stroke, FillRule::NonZero);
-    renderer.content.restore_state();
+    paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
+    canvas.content.restore_state();
 }
 
 struct PdfOutline {

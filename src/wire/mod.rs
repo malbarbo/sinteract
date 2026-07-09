@@ -23,7 +23,7 @@ use capnp::serialize;
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
-use crate::renderer::Renderer;
+use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
     Bitmap, ClipPath, Element, FillRule, FontStyle, LineCap, LineJoin, LinearGradient, Paint, Path,
     PathStyle, RadialGradient, Rgba, Scene, SpreadMode, Stop, TextNode, Verb,
@@ -59,9 +59,12 @@ pub enum Error {
     PathLengthMismatch { verbs: usize, coords: usize },
     /// A `Path` carried a verb byte we don't know how to consume.
     UnknownVerb(u8),
-    /// [`render_scene_stream`] saw a `Message` whose union arm was not
-    /// `Frame` (e.g. `Asset`, `Event`, `SessionClose`).
+    /// The stream decoder saw a `Message` whose union arm was not `Frame`
+    /// (e.g. `Asset`, `Event`, `SessionClose`).
     WrongMessageKind,
+    /// A backend could not allocate its drawing surface at the requested
+    /// size (a width×height too large to fit in memory).
+    Alloc { width: u32, height: u32 },
 }
 
 impl std::fmt::Display for Error {
@@ -79,6 +82,9 @@ impl std::fmt::Display for Error {
             Error::UnknownVerb(v) => write!(f, "unknown path verb byte: {v}"),
             Error::WrongMessageKind => {
                 write!(f, "expected Message::Frame, got a different union arm")
+            }
+            Error::Alloc { width, height } => {
+                write!(f, "could not allocate a {width}×{height} surface")
             }
         }
     }
@@ -746,54 +752,44 @@ pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -
 }
 
 // ---------------------------------------------------------------------------
-// Streaming entry point — capnp Reader → Renderer primitives
+// Streaming entry point — capnp Reader → Paint primitives
 // ---------------------------------------------------------------------------
 
-/// Decode exactly one `Message::Frame` from `reader` and replay the draw
-/// list through `renderer`. The Cap'n Proto reader is walked lazily — the
-/// `List(Element)` is iterated without materializing a `Vec<Element>`, and
-/// `Clipped` subtrees recurse via [`Renderer::with_clip`]. Each path is
-/// decoded into a scratch [`Path`] (bounded by one path at a time) and handed
-/// to [`Renderer::draw_path`].
+/// Decode exactly one `Message::Frame` from `reader`, size the surface via
+/// `resize`, and paint its elements onto `paint`. The Cap'n Proto reader is
+/// walked lazily — the `List(Element)` is iterated without materializing a
+/// `Vec<Element>`, and `Clipped` subtrees recurse via [`Paint::with_clip`].
+/// Each path is decoded into a scratch [`Path`] (bounded by one path at a
+/// time) and handed to [`Paint::draw_path`].
 ///
-/// Non-`Frame` messages (`Asset`, `Event`, `SessionClose`) return
-/// [`Error::WrongMessageKind`] — peek the kind separately or use
-/// [`decode`] for those.
-pub fn render_scene_stream<R: std::io::Read, T: Renderer>(
-    renderer: &mut T,
+/// `resize` runs once, after the frame's dimensions are known and before any
+/// element is painted, so the backend owns allocation. Non-`Frame` messages
+/// (`Asset`, `Event`, `SessionClose`) return [`Error::WrongMessageKind`] —
+/// peek the kind separately or use [`decode`] for those.
+pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
+    paint: &mut P,
     reader: R,
+    resize: impl FnOnce(&mut P, f32, f32) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let msg = serialize::read_message(reader, ReaderOptions::new())?;
     let m: message::Reader = msg.get_root()?;
     match m.which()? {
-        message::Frame(f) => stream_frame(renderer, f?),
+        message::Frame(f) => {
+            let frame = f?;
+            resize(paint, frame.get_width(), frame.get_height())?;
+            if frame.has_elements() {
+                stream_elements(paint, frame.get_elements()?)?;
+            }
+            Ok(())
+        }
         message::Asset(_) | message::Event(_) | message::SessionClose(()) => {
             Err(Error::WrongMessageKind)
         }
     }
 }
 
-fn stream_frame<T: Renderer>(renderer: &mut T, frame: wire_scene::Reader<'_>) -> Result<(), Error> {
-    // `frame` (a Cap'n Proto reader) is Copy and borrows the message arena,
-    // so it outlives the `frame()` call; the closure cannot return a Result,
-    // so a decode error mid-walk is parked in `result` and surfaced after the
-    // envelope closes (the backend still finalizes — its teardown is balanced).
-    let mut result = Ok(());
-    renderer.frame(frame.get_width(), frame.get_height(), |r| {
-        result = stream_frame_body(r, frame);
-    });
-    result
-}
-
-fn stream_frame_body<T: Renderer>(r: &mut T, frame: wire_scene::Reader<'_>) -> Result<(), Error> {
-    if frame.has_elements() {
-        stream_elements(r, frame.get_elements()?)?;
-    }
-    Ok(())
-}
-
-fn stream_elements<T: Renderer>(
-    r: &mut T,
+fn stream_elements<P: PaintSink>(
+    paint: &mut P,
     list: capnp::struct_list::Reader<'_, element::Owned>,
 ) -> Result<(), Error> {
     use element::Which;
@@ -801,25 +797,23 @@ fn stream_elements<T: Renderer>(
         match node.which()? {
             Which::Path(p) => {
                 let path = read_path(p?)?;
-                r.draw_path(&path);
+                paint.draw_path(&path);
             }
             Which::Clipped(c) => {
                 let c = c?;
                 let clip = read_clip_path(c.get_clip()?)?;
                 let children = c.get_elements()?;
-                let mut inner = Ok(());
-                r.with_clip(&clip, |r2| {
-                    inner = stream_elements(r2, children);
-                });
-                inner?;
+                // with_clip returns the closure's value, so the nested walk's
+                // Result threads straight out — no parked error cell.
+                paint.with_clip(&clip, |p2| stream_elements(p2, children))?;
             }
             Which::Text(t) => {
                 let t = read_text_node(t?)?;
-                r.draw_text(&t);
+                paint.draw_text(&t);
             }
             Which::Bitmap(b) => {
                 let b = read_bitmap(b?);
-                r.draw_bitmap(&b);
+                paint.draw_bitmap(&b);
             }
         }
     }

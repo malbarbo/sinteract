@@ -1,8 +1,6 @@
 //! Value types shared by the [`crate::renderer::Renderer`] trait and its
 //! implementations.
 
-use crate::renderer::Renderer;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rgba {
     pub r: u8,
@@ -640,7 +638,8 @@ pub enum Element {
 /// [`Path`] plus RAII guards — [`Self::path`] returns a [`PathScope`] that
 /// commits the path on drop, and [`Self::clip`] / [`Self::clip_rect`] return
 /// a [`ClipScope`] that wraps every element drawn during its lifetime into an
-/// [`Element::Clipped`] on drop. The list is replayed once via [`Self::render`].
+/// [`Element::Clipped`] on drop. The list is replayed by a
+/// [`Renderer`](crate::renderer::Renderer).
 ///
 /// Because path geometry only flows through a builder and a clip's subtree is
 /// exactly the run of elements drawn while its `ClipScope` is alive, several
@@ -743,15 +742,6 @@ impl Scene {
 
     pub fn bitmap(&mut self, node: Bitmap) {
         self.elements.push(Element::Bitmap(node));
-    }
-
-    /// Replay every node into `renderer`. Thin alias for
-    /// [`Renderer::render_scene`] (the canonical entry point); both work and
-    /// pick whichever reads more naturally at the call site. Generic rather
-    /// than `&mut dyn` because [`Renderer`] is not object-safe (its scoped
-    /// closures take `&mut Self`).
-    pub fn render<R: Renderer>(&self, renderer: &mut R) {
-        renderer.render_scene(self);
     }
 }
 

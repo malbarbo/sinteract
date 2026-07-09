@@ -31,13 +31,14 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, event, execute, queue, terminal};
 use tiny_skia::{
     Color as SkColor, FillRule as SkFillRule, GradientStop as SkStop, LineCap as SkLineCap,
-    LineJoin as SkLineJoin, Mask, Paint, PathBuilder, Pixmap, Point as SkPoint, Shader as SkShader,
-    SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
+    LineJoin as SkLineJoin, Mask, Paint as SkPaint, PathBuilder, Pixmap, Point as SkPoint,
+    Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::renderer::Renderer;
+use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Segment, TextNode,
+    Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Scene, Segment,
+    TextNode,
 };
 use crate::sixel;
 
@@ -138,41 +139,101 @@ pub fn kitty_supported() -> bool {
 }
 
 // -----------------------------------------------------------------------------
-// PixmapRenderer — Renderer → tiny-skia raster
+// PixmapRenderer — reusable tiny-skia raster surface
 // -----------------------------------------------------------------------------
 
+/// A reusable raster surface. Owns its [`Pixmap`]; [`Renderer::render`] clears
+/// and redraws into it, reallocating only when the frame size changes, so a
+/// redraw loop reuses one allocation.
 struct PixmapRenderer {
-    /// Target output box in pixels (`None` = render at native size).
-    target_px: Option<(u32, u32)>,
-    /// Upper bound on the rasterizer's uniform scale factor — depends on
-    /// the active backend (1.0 for Kitty/Sixel, smaller for half-blocks).
-    max_scale: f32,
-    /// Output pixmap, allocated when `begin` fires.
-    pixmap: Option<Pixmap>,
+    /// Output pixmap, sized in [`Self::ensure_size`]. Never absent while the
+    /// renderer is live — allocation failure is surfaced as an error there,
+    /// so no draw op has to reason about a missing surface.
+    pixmap: Pixmap,
     /// `input → output` scale folded into a transform applied to every path.
     base: Transform,
     clip_stack: Vec<Mask>,
     out_w: u32,
     out_h: u32,
+    /// Target output box in pixels (`None` = render at native size).
+    target_px: Option<(u32, u32)>,
+    /// Upper bound on the rasterizer's uniform scale factor — depends on
+    /// the active backend (1.0 for Kitty/Sixel, smaller for half-blocks).
+    max_scale: f32,
+}
+
+/// Scaled output dimensions and the input→output transform for a `width ×
+/// height` frame under `target`/`max_scale`.
+fn fit(
+    width: f32,
+    height: f32,
+    target: Option<(u32, u32)>,
+    max_scale: f32,
+) -> (u32, u32, Transform) {
+    let w = width.ceil().max(1.0) as u32;
+    let h = height.ceil().max(1.0) as u32;
+    let s = compute_scale(w, h, target, max_scale);
+    let out_w = ((w as f32) * s).ceil().max(1.0) as u32;
+    let out_h = ((h as f32) * s).ceil().max(1.0) as u32;
+    (out_w, out_h, Transform::from_scale(s, s))
+}
+
+/// Allocate an `out_w × out_h` pixmap with a transparent background (the
+/// terminal background shows through). `None` on allocation failure.
+fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
+    Pixmap::new(out_w, out_h).map(|mut pm| {
+        pm.fill(tiny_skia::Color::TRANSPARENT);
+        pm
+    })
 }
 
 impl PixmapRenderer {
-    fn new(target_px: Option<(u32, u32)>, max_scale: f32) -> Self {
-        Self {
+    /// Allocate a renderer whose surface fits `width × height` (scaled per
+    /// `target_px`/`max_scale`). `None` if the surface cannot be allocated.
+    fn new(target_px: Option<(u32, u32)>, max_scale: f32, width: f32, height: f32) -> Option<Self> {
+        let (out_w, out_h, base) = fit(width, height, target_px, max_scale);
+        Some(Self {
+            pixmap: new_pixmap(out_w, out_h)?,
+            base,
+            clip_stack: Vec::new(),
+            out_w,
+            out_h,
             target_px,
             max_scale,
-            pixmap: None,
-            base: Transform::identity(),
-            clip_stack: Vec::new(),
-            out_w: 0,
-            out_h: 0,
+        })
+    }
+
+    /// Prepare the surface for a `width × height` frame: reallocate if the
+    /// scaled size changed, otherwise clear the existing buffer in place —
+    /// reusing the allocation across same-size frames. The clip stack is
+    /// always reset.
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
+        let (out_w, out_h, base) = fit(width, height, self.target_px, self.max_scale);
+        self.base = base;
+        self.clip_stack.clear();
+        if (out_w, out_h) == (self.out_w, self.out_h) {
+            self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        } else {
+            self.pixmap = new_pixmap(out_w, out_h).ok_or(crate::wire::Error::Alloc {
+                width: out_w,
+                height: out_h,
+            })?;
+            self.out_w = out_w;
+            self.out_h = out_h;
         }
+        Ok(())
+    }
+
+    /// Consume the renderer and hand back the owned pixmap (for one-shot
+    /// callers that want to move the result out rather than borrow it).
+    fn into_pixmap(self) -> Pixmap {
+        self.pixmap
     }
 
     /// Build a clip mask from `clip`, intersect it with the current one, and
     /// push it. Returns whether a mask was actually pushed — an empty or
-    /// unbuildable clip pushes nothing, and [`Renderer::with_clip`]'s guard
-    /// pops only what was pushed (so the stack stays balanced regardless).
+    /// unbuildable clip pushes nothing, and [`Paint::with_clip`]'s guard pops
+    /// only what was pushed (so the stack stays balanced regardless).
     fn push_clip(&mut self, clip: &ClipPath) -> bool {
         let parent = self.clip_stack.last();
         let mut builder = PathBuilder::new();
@@ -222,39 +283,22 @@ impl PixmapRenderer {
     }
 }
 
-/// Pops the clip pushed by [`Renderer::with_clip`] on scope exit — including
-/// on unwind — so the clip stack cannot leak if the `inside` body panics.
+/// Pops the clip pushed by [`Paint::with_clip`] on scope exit — including on
+/// unwind — so the clip stack cannot leak if the `inside` body panics.
 struct ClipGuard<'a> {
-    renderer: &'a mut PixmapRenderer,
+    canvas: &'a mut PixmapRenderer,
     pushed: bool,
 }
 
 impl Drop for ClipGuard<'_> {
     fn drop(&mut self) {
         if self.pushed {
-            self.renderer.clip_stack.pop();
+            self.canvas.clip_stack.pop();
         }
     }
 }
 
-impl Renderer for PixmapRenderer {
-    fn frame(&mut self, width: f32, height: f32, mut body: impl FnMut(&mut Self)) {
-        let w = width.ceil().max(1.0) as u32;
-        let h = height.ceil().max(1.0) as u32;
-        let s = compute_scale(w, h, self.target_px, self.max_scale);
-        self.out_w = ((w as f32) * s).ceil().max(1.0) as u32;
-        self.out_h = ((h as f32) * s).ceil().max(1.0) as u32;
-        self.base = Transform::from_scale(s, s);
-        self.pixmap = Pixmap::new(self.out_w, self.out_h).map(|mut pm| {
-            // Transparent background: the terminal background shows through.
-            pm.fill(tiny_skia::Color::TRANSPARENT);
-            pm
-        });
-        // No teardown: the caller reads `pixmap` back directly, so there is
-        // nothing to flush and no drop-guard is needed here.
-        body(self);
-    }
-
+impl Paint for PixmapRenderer {
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
         let mut builder = PathBuilder::new();
@@ -284,18 +328,15 @@ impl Renderer for PixmapRenderer {
         let Some(sk_path) = builder.finish() else {
             return;
         };
-        let Some(pixmap) = self.pixmap.as_mut() else {
-            return;
-        };
         let mask = self.clip_stack.last();
 
         if style.fill.is_visible() {
-            let paint = Paint {
+            let paint = SkPaint {
                 shader: paint_to_shader(&style.fill),
                 anti_alias: true,
-                ..Paint::default()
+                ..SkPaint::default()
             };
-            pixmap.fill_path(
+            self.pixmap.fill_path(
                 &sk_path,
                 &paint,
                 sk_fill_rule(style.fill_rule),
@@ -304,10 +345,10 @@ impl Renderer for PixmapRenderer {
             );
         }
         if style.stroke.is_visible() && style.stroke_width > 0.0 {
-            let paint = Paint {
+            let paint = SkPaint {
                 shader: paint_to_shader(&style.stroke),
                 anti_alias: true,
-                ..Paint::default()
+                ..SkPaint::default()
             };
             let dash = if style.dash_array.is_empty() {
                 None
@@ -321,15 +362,13 @@ impl Renderer for PixmapRenderer {
                 miter_limit: style.miter_limit,
                 dash,
             };
-            pixmap.stroke_path(&sk_path, &paint, &stroke, self.base, mask);
+            self.pixmap
+                .stroke_path(&sk_path, &paint, &stroke, self.base, mask);
         }
     }
 
     fn draw_text(&mut self, node: &TextNode) {
-        let Some(pixmap) = self.pixmap.as_mut() else {
-            return;
-        };
-        render_text(node, pixmap, self.clip_stack.last(), self.base);
+        render_text(node, &mut self.pixmap, self.clip_stack.last(), self.base);
     }
 
     fn draw_bitmap(&mut self, _node: &Bitmap) {
@@ -343,13 +382,28 @@ impl Renderer for PixmapRenderer {
         }
     }
 
-    fn with_clip(&mut self, clip: &ClipPath, mut inside: impl FnMut(&mut Self)) {
+    fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         let pushed = self.push_clip(clip);
         let guard = ClipGuard {
-            renderer: self,
+            canvas: self,
             pushed,
         };
-        inside(&mut *guard.renderer);
+        inside(&mut *guard.canvas)
+    }
+}
+
+impl Renderer for PixmapRenderer {
+    type Output<'a> = &'a Pixmap;
+
+    fn render(&mut self, scene: &Scene) -> Result<&Pixmap, crate::wire::Error> {
+        self.ensure_size(scene.width, scene.height)?;
+        self.paint_elements(&scene.elements);
+        Ok(&self.pixmap)
+    }
+
+    fn render_stream(&mut self, reader: impl io::Read) -> Result<&Pixmap, crate::wire::Error> {
+        crate::wire::stream_frame(self, reader, |s, w, h| s.ensure_size(w, h))?;
+        Ok(&self.pixmap)
     }
 }
 
@@ -439,9 +493,9 @@ pub(crate) fn rasterize_scene(
     target_px: Option<(u32, u32)>,
     max_scale: f32,
 ) -> Option<Pixmap> {
-    let mut renderer = PixmapRenderer::new(target_px, max_scale);
-    scene.render(&mut renderer);
-    renderer.pixmap
+    let mut renderer = PixmapRenderer::new(target_px, max_scale, scene.width, scene.height)?;
+    renderer.render(scene).ok()?;
+    Some(renderer.into_pixmap())
 }
 
 /// Uniform scale factor to fit `(w, h)` inside `target` (both in pixels),
@@ -534,7 +588,7 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
         a: fa,
     } = node.fill;
     if fa > 0.0 {
-        let mut paint = Paint::default();
+        let mut paint = SkPaint::default();
         paint.set_color_rgba8(fr, fg, fb, (fa * 255.0).round().clamp(0.0, 255.0) as u8);
         paint.anti_alias = true;
         // Text glyphs are TrueType; non-zero winding is the standard fill rule.
@@ -547,7 +601,7 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
         a: sa,
     } = node.stroke;
     if sa > 0.0 && node.stroke_width > 0.0 {
-        let mut paint = Paint::default();
+        let mut paint = SkPaint::default();
         paint.set_color_rgba8(sr, sg, sb, (sa * 255.0).round().clamp(0.0, 255.0) as u8);
         paint.anti_alias = true;
         // Text outlines are closed contours on smooth curves — cap/join
@@ -1386,27 +1440,24 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Renderer builder API + streaming entry points
+    // Paint primitives + streaming entry points
     // -----------------------------------------------------------------------
 
     use crate::scene::ClipPath;
 
     #[test]
     fn draw_path_paints_rectangle() {
-        // Drive a PixmapRenderer directly through the scoped API — no Scene
-        // materialization. `frame` sets up the canvas, runs the body, and the
-        // pixmap is read back after.
-        let mut r = PixmapRenderer::new(None, 1.0);
-        r.frame(20.0, 20.0, |r| {
-            let path = Path::builder(solid(0, 255, 0))
-                .move_to(0.0, 0.0)
-                .line_to(20.0, 0.0)
-                .line_to(20.0, 20.0)
-                .line_to(0.0, 20.0)
-                .build();
-            r.draw_path(&path);
-        });
-        let pm = r.pixmap.expect("pixmap");
+        // Drive the paint primitives directly — no Scene materialization.
+        // `into_pixmap` moves the owned buffer out.
+        let mut r = PixmapRenderer::new(None, 1.0, 20.0, 20.0).expect("alloc");
+        let path = Path::builder(solid(0, 255, 0))
+            .move_to(0.0, 0.0)
+            .line_to(20.0, 0.0)
+            .line_to(20.0, 20.0)
+            .line_to(0.0, 20.0)
+            .build();
+        r.draw_path(&path);
+        let pm = r.into_pixmap();
         assert_eq!(pixel_rgba(&pm, 10, 10), (0, 255, 0, 255));
     }
 
@@ -1414,66 +1465,61 @@ mod tests {
     fn with_clip_excludes_outside() {
         // The `inside` body runs with the clip active; the clip pops when the
         // body returns.
-        let mut r = PixmapRenderer::new(None, 1.0);
-        r.frame(20.0, 20.0, |r| {
-            let clip = ClipPath::builder(FillRule::NonZero)
+        let mut r = PixmapRenderer::new(None, 1.0, 20.0, 20.0).expect("alloc");
+        let clip = ClipPath::builder(FillRule::NonZero)
+            .move_to(0.0, 0.0)
+            .line_to(10.0, 0.0)
+            .line_to(10.0, 10.0)
+            .line_to(0.0, 10.0)
+            .build();
+        r.with_clip(&clip, |c| {
+            let path = Path::builder(solid(0, 0, 255))
                 .move_to(0.0, 0.0)
-                .line_to(10.0, 0.0)
-                .line_to(10.0, 10.0)
-                .line_to(0.0, 10.0)
+                .line_to(20.0, 0.0)
+                .line_to(20.0, 20.0)
+                .line_to(0.0, 20.0)
                 .build();
-            r.with_clip(&clip, |r| {
-                let path = Path::builder(solid(0, 0, 255))
-                    .move_to(0.0, 0.0)
-                    .line_to(20.0, 0.0)
-                    .line_to(20.0, 20.0)
-                    .line_to(0.0, 20.0)
-                    .build();
-                r.draw_path(&path);
-            });
+            c.draw_path(&path);
         });
-        let pm = r.pixmap.expect("pixmap");
+        let pm = r.into_pixmap();
         // Inside the clip box: blue. Outside (e.g. 15,15): transparent.
         assert_eq!(pixel_rgba(&pm, 5, 5), (0, 0, 255, 255));
         assert_eq!(pixel_rgba(&pm, 15, 15).3, 0);
     }
 
     #[test]
-    fn render_scene_stream_matches_render_scene_for_flat_path() {
+    fn render_stream_matches_render_for_flat_path() {
         // Build a scene with a single red square, encode it as a capnp Frame,
-        // feed the bytes to render_scene_stream — pixel result must match
-        // the atomic render_scene path.
+        // feed the bytes to render_stream — pixel result must match the
+        // in-memory render path.
         let mut scene = Scene::new(10.0, 10.0);
         rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
         let bytes = crate::wire::encode_frame(&scene);
 
-        let mut atomic = PixmapRenderer::new(None, 1.0);
-        atomic.render_scene(&scene);
-        let pm_atomic = atomic.pixmap.expect("pixmap");
+        let mut r_atomic =
+            PixmapRenderer::new(None, 1.0, scene.width, scene.height).expect("alloc");
+        let pm_atomic = r_atomic.render(&scene).expect("render");
 
-        let mut streamed = PixmapRenderer::new(None, 1.0);
-        streamed
-            .render_scene_stream(&bytes[..])
-            .expect("decode + render");
-        let pm_streamed = streamed.pixmap.expect("pixmap");
+        // Construct at a different size to exercise the resize-on-render path.
+        let mut r_stream = PixmapRenderer::new(None, 1.0, 1.0, 1.0).expect("alloc");
+        let pm_streamed = r_stream.render_stream(&bytes[..]).expect("decode + render");
 
         for y in 0..10 {
             for x in 0..10 {
                 assert_eq!(
-                    pixel_rgba(&pm_atomic, x, y),
-                    pixel_rgba(&pm_streamed, x, y),
+                    pixel_rgba(pm_atomic, x, y),
+                    pixel_rgba(pm_streamed, x, y),
                     "mismatch at ({x}, {y})"
                 );
             }
         }
-        assert_eq!(pixel_rgba(&pm_streamed, 5, 5), (255, 0, 0, 255));
+        assert_eq!(pixel_rgba(pm_streamed, 5, 5), (255, 0, 0, 255));
     }
 
     #[test]
-    fn render_scene_stream_handles_nested_clip() {
-        // Capnp Frame with a Clipped subtree: clip_push streams through to
-        // the renderer's primitive, the nested path is dispatched inside,
-        // clip_pop after.
+    fn render_stream_handles_nested_clip() {
+        // Capnp Frame with a Clipped subtree: with_clip runs the nested walk
+        // with the clip active, then pops it.
         let mut scene = Scene::new(20.0, 20.0);
         {
             let clip = ClipPath::builder(FillRule::NonZero)
@@ -1487,18 +1533,17 @@ mod tests {
         }
         let bytes = crate::wire::encode_frame(&scene);
 
-        let mut r = PixmapRenderer::new(None, 1.0);
-        r.render_scene_stream(&bytes[..]).expect("decode + render");
-        let pm = r.pixmap.expect("pixmap");
-        assert_eq!(pixel_rgba(&pm, 5, 5), (0, 0, 255, 255));
-        assert_eq!(pixel_rgba(&pm, 15, 15).3, 0);
+        let mut r = PixmapRenderer::new(None, 1.0, 1.0, 1.0).expect("alloc");
+        let pm = r.render_stream(&bytes[..]).expect("decode + render");
+        assert_eq!(pixel_rgba(pm, 5, 5), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(pm, 15, 15).3, 0);
     }
 
     #[test]
-    fn render_scene_stream_rejects_non_frame_message() {
+    fn render_stream_rejects_non_frame_message() {
         let bytes = crate::wire::encode_close();
-        let mut r = PixmapRenderer::new(None, 1.0);
-        let err = r.render_scene_stream(&bytes[..]).expect_err("not a frame");
+        let mut r = PixmapRenderer::new(None, 1.0, 1.0, 1.0).expect("alloc");
+        let err = r.render_stream(&bytes[..]).expect_err("not a frame");
         assert!(matches!(err, crate::wire::Error::WrongMessageKind));
     }
 }
