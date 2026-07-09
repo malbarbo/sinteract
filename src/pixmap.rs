@@ -54,8 +54,8 @@ fn fit(
     (out_w, out_h, Transform::from_scale(s, s))
 }
 
-/// Allocate an `out_w × out_h` pixmap with a transparent background (the
-/// terminal background shows through). `None` on allocation failure.
+/// Allocate an `out_w × out_h` pixmap with a transparent background (so the
+/// backend's own background shows through). `None` on allocation failure.
 fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
     Pixmap::new(out_w, out_h).map(|mut pm| {
         pm.fill(tiny_skia::Color::TRANSPARENT);

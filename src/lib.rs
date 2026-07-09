@@ -2,11 +2,13 @@
 //!
 //! Front ends build a [`scene::Scene`] via builder methods and replay it
 //! through a [`renderer::Renderer`]. The crate ships two renderers:
-//! `PixmapRenderer` (terminal raster, in [`terminal`]) and `PdfRenderer`
+//! `PixmapRenderer` (tiny-skia raster, in [`pixmap`]) and `PdfRenderer`
 //! (PDF byte stream, in [`pdf`]).
 //!
 //! Pure-computation modules build everywhere, including `wasm32`, so a
-//! browser client can measure text and emit PDF without a native host:
+//! browser client can rasterize, measure text, and emit PDF without a native
+//! host:
+//! - [`pixmap`] — rasterize a [`scene::Scene`] to an owned tiny-skia `Pixmap`.
 //! - [`text`] — embedded Liberation families, glyph measurement and outline
 //!   (system-font lookup is native-only).
 //! - [`pdf`] — render a [`scene::Scene`] directly to PDF (text as outlined paths).
