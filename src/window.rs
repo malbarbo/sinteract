@@ -128,12 +128,8 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                // Flag closed and let the event loop wind down; `closed()`
-                // reports it and `WindowFrontend::wait_event` turns it into
-                // `InputEvent::Close`, so the host unwinds and tears the
-                // window down through `exit()`. No `process::exit` — it would
-                // kill a server hosting other sessions. Mirrors `terminal`'s
-                // Ctrl-C handling.
+                // Flag closed, not `process::exit` — that would kill a server
+                // hosting other sessions. `wait_event` turns it into `InputEvent::Close`.
                 self.closed = true;
                 event_loop.exit();
             }

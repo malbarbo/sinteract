@@ -49,10 +49,7 @@ pub(crate) const KEYPRESS: i32 = 0;
 pub(crate) const KEYDOWN: i32 = 1;
 pub(crate) const KEYUP: i32 = 2;
 
-// Fallback cell size when the terminal didn't reply to the `CSI 16 t` probe.
-// Real cells vary (most are 8×16 to 10×20 depending on font); we ask the
-// terminal for the actual pixel size in `cell_pixels()` and fall back to
-// these defaults only when the query returns nothing.
+// Fallback when the `CSI 16 t` probe returns nothing; see `cell_pixels`.
 const CELL_W_DEFAULT: u32 = 8;
 const CELL_H_DEFAULT: u32 = 16;
 
@@ -79,8 +76,7 @@ struct State {
     next_oneshot_id: u32,
     warned_bitmap: bool,
     text_blocks_lines: u16,
-    /// Set when the user hits Ctrl-C during an animation; surfaced to the
-    /// host as [`InputEvent::Close`] instead of killing the process.
+    /// Ctrl-C during animation; surfaced as [`InputEvent::Close`], not a process kill.
     closed: bool,
 }
 
@@ -836,8 +832,7 @@ pub fn enter_animation() {
     if state.in_animation {
         return;
     }
-    // Clear any close from a prior session before the setup early-returns, so a
-    // stale Ctrl-C can't make the next session report closed with no user action.
+    // Clear before any early-return, else a prior session's Ctrl-C closes this one.
     state.closed = false;
     if !kitty_supported() && !sixel::sixel_supported() && !text_blocks_supported() {
         eprintln!(
@@ -930,10 +925,8 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
         return None;
     };
 
-    // Ctrl-C flags the session closed; `TerminalFrontend::wait_event` turns
-    // that into `InputEvent::Close` so the host loop unwinds and tears the
-    // terminal down through `exit()` — no `process::exit`, which would kill a
-    // server hosting other sessions. Mirrors `window`'s `CloseRequested`.
+    // Flag closed, not `process::exit` — that would kill a server hosting
+    // other sessions. `wait_event` turns the flag into `InputEvent::Close`.
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
         STATE.lock().unwrap().closed = true;
         return None;
@@ -955,8 +948,7 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
     Some((event_type, key, [alt, ctrl, shift, meta, repeat]))
 }
 
-/// Whether the user hit Ctrl-C since [`enter_animation`]. Mirrors
-/// [`crate::window::closed`]; `TerminalFrontend` polls it to emit
+/// Ctrl-C since [`enter_animation`]? `TerminalFrontend` polls it to emit
 /// [`crate::event::InputEvent::Close`].
 pub fn closed() -> bool {
     STATE.lock().unwrap().closed

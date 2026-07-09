@@ -64,9 +64,8 @@ enum GradientShape {
     Radial(RadialGradient),
 }
 
-/// A reusable PDF renderer. Accumulates a content stream and its resources,
-/// then assembles a one-page document into `bytes` on each render. Reusable
-/// across frames; the content stream and output buffer are rebuilt per render.
+/// Reusable PDF renderer: accumulates a content stream + resources, then
+/// assembles a one-page document into `bytes` per render.
 struct PdfRenderer {
     width: f32,
     height: f32,
@@ -100,11 +99,7 @@ impl PdfRenderer {
         self.height = height.max(1.0);
         self.gstates.clear();
         self.gradients.clear();
-        // Combined transform: y-flip and px→pt scale. Draw-list coords are CSS
-        // pixels with y-down/top-left origin; PDF points are y-up/bottom-left.
-        // PDF's [a b c d e f] cm means [x' y' 1] = [x y 1] * [[a b 0][c d 0][e f 1]],
-        // so for x' = s*x and y' = -s*y + s*h (where s = PX_TO_PT) we need
-        // a=s, d=-s, f=s*h.
+        // y-flip + px→pt scale (see module docs); s=PX_TO_PT gives a=s, d=-s, f=s*h.
         let s = PX_TO_PT;
         let mut content = Content::new();
         content.transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
@@ -431,8 +426,7 @@ impl PdfRenderer {
                     GradientShape::Radial(g) => &g.stops,
                 };
                 let prepared = prepare_stops(stops);
-                // (stops-1) subfunctions when stitching, or 1 exponential when
-                // there are exactly 2 stops.
+                // 2 stops → 1 exponential; more → one sub-fn per interval.
                 let n_subfns = if prepared.len() <= 2 {
                     1
                 } else {

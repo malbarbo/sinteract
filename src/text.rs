@@ -315,8 +315,7 @@ pub fn outline_with(face: &Face<'_>, text: &str, size_px: i32, out: &mut dyn Out
 
 // ---------------------------------------------------------------------------
 // Per-node layout — the measurement prelude every renderer runs before it
-// emits glyphs. Keeps the guards and metric queries in one place so a backend
-// only spells out its own drawing.
+// emits glyphs, so each backend only spells out its own drawing.
 // ---------------------------------------------------------------------------
 
 /// Resolved face + box-local metrics for one [`TextNode`], measured once.

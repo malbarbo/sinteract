@@ -181,9 +181,8 @@ fn quantize(pixmap: &Pixmap, bg: (u8, u8, u8)) -> (Vec<(u8, u8, u8)>, Vec<u8>) {
     for y in 0..h {
         for x in 0..w {
             let p = pixels[y * w + x];
-            // Demultiply to straight color, then composite over the
-            // background; `composite` handles the a==0 (→bg) and a==255
-            // (→straight) ends without special-casing them here.
+            // Straight color, then composite over bg; `composite` folds in the
+            // a==0 (→bg) and a==255 (→straight) ends.
             let (sr, sg, sb) = crate::pixel::unpremultiply(p);
             let (r, g, b) = composite(sr, sg, sb, p.alpha(), bg);
 

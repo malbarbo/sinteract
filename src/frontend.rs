@@ -31,9 +31,7 @@ use crate::scene::Scene;
 
 use crate::stdio::StdioFrontend;
 
-/// Convenience: build a [`Duration`] period from a frequency in Hz. Each
-/// backend uses this to express its own software-timed vsync cadence — the
-/// value is not shared across backends.
+/// [`Duration`] period from a frequency in Hz.
 const fn period_from_hz(hz: u32) -> Duration {
     Duration::from_nanos(1_000_000_000 / hz as u64)
 }

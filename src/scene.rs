@@ -395,15 +395,12 @@ pub fn bitmap_box_affine(
     if img_w == 0 || img_h == 0 {
         return [1.0, 0.0, 0.0, 1.0, cx, cy];
     }
-    // Centre the asset on (cx, cy): pre-translate by (-img_w/2, -img_h/2)
-    // before the scale/rotate so the asset's centre lands on (cx, cy)
-    // after the rest of the transform.
     let sx = w / img_w as f32;
     let sy = h / img_h as f32;
     let theta = angle_deg * std::f32::consts::PI / 180.0;
     let ct = theta.cos();
     let st = theta.sin();
-    // M = T(cx,cy) · R(theta) · S(sx,sy) · T(-iw/2, -ih/2)
+    // Centre on (cx,cy): M = T(cx,cy) · R(theta) · S(sx,sy) · T(-iw/2, -ih/2)
     let a = sx * ct;
     let b = sx * st;
     let c = -sy * st;

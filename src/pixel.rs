@@ -2,12 +2,9 @@
 
 use tiny_skia::PremultipliedColorU8;
 
-/// Recover straight-alpha RGB from a tiny-skia premultiplied pixel.
-///
-/// tiny-skia stores `c_premult = c_straight * a / 255`; this inverts it.
-/// Fully-opaque pixels pass through untouched and `a == 0` yields black
-/// (no color survives) — callers that need a background substitute it
-/// themselves (e.g. by compositing the result over `bg`).
+/// Recover straight-alpha RGB from a tiny-skia premultiplied pixel
+/// (`c_premult = c_straight * a / 255`, inverted). `a == 0` yields black;
+/// callers wanting a background composite the result over it.
 pub(crate) fn unpremultiply(p: PremultipliedColorU8) -> (u8, u8, u8) {
     let a = p.alpha();
     if a == 255 {
