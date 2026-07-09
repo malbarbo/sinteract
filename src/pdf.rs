@@ -712,22 +712,9 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
 
 #[allow(clippy::similar_names)]
 fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
-    let size_i = node.size as i32;
-    if size_i <= 0 || node.text.is_empty() {
+    let Some(layout) = crate::text::layout_text(node) else {
         return;
-    }
-
-    let font = crate::text::resolve(&node.family, node.weight, node.style);
-    let face = font.face();
-
-    // Width is still needed for the underline rect (drawn in natural text
-    // space); vertical layout uses face metrics directly.
-    let original_w = crate::text::measure_width_with(face, &node.text, size_i) as f32;
-    if original_w <= 0.0 {
-        return;
-    }
-    let baseline_y = crate::text::measure_y_offset_with(face, &node.text, size_i) as f32;
-    let x_left = crate::text::measure_x_offset_with(face, &node.text, size_i) as f32;
+    };
 
     let do_fill = node.fill.a > 0.0;
     let do_stroke = node.stroke.a > 0.0 && node.stroke_width > 0.0;
@@ -762,25 +749,15 @@ fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
     canvas.content.transform(node.transform);
 
     let mut adapter = PdfOutline { ops: Vec::new() };
-    crate::text::outline_with(face, &node.text, size_i, &mut adapter);
+    crate::text::outline_with(layout.face, &node.text, layout.size_i, &mut adapter);
     emit_path_ops(&adapter.ops, &mut canvas.content);
 
     if node.underline {
-        let face_units = face.units_per_em() as f32;
-        let scale = node.size / face_units;
-        let metrics = face.underline_metrics();
-        let pos_units = metrics.map(|m| m.position as f32).unwrap_or(-217.0);
-        let thickness_units = metrics.map(|m| m.thickness as f32).unwrap_or(150.0);
-        let underline_pos = -pos_units * scale;
-        let thickness = (thickness_units * scale).max(1.0);
-        let y_top = baseline_y + underline_pos - thickness / 2.0;
-        let y_bot = y_top + thickness;
-        let x_l = x_left;
-        let x_r = x_l + original_w;
-        canvas.content.move_to(x_l, y_top);
-        canvas.content.line_to(x_r, y_top);
-        canvas.content.line_to(x_r, y_bot);
-        canvas.content.line_to(x_l, y_bot);
+        let u = crate::text::underline_rect(&layout);
+        canvas.content.move_to(u.x_l, u.y_top);
+        canvas.content.line_to(u.x_r, u.y_top);
+        canvas.content.line_to(u.x_r, u.y_bot);
+        canvas.content.line_to(u.x_l, u.y_bot);
         canvas.content.close_path();
     }
 

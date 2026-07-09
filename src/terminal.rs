@@ -509,50 +509,20 @@ fn compute_scale(w: u32, h: u32, target: Option<(u32, u32)>, max_scale: f32) -> 
 // -----------------------------------------------------------------------------
 
 fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Transform) {
-    // Match Python: `int(f.size)` is used for measurement.
-    let size_i = node.size as i32;
-    if size_i <= 0 || node.text.is_empty() {
+    let Some(layout) = crate::text::layout_text(node) else {
         return;
-    }
-
-    // Pick the actual variant requested. `node.family` falls back to
-    // Liberation Sans when empty (default), so the historic test fixtures
-    // keep rendering with the same face.
-    let font = crate::text::resolve(&node.family, node.weight, node.style);
-    let face = font.face();
-
-    // Measure the rendered width — only used for the underline rect now;
-    // the rest of the placement lives in `node.transform`. Vertical extent
-    // is read from face metrics directly when the underline runs.
-    let original_w = crate::text::measure_width_with(face, &node.text, size_i) as f32;
-    if original_w <= 0.0 {
-        return;
-    }
-    let baseline_y = crate::text::measure_y_offset_with(face, &node.text, size_i) as f32;
+    };
 
     let mut builder = PathBuilder::new();
     let mut adapter = SkiaOutline { b: &mut builder };
-    crate::text::outline_with(face, &node.text, size_i, &mut adapter);
+    crate::text::outline_with(layout.face, &node.text, layout.size_i, &mut adapter);
 
     if node.underline {
-        // Use the face's own metrics so non-Sans fonts (Serif / Mono /
-        // system) get a position that matches their design — hardcoded
-        // Liberation Sans values would look misplaced under e.g. a Serif.
-        let face_units = face.units_per_em() as f32;
-        let scale = node.size / face_units;
-        let metrics = face.underline_metrics();
-        let pos_units = metrics.map(|m| m.position as f32).unwrap_or(-217.0);
-        let thickness_units = metrics.map(|m| m.thickness as f32).unwrap_or(150.0);
-        let underline_pos = -pos_units * scale; // font y-up → flips to +y in box-local
-        let thickness = (thickness_units * scale).max(1.0);
-        let y_top = baseline_y + underline_pos - thickness / 2.0;
-        let y_bot = y_top + thickness;
-        let x_l = crate::text::measure_x_offset_with(face, &node.text, size_i) as f32;
-        let x_r = x_l + original_w;
-        builder.move_to(x_l, y_top);
-        builder.line_to(x_r, y_top);
-        builder.line_to(x_r, y_bot);
-        builder.line_to(x_l, y_bot);
+        let u = crate::text::underline_rect(&layout);
+        builder.move_to(u.x_l, u.y_top);
+        builder.line_to(u.x_r, u.y_top);
+        builder.line_to(u.x_r, u.y_bot);
+        builder.line_to(u.x_l, u.y_bot);
         builder.close();
     }
 

@@ -24,7 +24,7 @@ use std::sync::{Mutex, OnceLock};
 
 use ttf_parser::{Face, GlyphId};
 
-use crate::scene::FontStyle;
+use crate::scene::{FontStyle, TextNode};
 
 // ---------------------------------------------------------------------------
 // Embedded fonts
@@ -111,7 +111,7 @@ pub struct ResolvedFont {
 }
 
 impl ResolvedFont {
-    pub fn face(&self) -> &Face<'static> {
+    pub fn face(&self) -> &'static Face<'static> {
         self.face
     }
 }
@@ -310,6 +310,78 @@ pub fn outline_with(face: &Face<'_>, text: &str, size_px: i32, out: &mut dyn Out
         };
         let _ = face.outline_glyph(gid, &mut adapter);
         pen_x += f64::from(face.glyph_hor_advance(gid).unwrap_or(0));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-node layout — the measurement prelude every renderer runs before it
+// emits glyphs. Keeps the guards and metric queries in one place so a backend
+// only spells out its own drawing.
+// ---------------------------------------------------------------------------
+
+/// Resolved face + box-local metrics for one [`TextNode`], measured once.
+pub struct TextLayout {
+    pub face: &'static Face<'static>,
+    /// `int(size)` — the integral pixel size used for measurement and outlines,
+    /// matching the front end's `int(f.size)`.
+    pub size_i: i32,
+    /// The node's fractional size, needed for underline metric scaling.
+    pub size: f32,
+    /// Measured horizontal advance (box-local).
+    pub width: f32,
+    pub baseline_y: f32,
+    pub x_left: f32,
+}
+
+/// Resolve and measure a text node. Returns `None` when the node draws nothing —
+/// non-positive size, empty text, or zero measured width — so callers early-return.
+pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
+    let size_i = node.size as i32;
+    if size_i <= 0 || node.text.is_empty() {
+        return None;
+    }
+    // Empty family resolves to Liberation Sans — keeps the historic render
+    // fixtures pinned to the same face.
+    let face = resolve(&node.family, node.weight, node.style).face();
+    let width = measure_width_with(face, &node.text, size_i) as f32;
+    if width <= 0.0 {
+        return None;
+    }
+    Some(TextLayout {
+        face,
+        size_i,
+        size: node.size,
+        width,
+        baseline_y: measure_y_offset_with(face, &node.text, size_i) as f32,
+        x_left: measure_x_offset_with(face, &node.text, size_i) as f32,
+    })
+}
+
+/// Axis-aligned underline rectangle in box-local text space.
+pub struct UnderlineRect {
+    pub x_l: f32,
+    pub x_r: f32,
+    pub y_top: f32,
+    pub y_bot: f32,
+}
+
+/// The underline rectangle for a laid-out node. Reads the face's own underline
+/// metrics so non-Sans faces (Serif / Mono / system) get a design-matched
+/// position instead of hardcoded Liberation Sans values.
+pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
+    let face_units = layout.face.units_per_em() as f32;
+    let scale = layout.size / face_units;
+    let metrics = layout.face.underline_metrics();
+    let pos_units = metrics.map(|m| m.position as f32).unwrap_or(-217.0);
+    let thickness_units = metrics.map(|m| m.thickness as f32).unwrap_or(150.0);
+    let underline_pos = -pos_units * scale; // font y-up → +y in box-local
+    let thickness = (thickness_units * scale).max(1.0);
+    let y_top = layout.baseline_y + underline_pos - thickness / 2.0;
+    UnderlineRect {
+        x_l: layout.x_left,
+        x_r: layout.x_left + layout.width,
+        y_top,
+        y_bot: y_top + thickness,
     }
 }
 
