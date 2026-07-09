@@ -35,6 +35,7 @@ mod frame_capnp;
 
 pub mod pdf;
 mod pixel;
+pub mod pixmap;
 pub mod sixel;
 pub mod stdio;
 pub mod text;

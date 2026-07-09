@@ -330,7 +330,7 @@ pub fn show_image(scene: &crate::scene::Scene) {
         }
 
         let target_px = (w.get(), h.get());
-        let pixmap = match crate::terminal::rasterize_scene(scene, Some(target_px), 32.0) {
+        let pixmap = match crate::pixmap::rasterize_scene(scene, Some(target_px), 32.0) {
             Some(p) => p,
             None => return,
         };
