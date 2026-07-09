@@ -2,7 +2,7 @@
 //! the WASM build does not link against `pdf-writer`.
 //!
 //! The draw list is replayed via [`Renderer::render`]; this module's
-//! [`PdfRenderer`] translates each element into PDF content-stream operators
+//! `PdfRenderer` translates each element into PDF content-stream operators
 //! and then assembles a one-page document. The renderer is reusable across
 //! frames — it rebuilds a fresh content stream and output buffer per render.
 //!

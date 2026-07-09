@@ -416,8 +416,8 @@ pub fn bitmap_box_affine(
 }
 
 /// The kind of a path segment — its verb byte on the wire. Each kind consumes
-/// a fixed number of floats from [`Path::coords`] (see [`Self::coords`]); pair
-/// one with its coords to get a [`Segment`]. The discriminants are stable: they
+/// a fixed number of floats from the coordinate stream (see [`Self::coords`]);
+/// pair one with its coords to get a [`Segment`]. The discriminants are stable: they
 /// match the byte values used in the wire format
 /// (`verbMove`/`verbLine`/`verbQuad`/`verbCubic` in `schema/frame.capnp`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

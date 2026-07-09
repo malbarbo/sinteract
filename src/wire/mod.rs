@@ -2,7 +2,7 @@
 //!
 //! `simage::wire` is a thin layer over the Cap'n Proto schema in
 //! `schema/frame.capnp`. The generated Rust bindings (committed at
-//! [`frame_capnp`]) are kept private — callers go through the high-level
+//! `src/wire/frame_capnp.rs`) are kept private — callers go through the high-level
 //! [`encode_frame`], [`encode_event`], [`encode_asset`], [`encode_close`],
 //! and [`decode`] entry points. They:
 //!
