@@ -199,7 +199,7 @@ impl Paint for PixmapRenderer {
         };
         let mask = self.clip_stack.last();
 
-        if style.fill.is_visible() {
+        if style.draws_fill() {
             let paint = SkPaint {
                 shader: paint_to_shader(&style.fill),
                 anti_alias: true,
@@ -213,7 +213,7 @@ impl Paint for PixmapRenderer {
                 mask,
             );
         }
-        if style.stroke.is_visible() && style.stroke_width > 0.0 {
+        if style.draws_stroke() {
             let paint = SkPaint {
                 shader: paint_to_shader(&style.stroke),
                 anti_alias: true,
@@ -396,12 +396,7 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
     crate::text::outline_with(layout.face, &node.text, layout.size_i, &mut adapter);
 
     if node.underline {
-        let u = crate::text::underline_rect(&layout);
-        builder.move_to(u.x_l, u.y_top);
-        builder.line_to(u.x_r, u.y_top);
-        builder.line_to(u.x_r, u.y_bot);
-        builder.line_to(u.x_l, u.y_bot);
-        builder.close();
+        crate::text::outline_underline(&layout, &mut adapter);
     }
 
     let Some(path) = builder.finish() else {
@@ -422,28 +417,16 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
     // transform first, then the global pixmap-scale.
     let transform = local.post_concat(base);
 
-    let Rgba {
-        r: fr,
-        g: fg,
-        b: fb,
-        a: fa,
-    } = node.fill;
-    if fa > 0.0 {
+    if node.fill.a > 0.0 {
         let mut paint = SkPaint::default();
-        paint.set_color_rgba8(fr, fg, fb, (fa * 255.0).round().clamp(0.0, 255.0) as u8);
+        paint.set_color(sk_color(node.fill));
         paint.anti_alias = true;
         // Text glyphs are TrueType; non-zero winding is the standard fill rule.
         pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
     }
-    let Rgba {
-        r: sr,
-        g: sg,
-        b: sb,
-        a: sa,
-    } = node.stroke;
-    if sa > 0.0 && node.stroke_width > 0.0 {
+    if node.stroke.a > 0.0 && node.stroke_width > 0.0 {
         let mut paint = SkPaint::default();
-        paint.set_color_rgba8(sr, sg, sb, (sa * 255.0).round().clamp(0.0, 255.0) as u8);
+        paint.set_color(sk_color(node.stroke));
         paint.anti_alias = true;
         // Text outlines are closed contours on smooth curves — cap/join
         // tweaks are imperceptible, so we don't carry them through the

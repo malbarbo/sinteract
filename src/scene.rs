@@ -124,6 +124,19 @@ pub struct PathStyle {
     pub dash_offset: f32,
 }
 
+impl PathStyle {
+    /// Whether the fill would mark the canvas.
+    pub fn draws_fill(&self) -> bool {
+        self.fill.is_visible()
+    }
+
+    /// Whether the stroke would mark the canvas — a zero width draws nothing
+    /// however visible the paint is.
+    pub fn draws_stroke(&self) -> bool {
+        self.stroke.is_visible() && self.stroke_width > 0.0
+    }
+}
+
 impl Default for PathStyle {
     fn default() -> Self {
         Self {
@@ -201,14 +214,13 @@ impl FillRule {
 /// have to add a final line back to the starting point. `fill_rule` decides
 /// which sub-regions count as "inside".
 ///
-/// `verbs`/`coords` are private and always agree in length — the only way to
-/// build one is [`ClipPath::builder`], which pushes verbs and coords together
-/// so a mismatch is structurally impossible. Read the geometry back via
-/// [`ClipPath::segments`].
+/// The verb and coord streams are private and always agree in length:
+/// [`ClipPath::builder`] pushes verbs and coords together, and the wire
+/// decoder's only entry point validates the arity, so a mismatch cannot be
+/// built either way. Read the geometry back via [`ClipPath::segments`].
 #[derive(Clone, Debug, Default)]
 pub struct ClipPath {
-    verbs: Vec<SegmentKind>,
-    coords: Vec<f32>,
+    geom: Geometry,
     pub fill_rule: FillRule,
 }
 
@@ -220,22 +232,28 @@ impl ClipPath {
         ClipPathBuilder::new(fill_rule)
     }
 
+    /// Wire decode: pair a fill rule with geometry already validated by
+    /// [`Geometry::from_wire`].
+    pub(crate) fn from_wire(fill_rule: FillRule, geom: Geometry) -> Self {
+        Self { geom, fill_rule }
+    }
+
     /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
     /// — only the wire codec touches the raw streams; read geometry through
     /// [`Self::segments`].
     pub(crate) fn verbs(&self) -> &[SegmentKind] {
-        &self.verbs
+        &self.geom.verbs
     }
 
     /// Raw coordinate stream. Crate-internal; read [`Self::segments`] for a
     /// typed walk.
     pub(crate) fn coords(&self) -> &[f32] {
-        &self.coords
+        &self.geom.coords
     }
 
     /// Typed segment walk over the verb/coord streams.
     pub fn segments(&self) -> Segments<'_> {
-        Segments::new(&self.verbs, &self.coords)
+        self.geom.segments()
     }
 }
 
@@ -300,7 +318,7 @@ impl Default for TextNode {
             // Identity affine — renders glyphs in their natural orientation
             // at the origin. Callers that want a translated/rotated/fitted
             // text run go through [`text_box_affine`].
-            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            transform: translate(0.0, 0.0),
             size: 0.0,
             family: String::new(),
             weight: 400,
@@ -309,6 +327,24 @@ impl Default for TextNode {
             text: String::new(),
         }
     }
+}
+
+/// The `cm` / `matrix(...)` affine that scales by `(sx, sy)`, rotates by
+/// `angle_deg`, then translates to `(e, f)`.
+fn rotate_scale_at(sx: f32, sy: f32, angle_deg: f32, e: f32, f: f32) -> [f32; 6] {
+    let (st, ct) = angle_deg.to_radians().sin_cos();
+    [sx * ct, sx * st, -sy * st, sy * ct, e, f]
+}
+
+/// The identity affine translated to `(e, f)` — the degenerate-input fallback
+/// shared by the `*_box_affine` helpers.
+fn translate(e: f32, f: f32) -> [f32; 6] {
+    [1.0, 0.0, 0.0, 1.0, e, f]
+}
+
+/// Map `(x, y)` through a `cm` / `matrix(...)` affine.
+fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
+    (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
 /// Compose the affine for "fit the rendered text into a rotated bounding
@@ -334,21 +370,16 @@ pub fn text_box_affine(
 ) -> [f32; 6] {
     let size_i = size as i32;
     if size_i <= 0 || text.is_empty() {
-        return [1.0, 0.0, 0.0, 1.0, cx, cy];
+        return translate(cx, cy);
     }
     let font = crate::text::resolve(family, weight, style);
     let face = font.face();
     let orig_w = crate::text::measure_width_with(face, text, size_i) as f32;
     let orig_h = crate::text::measure_height_with(face, text, size_i) as f32;
     if orig_w <= 0.0 || orig_h <= 0.0 {
-        return [1.0, 0.0, 0.0, 1.0, cx, cy];
+        return translate(cx, cy);
     }
-    let sx = bw / orig_w;
-    let sy = bh / orig_h;
-    let theta = angle_deg * std::f32::consts::PI / 180.0;
-    let ct = theta.cos();
-    let st = theta.sin();
-    [sx * ct, sx * st, -sy * st, sy * ct, cx, cy]
+    rotate_scale_at(bw / orig_w, bh / orig_h, angle_deg, cx, cy)
 }
 
 /// A bitmap blit. The `id` references a previously-uploaded asset
@@ -368,7 +399,7 @@ impl Default for Bitmap {
     fn default() -> Self {
         Self {
             id: 0,
-            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            transform: translate(0.0, 0.0),
         }
     }
 }
@@ -389,23 +420,13 @@ pub fn bitmap_box_affine(
     angle_deg: f32,
 ) -> [f32; 6] {
     if img_w == 0 || img_h == 0 {
-        return [1.0, 0.0, 0.0, 1.0, cx, cy];
+        return translate(cx, cy);
     }
-    let sx = w / img_w as f32;
-    let sy = h / img_h as f32;
-    let theta = angle_deg * std::f32::consts::PI / 180.0;
-    let ct = theta.cos();
-    let st = theta.sin();
-    // Centre on (cx,cy): M = T(cx,cy) · R(theta) · S(sx,sy) · T(-iw/2, -ih/2)
-    let a = sx * ct;
-    let b = sx * st;
-    let c = -sy * st;
-    let d = sy * ct;
-    let half_w = img_w as f32 * 0.5;
-    let half_h = img_h as f32 * 0.5;
-    let e = cx - (a * half_w + c * half_h);
-    let f = cy - (b * half_w + d * half_h);
-    [a, b, c, d, e, f]
+    // Centre on (cx,cy): M = T(cx,cy) · R(theta) · S(sx,sy) · T(-iw/2, -ih/2),
+    // i.e. offset the rotated-scaled image centre back onto (cx, cy).
+    let m = rotate_scale_at(w / img_w as f32, h / img_h as f32, angle_deg, 0.0, 0.0);
+    let (ox, oy) = apply_affine(m, img_w as f32 * 0.5, img_h as f32 * 0.5);
+    [m[0], m[1], m[2], m[3], cx - ox, cy - oy]
 }
 
 /// The kind of a path segment — its verb byte on the wire. Each kind consumes
@@ -526,65 +547,123 @@ impl Iterator for Segments<'_> {
     }
 }
 
-/// Expand an SVG endpoint arc from `(x1, y1)` to `(x, y)` into cubic segments,
-/// appending `Cubic` verbs and their coords in lock-step. Returns `false` for
-/// a degenerate arc — the caller emits a line instead. Shared by the path and
-/// clip builders so the kurbo expansion lives in one place.
-#[allow(clippy::too_many_arguments)]
-fn push_arc_cubics(
-    verbs: &mut Vec<SegmentKind>,
-    coords: &mut Vec<f32>,
-    x1: f32,
-    y1: f32,
-    rx: f32,
-    ry: f32,
-    rotation_deg: f32,
-    large_arc: bool,
-    sweep: bool,
-    x: f32,
-    y: f32,
-) -> bool {
-    let svg_arc = kurbo::SvgArc {
-        from: kurbo::Point::new(x1 as f64, y1 as f64),
-        to: kurbo::Point::new(x as f64, y as f64),
-        radii: kurbo::Vec2::new(rx as f64, ry as f64),
-        x_rotation: (rotation_deg as f64).to_radians(),
-        large_arc,
-        sweep,
-    };
-    let Some(arc) = kurbo::Arc::from_svg_arc(&svg_arc) else {
-        return false;
-    };
-    for el in arc.append_iter(ARC_TOLERANCE) {
-        if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
-            verbs.push(SegmentKind::Cubic);
-            coords.extend([
-                p1.x as f32,
-                p1.y as f32,
-                p2.x as f32,
-                p2.y as f32,
-                p3.x as f32,
-                p3.y as f32,
-            ]);
-        }
+/// A verb stream paired with its coordinates — the geometry half of both
+/// [`Path`] and [`ClipPath`]. Fields are private and only [`GeometryBuilder`]
+/// appends to them, pushing a verb and its coords together, so the two streams
+/// cannot fall out of sync.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Geometry {
+    verbs: Vec<SegmentKind>,
+    coords: Vec<f32>,
+}
+
+impl Geometry {
+    fn segments(&self) -> Segments<'_> {
+        Segments::new(&self.verbs, &self.coords)
     }
-    true
+
+    /// Build from raw wire streams, validating that `coords` holds exactly the
+    /// verbs' total arity — the invariant the private fields exist to protect.
+    /// `None` when they disagree; the codec maps that to
+    /// [`wire::Error::PathLengthMismatch`](crate::wire::Error).
+    pub(crate) fn from_wire(verbs: Vec<SegmentKind>, coords: Vec<f32>) -> Option<Self> {
+        let needed: usize = verbs.iter().map(|v| v.coords()).sum();
+        (needed == coords.len()).then_some(Self { verbs, coords })
+    }
+}
+
+/// Accumulator behind [`PathBuilder`] and [`ClipPathBuilder`]. Owns the only
+/// code that appends geometry, so a new verb is added here once instead of
+/// once per builder, and the kurbo arc expansion lives in a single place.
+#[derive(Default)]
+struct GeometryBuilder {
+    geom: Geometry,
+    last_point: Option<(f32, f32)>,
+}
+
+impl GeometryBuilder {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.geom.verbs.push(SegmentKind::Move);
+        self.geom.coords.extend([x, y]);
+        self.last_point = Some((x, y));
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.geom.verbs.push(SegmentKind::Line);
+        self.geom.coords.extend([x, y]);
+        self.last_point = Some((x, y));
+    }
+
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        self.geom.verbs.push(SegmentKind::Quad);
+        self.geom.coords.extend([cx, cy, x, y]);
+        self.last_point = Some((x, y));
+    }
+
+    fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+        self.geom.verbs.push(SegmentKind::Cubic);
+        self.geom.coords.extend([c1x, c1y, c2x, c2y, x, y]);
+        self.last_point = Some((x, y));
+    }
+
+    /// Append an SVG endpoint arc, pre-expanding to cubics. With no current
+    /// point it degrades to `move_to(x, y)`; a degenerate arc collapses to a
+    /// line.
+    #[allow(clippy::too_many_arguments)]
+    fn arc_to(
+        &mut self,
+        rx: f32,
+        ry: f32,
+        rotation_deg: f32,
+        large_arc: bool,
+        sweep: bool,
+        x: f32,
+        y: f32,
+    ) {
+        let Some((x1, y1)) = self.last_point else {
+            return self.move_to(x, y);
+        };
+        let svg_arc = kurbo::SvgArc {
+            from: kurbo::Point::new(x1 as f64, y1 as f64),
+            to: kurbo::Point::new(x as f64, y as f64),
+            radii: kurbo::Vec2::new(rx as f64, ry as f64),
+            x_rotation: (rotation_deg as f64).to_radians(),
+            large_arc,
+            sweep,
+        };
+        let Some(arc) = kurbo::Arc::from_svg_arc(&svg_arc) else {
+            return self.line_to(x, y);
+        };
+        for el in arc.append_iter(ARC_TOLERANCE) {
+            if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
+                self.geom.verbs.push(SegmentKind::Cubic);
+                self.geom.coords.extend([
+                    p1.x as f32,
+                    p1.y as f32,
+                    p2.x as f32,
+                    p2.y as f32,
+                    p3.x as f32,
+                    p3.y as f32,
+                ]);
+            }
+        }
+        self.last_point = Some((x, y));
+    }
 }
 
 /// A materialized 2D path: a style plus a flat verb stream and its
 /// floating-point arguments.
 ///
 /// `verbs[i]` pulls 2 (move/line), 4 (quad), or 6 (cubic) floats from
-/// `coords` in order. `verbs`/`coords` are private and always agree in length
-/// — the only way to build one is a [`PathBuilder`] (via [`Path::builder`] or
-/// the [`Scene::path`] scope), which pushes verbs and coords together so a
-/// mismatch is structurally impossible. Read the geometry back via
-/// [`Path::segments`].
+/// `coords` in order. Both streams are private and always agree in length: a
+/// [`PathBuilder`] (via [`Path::builder`] or the [`Scene::path`] scope) pushes
+/// verbs and coords together, and the wire decoder's only entry point
+/// validates the arity, so a mismatch cannot be built either way. Read the
+/// geometry back via [`Path::segments`].
 #[derive(Clone, Debug, Default)]
 pub struct Path {
     pub style: PathStyle,
-    verbs: Vec<SegmentKind>,
-    coords: Vec<f32>,
+    geom: Geometry,
 }
 
 impl Path {
@@ -595,22 +674,28 @@ impl Path {
         PathBuilder::new(style)
     }
 
+    /// Wire decode: pair a style with geometry already validated by
+    /// [`Geometry::from_wire`].
+    pub(crate) fn from_wire(style: PathStyle, geom: Geometry) -> Self {
+        Self { style, geom }
+    }
+
     /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
     /// — only the wire codec touches the raw streams; read geometry through
     /// [`Self::segments`].
     pub(crate) fn verbs(&self) -> &[SegmentKind] {
-        &self.verbs
+        &self.geom.verbs
     }
 
     /// Raw coordinate stream. Crate-internal; read [`Self::segments`] for a
     /// typed walk.
     pub(crate) fn coords(&self) -> &[f32] {
-        &self.coords
+        &self.geom.coords
     }
 
     /// Typed segment walk over the verb/coord streams.
     pub fn segments(&self) -> Segments<'_> {
-        Segments::new(&self.verbs, &self.coords)
+        self.geom.segments()
     }
 }
 
@@ -712,10 +797,8 @@ impl Scene {
     ) -> ClipScope<'_> {
         let hw = w / 2.0;
         let hh = h / 2.0;
-        let theta = angle_deg * std::f32::consts::PI / 180.0;
-        let (cos, sin) = (theta.cos(), theta.sin());
-        let corner =
-            |x: f32, y: f32| -> (f32, f32) { (cx + x * cos - y * sin, cy + x * sin + y * cos) };
+        let m = rotate_scale_at(1.0, 1.0, angle_deg, cx, cy);
+        let corner = |x: f32, y: f32| apply_affine(m, x, y);
         let p0 = corner(-hw, -hh);
         let p1 = corner(hw, -hh);
         let p2 = corner(hw, hh);
@@ -753,17 +836,17 @@ pub struct PathScope<'a> {
 
 impl PathScope<'_> {
     pub fn move_to(&mut self, x: f32, y: f32) -> &mut Self {
-        self.builder = std::mem::take(&mut self.builder).move_to(x, y);
+        self.builder.geom.move_to(x, y);
         self
     }
 
     pub fn line_to(&mut self, x: f32, y: f32) -> &mut Self {
-        self.builder = std::mem::take(&mut self.builder).line_to(x, y);
+        self.builder.geom.line_to(x, y);
         self
     }
 
     pub fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) -> &mut Self {
-        self.builder = std::mem::take(&mut self.builder).quad_to(cx, cy, x, y);
+        self.builder.geom.quad_to(cx, cy, x, y);
         self
     }
 
@@ -776,7 +859,7 @@ impl PathScope<'_> {
         x: f32,
         y: f32,
     ) -> &mut Self {
-        self.builder = std::mem::take(&mut self.builder).cubic_to(c1x, c1y, c2x, c2y, x, y);
+        self.builder.geom.cubic_to(c1x, c1y, c2x, c2y, x, y);
         self
     }
 
@@ -791,8 +874,9 @@ impl PathScope<'_> {
         x: f32,
         y: f32,
     ) -> &mut Self {
-        self.builder =
-            std::mem::take(&mut self.builder).arc_to(rx, ry, rotation_deg, large_arc, sweep, x, y);
+        self.builder
+            .geom
+            .arc_to(rx, ry, rotation_deg, large_arc, sweep, x, y);
         self
     }
 }
@@ -800,7 +884,7 @@ impl PathScope<'_> {
 impl Drop for PathScope<'_> {
     fn drop(&mut self) {
         let builder = std::mem::take(&mut self.builder);
-        if !builder.verbs.is_empty() {
+        if !builder.geom.geom.verbs.is_empty() {
             self.scene.elements.push(Element::Path(builder.build()));
         }
     }
@@ -852,50 +936,40 @@ impl<'a> Drop for ClipScope<'a> {
 /// moves the parts into the finished path. Arcs entered via [`Self::arc_to`]
 /// are pre-expanded to cubics. [`Scene::path`] drives one to commit straight
 /// into a scene.
+/// `Default` is derived only so [`PathScope`]'s `Drop` can `mem::take` the
+/// builder out of the scope; geometry always arrives through [`Path::builder`].
 #[derive(Default)]
 #[must_use = "PathBuilder yields a Path only when build() is called"]
 pub struct PathBuilder {
     style: PathStyle,
-    verbs: Vec<SegmentKind>,
-    coords: Vec<f32>,
-    last_point: Option<(f32, f32)>,
+    geom: GeometryBuilder,
 }
 
 impl PathBuilder {
     fn new(style: PathStyle) -> Self {
         Self {
             style,
-            verbs: Vec::new(),
-            coords: Vec::new(),
-            last_point: None,
+            geom: GeometryBuilder::default(),
         }
     }
 
     pub fn move_to(mut self, x: f32, y: f32) -> Self {
-        self.verbs.push(SegmentKind::Move);
-        self.coords.extend([x, y]);
-        self.last_point = Some((x, y));
+        self.geom.move_to(x, y);
         self
     }
 
     pub fn line_to(mut self, x: f32, y: f32) -> Self {
-        self.verbs.push(SegmentKind::Line);
-        self.coords.extend([x, y]);
-        self.last_point = Some((x, y));
+        self.geom.line_to(x, y);
         self
     }
 
     pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
-        self.verbs.push(SegmentKind::Quad);
-        self.coords.extend([cx, cy, x, y]);
-        self.last_point = Some((x, y));
+        self.geom.quad_to(cx, cy, x, y);
         self
     }
 
     pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
-        self.verbs.push(SegmentKind::Cubic);
-        self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
-        self.last_point = Some((x, y));
+        self.geom.cubic_to(c1x, c1y, c2x, c2y, x, y);
         self
     }
 
@@ -913,34 +987,15 @@ impl PathBuilder {
         x: f32,
         y: f32,
     ) -> Self {
-        let Some((x1, y1)) = self.last_point else {
-            return self.move_to(x, y);
-        };
-        if push_arc_cubics(
-            &mut self.verbs,
-            &mut self.coords,
-            x1,
-            y1,
-            rx,
-            ry,
-            rotation_deg,
-            large_arc,
-            sweep,
-            x,
-            y,
-        ) {
-            self.last_point = Some((x, y));
-            self
-        } else {
-            self.line_to(x, y)
-        }
+        self.geom
+            .arc_to(rx, ry, rotation_deg, large_arc, sweep, x, y);
+        self
     }
 
     pub fn build(self) -> Path {
         Path {
             style: self.style,
-            verbs: self.verbs,
-            coords: self.coords,
+            geom: self.geom.geom,
         }
     }
 }
@@ -952,47 +1007,35 @@ impl PathBuilder {
 /// implicitly closed by the renderers, so no closing line is required.
 #[must_use = "ClipPathBuilder yields a ClipPath only when build() is called"]
 pub struct ClipPathBuilder {
-    verbs: Vec<SegmentKind>,
-    coords: Vec<f32>,
+    geom: GeometryBuilder,
     fill_rule: FillRule,
-    last_point: Option<(f32, f32)>,
 }
 
 impl ClipPathBuilder {
     fn new(fill_rule: FillRule) -> Self {
         Self {
-            verbs: Vec::new(),
-            coords: Vec::new(),
+            geom: GeometryBuilder::default(),
             fill_rule,
-            last_point: None,
         }
     }
 
     pub fn move_to(mut self, x: f32, y: f32) -> Self {
-        self.verbs.push(SegmentKind::Move);
-        self.coords.extend([x, y]);
-        self.last_point = Some((x, y));
+        self.geom.move_to(x, y);
         self
     }
 
     pub fn line_to(mut self, x: f32, y: f32) -> Self {
-        self.verbs.push(SegmentKind::Line);
-        self.coords.extend([x, y]);
-        self.last_point = Some((x, y));
+        self.geom.line_to(x, y);
         self
     }
 
     pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
-        self.verbs.push(SegmentKind::Quad);
-        self.coords.extend([cx, cy, x, y]);
-        self.last_point = Some((x, y));
+        self.geom.quad_to(cx, cy, x, y);
         self
     }
 
     pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
-        self.verbs.push(SegmentKind::Cubic);
-        self.coords.extend([c1x, c1y, c2x, c2y, x, y]);
-        self.last_point = Some((x, y));
+        self.geom.cubic_to(c1x, c1y, c2x, c2y, x, y);
         self
     }
 
@@ -1010,33 +1053,14 @@ impl ClipPathBuilder {
         x: f32,
         y: f32,
     ) -> Self {
-        let Some((x1, y1)) = self.last_point else {
-            return self.move_to(x, y);
-        };
-        if push_arc_cubics(
-            &mut self.verbs,
-            &mut self.coords,
-            x1,
-            y1,
-            rx,
-            ry,
-            rotation_deg,
-            large_arc,
-            sweep,
-            x,
-            y,
-        ) {
-            self.last_point = Some((x, y));
-            self
-        } else {
-            self.line_to(x, y)
-        }
+        self.geom
+            .arc_to(rx, ry, rotation_deg, large_arc, sweep, x, y);
+        self
     }
 
     pub fn build(self) -> ClipPath {
         ClipPath {
-            verbs: self.verbs,
-            coords: self.coords,
+            geom: self.geom.geom,
             fill_rule: self.fill_rule,
         }
     }

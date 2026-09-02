@@ -25,8 +25,8 @@ use crate::event::{
 };
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
-    Bitmap, ClipPath, Element, FillRule, FontStyle, LineCap, LineJoin, LinearGradient, Paint, Path,
-    PathStyle, RadialGradient, Rgba, Scene, SegmentKind, SpreadMode, Stop, TextNode,
+    Bitmap, ClipPath, Element, FillRule, FontStyle, Geometry, LineCap, LineJoin, LinearGradient,
+    Paint, Path, PathStyle, RadialGradient, Rgba, Scene, SegmentKind, SpreadMode, Stop, TextNode,
 };
 
 use crate::frame_capnp::{
@@ -465,32 +465,11 @@ fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
 }
 
 fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, Error> {
-    let coords = r.get_coords()?;
-    let verbs = parse_verbs(r.get_verbs()?, coords.len() as usize)?;
-    let mut b = ClipPath::builder(fill_rule_from_wire(r.get_fill_rule()?));
-    let mut i = 0u32;
-    for v in verbs {
-        b = match v {
-            SegmentKind::Move => b.move_to(coords.get(i), coords.get(i + 1)),
-            SegmentKind::Line => b.line_to(coords.get(i), coords.get(i + 1)),
-            SegmentKind::Quad => b.quad_to(
-                coords.get(i),
-                coords.get(i + 1),
-                coords.get(i + 2),
-                coords.get(i + 3),
-            ),
-            SegmentKind::Cubic => b.cubic_to(
-                coords.get(i),
-                coords.get(i + 1),
-                coords.get(i + 2),
-                coords.get(i + 3),
-                coords.get(i + 4),
-                coords.get(i + 5),
-            ),
-        };
-        i += v.coords() as u32;
-    }
-    Ok(b.build())
+    let geom = read_geometry(r.get_verbs()?, r.get_coords()?)?;
+    Ok(ClipPath::from_wire(
+        fill_rule_from_wire(r.get_fill_rule()?),
+        geom,
+    ))
 }
 
 fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &Bitmap) {
@@ -561,25 +540,24 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
 // Scene <-> wire
 // ---------------------------------------------------------------------------
 
-/// Parse the wire byte stream into typed verbs, validating against
-/// `coords_len` at the same time. Rejects unknown verb bytes and verb/coord
-/// length disagreement; the verb enum makes both errors structurally absent
-/// past this point.
-fn parse_verbs(bytes: &[u8], coords_len: usize) -> Result<Vec<SegmentKind>, Error> {
+/// Decode the wire verb bytes and coordinate list into a validated
+/// [`Geometry`]. Rejects unknown verb bytes here and verb/coord length
+/// disagreement in [`Geometry::from_wire`], so both errors are structurally
+/// absent past this point. Shared by the path and clip readers.
+fn read_geometry(
+    bytes: &[u8],
+    coords: capnp::primitive_list::Reader<'_, f32>,
+) -> Result<Geometry, Error> {
     let mut verbs = Vec::with_capacity(bytes.len());
-    let mut needed = 0usize;
     for &b in bytes {
-        let v = SegmentKind::from_u8(b).ok_or(Error::UnknownVerb(b))?;
-        needed += v.coords();
-        verbs.push(v);
+        verbs.push(SegmentKind::from_u8(b).ok_or(Error::UnknownVerb(b))?);
     }
-    if needed != coords_len {
-        return Err(Error::PathLengthMismatch {
-            verbs: bytes.len(),
-            coords: coords_len,
-        });
-    }
-    Ok(verbs)
+    let coords: Vec<f32> = (0..coords.len()).map(|i| coords.get(i)).collect();
+    let coords_len = coords.len();
+    Geometry::from_wire(verbs, coords).ok_or(Error::PathLengthMismatch {
+        verbs: bytes.len(),
+        coords: coords_len,
+    })
 }
 
 /// Pack a typed verb stream into the byte representation the wire uses. One
@@ -605,32 +583,8 @@ fn write_path_parts(
 
 fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
     let style = read_path_style(r.get_style()?)?;
-    let coords = r.get_coords()?;
-    let verbs = parse_verbs(r.get_verbs()?, coords.len() as usize)?;
-    let mut b = Path::builder(style);
-    let mut i = 0u32;
-    for v in verbs {
-        b = match v {
-            SegmentKind::Move => b.move_to(coords.get(i), coords.get(i + 1)),
-            SegmentKind::Line => b.line_to(coords.get(i), coords.get(i + 1)),
-            SegmentKind::Quad => b.quad_to(
-                coords.get(i),
-                coords.get(i + 1),
-                coords.get(i + 2),
-                coords.get(i + 3),
-            ),
-            SegmentKind::Cubic => b.cubic_to(
-                coords.get(i),
-                coords.get(i + 1),
-                coords.get(i + 2),
-                coords.get(i + 3),
-                coords.get(i + 4),
-                coords.get(i + 5),
-            ),
-        };
-        i += v.coords() as u32;
-    }
-    Ok(b.build())
+    let geom = read_geometry(r.get_verbs()?, r.get_coords()?)?;
+    Ok(Path::from_wire(style, geom))
 }
 
 fn write_element(b: element::Builder<'_>, node: &Element) {

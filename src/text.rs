@@ -346,7 +346,10 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
     // Empty family resolves to Liberation Sans — keeps the historic render
     // fixtures pinned to the same face.
     let face = resolve(&node.family, node.weight, node.style).face();
-    let width = measure_width_with(face, &node.text, size_i) as f32;
+    // Measure once: `measure_x_offset_with` is `-width / 2.0`, so calling it
+    // here would walk the string a second time.
+    let measured = measure_width_with(face, &node.text, size_i);
+    let width = measured as f32;
     if width <= 0.0 {
         return None;
     }
@@ -356,8 +359,20 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
         size: node.size,
         width,
         baseline_y: measure_y_offset_with(face, &node.text, size_i) as f32,
-        x_left: measure_x_offset_with(face, &node.text, size_i) as f32,
+        x_left: (-measured / 2.0) as f32,
     })
+}
+
+/// Emit the underline rectangle for a laid-out node as a closed contour.
+/// Backends share this so the rect→verbs step is written once rather than
+/// once per renderer.
+pub fn outline_underline(layout: &TextLayout, out: &mut dyn OutlineBuilder) {
+    let u = underline_rect(layout);
+    out.move_to(u.x_l, u.y_top);
+    out.line_to(u.x_r, u.y_top);
+    out.line_to(u.x_r, u.y_bot);
+    out.line_to(u.x_l, u.y_bot);
+    out.close();
 }
 
 /// Axis-aligned underline rectangle in box-local text space.

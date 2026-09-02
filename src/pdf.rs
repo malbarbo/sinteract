@@ -177,57 +177,43 @@ impl PdfRenderer {
         ops
     }
 
-    /// Decide what to emit for the fill paint. Solid → `set_fill_rgb`; gradient
-    /// → `cs /Pattern\n scn /Pn`. Returns the pattern name for diagnostics.
-    fn bind_fill_paint(&mut self, paint: &IrPaint) -> Option<String> {
-        match paint {
+    /// Decide what to emit for a paint. Solid → `set_*_rgb`; gradient →
+    /// `cs /Pattern\n scn /Pn`. `target` picks the fill or stroke operators,
+    /// which is the only thing that differs between the two.
+    fn bind_paint(&mut self, paint: &IrPaint, target: PaintTarget) {
+        let shape = match paint {
             IrPaint::Solid(c) => {
-                let Rgba { r, g, b, .. } = *c;
-                self.content
-                    .set_fill_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
-                None
+                let [r, g, b] = rgb_components(*c);
+                match target {
+                    PaintTarget::Fill => self.content.set_fill_rgb(r, g, b),
+                    PaintTarget::Stroke => self.content.set_stroke_rgb(r, g, b),
+                };
+                return;
             }
-            IrPaint::Linear(g) => {
-                let name = self.push_gradient(GradientShape::Linear(g.clone()));
-                self.content
-                    .set_fill_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
-                self.content.set_fill_pattern(None, Name(name.as_bytes()));
-                Some(name)
+            IrPaint::Linear(g) => GradientShape::Linear(g.clone()),
+            IrPaint::Radial(g) => GradientShape::Radial(g.clone()),
+        };
+        let name = self.push_gradient(shape);
+        let name = Name(name.as_bytes());
+        let pattern = pdf_writer::types::ColorSpaceOperand::Pattern;
+        match target {
+            PaintTarget::Fill => {
+                self.content.set_fill_color_space(pattern);
+                self.content.set_fill_pattern(None, name)
             }
-            IrPaint::Radial(g) => {
-                let name = self.push_gradient(GradientShape::Radial(g.clone()));
-                self.content
-                    .set_fill_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
-                self.content.set_fill_pattern(None, Name(name.as_bytes()));
-                Some(name)
+            PaintTarget::Stroke => {
+                self.content.set_stroke_color_space(pattern);
+                self.content.set_stroke_pattern(None, name)
             }
-        }
+        };
     }
+}
 
-    fn bind_stroke_paint(&mut self, paint: &IrPaint) -> Option<String> {
-        match paint {
-            IrPaint::Solid(c) => {
-                let Rgba { r, g, b, .. } = *c;
-                self.content
-                    .set_stroke_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
-                None
-            }
-            IrPaint::Linear(g) => {
-                let name = self.push_gradient(GradientShape::Linear(g.clone()));
-                self.content
-                    .set_stroke_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
-                self.content.set_stroke_pattern(None, Name(name.as_bytes()));
-                Some(name)
-            }
-            IrPaint::Radial(g) => {
-                let name = self.push_gradient(GradientShape::Radial(g.clone()));
-                self.content
-                    .set_stroke_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
-                self.content.set_stroke_pattern(None, Name(name.as_bytes()));
-                Some(name)
-            }
-        }
-    }
+/// Which half of the PDF graphics state a paint binds to.
+#[derive(Clone, Copy)]
+enum PaintTarget {
+    Fill,
+    Stroke,
 }
 
 /// Emits `restore_state` on scope exit — including on unwind — so a clip's
@@ -250,8 +236,8 @@ impl Paint for PdfRenderer {
         // uniform alpha is taken from the first stop (best-effort — a soft-
         // mask would be the next step).
         let style = &path.style;
-        let do_fill = style.fill.is_visible();
-        let do_stroke = style.stroke.is_visible() && style.stroke_width > 0.0;
+        let do_fill = style.draws_fill();
+        let do_stroke = style.draws_stroke();
         if !do_fill && !do_stroke {
             return;
         }
@@ -275,16 +261,12 @@ impl Paint for PdfRenderer {
 
         // Allocate any pattern names *before* writing the path ops so the
         // `cs /Pattern\n /Pn scn` operators land in the right order.
-        let fill_pattern = if do_fill {
-            self.bind_fill_paint(&style.fill)
-        } else {
-            None
-        };
-        let stroke_pattern = if do_stroke {
-            self.bind_stroke_paint(&style.stroke)
-        } else {
-            None
-        };
+        if do_fill {
+            self.bind_paint(&style.fill, PaintTarget::Fill);
+        }
+        if do_stroke {
+            self.bind_paint(&style.stroke, PaintTarget::Stroke);
+        }
 
         if do_stroke {
             self.content.set_line_width(style.stroke_width);
@@ -306,7 +288,6 @@ impl Paint for PdfRenderer {
         // Pattern color spaces persist on the gstate, so restore_state below
         // is what cleans them up — no explicit reset needed.
         self.content.restore_state();
-        let _ = (fill_pattern, stroke_pattern);
     }
 
     fn draw_text(&mut self, node: &TextNode) {
@@ -722,18 +703,12 @@ fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
         if do_stroke { node.stroke.a } else { 1.0 },
     );
     if do_fill {
-        canvas.content.set_fill_rgb(
-            node.fill.r as f32 / 255.0,
-            node.fill.g as f32 / 255.0,
-            node.fill.b as f32 / 255.0,
-        );
+        let [r, g, b] = rgb_components(node.fill);
+        canvas.content.set_fill_rgb(r, g, b);
     }
     if do_stroke {
-        canvas.content.set_stroke_rgb(
-            node.stroke.r as f32 / 255.0,
-            node.stroke.g as f32 / 255.0,
-            node.stroke.b as f32 / 255.0,
-        );
+        let [r, g, b] = rgb_components(node.stroke);
+        canvas.content.set_stroke_rgb(r, g, b);
         canvas.content.set_line_width(node.stroke_width);
         // Cap/join intentionally omitted: text outlines are closed contours
         // on smooth curves, so the PDF defaults (butt cap, miter join) are
@@ -744,16 +719,10 @@ fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
 
     let mut adapter = PdfOutline { ops: Vec::new() };
     crate::text::outline_with(layout.face, &node.text, layout.size_i, &mut adapter);
-    emit_path_ops(&adapter.ops, &mut canvas.content);
-
     if node.underline {
-        let u = crate::text::underline_rect(&layout);
-        canvas.content.move_to(u.x_l, u.y_top);
-        canvas.content.line_to(u.x_r, u.y_top);
-        canvas.content.line_to(u.x_r, u.y_bot);
-        canvas.content.line_to(u.x_l, u.y_bot);
-        canvas.content.close_path();
+        crate::text::outline_underline(&layout, &mut adapter);
     }
+    emit_path_ops(&adapter.ops, &mut canvas.content);
 
     paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
     canvas.content.restore_state();
@@ -863,6 +832,32 @@ mod tests {
         assert!(out.starts_with(b"%PDF-"));
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains(" cm"), "expected cm transform in content stream");
+    }
+
+    /// The underline contour is emitted through the same `PdfOutline` adapter
+    /// as the glyphs, so it must add path ops beyond the un-underlined run.
+    #[test]
+    fn underline_adds_path_ops() {
+        let render = |underline: bool| {
+            let mut scene = Scene::new(100.0, 30.0);
+            scene.text(TextNode {
+                fill: Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                size: 16.0,
+                text: "Hi".to_owned(),
+                underline,
+                ..TextNode::default()
+            });
+            render_to_pdf(&scene).len()
+        };
+        assert!(
+            render(true) > render(false),
+            "underline should emit extra content-stream ops"
+        );
     }
 
     #[test]
