@@ -26,7 +26,8 @@ use crate::event::{
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LineCap,
-    LineJoin, Paint, Path, PathStyle, Rgba, Scene, SegmentKind, SpreadMode, Stop, TextNode,
+    LineJoin, Paint, Path, PathStyle, Rgba, Scene, Segment, SegmentKind, Segments, SpreadMode,
+    Stop, TextNode,
 };
 
 use crate::frame_capnp::{
@@ -451,27 +452,18 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
 
 fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
     b.set_fill_rule(fill_rule_to_wire(c.fill_rule));
-    let verbs = c.verbs();
-    write_verbs(b.reborrow().init_verbs(verbs.len() as u32), verbs);
-    let coords = c.coords();
-    let mut out = b.init_coords(coords.len() as u32);
-    for (i, &v) in coords.iter().enumerate() {
-        out.set(i as u32, v);
-    }
+    write_verbs(
+        b.reborrow().init_verbs(c.segments().len() as u32),
+        c.segments(),
+    );
+    write_coords(&mut b.init_coords(coord_count(c.segments())), c.segments());
 }
 
 fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, Error> {
-    let (verbs, coords) = (r.get_verbs()?, r.get_coords()?);
     let mut clip = ClipPath::default();
-    if clip.refill_from_wire(
-        fill_rule_from_wire(r.get_fill_rule()?),
-        wire_verbs(verbs),
-        wire_coords(coords),
-    )? {
-        Ok(clip)
-    } else {
-        Err(length_mismatch(verbs, coords))
-    }
+    clip.fill_rule = fill_rule_from_wire(r.get_fill_rule()?);
+    read_segments(clip.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
+    Ok(clip)
 }
 
 fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &Bitmap) {
@@ -542,62 +534,102 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
 // Scene <-> wire
 // ---------------------------------------------------------------------------
 
-/// The wire verb bytes as typed verbs, rejecting an unrecognised byte where it
-/// is read — so an invalid verb is structurally absent past this point.
-fn wire_verbs(bytes: &[u8]) -> impl Iterator<Item = Result<SegmentKind, Error>> + '_ {
-    bytes
-        .iter()
-        .map(|&b| SegmentKind::from_u8(b).ok_or(Error::UnknownVerb(b)))
+// The flat verb/coord pair is the wire's representation, not the scene's: a
+// `Path` holds typed `Segment`s, and the functions below are the only place
+// the two forms meet.
+
+/// Floats the flat coord stream needs for `segs`.
+fn coord_count(segs: Segments<'_>) -> u32 {
+    segs.map(|s| s.kind().coords() as u32).sum()
 }
 
-/// The wire coordinate list as a plain iterator. Capnp primitive lists are
-/// read by index, not borrowed as a slice.
-fn wire_coords(coords: capnp::primitive_list::Reader<'_, f32>) -> impl Iterator<Item = f32> + '_ {
-    (0..coords.len()).map(move |i| coords.get(i))
+/// Flatten typed segments into the message's own verb buffer. The
+/// `SegmentKind` discriminants are the wire bytes by construction, so a verb
+/// is a `repr(u8)` cast; writing in place means nothing is staged in a `Vec`
+/// per path just to be copied out of. Coords go in a second pass because a
+/// capnp builder hands out one field at a time.
+fn write_verbs(out: capnp::data::Builder<'_>, segs: Segments<'_>) {
+    for (dst, seg) in out.iter_mut().zip(segs) {
+        *dst = seg.kind() as u8;
+    }
 }
 
-/// The length mismatch [`Geometry::refill_from_wire`] reports as `false`.
-fn length_mismatch(bytes: &[u8], coords: capnp::primitive_list::Reader<'_, f32>) -> Error {
-    Error::PathLengthMismatch {
-        verbs: bytes.len(),
+/// Flatten typed segments into the message's own coordinate list, in verb
+/// order — the layout [`read_segments`] expects.
+fn write_coords(out: &mut capnp::primitive_list::Builder<'_, f32>, segs: Segments<'_>) {
+    let mut i = 0;
+    for seg in segs {
+        for &c in &seg.wire_coords()[..seg.kind().coords()] {
+            out.set(i, c);
+            i += 1;
+        }
+    }
+}
+
+/// Rebuild typed segments from the flat wire streams into `out`, reusing its
+/// allocation. Rejects an unknown verb byte, and a coord stream that does not
+/// hold exactly what the verbs claim — the two ways the flat pair can be
+/// malformed, and the reason it is confined to this module.
+fn read_segments(
+    out: &mut Vec<Segment>,
+    verbs: &[u8],
+    coords: capnp::primitive_list::Reader<'_, f32>,
+) -> Result<(), Error> {
+    let mismatch = || Error::PathLengthMismatch {
+        verbs: verbs.len(),
         coords: coords.len() as usize,
+    };
+    out.clear();
+    out.reserve(verbs.len());
+    let mut i = 0;
+    for &b in verbs {
+        let kind = SegmentKind::from_u8(b).ok_or(Error::UnknownVerb(b))?;
+        if i + kind.coords() as u32 > coords.len() {
+            return Err(mismatch());
+        }
+        let c = |k: u32| coords.get(i + k);
+        out.push(match kind {
+            SegmentKind::Move => Segment::Move { x: c(0), y: c(1) },
+            SegmentKind::Line => Segment::Line { x: c(0), y: c(1) },
+            SegmentKind::Quad => Segment::Quad {
+                cx: c(0),
+                cy: c(1),
+                x: c(2),
+                y: c(3),
+            },
+            SegmentKind::Cubic => Segment::Cubic {
+                c1x: c(0),
+                c1y: c(1),
+                c2x: c(2),
+                c2y: c(3),
+                x: c(4),
+                y: c(5),
+            },
+        });
+        i += kind.coords() as u32;
     }
+    // Trailing coords no verb claims mean the streams disagree just as surely
+    // as a short one does.
+    if i != coords.len() {
+        return Err(mismatch());
+    }
+    Ok(())
 }
 
-/// Write a typed verb stream into the message's own buffer. The `SegmentKind`
-/// discriminants are the wire bytes by construction, so this is a `repr(u8)`
-/// cast per element — and writing in place means no `Vec<u8>` is packed per
-/// path just to be copied out of.
-fn write_verbs(out: capnp::data::Builder<'_>, verbs: &[SegmentKind]) {
-    for (dst, &v) in out.iter_mut().zip(verbs) {
-        *dst = v as u8;
-    }
-}
-
-fn write_path_parts(
-    mut b: wire_path::Builder<'_>,
-    style: &PathStyle,
-    verbs: &[SegmentKind],
-    coords: &[f32],
-) {
-    write_path_style(b.reborrow().init_style(), style);
-    write_verbs(b.reborrow().init_verbs(verbs.len() as u32), verbs);
-    let mut out = b.init_coords(coords.len() as u32);
-    for (i, &c) in coords.iter().enumerate() {
-        out.set(i as u32, c);
-    }
+fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
+    write_path_style(b.reborrow().init_style(), &p.style);
+    write_verbs(
+        b.reborrow().init_verbs(p.segments().len() as u32),
+        p.segments(),
+    );
+    write_coords(&mut b.init_coords(coord_count(p.segments())), p.segments());
 }
 
 /// Decode into `path`, reusing whatever it already holds. The streaming
 /// decoder keeps one of these alive for a whole frame.
 fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Result<(), Error> {
-    let style = read_path_style(r.get_style()?)?;
-    let (verbs, coords) = (r.get_verbs()?, r.get_coords()?);
-    if path.refill_from_wire(style, wire_verbs(verbs), wire_coords(coords))? {
-        Ok(())
-    } else {
-        Err(length_mismatch(verbs, coords))
-    }
+    path.style = read_path_style(r.get_style()?)?;
+    read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)
 }
 
 fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
@@ -608,7 +640,7 @@ fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
 
 fn write_element(b: element::Builder<'_>, node: &Element) {
     match node {
-        Element::Path(p) => write_path_parts(b.init_path(), &p.style, p.verbs(), p.coords()),
+        Element::Path(p) => write_path(b.init_path(), p),
         Element::Clipped { clip, elements } => write_clipped(b.init_clipped(), clip, elements),
         Element::Text(t) => write_text_node(b.init_text(), t),
         Element::Bitmap(n) => write_bitmap(b.init_bitmap(), n),
@@ -957,6 +989,39 @@ mod tests {
     }
 
     #[test]
+    fn a_path_with_coords_no_verb_claims_is_rejected() {
+        // The mirror of the short case: verbs=[MOVE] wants 2 floats and 4 are
+        // present. The scene has no room for the extra two, so the frame is
+        // malformed rather than silently truncated.
+        let mut builder = MessageBuilder::new_default();
+        {
+            let msg = builder.init_root::<message::Builder>();
+            let frame = msg.init_frame();
+            let mut nodes = frame.init_elements(1);
+            let node = nodes.reborrow().get(0);
+            let mut p = node.init_path();
+            let _ = p.reborrow().init_style();
+            p.set_verbs(&[SegmentKind::Move as u8]);
+            let mut coords = p.init_coords(4);
+            for i in 0..4 {
+                coords.set(i, i as f32);
+            }
+        }
+        let bytes = finish(builder);
+        let err = decode(&bytes).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::PathLengthMismatch {
+                    verbs: 1,
+                    coords: 4
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
     fn malformed_path_is_rejected() {
         // Hand-build a Path with verbs=[CUBIC] (needs 6 floats) but only
         // 4 coords → decoder must reject with PathLengthMismatch.
@@ -1237,18 +1302,20 @@ mod tests {
                 let Element::Clipped { clip, elements } = &d.elements[0] else {
                     panic!("expected Clipped, got {:?}", d.elements[0]);
                 };
+                let segs: Vec<_> = clip.segments().collect();
                 assert_eq!(
-                    clip.verbs(),
+                    segs,
                     [
-                        SegmentKind::Move,
-                        SegmentKind::Line,
-                        SegmentKind::Quad,
-                        SegmentKind::Line
+                        Segment::Move { x: 0.0, y: 0.0 },
+                        Segment::Line { x: 30.0, y: 0.0 },
+                        Segment::Quad {
+                            cx: 40.0,
+                            cy: 25.0,
+                            x: 30.0,
+                            y: 40.0
+                        },
+                        Segment::Line { x: 0.0, y: 40.0 },
                     ]
-                );
-                assert_eq!(
-                    clip.coords(),
-                    [0.0, 0.0, 30.0, 0.0, 40.0, 25.0, 30.0, 40.0, 0.0, 40.0]
                 );
                 assert_eq!(clip.fill_rule, FillRule::EvenOdd);
                 assert_eq!(elements.len(), 1);

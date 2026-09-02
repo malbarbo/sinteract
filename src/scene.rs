@@ -222,52 +222,28 @@ pub enum FillRule {
 /// have to add a final line back to the starting point. `fill_rule` decides
 /// which sub-regions count as "inside".
 ///
-/// The verb and coord streams are private and always agree in length:
-/// [`ClipPath::builder`] pushes verbs and coords together, and the wire
-/// decoder's only entry point validates the arity, so a mismatch cannot be
-/// built either way. Read the geometry back via [`ClipPath::segments`].
+/// Read the geometry back via [`ClipPath::segments`].
 #[derive(Clone, Debug, Default)]
 pub struct ClipPath {
-    geom: Geometry,
+    segs: Vec<Segment>,
     pub fill_rule: FillRule,
 }
 
 impl ClipPath {
-    /// Start building a clip with the given fill rule. Each geometry method
-    /// pushes a verb and its coordinates together, so the pair can never fall
-    /// out of sync.
+    /// Start building a clip with the given fill rule.
     pub fn builder(fill_rule: FillRule) -> ClipPathBuilder {
         ClipPathBuilder::new(fill_rule)
     }
 
-    /// Wire decode into an existing clip, reusing its allocations. See
-    /// [`Geometry::refill_from_wire`] for the arity contract.
-    pub(crate) fn refill_from_wire<E>(
-        &mut self,
-        fill_rule: FillRule,
-        verbs: impl Iterator<Item = Result<SegmentKind, E>>,
-        coords: impl Iterator<Item = f32>,
-    ) -> Result<bool, E> {
-        self.fill_rule = fill_rule;
-        self.geom.refill_from_wire(verbs, coords)
+    /// The segment buffer, for the wire decoder to refill in place. See
+    /// [`Path::segments_mut`].
+    pub(crate) fn segments_mut(&mut self) -> &mut Vec<Segment> {
+        &mut self.segs
     }
 
-    /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
-    /// — only the wire codec touches the raw streams; read geometry through
-    /// [`Self::segments`].
-    pub(crate) fn verbs(&self) -> &[SegmentKind] {
-        &self.geom.verbs
-    }
-
-    /// Raw coordinate stream. Crate-internal; read [`Self::segments`] for a
-    /// typed walk.
-    pub(crate) fn coords(&self) -> &[f32] {
-        &self.geom.coords
-    }
-
-    /// Typed segment walk over the verb/coord streams.
+    /// Walk the clip's segments.
     pub fn segments(&self) -> Segments<'_> {
-        self.geom.segments()
+        Segments(self.segs.iter())
     }
 }
 
@@ -435,11 +411,11 @@ pub fn bitmap_box_affine(
     [m[0], m[1], m[2], m[3], cx - ox, cy - oy]
 }
 
-/// The kind of a path segment — its verb byte on the wire. Each kind consumes
-/// a fixed number of floats from the coordinate stream (see [`Self::coords`]);
-/// pair one with its coords to get a [`Segment`]. The discriminants are stable: they
-/// match the byte values used in the wire format
-/// (`verbMove`/`verbLine`/`verbQuad`/`verbCubic` in `schema/frame.capnp`).
+/// A path segment's verb byte on the wire. Scenes hold typed [`Segment`]s; this
+/// is the flat form they are encoded to and decoded from, and the codec is the
+/// only place it appears. The discriminants are stable: they match the byte
+/// values used in the wire format (`verbMove`/`verbLine`/`verbQuad`/`verbCubic`
+/// in `schema/frame.capnp`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SegmentKind {
@@ -462,7 +438,7 @@ impl SegmentKind {
         }
     }
 
-    /// Number of floats this verb pulls from the coord stream.
+    /// Number of floats this verb pulls from the wire's coord stream.
     pub fn coords(self) -> usize {
         match self {
             Self::Move | Self::Line => 2,
@@ -472,9 +448,10 @@ impl SegmentKind {
     }
 }
 
-/// One decoded path segment — a verb paired with its coordinates. Yielded by
-/// [`Path::segments`] / [`ClipPath::segments`] so backends walk typed geometry
-/// instead of indexing parallel `verbs`/`coords` arrays.
+/// One path segment — a verb and its coordinates in one value. This is how a
+/// [`Path`] and a [`ClipPath`] store their geometry and what
+/// [`Path::segments`] / [`ClipPath::segments`] yield, so there is no parallel
+/// verb/coord pair for anything but the codec to keep in step.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Segment {
     Move {
@@ -501,26 +478,42 @@ pub enum Segment {
     },
 }
 
-/// Iterator over a verb/coord pair, yielding one [`Segment`] per verb.
-/// Constructed from a [`Path`]/[`ClipPath`] whose streams agree in length by
-/// construction; even so, [`Self::next`] slices defensively — if the coord
-/// stream runs short it stops (`None`) instead of panicking.
-#[must_use = "Segments yields nothing unless iterated"]
-pub struct Segments<'a> {
-    verbs: std::slice::Iter<'a, SegmentKind>,
-    coords: &'a [f32],
-    i: usize,
-}
-
-impl<'a> Segments<'a> {
-    fn new(verbs: &'a [SegmentKind], coords: &'a [f32]) -> Self {
-        Self {
-            verbs: verbs.iter(),
-            coords,
-            i: 0,
+impl Segment {
+    /// This segment's verb byte on the wire.
+    pub fn kind(self) -> SegmentKind {
+        match self {
+            Self::Move { .. } => SegmentKind::Move,
+            Self::Line { .. } => SegmentKind::Line,
+            Self::Quad { .. } => SegmentKind::Quad,
+            Self::Cubic { .. } => SegmentKind::Cubic,
         }
     }
 
+    /// This segment's coordinates in wire order. Only the first
+    /// [`SegmentKind::coords`] slots are meaningful — a fixed array so the
+    /// encoder reads them without allocating per segment.
+    pub(crate) fn wire_coords(self) -> [f32; 6] {
+        match self {
+            Self::Move { x, y } | Self::Line { x, y } => [x, y, 0.0, 0.0, 0.0, 0.0],
+            Self::Quad { cx, cy, x, y } => [cx, cy, x, y, 0.0, 0.0],
+            Self::Cubic {
+                c1x,
+                c1y,
+                c2x,
+                c2y,
+                x,
+                y,
+            } => [c1x, c1y, c2x, c2y, x, y],
+        }
+    }
+}
+
+/// Walk over a path's segments. The geometry is stored typed, so this is a
+/// slice iterator — nothing is decoded and nothing can run short.
+#[must_use = "Segments yields nothing unless iterated"]
+pub struct Segments<'a>(std::slice::Iter<'a, Segment>);
+
+impl<'a> Segments<'a> {
     /// This walk with quadratics elevated to cubics. See [`Cubics`].
     pub fn cubics(self) -> Cubics<'a> {
         Cubics {
@@ -534,32 +527,15 @@ impl Iterator for Segments<'_> {
     type Item = Segment;
 
     fn next(&mut self) -> Option<Segment> {
-        let &v = self.verbs.next()?;
-        // One bounds check for the whole verb; `c` then has exactly `v.coords()`
-        // elements, so the fixed indices below cannot go out of range.
-        let c = self.coords.get(self.i..self.i + v.coords())?;
-        let seg = match v {
-            SegmentKind::Move => Segment::Move { x: c[0], y: c[1] },
-            SegmentKind::Line => Segment::Line { x: c[0], y: c[1] },
-            SegmentKind::Quad => Segment::Quad {
-                cx: c[0],
-                cy: c[1],
-                x: c[2],
-                y: c[3],
-            },
-            SegmentKind::Cubic => Segment::Cubic {
-                c1x: c[0],
-                c1y: c[1],
-                c2x: c[2],
-                c2y: c[3],
-                x: c[4],
-                y: c[5],
-            },
-        };
-        self.i += v.coords();
-        Some(seg)
+        self.0.next().copied()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
     }
 }
+
+impl ExactSizeIterator for Segments<'_> {}
 
 /// Promote a quadratic Bézier — current point `p0`, control `(cx, cy)`,
 /// endpoint `(x, y)` — to a cubic's two control points.
@@ -624,86 +600,40 @@ impl Iterator for Cubics<'_> {
     }
 }
 
-/// A verb stream paired with its coordinates — the geometry half of both
-/// [`Path`] and [`ClipPath`]. Fields are private and only [`GeometryBuilder`]
-/// appends to them, pushing a verb and its coords together, so the two streams
-/// cannot fall out of sync.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Geometry {
-    verbs: Vec<SegmentKind>,
-    coords: Vec<f32>,
-}
-
-impl Geometry {
-    fn segments(&self) -> Segments<'_> {
-        Segments::new(&self.verbs, &self.coords)
-    }
-
-    /// Refill from raw wire streams, reusing the allocations already here, and
-    /// validate that `coords` holds exactly the verbs' total arity — the
-    /// invariant the private fields exist to protect. `Ok(false)` reports a
-    /// disagreement, which the codec maps to
-    /// [`wire::Error::PathLengthMismatch`](crate::wire::Error). On either
-    /// failure the geometry is emptied rather than left half-decoded, so it is
-    /// consistent whatever the caller does with the error.
-    pub(crate) fn refill_from_wire<E>(
-        &mut self,
-        verbs: impl Iterator<Item = Result<SegmentKind, E>>,
-        coords: impl Iterator<Item = f32>,
-    ) -> Result<bool, E> {
-        self.verbs.clear();
-        self.coords.clear();
-        for v in verbs {
-            match v {
-                Ok(v) => self.verbs.push(v),
-                Err(e) => {
-                    self.verbs.clear();
-                    return Err(e);
-                }
-            }
-        }
-        self.coords.extend(coords);
-        let needed: usize = self.verbs.iter().map(|v| v.coords()).sum();
-        if needed != self.coords.len() {
-            self.verbs.clear();
-            self.coords.clear();
-            return Ok(false);
-        }
-        Ok(true)
-    }
-}
-
 /// Accumulator behind [`PathBuilder`] and [`ClipPathBuilder`]. Owns the only
-/// code that appends geometry, so a new verb is added here once instead of
+/// code that appends geometry, so a new segment is added here once instead of
 /// once per builder, and the kurbo arc expansion lives in a single place.
 #[derive(Default)]
 struct GeometryBuilder {
-    geom: Geometry,
+    segs: Vec<Segment>,
     last_point: Option<(f32, f32)>,
 }
 
 impl GeometryBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.geom.verbs.push(SegmentKind::Move);
-        self.geom.coords.extend([x, y]);
+        self.segs.push(Segment::Move { x, y });
         self.last_point = Some((x, y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.geom.verbs.push(SegmentKind::Line);
-        self.geom.coords.extend([x, y]);
+        self.segs.push(Segment::Line { x, y });
         self.last_point = Some((x, y));
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        self.geom.verbs.push(SegmentKind::Quad);
-        self.geom.coords.extend([cx, cy, x, y]);
+        self.segs.push(Segment::Quad { cx, cy, x, y });
         self.last_point = Some((x, y));
     }
 
     fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
-        self.geom.verbs.push(SegmentKind::Cubic);
-        self.geom.coords.extend([c1x, c1y, c2x, c2y, x, y]);
+        self.segs.push(Segment::Cubic {
+            c1x,
+            c1y,
+            c2x,
+            c2y,
+            x,
+            y,
+        });
         self.last_point = Some((x, y));
     }
 
@@ -737,72 +667,47 @@ impl GeometryBuilder {
         };
         for el in arc.append_iter(ARC_TOLERANCE) {
             if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
-                self.geom.verbs.push(SegmentKind::Cubic);
-                self.geom.coords.extend([
-                    p1.x as f32,
-                    p1.y as f32,
-                    p2.x as f32,
-                    p2.y as f32,
-                    p3.x as f32,
-                    p3.y as f32,
-                ]);
+                self.segs.push(Segment::Cubic {
+                    c1x: p1.x as f32,
+                    c1y: p1.y as f32,
+                    c2x: p2.x as f32,
+                    c2y: p2.y as f32,
+                    x: p3.x as f32,
+                    y: p3.y as f32,
+                });
             }
         }
         self.last_point = Some((x, y));
     }
 }
 
-/// A materialized 2D path: a style plus a flat verb stream and its
-/// floating-point arguments.
+/// A materialized 2D path: a style plus its [`Segment`]s.
 ///
-/// `verbs[i]` pulls 2 (move/line), 4 (quad), or 6 (cubic) floats from
-/// `coords` in order. Both streams are private and always agree in length: a
-/// [`PathBuilder`] (via [`Path::builder`] or the [`Scene::path`] scope) pushes
-/// verbs and coords together, and the wire decoder's only entry point
-/// validates the arity, so a mismatch cannot be built either way. Read the
-/// geometry back via [`Path::segments`].
+/// Build one with a [`PathBuilder`] (via [`Path::builder`] or the
+/// [`Scene::path`] scope); read the geometry back through [`Path::segments`].
+/// The flat verb/coord pair the wire format uses exists only inside the codec.
 #[derive(Clone, Debug, Default)]
 pub struct Path {
     pub style: PathStyle,
-    geom: Geometry,
+    segs: Vec<Segment>,
 }
 
 impl Path {
-    /// Start building a path with the given style. Each geometry method pushes
-    /// a verb and its coordinates together, so the pair can never fall out of
-    /// sync.
+    /// Start building a path with the given style.
     pub fn builder(style: PathStyle) -> PathBuilder {
         PathBuilder::new(style)
     }
 
-    /// Wire decode into an existing path, reusing its allocations. See
-    /// [`Geometry::refill_from_wire`] for the arity contract.
-    pub(crate) fn refill_from_wire<E>(
-        &mut self,
-        style: PathStyle,
-        verbs: impl Iterator<Item = Result<SegmentKind, E>>,
-        coords: impl Iterator<Item = f32>,
-    ) -> Result<bool, E> {
-        self.style = style;
-        self.geom.refill_from_wire(verbs, coords)
+    /// The segment buffer, for the wire decoder to refill in place. Handed out
+    /// directly because there is no longer an invariant to protect: a
+    /// `Vec<Segment>` is well-formed however it is filled.
+    pub(crate) fn segments_mut(&mut self) -> &mut Vec<Segment> {
+        &mut self.segs
     }
 
-    /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
-    /// — only the wire codec touches the raw streams; read geometry through
-    /// [`Self::segments`].
-    pub(crate) fn verbs(&self) -> &[SegmentKind] {
-        &self.geom.verbs
-    }
-
-    /// Raw coordinate stream. Crate-internal; read [`Self::segments`] for a
-    /// typed walk.
-    pub(crate) fn coords(&self) -> &[f32] {
-        &self.geom.coords
-    }
-
-    /// Typed segment walk over the verb/coord streams.
+    /// Walk the path's segments.
     pub fn segments(&self) -> Segments<'_> {
-        self.geom.segments()
+        Segments(self.segs.iter())
     }
 }
 
@@ -1006,7 +911,7 @@ impl PathScope<'_> {
 impl Drop for PathScope<'_> {
     fn drop(&mut self) {
         let builder = std::mem::take(&mut self.builder);
-        if !builder.geom.geom.verbs.is_empty() {
+        if !builder.geom.segs.is_empty() {
             self.scene.elements.push(Element::Path(builder.build()));
         }
     }
@@ -1053,9 +958,9 @@ impl<'a> Drop for ClipScope<'a> {
 }
 
 /// Owned builder for a [`Path`], returned by [`Path::builder`]. Each geometry
-/// method consumes and returns `self`, appending a verb and its coordinates
-/// together so the verb/coord streams cannot fall out of sync; [`Self::build`]
-/// moves the parts into the finished path. Arcs entered via [`Self::arc_to`]
+/// method consumes and returns `self`, appending one [`Segment`];
+/// [`Self::build`] moves the parts into the finished path. Arcs entered via
+/// [`Self::arc_to`]
 /// are pre-expanded to cubics. [`Scene::path`] drives one to commit straight
 /// into a scene.
 /// `Default` is derived only so [`PathScope`]'s `Drop` can `mem::take` the
@@ -1117,14 +1022,13 @@ impl PathBuilder {
     pub fn build(self) -> Path {
         Path {
             style: self.style,
-            geom: self.geom.geom,
+            segs: self.geom.segs,
         }
     }
 }
 
 /// Owned builder for a [`ClipPath`], returned by [`ClipPath::builder`]. Each
-/// geometry method consumes and returns `self`, appending a verb and its
-/// coordinates together so the verb/coord streams cannot fall out of sync;
+/// geometry method consumes and returns `self`, appending one [`Segment`];
 /// [`Self::build`] moves the parts into the finished clip. Sub-paths are
 /// implicitly closed by the renderers, so no closing line is required.
 #[must_use = "ClipPathBuilder yields a ClipPath only when build() is called"]
@@ -1182,7 +1086,7 @@ impl ClipPathBuilder {
 
     pub fn build(self) -> ClipPath {
         ClipPath {
-            geom: self.geom.geom,
+            segs: self.geom.segs,
             fill_rule: self.fill_rule,
         }
     }
@@ -1191,12 +1095,6 @@ impl ClipPathBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Total floats a verb stream consumes — the invariant every builder must
-    /// preserve.
-    fn coords_arity(verbs: &[SegmentKind]) -> usize {
-        verbs.iter().map(|v| v.coords()).sum()
-    }
 
     #[test]
     fn cubics_elevates_quads_against_the_current_point() {
@@ -1251,15 +1149,16 @@ mod tests {
     }
 
     #[test]
-    fn builders_keep_streams_in_lockstep() {
+    fn builders_append_one_segment_per_call() {
         let clip = ClipPath::builder(FillRule::EvenOdd)
             .move_to(0.0, 0.0)
             .line_to(10.0, 0.0)
             .quad_to(15.0, 5.0, 10.0, 10.0)
             .cubic_to(8.0, 8.0, 4.0, 6.0, 0.0, 10.0)
             .build();
+        let kinds: Vec<_> = clip.segments().map(|s| s.kind()).collect();
         assert_eq!(
-            clip.verbs(),
+            kinds,
             [
                 SegmentKind::Move,
                 SegmentKind::Line,
@@ -1267,7 +1166,6 @@ mod tests {
                 SegmentKind::Cubic
             ]
         );
-        assert_eq!(coords_arity(clip.verbs()), clip.coords().len());
         assert_eq!(clip.fill_rule, FillRule::EvenOdd);
     }
 
@@ -1304,27 +1202,17 @@ mod tests {
     }
 
     #[test]
-    fn segments_stops_on_short_coords() {
-        // Degenerate streams (unreachable through the builders, but the iterator
-        // must not panic if handed one): the Move decodes, then the Cubic wants
-        // six coords and only finds none, so next() ends the walk with None.
-        let verbs = [SegmentKind::Move, SegmentKind::Cubic];
-        let coords = [1.0, 2.0];
-        let mut segs = Segments::new(&verbs, &coords);
-        assert_eq!(segs.next(), Some(Segment::Move { x: 1.0, y: 2.0 }));
-        assert_eq!(segs.next(), None);
-    }
-
-    #[test]
-    fn clip_builder_arc_to_expands_to_cubics_in_lockstep() {
+    fn clip_builder_arc_to_expands_to_cubics() {
         let clip = ClipPath::builder(FillRule::NonZero)
             .move_to(0.0, 0.0)
             .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0)
             .build();
-        // Arc after a current point expands to at least one cubic; the streams
-        // stay balanced regardless of how many the tolerance produced.
-        assert!(clip.verbs().contains(&SegmentKind::Cubic));
-        assert_eq!(coords_arity(clip.verbs()), clip.coords().len());
+        // An arc after a current point expands to cubics, however many the
+        // tolerance produced.
+        let kinds: Vec<_> = clip.segments().map(|s| s.kind()).collect();
+        assert_eq!(kinds[0], SegmentKind::Move);
+        assert!(kinds.len() > 1);
+        assert!(kinds[1..].iter().all(|&k| k == SegmentKind::Cubic));
     }
 
     #[test]
@@ -1333,26 +1221,35 @@ mod tests {
         let clip = ClipPath::builder(FillRule::NonZero)
             .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 10.0)
             .build();
-        assert_eq!(clip.verbs(), [SegmentKind::Move]);
-        assert_eq!(clip.coords(), [10.0, 10.0]);
+        let segs: Vec<_> = clip.segments().collect();
+        assert_eq!(segs, [Segment::Move { x: 10.0, y: 10.0 }]);
     }
 
     #[test]
-    fn standalone_path_builder_builds_agreeing_path() {
+    fn standalone_path_builder_builds_the_segments_it_was_given() {
         let p = Path::builder(PathStyle::default())
             .move_to(0.0, 0.0)
             .line_to(10.0, 0.0)
             .quad_to(15.0, 5.0, 10.0, 10.0)
             .build();
+        let segs: Vec<_> = p.segments().collect();
         assert_eq!(
-            p.verbs(),
-            [SegmentKind::Move, SegmentKind::Line, SegmentKind::Quad]
+            segs,
+            [
+                Segment::Move { x: 0.0, y: 0.0 },
+                Segment::Line { x: 10.0, y: 0.0 },
+                Segment::Quad {
+                    cx: 15.0,
+                    cy: 5.0,
+                    x: 10.0,
+                    y: 10.0
+                },
+            ]
         );
-        assert_eq!(coords_arity(p.verbs()), p.coords().len());
     }
 
     #[test]
-    fn scene_path_builder_commits_agreeing_geometry() {
+    fn scene_path_builder_commits_the_expanded_arc() {
         let mut scene = Scene::new(10.0, 10.0);
         scene
             .path(PathStyle::default())
@@ -1361,8 +1258,7 @@ mod tests {
         let Element::Path(p) = &scene.elements[0] else {
             panic!("expected a path");
         };
-        // arc_to expands to cubics; whatever the count, the streams agree.
-        assert_eq!(coords_arity(p.verbs()), p.coords().len());
+        assert!(p.segments().any(|s| s.kind() == SegmentKind::Cubic));
     }
 
     #[test]
@@ -1376,7 +1272,8 @@ mod tests {
         let Element::Path(p) = &scene.elements[0] else {
             panic!("expected a path");
         };
-        assert_eq!(p.verbs(), [SegmentKind::Move, SegmentKind::Line]);
+        let kinds: Vec<_> = p.segments().map(|s| s.kind()).collect();
+        assert_eq!(kinds, [SegmentKind::Move, SegmentKind::Line]);
     }
 
     #[test]
@@ -1416,7 +1313,8 @@ mod tests {
         let Element::Path(p) = &elements[0] else {
             panic!("expected a path inside the clip");
         };
-        assert_eq!(p.coords(), [1.0, 1.0]);
+        let segs: Vec<_> = p.segments().collect();
+        assert_eq!(segs, [Segment::Move { x: 1.0, y: 1.0 }]);
     }
 
     #[test]
