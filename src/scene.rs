@@ -29,16 +29,6 @@ pub enum SpreadMode {
     Repeat = 2,
 }
 
-impl SpreadMode {
-    pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Reflect,
-            2 => Self::Repeat,
-            _ => Self::Pad,
-        }
-    }
-}
-
 /// Where a gradient's color ramp is swept, in path-local coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GradientGeom {
@@ -227,35 +217,6 @@ pub enum FillRule {
     EvenOdd = 1,
 }
 
-impl LineCap {
-    pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Round,
-            2 => Self::Square,
-            _ => Self::Butt,
-        }
-    }
-}
-
-impl LineJoin {
-    pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Round,
-            2 => Self::Bevel,
-            _ => Self::Miter,
-        }
-    }
-}
-
-impl FillRule {
-    pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::EvenOdd,
-            _ => Self::NonZero,
-        }
-    }
-}
-
 /// Arbitrary clip region described by a verb/coord path (same encoding as
 /// [`Path`]). Sub-paths are treated as implicitly closed — callers do not
 /// have to add a final line back to the starting point. `fill_rule` decides
@@ -317,16 +278,6 @@ pub enum FontStyle {
     Normal = 0,
     Italic = 1,
     Oblique = 2,
-}
-
-impl FontStyle {
-    pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Italic,
-            2 => Self::Oblique,
-            _ => Self::Normal,
-        }
-    }
 }
 
 /// Text node fields. Glyphs are drawn in "natural" text space (origin at
