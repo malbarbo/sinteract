@@ -770,7 +770,7 @@ mod tests {
         // middle a clearly-different gray in between.
         let mut scene = Scene::new(40.0, 10.0);
         let style = PathStyle {
-            fill: IrPaint::Gradient(Gradient::linear(
+            fill: IrPaint::gradient(Gradient::linear(
                 0.0,
                 0.0,
                 40.0,
@@ -817,7 +817,7 @@ mod tests {
         // center, transparent at the edge.
         let mut scene = Scene::new(40.0, 40.0);
         let style = PathStyle {
-            fill: IrPaint::Gradient(Gradient::radial(
+            fill: IrPaint::gradient(Gradient::radial(
                 20.0,
                 20.0,
                 20.0,
@@ -860,7 +860,7 @@ mod tests {
         // which Pad clamps to white but Reflect folds back to t=0.5 (gray).
         let mut scene = Scene::new(80.0, 10.0);
         let style = PathStyle {
-            fill: IrPaint::Gradient(
+            fill: IrPaint::gradient(
                 crate::scene::Gradient::linear(
                     0.0,
                     0.0,

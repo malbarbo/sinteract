@@ -182,7 +182,7 @@ impl PdfRenderer {
                 };
                 return;
             }
-            IrPaint::Gradient(g) => g.clone(),
+            IrPaint::Gradient(g) => g.as_ref().clone(),
         };
         let name = self.push_gradient(gradient);
         let name = Name(name.as_bytes());
@@ -900,7 +900,7 @@ mod tests {
         //  - the content stream using `cs /Pattern\n /P0 scn` for the fill.
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            fill: crate::scene::Paint::Gradient(crate::scene::Gradient::linear(
+            fill: crate::scene::Paint::gradient(crate::scene::Gradient::linear(
                 0.0,
                 0.0,
                 50.0,
@@ -951,7 +951,7 @@ mod tests {
     fn radial_gradient_emits_radial_shading() {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            fill: crate::scene::Paint::Gradient(crate::scene::Gradient::radial(
+            fill: crate::scene::Paint::gradient(crate::scene::Gradient::radial(
                 25.0,
                 25.0,
                 20.0,
@@ -994,7 +994,7 @@ mod tests {
         // Type 2 sub-functions.
         let mut scene = Scene::new(60.0, 10.0);
         let style = PathStyle {
-            fill: crate::scene::Paint::Gradient(crate::scene::Gradient::linear(
+            fill: crate::scene::Paint::gradient(crate::scene::Gradient::linear(
                 0.0,
                 0.0,
                 60.0,

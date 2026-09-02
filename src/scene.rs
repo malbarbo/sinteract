@@ -81,11 +81,13 @@ impl Gradient {
     }
 }
 
-/// Fill or stroke paint — solid color or gradient.
+/// Fill or stroke paint — solid color or gradient. The gradient is boxed:
+/// solid is the overwhelmingly common case, and inlining a `Gradient` here
+/// would widen every `PathStyle`, and so every `Element`, by 40 bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(Rgba),
-    Gradient(Gradient),
+    Gradient(Box<Gradient>),
 }
 
 impl Default for Paint {
@@ -98,6 +100,11 @@ impl Paint {
     /// Convenience: solid paint from raw bytes.
     pub fn rgba(r: u8, g: u8, b: u8, a: f32) -> Self {
         Self::Solid(Rgba { r, g, b, a })
+    }
+
+    /// Gradient paint, boxing for the caller.
+    pub fn gradient(g: Gradient) -> Self {
+        Self::Gradient(Box::new(g))
     }
 
     /// Whether this paint would draw at least one visible pixel. Used by
@@ -1299,3 +1306,4 @@ mod tests {
         assert!(matches!(elements[1], Element::Clipped { .. }));
     }
 }
+

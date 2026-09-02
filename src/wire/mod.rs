@@ -403,7 +403,7 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, Error> {
             (geom, read_stops(g.get_stops()?)?, g.get_spread()?)
         }
     };
-    Ok(Paint::Gradient(Gradient {
+    Ok(Paint::gradient(Gradient {
         geom,
         stops,
         spread: spread_from_wire(spread),
@@ -1030,7 +1030,7 @@ mod tests {
         );
         {
             let mut p = scene.path(PathStyle {
-                fill: Paint::Gradient(gradient.clone()),
+                fill: Paint::gradient(gradient.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
@@ -1043,7 +1043,7 @@ mod tests {
                 let Element::Path(p) = d.elements.first().unwrap() else {
                     panic!();
                 };
-                assert_eq!(p.style.fill, Paint::Gradient(gradient));
+                assert_eq!(p.style.fill, Paint::gradient(gradient));
             }
             _ => panic!(),
         }
@@ -1079,7 +1079,7 @@ mod tests {
         );
         {
             let mut p = scene.path(PathStyle {
-                fill: Paint::Gradient(gradient.clone()),
+                fill: Paint::gradient(gradient.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
@@ -1091,7 +1091,7 @@ mod tests {
                 let Element::Path(p) = d.elements.first().unwrap() else {
                     panic!();
                 };
-                assert_eq!(p.style.fill, Paint::Gradient(gradient));
+                assert_eq!(p.style.fill, Paint::gradient(gradient));
             }
             _ => panic!(),
         }
@@ -1131,7 +1131,7 @@ mod tests {
         .with_spread(SpreadMode::Reflect);
         {
             let mut p = scene.path(PathStyle {
-                fill: Paint::Gradient(linear.clone()),
+                fill: Paint::gradient(linear.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
@@ -1160,7 +1160,7 @@ mod tests {
         .with_spread(SpreadMode::Repeat);
         {
             let mut p = scene.path(PathStyle {
-                fill: Paint::Gradient(radial.clone()),
+                fill: Paint::gradient(radial.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
@@ -1172,11 +1172,11 @@ mod tests {
                 let Element::Path(p0) = &d.elements[0] else {
                     panic!();
                 };
-                assert_eq!(p0.style.fill, Paint::Gradient(linear));
+                assert_eq!(p0.style.fill, Paint::gradient(linear));
                 let Element::Path(p1) = &d.elements[1] else {
                     panic!();
                 };
-                assert_eq!(p1.style.fill, Paint::Gradient(radial));
+                assert_eq!(p1.style.fill, Paint::gradient(radial));
             }
             _ => panic!(),
         }
