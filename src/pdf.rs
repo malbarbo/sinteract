@@ -47,14 +47,6 @@ fn alpha_value(key: u16) -> f32 {
     f32::from(key) / 1000.0
 }
 
-#[derive(Clone, Copy)]
-enum PathOp {
-    Move(f32, f32),
-    Line(f32, f32),
-    Cubic(f32, f32, f32, f32, f32, f32),
-    Close,
-}
-
 /// Reusable PDF renderer: accumulates a content stream + resources, then
 /// assembles a one-page document into `bytes` per render.
 struct PdfRenderer {
@@ -109,29 +101,6 @@ impl PdfRenderer {
         let idx = *self.gstates.entry((fk, sk)).or_insert(next);
         let name = format!("Gs{idx}");
         self.content.set_parameters(Name(name.as_bytes()));
-    }
-
-    /// Walk `segments` into a list of PDF path ops. PDF has no quadratic
-    /// operator, so the walk comes through [`Segments::cubics`], which owns
-    /// the elevation. Shared by fill/stroke paths and clip geometry.
-    fn path_ops(segments: Segments<'_>) -> Vec<PathOp> {
-        segments
-            .cubics()
-            .map(|seg| match seg {
-                Segment::Move { x, y } => PathOp::Move(x, y),
-                Segment::Line { x, y } => PathOp::Line(x, y),
-                Segment::Cubic {
-                    c1x,
-                    c1y,
-                    c2x,
-                    c2y,
-                    x,
-                    y,
-                } => PathOp::Cubic(c1x, c1y, c2x, c2y, x, y),
-                // `cubics()` yields no quads.
-                Segment::Quad { x, y, .. } => PathOp::Line(x, y),
-            })
-            .collect()
     }
 
     /// Decide what to emit for a paint. Solid → `set_*_rgb`; gradient →
@@ -214,8 +183,11 @@ impl Paint for PdfRenderer {
         if !do_fill && !do_stroke {
             return;
         }
-        let ops = Self::path_ops(path.segments());
-        if ops.is_empty() {
+        // Asked of the walk rather than of a materialized op list. It is the
+        // elevated walk because that is what gets written, and it can come up
+        // empty on a path a `Move` never opened -- which must not emit the
+        // state setup below.
+        if path.segments().cubics().next().is_none() {
             return;
         }
 
@@ -253,7 +225,7 @@ impl Paint for PdfRenderer {
                     .set_dash_pattern(dash.array().iter().copied(), dash.offset());
             }
         }
-        emit_path_ops(&ops, &mut self.content);
+        emit_segments(path.segments(), &mut self.content);
         if style.closed {
             self.content.close_path();
         }
@@ -273,8 +245,7 @@ impl Paint for PdfRenderer {
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
-        let ops = Self::path_ops(clip.segments());
-        emit_path_ops(&ops, &mut self.content);
+        emit_segments(clip.segments(), &mut self.content);
         self.content.close_path();
         match clip.fill_rule {
             FillRule::NonZero => {
@@ -586,20 +557,31 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs
     }
 }
 
-fn emit_path_ops(ops: &[PathOp], content: &mut Content) {
-    for op in ops {
-        match *op {
-            PathOp::Move(x, y) => {
+/// Write `segments` into the content stream as PDF path ops. PDF has no
+/// quadratic operator, so the walk comes through [`Segments::cubics`], which
+/// owns the elevation. Shared by fill/stroke paths and clip geometry.
+fn emit_segments(segments: Segments<'_>, content: &mut Content) {
+    for seg in segments.cubics() {
+        match seg {
+            Segment::Move { x, y } => {
                 content.move_to(x, y);
             }
-            PathOp::Line(x, y) => {
+            Segment::Line { x, y } => {
                 content.line_to(x, y);
             }
-            PathOp::Cubic(c1x, c1y, c2x, c2y, x, y) => {
+            Segment::Cubic {
+                c1x,
+                c1y,
+                c2x,
+                c2y,
+                x,
+                y,
+            } => {
                 content.cubic_to(c1x, c1y, c2x, c2y, x, y);
             }
-            PathOp::Close => {
-                content.close_path();
+            // `cubics()` yields no quads.
+            Segment::Quad { x, y, .. } => {
+                content.line_to(x, y);
             }
         }
     }
@@ -660,44 +642,46 @@ fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
     // `node.transform` is already in the PDF `cm` convention.
     canvas.content.transform(node.transform);
 
-    let mut adapter = PdfOutline { ops: Vec::new() };
     {
         // PDF has no quadratic operator; ElevateQuads tracks the current point
         // through the contour, `close` included, so this adapter does not have
-        // to guess it from the ops it already pushed.
+        // to reconstruct it from what it already wrote.
+        let mut adapter = PdfOutline {
+            content: &mut canvas.content,
+        };
         let mut out = crate::text::ElevateQuads::new(&mut adapter);
         crate::text::outline_layout(&layout, &node.text, &mut out);
         if node.underline {
             crate::text::outline_underline(&layout, &mut out);
         }
     }
-    emit_path_ops(&adapter.ops, &mut canvas.content);
 
     paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
     canvas.content.restore_state();
 }
 
-struct PdfOutline {
-    ops: Vec<PathOp>,
+/// Glyph outlines, written straight into the content stream.
+struct PdfOutline<'a> {
+    content: &'a mut Content,
 }
 
-impl crate::text::OutlineBuilder for PdfOutline {
+impl crate::text::OutlineBuilder for PdfOutline<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.ops.push(PathOp::Move(x, y));
+        self.content.move_to(x, y);
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.ops.push(PathOp::Line(x, y));
+        self.content.line_to(x, y);
     }
     fn quad_to(&mut self, _cx: f32, _cy: f32, x: f32, y: f32) {
         // Unreachable: glyphs reach this adapter through ElevateQuads. Degrade
         // to a line rather than panic if someone wires it up directly.
-        self.ops.push(PathOp::Line(x, y));
+        self.content.line_to(x, y);
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        self.ops.push(PathOp::Cubic(cx1, cy1, cx2, cy2, x, y));
+        self.content.cubic_to(cx1, cy1, cx2, cy2, x, y);
     }
     fn close(&mut self) {
-        self.ops.push(PathOp::Close);
+        self.content.close_path();
     }
 }
 
@@ -744,6 +728,19 @@ mod tests {
                 || out.windows(3).any(|w| w == b"\nf\n"),
             "expected fill operator in stream; bytes: {:?}",
             String::from_utf8_lossy(&out)
+        );
+    }
+
+    #[test]
+    fn a_path_no_move_opened_emits_nothing() {
+        // The elevated walk drops a quadratic with no current point, so this
+        // path has nothing to write -- and must not leave a `q ... f Q` with
+        // no geometry in it either.
+        let mut scene = Scene::new(100.0, 50.0);
+        scene.path(red_fill(1.0)).quad_to(10.0, 10.0, 20.0, 20.0);
+        assert_eq!(
+            render_to_pdf(&scene),
+            render_to_pdf(&Scene::new(100.0, 50.0))
         );
     }
 
