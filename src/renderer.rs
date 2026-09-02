@@ -48,10 +48,14 @@ pub(crate) mod sealed {
         /// Draw one text node.
         fn draw_text(&mut self, text: &TextNode);
 
-        /// Blit a previously-uploaded bitmap referenced by `bitmap.id`. The
-        /// current backends skip it (pdf silently, terminal warns once); only
-        /// the future canvas / WebGL frontends honor it.
-        fn draw_bitmap(&mut self, bitmap: &Bitmap);
+        /// Blit a previously-uploaded bitmap referenced by `bitmap.id`.
+        /// Defaults to skipping it: no current backend can blit, and the
+        /// diagnostic belongs to the host, which knows whether the frame it
+        /// is about to show carries any (see
+        /// [`Scene::has_bitmaps`](crate::scene::Scene::has_bitmaps)).
+        fn draw_bitmap(&mut self, bitmap: &Bitmap) {
+            let _ = bitmap;
+        }
 
         /// Run `inside` with `clip` active, then pop the clip, and return
         /// whatever `inside` returned (so a fallible walk threads its `Result`

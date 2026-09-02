@@ -26,8 +26,8 @@ use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path,
-    Rgba, Scene, Segment, Segments, Stop, TextNode,
+    ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba,
+    Scene, Segment, Segments, Stop, TextNode,
 };
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -283,11 +283,6 @@ impl Paint for PdfRenderer {
 
     fn draw_text(&mut self, node: &TextNode) {
         render_text(node, self);
-    }
-
-    fn draw_bitmap(&mut self, _node: &Bitmap) {
-        // Bitmaps are not supported in PDF v1 (consistent with the
-        // terminal renderer); silently skip.
     }
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {

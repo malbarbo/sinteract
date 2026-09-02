@@ -122,6 +122,19 @@ impl Frontend {
     }
 }
 
+/// Say once per frontend — not once per process — that this backend drops the
+/// bitmaps in the frame. A process-global flag would silence every session
+/// after the first, which is precisely the case that needs telling in server
+/// mode.
+fn warn_bitmaps_once(warned: &mut bool, scene: &Scene, backend: &str) {
+    if !*warned && scene.has_bitmaps() {
+        *warned = true;
+        eprintln!(
+            "[simage] the {backend} renderer does not support bitmaps; drawing without them."
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Common vsync-scheduling helper
 // ---------------------------------------------------------------------------
@@ -217,6 +230,7 @@ pub(crate) fn key_event_from_legacy(event_type: i32, key: String, flags: [bool; 
 pub struct TerminalFrontend {
     clock: VsyncClock,
     entered: bool,
+    warned_bitmaps: bool,
 }
 
 impl TerminalFrontend {
@@ -229,6 +243,7 @@ impl TerminalFrontend {
         Self {
             clock: VsyncClock::new(Self::VSYNC_PERIOD),
             entered: false,
+            warned_bitmaps: false,
         }
     }
 
@@ -247,6 +262,7 @@ impl TerminalFrontend {
     }
 
     pub fn present(&mut self, scene: &Scene) {
+        warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
         crate::terminal::show_image(scene);
     }
 
@@ -298,6 +314,7 @@ pub struct WindowFrontend {
     title: String,
     clock: VsyncClock,
     entered: bool,
+    warned_bitmaps: bool,
 }
 
 impl WindowFrontend {
@@ -312,6 +329,7 @@ impl WindowFrontend {
             title: title.to_owned(),
             clock: VsyncClock::new(Self::VSYNC_PERIOD),
             entered: false,
+            warned_bitmaps: false,
         }
     }
 
@@ -330,6 +348,7 @@ impl WindowFrontend {
     }
 
     pub fn present(&mut self, scene: &Scene) {
+        warn_bitmaps_once(&mut self.warned_bitmaps, scene, "window");
         crate::window::show_image(scene);
     }
 

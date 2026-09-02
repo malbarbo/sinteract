@@ -798,6 +798,21 @@ impl Scene {
         }
     }
 
+    /// Whether any element in the tree is a bitmap, clip subtrees included.
+    /// A host asks this to tell the user once that the backend it picked
+    /// renders the frame without them — the backends themselves cannot say
+    /// it, since a diagnostic is a property of the session, not of the draw.
+    pub fn has_bitmaps(&self) -> bool {
+        fn walk(elements: &[Element]) -> bool {
+            elements.iter().any(|e| match e {
+                Element::Bitmap(_) => true,
+                Element::Clipped { elements, .. } => walk(elements),
+                Element::Path(_) | Element::Text(_) => false,
+            })
+        }
+        walk(&self.elements)
+    }
+
     /// Append an already-built [`Path`] as a leaf element. Use this when a
     /// path is assembled away from the scene — decoded off the wire, shared,
     /// or produced by [`Path::builder`]; use [`Self::path`] to build one in
@@ -1126,6 +1141,24 @@ mod tests {
     }
 
     #[test]
+    fn has_bitmaps_sees_through_clip_subtrees() {
+        let mut scene = Scene::new(10.0, 10.0);
+        {
+            let mut p = scene.path(PathStyle::default());
+            p.move_to(0.0, 0.0);
+            p.line_to(5.0, 5.0);
+        }
+        assert!(!scene.has_bitmaps());
+
+        let clip = ClipPath::builder(FillRule::NonZero)
+            .move_to(0.0, 0.0)
+            .line_to(10.0, 10.0)
+            .build();
+        scene.clip(clip).bitmap(Bitmap::default());
+        assert!(scene.has_bitmaps());
+    }
+
+    #[test]
     fn builders_keep_streams_in_lockstep() {
         let clip = ClipPath::builder(FillRule::EvenOdd)
             .move_to(0.0, 0.0)
@@ -1331,4 +1364,3 @@ mod tests {
         assert!(matches!(elements[1], Element::Clipped { .. }));
     }
 }
-

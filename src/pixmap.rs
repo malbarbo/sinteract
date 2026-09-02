@@ -4,7 +4,6 @@
 //! present the pixels their own way.
 
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use tiny_skia::{
     Color as SkColor, FillRule as SkFillRule, GradientStop as SkStop, LineCap as SkLineCap,
@@ -14,8 +13,8 @@ use tiny_skia::{
 
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba,
-    Scene, Segment, Segments, TextNode,
+    ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Scene,
+    Segment, Segments, TextNode,
 };
 
 /// A reusable raster surface. Owns its [`Pixmap`]; [`Renderer::render`] clears
@@ -239,17 +238,6 @@ impl Paint for PixmapRenderer {
         render_text(node, &mut self.pixmap, self.clip_stack.last(), self.base);
     }
 
-    fn draw_bitmap(&mut self, _node: &Bitmap) {
-        // The raster surface has no bitmap support yet; warn once so a scene
-        // that carries bitmaps still renders (without them) instead of failing.
-        if !WARNED_BITMAP.swap(true, Ordering::Relaxed) {
-            eprintln!(
-                "[simage] raster renderer does not yet support bitmaps; \
-                 rendering without them."
-            );
-        }
-    }
-
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         let pushed = self.push_clip(clip);
         let guard = ClipGuard {
@@ -259,8 +247,6 @@ impl Paint for PixmapRenderer {
         inside(&mut *guard.canvas)
     }
 }
-
-static WARNED_BITMAP: AtomicBool = AtomicBool::new(false);
 
 impl Renderer for PixmapRenderer {
     type Output<'a> = &'a Pixmap;
