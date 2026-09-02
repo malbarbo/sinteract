@@ -563,6 +563,14 @@ impl<'a> Segments<'a> {
             i: 0,
         }
     }
+
+    /// This walk with quadratics elevated to cubics. See [`Cubics`].
+    pub fn cubics(self) -> Cubics<'a> {
+        Cubics {
+            inner: self,
+            last: None,
+        }
+    }
 }
 
 impl Iterator for Segments<'_> {
@@ -593,6 +601,69 @@ impl Iterator for Segments<'_> {
         };
         self.i += v.coords();
         Some(seg)
+    }
+}
+
+/// Promote a quadratic Bézier — current point `p0`, control `(cx, cy)`,
+/// endpoint `(x, y)` — to a cubic's two control points.
+pub(crate) fn quad_to_cubic(
+    p0: (f32, f32),
+    cx: f32,
+    cy: f32,
+    x: f32,
+    y: f32,
+) -> (f32, f32, f32, f32) {
+    let (p0x, p0y) = p0;
+    (
+        p0x + 2.0 / 3.0 * (cx - p0x),
+        p0y + 2.0 / 3.0 * (cy - p0y),
+        x + 2.0 / 3.0 * (cx - x),
+        y + 2.0 / 3.0 * (cy - y),
+    )
+}
+
+/// [`Segments`] with every quadratic elevated to a cubic, for backends that
+/// have no quadratic operator. Tracking the current point is the whole job,
+/// and doing it here means doing it once — the scene owns the format, so it
+/// owns this expansion the way it already owns arc→cubic.
+#[must_use = "Cubics yields nothing unless iterated"]
+pub struct Cubics<'a> {
+    inner: Segments<'a>,
+    last: Option<(f32, f32)>,
+}
+
+impl Iterator for Cubics<'_> {
+    type Item = Segment;
+
+    fn next(&mut self) -> Option<Segment> {
+        loop {
+            let seg = self.inner.next()?;
+            match seg {
+                Segment::Move { x, y } | Segment::Line { x, y } => {
+                    self.last = Some((x, y));
+                    return Some(seg);
+                }
+                Segment::Cubic { x, y, .. } => {
+                    self.last = Some((x, y));
+                    return Some(seg);
+                }
+                Segment::Quad { cx, cy, x, y } => {
+                    // Geometry that opens on a quad has no anchor to elevate
+                    // from; skip it and leave the current point unset.
+                    let Some(p0) = self.last else { continue };
+                    let (c1x, c1y, c2x, c2y) = quad_to_cubic(p0, cx, cy, x, y);
+                    self.last = Some((x, y));
+                    return Some(Segment::Cubic {
+                        c1x,
+                        c1y,
+                        c2x,
+                        c2y,
+                        x,
+                        y,
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -1138,6 +1209,40 @@ mod tests {
     /// preserve.
     fn coords_arity(verbs: &[SegmentKind]) -> usize {
         verbs.iter().map(|v| v.coords()).sum()
+    }
+
+    #[test]
+    fn cubics_elevates_quads_against_the_current_point() {
+        let path = Path::builder(PathStyle::default())
+            .move_to(0.0, 0.0)
+            .quad_to(3.0, 3.0, 6.0, 0.0)
+            .build();
+        let segs: Vec<_> = path.segments().cubics().collect();
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0], Segment::Move { x: 0.0, y: 0.0 });
+        // Controls sit 2/3 of the way from each endpoint toward the quad's.
+        assert_eq!(
+            segs[1],
+            Segment::Cubic {
+                c1x: 2.0,
+                c1y: 2.0,
+                c2x: 4.0,
+                c2y: 2.0,
+                x: 6.0,
+                y: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn cubics_drops_a_quad_with_no_anchor() {
+        // A stream opening on a quad has no current point to elevate from.
+        let path = Path::builder(PathStyle::default())
+            .quad_to(3.0, 3.0, 6.0, 0.0)
+            .line_to(9.0, 0.0)
+            .build();
+        let segs: Vec<_> = path.segments().cubics().collect();
+        assert_eq!(segs, vec![Segment::Line { x: 9.0, y: 0.0 }]);
     }
 
     #[test]

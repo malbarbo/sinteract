@@ -260,6 +260,58 @@ pub trait OutlineBuilder {
     fn close(&mut self);
 }
 
+/// Wraps an [`OutlineBuilder`] that has no quadratic operator, elevating every
+/// quad to a cubic on the way through. The current point is tracked here —
+/// including across `close`, which returns it to the start of the subpath —
+/// so a backend never has to reconstruct it from what it has already emitted.
+pub struct ElevateQuads<'a, B: ?Sized> {
+    inner: &'a mut B,
+    start: Option<(f32, f32)>,
+    last: Option<(f32, f32)>,
+}
+
+impl<'a, B: OutlineBuilder + ?Sized> ElevateQuads<'a, B> {
+    pub fn new(inner: &'a mut B) -> Self {
+        Self {
+            inner,
+            start: None,
+            last: None,
+        }
+    }
+}
+
+impl<B: OutlineBuilder + ?Sized> OutlineBuilder for ElevateQuads<'_, B> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.start = Some((x, y));
+        self.last = Some((x, y));
+        self.inner.move_to(x, y);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.last = Some((x, y));
+        self.inner.line_to(x, y);
+    }
+
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        // A contour opening on a quad has no anchor; drop it rather than
+        // inventing a control point from the endpoint.
+        let Some(p0) = self.last else { return };
+        let (c1x, c1y, c2x, c2y) = crate::scene::quad_to_cubic(p0, cx, cy, x, y);
+        self.last = Some((x, y));
+        self.inner.cubic_to(c1x, c1y, c2x, c2y, x, y);
+    }
+
+    fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
+        self.last = Some((x, y));
+        self.inner.cubic_to(cx1, cy1, cx2, cy2, x, y);
+    }
+
+    fn close(&mut self) {
+        self.last = self.start;
+        self.inner.close();
+    }
+}
+
 /// Total horizontal advance of `text` rendered at `size_px` in `face`.
 pub fn measure_width_with(face: &Face<'_>, text: &str, size_px: i32) -> f64 {
     if text.is_empty() || size_px <= 0 {
@@ -470,6 +522,67 @@ impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Records what reached the wrapped builder, so a test can assert the
+    /// exact ops rather than counts.
+    #[derive(Default)]
+    struct Recorder {
+        ops: Vec<String>,
+    }
+
+    impl OutlineBuilder for Recorder {
+        fn move_to(&mut self, x: f32, y: f32) {
+            self.ops.push(format!("M {x} {y}"));
+        }
+        fn line_to(&mut self, x: f32, y: f32) {
+            self.ops.push(format!("L {x} {y}"));
+        }
+        fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+            self.ops.push(format!("Q {cx} {cy} {x} {y}"));
+        }
+        fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+            self.ops.push(format!("C {c1x} {c1y} {c2x} {c2y} {x} {y}"));
+        }
+        fn close(&mut self) {
+            self.ops.push("Z".to_string());
+        }
+    }
+
+    #[test]
+    fn elevate_quads_tracks_the_point_across_close() {
+        // The current point after `close` is the start of the subpath. An
+        // adapter that reconstructs it from the last emitted op cannot see
+        // that, and would anchor the quad at its own endpoint instead.
+        let mut sink = Recorder::default();
+        {
+            let mut out = ElevateQuads::new(&mut sink);
+            out.move_to(0.0, 0.0);
+            out.line_to(6.0, 0.0);
+            out.close();
+            out.quad_to(3.0, 3.0, 6.0, 0.0);
+        }
+        assert_eq!(
+            sink.ops,
+            vec![
+                "M 0 0".to_string(),
+                "L 6 0".to_string(),
+                "Z".to_string(),
+                // Anchored at (0, 0), the subpath start — not at (6, 0).
+                "C 2 2 4 2 6 0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn elevate_quads_drops_a_contour_opening_on_a_quad() {
+        let mut sink = Recorder::default();
+        {
+            let mut out = ElevateQuads::new(&mut sink);
+            out.quad_to(3.0, 3.0, 6.0, 0.0);
+            out.move_to(1.0, 1.0);
+        }
+        assert_eq!(sink.ops, vec!["M 1 1".to_string()]);
+    }
 
     struct CountingBuilder {
         moves: u32,

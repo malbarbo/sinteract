@@ -111,32 +111,15 @@ impl PdfRenderer {
         self.content.set_parameters(Name(name.as_bytes()));
     }
 
-    /// Walk `segments` into a list of PDF path ops, converting quads to cubics
-    /// (PDF has no quadratic operator) against the running current point.
-    /// Shared by fill/stroke paths and clip geometry.
+    /// Walk `segments` into a list of PDF path ops. PDF has no quadratic
+    /// operator, so the walk comes through [`Segments::cubics`], which owns
+    /// the elevation. Shared by fill/stroke paths and clip geometry.
     fn path_ops(segments: Segments<'_>) -> Vec<PathOp> {
-        let mut ops = Vec::new();
-        let mut last_point: Option<(f32, f32)> = None;
-        for seg in segments {
-            match seg {
-                Segment::Move { x, y } => {
-                    ops.push(PathOp::Move(x, y));
-                    last_point = Some((x, y));
-                }
-                Segment::Line { x, y } => {
-                    ops.push(PathOp::Line(x, y));
-                    last_point = Some((x, y));
-                }
-                Segment::Quad { cx, cy, x, y } => {
-                    // A quad with no current point is dropped and leaves the
-                    // point unset — geometry that opens on a quad is malformed
-                    // and has no anchor.
-                    if let Some(p0) = last_point {
-                        let (c1x, c1y, c2x, c2y) = quad_to_cubic(p0, cx, cy, x, y);
-                        ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
-                        last_point = Some((x, y));
-                    }
-                }
+        segments
+            .cubics()
+            .map(|seg| match seg {
+                Segment::Move { x, y } => PathOp::Move(x, y),
+                Segment::Line { x, y } => PathOp::Line(x, y),
                 Segment::Cubic {
                     c1x,
                     c1y,
@@ -144,13 +127,11 @@ impl PdfRenderer {
                     c2y,
                     x,
                     y,
-                } => {
-                    ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
-                    last_point = Some((x, y));
-                }
-            }
-        }
-        ops
+                } => PathOp::Cubic(c1x, c1y, c2x, c2y, x, y),
+                // `cubics()` yields no quads.
+                Segment::Quad { x, y, .. } => PathOp::Line(x, y),
+            })
+            .collect()
     }
 
     /// Decide what to emit for a paint. Solid → `set_*_rgb`; gradient →
@@ -605,19 +586,6 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs
     }
 }
 
-/// Promote a quadratic Bézier — current point `p0`, control `(cx, cy)`,
-/// endpoint `(x, y)` — to a cubic's two control points. PDF has no quadratic
-/// path operator, so every quad the draw list carries is elevated here.
-fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32, f32, f32) {
-    let (p0x, p0y) = p0;
-    (
-        p0x + 2.0 / 3.0 * (cx - p0x),
-        p0y + 2.0 / 3.0 * (cy - p0y),
-        x + 2.0 / 3.0 * (cx - x),
-        y + 2.0 / 3.0 * (cy - y),
-    )
-}
-
 fn emit_path_ops(ops: &[PathOp], content: &mut Content) {
     for op in ops {
         match *op {
@@ -693,9 +661,15 @@ fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
     canvas.content.transform(node.transform);
 
     let mut adapter = PdfOutline { ops: Vec::new() };
-    crate::text::outline_with(layout.face, &node.text, layout.size_i, &mut adapter);
-    if node.underline {
-        crate::text::outline_underline(&layout, &mut adapter);
+    {
+        // PDF has no quadratic operator; ElevateQuads tracks the current point
+        // through the contour, `close` included, so this adapter does not have
+        // to guess it from the ops it already pushed.
+        let mut out = crate::text::ElevateQuads::new(&mut adapter);
+        crate::text::outline_with(layout.face, &node.text, layout.size_i, &mut out);
+        if node.underline {
+            crate::text::outline_underline(&layout, &mut out);
+        }
     }
     emit_path_ops(&adapter.ops, &mut canvas.content);
 
@@ -714,14 +688,10 @@ impl crate::text::OutlineBuilder for PdfOutline {
     fn line_to(&mut self, x: f32, y: f32) {
         self.ops.push(PathOp::Line(x, y));
     }
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        let p0 = self.ops.last().and_then(|op| match *op {
-            PathOp::Move(x, y) | PathOp::Line(x, y) => Some((x, y)),
-            PathOp::Cubic(_, _, _, _, x, y) => Some((x, y)),
-            PathOp::Close => None,
-        });
-        let (c1x, c1y, c2x, c2y) = quad_to_cubic(p0.unwrap_or((x, y)), cx, cy, x, y);
-        self.ops.push(PathOp::Cubic(c1x, c1y, c2x, c2y, x, y));
+    fn quad_to(&mut self, _cx: f32, _cy: f32, x: f32, y: f32) {
+        // Unreachable: glyphs reach this adapter through ElevateQuads. Degrade
+        // to a line rather than panic if someone wires it up directly.
+        self.ops.push(PathOp::Line(x, y));
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
         self.ops.push(PathOp::Cubic(cx1, cy1, cx2, cy2, x, y));
