@@ -219,11 +219,10 @@ impl Paint for PixmapRenderer {
                 anti_alias: true,
                 ..SkPaint::default()
             };
-            let dash = if style.dash_array.is_empty() {
-                None
-            } else {
-                StrokeDash::new(style.dash_array.clone(), style.dash_offset)
-            };
+            let dash = style
+                .dash
+                .as_ref()
+                .and_then(|d| StrokeDash::new(d.array().to_vec(), d.offset()));
             let stroke = Stroke {
                 width: style.stroke_width,
                 line_cap: sk_line_cap(style.line_cap),

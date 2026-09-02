@@ -918,7 +918,7 @@ mod tests {
             let mut p = scene.path(PathStyle {
                 stroke: IrPaint::rgba(255, 0, 0, 1.0),
                 stroke_width: 3.0,
-                dash_array: vec![10.0, 10.0],
+                dash: crate::scene::Dash::new(vec![10.0, 10.0], 0.0).map(Box::new),
                 ..PathStyle::default()
             });
             p.move_to(5.0, 10.0);

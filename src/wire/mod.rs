@@ -25,8 +25,9 @@ use crate::event::{
 };
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
-    Bitmap, ClipPath, Element, FillRule, FontStyle, Geometry, Gradient, GradientGeom, LineCap,
-    LineJoin, Paint, Path, PathStyle, Rgba, Scene, SegmentKind, SpreadMode, Stop, TextNode,
+    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Geometry, Gradient, GradientGeom,
+    LineCap, LineJoin, Paint, Path, PathStyle, Rgba, Scene, SegmentKind, SpreadMode, Stop,
+    TextNode,
 };
 
 use crate::frame_capnp::{
@@ -419,21 +420,23 @@ fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
     b.set_fill_rule(fill_rule_to_wire(s.fill_rule));
     b.set_closed(s.closed);
     b.set_miter_limit(s.miter_limit);
-    b.set_dash_offset(s.dash_offset);
-    if !s.dash_array.is_empty() {
-        let mut out = b.init_dash_array(s.dash_array.len() as u32);
-        for (i, v) in s.dash_array.iter().enumerate() {
+    if let Some(dash) = &s.dash {
+        b.set_dash_offset(dash.offset());
+        let mut out = b.init_dash_array(dash.array().len() as u32);
+        for (i, v) in dash.array().iter().enumerate() {
             out.set(i as u32, *v);
         }
     }
 }
 
 fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
-    let dash_array = if r.has_dash_array() {
-        r.get_dash_array()?.iter().collect()
-    } else {
-        Vec::new()
-    };
+    // An empty array is no dash at all, so Dash::new folds it back to None
+    // along with any stray offset.
+    let dash = Dash::new(
+        r.get_dash_array()?.iter().collect::<Vec<_>>(),
+        r.get_dash_offset(),
+    )
+    .map(Box::new);
     Ok(PathStyle {
         fill: read_paint(r.get_fill()?)?,
         stroke: read_paint(r.get_stroke()?)?,
@@ -443,8 +446,7 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
         fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
         closed: r.get_closed(),
         miter_limit: r.get_miter_limit(),
-        dash_array,
-        dash_offset: r.get_dash_offset(),
+        dash,
     })
 }
 
@@ -968,8 +970,7 @@ mod tests {
                 stroke: Paint::rgba(0, 0, 0, 1.0),
                 stroke_width: 2.0,
                 miter_limit: 7.5,
-                dash_array: vec![4.0, 2.0, 1.0],
-                dash_offset: 1.5,
+                dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5).map(Box::new),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
@@ -983,8 +984,9 @@ mod tests {
                     panic!("expected path");
                 };
                 assert_eq!(p.style.miter_limit, 7.5);
-                assert_eq!(p.style.dash_array, vec![4.0, 2.0, 1.0]);
-                assert_eq!(p.style.dash_offset, 1.5);
+                let dash = p.style.dash.as_ref().unwrap();
+                assert_eq!(dash.array(), [4.0, 2.0, 1.0]);
+                assert_eq!(dash.offset(), 1.5);
             }
             _ => panic!(),
         }
@@ -1322,8 +1324,7 @@ mod tests {
                 };
                 assert_eq!(p.style.fill, Paint::Solid(Rgba::default()));
                 assert_eq!(p.style.stroke, Paint::Solid(Rgba::default()));
-                assert!(p.style.dash_array.is_empty());
-                assert_eq!(p.style.dash_offset, 0.0);
+                assert!(p.style.dash.is_none());
                 assert_eq!(p.style.miter_limit, crate::scene::DEFAULT_MITER_LIMIT);
             }
             _ => panic!(),

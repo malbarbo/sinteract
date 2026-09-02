@@ -128,6 +128,31 @@ impl Paint {
     }
 }
 
+/// A stroke dash pattern: on/off lengths in path units, repeating once
+/// consumed, started `offset` units in. Constructed only through
+/// [`Dash::new`], which rejects an empty pattern — a dash with no lengths is
+/// a solid stroke, and that case belongs in the `Option`, not in this type.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dash {
+    array: Box<[f32]>,
+    offset: f32,
+}
+
+impl Dash {
+    pub fn new(array: impl Into<Box<[f32]>>, offset: f32) -> Option<Self> {
+        let array = array.into();
+        (!array.is_empty()).then_some(Self { array, offset })
+    }
+
+    pub fn array(&self) -> &[f32] {
+        &self.array
+    }
+
+    pub fn offset(&self) -> f32 {
+        self.offset
+    }
+}
+
 /// SVG `stroke-miterlimit` default. Joins with computed miter length above
 /// this threshold (relative to stroke width) fall back to bevel.
 pub const DEFAULT_MITER_LIMIT: f32 = 4.0;
@@ -142,10 +167,9 @@ pub struct PathStyle {
     pub fill_rule: FillRule,
     pub closed: bool,
     pub miter_limit: f32,
-    /// Empty = solid stroke. Otherwise on/off lengths in path units; the
-    /// pattern repeats when consumed.
-    pub dash_array: Vec<f32>,
-    pub dash_offset: f32,
+    /// `None` = solid stroke. Boxed: dashing is rare and a `Dash` inline
+    /// would cost every style 16 bytes it almost never uses.
+    pub dash: Option<Box<Dash>>,
 }
 
 impl PathStyle {
@@ -172,8 +196,7 @@ impl Default for PathStyle {
             fill_rule: FillRule::default(),
             closed: false,
             miter_limit: DEFAULT_MITER_LIMIT,
-            dash_array: Vec::new(),
-            dash_offset: 0.0,
+            dash: None,
         }
     }
 }

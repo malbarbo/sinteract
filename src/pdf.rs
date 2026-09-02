@@ -266,9 +266,9 @@ impl Paint for PdfRenderer {
             if style.line_join == LineJoin::Miter {
                 self.content.set_miter_limit(style.miter_limit);
             }
-            if !style.dash_array.is_empty() {
+            if let Some(dash) = &style.dash {
                 self.content
-                    .set_dash_pattern(style.dash_array.iter().copied(), style.dash_offset);
+                    .set_dash_pattern(dash.array().iter().copied(), dash.offset());
             }
         }
         emit_path_ops(&ops, &mut self.content);
@@ -862,8 +862,7 @@ mod tests {
         let style = PathStyle {
             stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 1.0,
-            dash_array: vec![3.0, 2.0],
-            dash_offset: 1.0,
+            dash: crate::scene::Dash::new(vec![3.0, 2.0], 1.0).map(Box::new),
             ..PathStyle::default()
         };
         rect(&mut scene, style, 0.0, 0.0, 100.0, 50.0);
