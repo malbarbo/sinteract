@@ -26,6 +26,10 @@ struct PixmapRenderer {
     /// `input → output` scale folded into a transform applied to every path.
     base: Transform,
     clip_stack: Vec<Mask>,
+    /// Masks popped off `clip_stack`, kept for the next push. Every mask is
+    /// canvas-sized, so a freed one always fits — which is what makes clipping
+    /// allocation-free after the first few nodes.
+    mask_pool: Vec<Mask>,
     out_w: u32,
     out_h: u32,
     /// Uniform input→output scale, decided by the caller. Whether a frame may
@@ -103,6 +107,7 @@ impl PixmapRenderer {
             pixmap: new_pixmap(out_w, out_h)?,
             base,
             clip_stack: Vec::new(),
+            mask_pool: Vec::new(),
             out_w,
             out_h,
             scale,
@@ -120,7 +125,6 @@ impl PixmapRenderer {
     /// unbuildable clip pushes nothing, and [`Paint::with_clip`]'s guard pops
     /// only what was pushed (so the stack stays balanced regardless).
     fn push_clip(&mut self, clip: &ClipPath) -> bool {
-        let parent = self.clip_stack.last();
         let mut builder = PathBuilder::new();
         append_segments(&mut builder, clip.segments());
         // SVG `<clipPath>` semantics: sub-paths are filled, so close before
@@ -130,28 +134,41 @@ impl PixmapRenderer {
         let Some(path) = builder.finish() else {
             return false;
         };
-        let Some(mut mask) = (match parent {
-            Some(m) => Some(m.clone()),
-            None => Mask::new(self.out_w, self.out_h).map(|mut m| {
-                if let Some(rect) =
-                    tiny_skia::Rect::from_xywh(0.0, 0.0, self.out_w as f32, self.out_h as f32)
-                {
-                    m.fill_path(
-                        &PathBuilder::from_rect(rect),
-                        SkFillRule::Winding,
-                        true,
-                        Transform::identity(),
-                    );
-                }
-                m
-            }),
-        }) else {
+        let Some(mut mask) = self.take_mask() else {
             return false;
         };
-        mask.intersect_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
+        mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
+        if let Some(parent) = self.clip_stack.last() {
+            // `Mask::intersect_path` would rasterize the same coverage into a
+            // fresh canvas-sized mask of its own; it is already here, so
+            // combine in place.
+            for (a, b) in mask.data_mut().iter_mut().zip(parent.data()) {
+                *a = mask_mul(*a, *b);
+            }
+        }
         self.clip_stack.push(mask);
         true
     }
+
+    /// A zeroed canvas-sized mask, recycled when one is free. `fill_path`
+    /// draws on top of what a mask already holds, so a reused buffer has to be
+    /// cleared before it is filled.
+    fn take_mask(&mut self) -> Option<Mask> {
+        match self.mask_pool.pop() {
+            Some(mut m) => {
+                m.clear();
+                Some(m)
+            }
+            None => Mask::new(self.out_w, self.out_h),
+        }
+    }
+}
+
+/// `a * b / 255`, rounded — tiny-skia's own coverage product, so a mask
+/// intersected here matches one intersected by `Mask::intersect_path`.
+fn mask_mul(a: u8, b: u8) -> u8 {
+    let prod = u32::from(a) * u32::from(b) + 128;
+    ((prod + (prod >> 8)) >> 8) as u8
 }
 
 /// Pops the clip pushed by [`Paint::with_clip`] on scope exit — including on
@@ -163,8 +180,10 @@ struct ClipGuard<'a> {
 
 impl Drop for ClipGuard<'_> {
     fn drop(&mut self) {
-        if self.pushed {
-            self.canvas.clip_stack.pop();
+        if self.pushed
+            && let Some(mask) = self.canvas.clip_stack.pop()
+        {
+            self.canvas.mask_pool.push(mask);
         }
     }
 }
@@ -177,10 +196,14 @@ impl Paint for PixmapRenderer {
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
         let (out_w, out_h, base) = fit(width, height, self.scale);
         self.base = base;
-        self.clip_stack.clear();
+        // Reclaim rather than drop: at the same size these buffers are exactly
+        // what the next frame's clips need.
+        self.mask_pool.append(&mut self.clip_stack);
         if (out_w, out_h) == (self.out_w, self.out_h) {
             self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
         } else {
+            // Masks are canvas-sized, so a resize invalidates every pooled one.
+            self.mask_pool.clear();
             self.pixmap = new_pixmap(out_w, out_h).ok_or(crate::wire::Error::Alloc {
                 width: out_w,
                 height: out_h,
@@ -533,6 +556,38 @@ mod tests {
             }
         }
         assert_eq!(pixel_rgba(pm_streamed, 5, 5), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn a_recycled_mask_does_not_leak_the_previous_clip() {
+        // Sibling clips reuse the same mask buffer; the second must not see
+        // the first's coverage.
+        let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
+        let cover = |c: &mut PixmapRenderer| {
+            let path = Path::builder(solid(0, 0, 255))
+                .move_to(0.0, 0.0)
+                .line_to(20.0, 0.0)
+                .line_to(20.0, 20.0)
+                .line_to(0.0, 20.0)
+                .build();
+            c.draw_path(&path);
+        };
+        let box_at = |x: f32| {
+            ClipPath::builder(FillRule::NonZero)
+                .move_to(x, 0.0)
+                .line_to(x + 8.0, 0.0)
+                .line_to(x + 8.0, 8.0)
+                .line_to(x, 8.0)
+                .build()
+        };
+        r.with_clip(&box_at(0.0), cover);
+        r.with_clip(&box_at(10.0), cover);
+
+        let pm = r.into_pixmap();
+        // Each clip painted its own box; neither painted the gap between them.
+        assert_eq!(pixel_rgba(&pm, 4, 4), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(&pm, 14, 4), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(&pm, 9, 4).3, 0);
     }
 
     #[test]
