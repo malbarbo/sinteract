@@ -330,7 +330,11 @@ pub fn show_image(scene: &crate::scene::Scene) {
         }
 
         let target_px = (w.get(), h.get());
-        let pixmap = match crate::pixmap::rasterize_scene(scene, Some(target_px), 32.0) {
+        // The window fills its surface: unlike the terminal, a draw list
+        // smaller than the window is scaled up rather than pinned to native
+        // size, so there is no cap here.
+        let scale = crate::pixmap::fit_scale(scene.width, scene.height, target_px);
+        let pixmap = match crate::pixmap::rasterize_scene(scene, scale) {
             Some(p) => p,
             None => return,
         };
@@ -346,10 +350,9 @@ pub fn show_image(scene: &crate::scene::Scene) {
 
 /// Copy a [`tiny_skia::Pixmap`] into a softbuffer `0RGB` u32 buffer.
 ///
-/// The pixmap is centered + letterboxed if smaller than the buffer (which
-/// happens because `rasterize_scene` is shrink-only — when the
-/// window is bigger than the draw list, the pixmap stays at native size
-/// and we paint the surrounding area black).
+/// The pixmap is centered + letterboxed when it does not fill the buffer.
+/// The fit preserves aspect ratio, so one axis matches the window and the
+/// other leaves a band; that band is painted black.
 fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
     let pw = pixmap.width();
     let ph = pixmap.height();

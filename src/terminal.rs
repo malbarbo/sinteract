@@ -170,6 +170,18 @@ fn max_scale_for_backend(backend: Backend) -> f32 {
     }
 }
 
+/// Uniform input→output scale for a `width × height` frame on `backend`:
+/// shrink to fit the cell grid when its size is known, capped so one logical
+/// pixel never expands past one screen pixel. With no known grid the cap is
+/// the whole policy — half-blocks still have to pack 2:1.
+fn scale_for_backend(backend: Backend, width: f32, height: f32) -> f32 {
+    let cap = max_scale_for_backend(backend);
+    match target_pixels_for_backend(backend) {
+        Some(target) => crate::pixmap::fit_scale(width, height, target).min(cap),
+        None => cap,
+    }
+}
+
 /// Render a pixmap to truecolor ANSI half-blocks (`▀`). Each pair of pixmap
 /// rows becomes one terminal cell row; the foreground holds the upper pixel
 /// and the background holds the lower one. Alpha is composited over black.
@@ -265,9 +277,8 @@ pub fn show_image(scene: &crate::scene::Scene) {
     let Some(backend) = pick_backend() else {
         return;
     };
-    let target = target_pixels_for_backend(backend);
-    let max_scale = max_scale_for_backend(backend);
-    let Some(pixmap) = rasterize_scene(scene, target, max_scale) else {
+    let scale = scale_for_backend(backend, scene.width, scene.height);
+    let Some(pixmap) = rasterize_scene(scene, scale) else {
         eprintln!("[spython] failed to rasterize draw list");
         return;
     };
@@ -539,7 +550,7 @@ mod tests {
     }
 
     fn rasterize(scene: &Scene) -> Pixmap {
-        rasterize_scene(scene, None, 1.0).expect("pixmap")
+        rasterize_scene(scene, 1.0).expect("pixmap")
     }
 
     fn rect_path(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
@@ -666,12 +677,18 @@ mod tests {
         assert_eq!(count_opaque_pixels(&pm), 0);
     }
 
+    /// What `scale_for_backend` does once the target box is known: fit, then
+    /// apply the backend's cap.
+    fn fit_capped(scene: &Scene, target: (u32, u32), cap: f32) -> f32 {
+        crate::pixmap::fit_scale(scene.width, scene.height, target).min(cap)
+    }
+
     #[test]
     fn scale_to_fit_preserves_aspect() {
         // 200×100 input + 50×50 target → fit width: scale=0.25 → 50×25 output.
         let mut scene = Scene::new(200.0, 100.0);
         rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0);
-        let pm = rasterize_scene(&scene, Some((50, 50)), 1.0).expect("pixmap");
+        let pm = rasterize_scene(&scene, fit_capped(&scene, (50, 50), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 50);
         assert_eq!(pm.height(), 25);
         assert_eq!(pixel_rgba(&pm, 25, 12), (0, 0, 255, 255));
@@ -682,7 +699,7 @@ mod tests {
         // Tiny 10×10 image + huge 1000×1000 target should keep native dims.
         let mut scene = Scene::new(10.0, 10.0);
         rect_path(&mut scene, solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0);
-        let pm = rasterize_scene(&scene, Some((1000, 1000)), 1.0).expect("pixmap");
+        let pm = rasterize_scene(&scene, fit_capped(&scene, (1000, 1000), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 10);
         assert_eq!(pm.height(), 10);
     }
@@ -692,7 +709,7 @@ mod tests {
         // 100×200 input + 200×50 target → fit height: scale=0.25 → 25×50 output.
         let mut scene = Scene::new(100.0, 200.0);
         rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0);
-        let pm = rasterize_scene(&scene, Some((200, 50)), 1.0).expect("pixmap");
+        let pm = rasterize_scene(&scene, fit_capped(&scene, (200, 50), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 25);
         assert_eq!(pm.height(), 50);
     }
@@ -706,7 +723,7 @@ mod tests {
         let mut scene = Scene::new(100.0, 100.0);
         rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
         // target is the half-blocks bounding box for an 80×24 terminal.
-        let pm = rasterize_scene(&scene, Some((80, 48)), 1.0 / 8.0).expect("pixmap");
+        let pm = rasterize_scene(&scene, fit_capped(&scene, (80, 48), 1.0 / 8.0)).expect("pixmap");
         assert!(pm.width() <= 13, "got width {}", pm.width());
         assert!(pm.height() <= 13, "got height {}", pm.height());
     }

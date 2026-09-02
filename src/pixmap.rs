@@ -28,24 +28,34 @@ struct PixmapRenderer {
     clip_stack: Vec<Mask>,
     out_w: u32,
     out_h: u32,
-    /// Target output box in pixels (`None` = render at native size).
-    target_px: Option<(u32, u32)>,
-    /// Upper bound on the rasterizer's uniform scale factor — depends on
-    /// the active backend (1.0 for Kitty/Sixel, smaller for half-blocks).
-    max_scale: f32,
+    /// Uniform input→output scale, decided by the caller. Whether a frame may
+    /// grow to fill its output is presentation policy and belongs there.
+    scale: f32,
+}
+
+/// A frame's size in whole output pixels.
+fn frame_px(width: f32, height: f32) -> (u32, u32) {
+    (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32)
+}
+
+/// Uniform scale that fits a `width × height` frame inside `target` pixels,
+/// preserving aspect ratio. Pure geometry — whether the result may exceed 1.0,
+/// i.e. whether the frame is allowed to grow, is the caller's to decide.
+pub(crate) fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
+    let (tw, th) = target;
+    if tw == 0 || th == 0 {
+        return 1.0;
+    }
+    let (w, h) = frame_px(width, height);
+    (tw as f32 / w as f32).min(th as f32 / h as f32)
 }
 
 /// Scaled output dimensions and the input→output transform for a `width ×
-/// height` frame under `target`/`max_scale`.
-fn fit(
-    width: f32,
-    height: f32,
-    target: Option<(u32, u32)>,
-    max_scale: f32,
-) -> (u32, u32, Transform) {
-    let w = width.ceil().max(1.0) as u32;
-    let h = height.ceil().max(1.0) as u32;
-    let s = compute_scale(w, h, target, max_scale);
+/// height` frame at `scale`.
+fn fit(width: f32, height: f32, scale: f32) -> (u32, u32, Transform) {
+    let (w, h) = frame_px(width, height);
+    // A zero or negative scale would allocate nothing to draw into.
+    let s = scale.max(1e-3);
     let out_w = ((w as f32) * s).ceil().max(1.0) as u32;
     let out_h = ((h as f32) * s).ceil().max(1.0) as u32;
     (out_w, out_h, Transform::from_scale(s, s))
@@ -85,18 +95,17 @@ fn append_segments(builder: &mut PathBuilder, segments: Segments<'_>) -> bool {
 }
 
 impl PixmapRenderer {
-    /// Allocate a renderer whose surface fits `width × height` (scaled per
-    /// `target_px`/`max_scale`). `None` if the surface cannot be allocated.
-    fn new(target_px: Option<(u32, u32)>, max_scale: f32, width: f32, height: f32) -> Option<Self> {
-        let (out_w, out_h, base) = fit(width, height, target_px, max_scale);
+    /// Allocate a renderer whose surface holds `width × height` at `scale`.
+    /// `None` if the surface cannot be allocated.
+    fn new(scale: f32, width: f32, height: f32) -> Option<Self> {
+        let (out_w, out_h, base) = fit(width, height, scale);
         Some(Self {
             pixmap: new_pixmap(out_w, out_h)?,
             base,
             clip_stack: Vec::new(),
             out_w,
             out_h,
-            target_px,
-            max_scale,
+            scale,
         })
     }
 
@@ -166,7 +175,7 @@ impl Paint for PixmapRenderer {
     /// reusing the allocation across same-size frames. The clip stack is
     /// always reset.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
-        let (out_w, out_h, base) = fit(width, height, self.target_px, self.max_scale);
+        let (out_w, out_h, base) = fit(width, height, self.scale);
         self.base = base;
         self.clip_stack.clear();
         if (out_w, out_h) == (self.out_w, self.out_h) {
@@ -330,32 +339,13 @@ fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
     .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
 }
 
-/// Rasterize a [`crate::scene::Scene`], optionally fitting the output to
-/// `target_px` (in pixels). When a target is given, the output is uniformly
-/// scaled so it fits inside the target box while preserving aspect ratio.
-/// Scaling is **shrink-only**: an image smaller than the target stays at its
-/// native dimensions (the user picked those numbers; respect them).
-pub(crate) fn rasterize_scene(
-    scene: &crate::scene::Scene,
-    target_px: Option<(u32, u32)>,
-    max_scale: f32,
-) -> Option<Pixmap> {
-    let mut renderer = PixmapRenderer::new(target_px, max_scale, scene.width, scene.height)?;
+/// Rasterize a [`crate::scene::Scene`] at `scale` (1.0 = the frame's own
+/// pixels). Callers pick the scale — see [`fit_scale`] for the fit-into-a-box
+/// half of that decision.
+pub(crate) fn rasterize_scene(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
+    let mut renderer = PixmapRenderer::new(scale, scene.width, scene.height)?;
     renderer.render(scene).ok()?;
     Some(renderer.into_pixmap())
-}
-
-/// Uniform scale factor to fit `(w, h)` inside `target` (both in pixels),
-/// capped at `max_scale` so we never upscale beyond the per-backend limit.
-fn compute_scale(w: u32, h: u32, target: Option<(u32, u32)>, max_scale: f32) -> f32 {
-    match target {
-        Some((tw, th)) if w > 0 && h > 0 && tw > 0 && th > 0 => {
-            let sw = tw as f32 / w as f32;
-            let sh = th as f32 / h as f32;
-            sw.min(sh).clamp(1e-3, max_scale)
-        }
-        _ => max_scale,
-    }
 }
 
 // -----------------------------------------------------------------------------
@@ -466,10 +456,20 @@ mod tests {
     }
 
     #[test]
+    fn fit_scale_is_uncapped_geometry() {
+        // Shrinking and growing are the same computation here; capping growth
+        // is the terminal's policy, not this module's.
+        assert_eq!(fit_scale(200.0, 100.0, (50, 50)), 0.25);
+        assert_eq!(fit_scale(10.0, 10.0, (1000, 1000)), 100.0);
+        // A degenerate target leaves the frame at its own size.
+        assert_eq!(fit_scale(10.0, 10.0, (0, 10)), 1.0);
+    }
+
+    #[test]
     fn draw_path_paints_rectangle() {
         // Drive the paint primitives directly — no Scene materialization.
         // `into_pixmap` moves the owned buffer out.
-        let mut r = PixmapRenderer::new(None, 1.0, 20.0, 20.0).expect("alloc");
+        let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
         let path = Path::builder(solid(0, 255, 0))
             .move_to(0.0, 0.0)
             .line_to(20.0, 0.0)
@@ -485,7 +485,7 @@ mod tests {
     fn with_clip_excludes_outside() {
         // The `inside` body runs with the clip active; the clip pops when the
         // body returns.
-        let mut r = PixmapRenderer::new(None, 1.0, 20.0, 20.0).expect("alloc");
+        let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
         let clip = ClipPath::builder(FillRule::NonZero)
             .move_to(0.0, 0.0)
             .line_to(10.0, 0.0)
@@ -516,12 +516,11 @@ mod tests {
         rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
         let bytes = crate::wire::encode_frame(&scene);
 
-        let mut r_atomic =
-            PixmapRenderer::new(None, 1.0, scene.width, scene.height).expect("alloc");
+        let mut r_atomic = PixmapRenderer::new(1.0, scene.width, scene.height).expect("alloc");
         let pm_atomic = r_atomic.render(&scene).expect("render");
 
         // Construct at a different size to exercise the resize-on-render path.
-        let mut r_stream = PixmapRenderer::new(None, 1.0, 1.0, 1.0).expect("alloc");
+        let mut r_stream = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let pm_streamed = r_stream.render_stream(&bytes[..]).expect("decode + render");
 
         for y in 0..10 {
@@ -553,7 +552,7 @@ mod tests {
         }
         let bytes = crate::wire::encode_frame(&scene);
 
-        let mut r = PixmapRenderer::new(None, 1.0, 1.0, 1.0).expect("alloc");
+        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let pm = r.render_stream(&bytes[..]).expect("decode + render");
         assert_eq!(pixel_rgba(pm, 5, 5), (0, 0, 255, 255));
         assert_eq!(pixel_rgba(pm, 15, 15).3, 0);
@@ -562,7 +561,7 @@ mod tests {
     #[test]
     fn render_stream_rejects_non_frame_message() {
         let bytes = crate::wire::encode_close();
-        let mut r = PixmapRenderer::new(None, 1.0, 1.0, 1.0).expect("alloc");
+        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let err = r.render_stream(&bytes[..]).expect_err("not a frame");
         assert!(matches!(err, crate::wire::Error::WrongMessageKind));
     }
