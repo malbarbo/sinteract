@@ -524,7 +524,7 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
             r.get_m5(),
         ],
         size: r.get_size(),
-        family: r.get_family()?.to_str()?.to_owned(),
+        family: r.get_family()?.to_str()?.into(),
         weight: r.get_weight(),
         style: font_style_from_wire(r.get_style()?),
         underline: r.get_underline(),
@@ -625,7 +625,7 @@ fn read_element(node: element::Reader<'_>) -> Result<Element, Error> {
             let elements = read_element_list(c.get_elements()?)?;
             Element::Clipped { clip, elements }
         }
-        Which::Text(t) => Element::Text(Box::new(read_text_node(t?)?)),
+        Which::Text(t) => Element::Text(read_text_node(t?)?),
         Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?)),
     })
 }

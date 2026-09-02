@@ -349,7 +349,9 @@ pub struct TextNode {
     pub stroke_width: f32,
     pub transform: [f32; 6],
     pub size: f32,
-    pub family: String,
+    /// Boxed rather than a `String`: it is only ever read as `&str`, and the
+    /// 8 bytes saved keep [`Element`] the size of its `Path` variant.
+    pub family: Box<str>,
     pub weight: u16,
     pub style: FontStyle,
     pub underline: bool,
@@ -367,7 +369,7 @@ impl Default for TextNode {
             // text run go through [`text_box_affine`].
             transform: translate(0.0, 0.0),
             size: 0.0,
-            family: String::new(),
+            family: Box::default(),
             weight: 400,
             style: FontStyle::Normal,
             underline: false,
@@ -755,7 +757,7 @@ pub enum Element {
         clip: ClipPath,
         elements: Vec<Element>,
     },
-    Text(Box<TextNode>),
+    Text(TextNode),
     Bitmap(Bitmap),
 }
 
@@ -861,7 +863,7 @@ impl Scene {
     }
 
     pub fn text(&mut self, node: TextNode) {
-        self.elements.push(Element::Text(Box::new(node)));
+        self.elements.push(Element::Text(node));
     }
 
     pub fn bitmap(&mut self, node: Bitmap) {
