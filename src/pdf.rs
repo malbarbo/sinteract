@@ -26,8 +26,8 @@ use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, LineCap, LineJoin, LinearGradient, Paint as IrPaint, Path,
-    RadialGradient, Rgba, Scene, Segment, Segments, Stop, TextNode,
+    Bitmap, ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path,
+    Rgba, Scene, Segment, Segments, Stop, TextNode,
 };
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -55,15 +55,6 @@ enum PathOp {
     Close,
 }
 
-/// A gradient encountered during draw-list playback. Kept around until
-/// [`PdfRenderer::assemble`] writes out the function/shading/pattern indirect
-/// objects.
-#[derive(Clone)]
-enum GradientShape {
-    Linear(LinearGradient),
-    Radial(RadialGradient),
-}
-
 /// Reusable PDF renderer: accumulates a content stream + resources, then
 /// assembles a one-page document into `bytes` per render.
 struct PdfRenderer {
@@ -72,9 +63,10 @@ struct PdfRenderer {
     content: Content,
     /// (fill_alpha_key, stroke_alpha_key) -> graphics-state index.
     gstates: BTreeMap<(u16, u16), u32>,
-    /// Gradients seen so far; the index in this vec is the `/P{n}` name
-    /// used in the content stream and the Resources/Pattern dictionary.
-    gradients: Vec<GradientShape>,
+    /// Gradients seen so far, kept until [`PdfRenderer::assemble`] writes the
+    /// function/shading/pattern objects. The index in this vec is the `/P{n}`
+    /// name used in the content stream and the Resources/Pattern dictionary.
+    gradients: Vec<Gradient>,
     /// Assembled document bytes from the most recent render.
     bytes: Vec<u8>,
 }
@@ -114,9 +106,9 @@ impl PdfRenderer {
     }
 
     /// Register a gradient and return its content-stream pattern name `Pn`.
-    fn push_gradient(&mut self, shape: GradientShape) -> String {
+    fn push_gradient(&mut self, g: Gradient) -> String {
         let idx = self.gradients.len();
-        self.gradients.push(shape);
+        self.gradients.push(g);
         format!("P{idx}")
     }
 
@@ -181,7 +173,7 @@ impl PdfRenderer {
     /// `cs /Pattern\n scn /Pn`. `target` picks the fill or stroke operators,
     /// which is the only thing that differs between the two.
     fn bind_paint(&mut self, paint: &IrPaint, target: PaintTarget) {
-        let shape = match paint {
+        let gradient = match paint {
             IrPaint::Solid(c) => {
                 let [r, g, b] = rgb_components(*c);
                 match target {
@@ -190,10 +182,9 @@ impl PdfRenderer {
                 };
                 return;
             }
-            IrPaint::Linear(g) => GradientShape::Linear(g.clone()),
-            IrPaint::Radial(g) => GradientShape::Radial(g.clone()),
+            IrPaint::Gradient(g) => g.clone(),
         };
-        let name = self.push_gradient(shape);
+        let name = self.push_gradient(gradient);
         let name = Name(name.as_bytes());
         let pattern = pdf_writer::types::ColorSpaceOperand::Pattern;
         match target {
@@ -401,12 +392,8 @@ impl PdfRenderer {
         // Allocate function/shading/pattern refs for each gradient.
         let gradient_refs: Vec<GradientRefs> = gradients
             .iter()
-            .map(|shape| {
-                let stops = match shape {
-                    GradientShape::Linear(g) => &g.stops,
-                    GradientShape::Radial(g) => &g.stops,
-                };
-                let prepared = prepare_stops(stops);
+            .map(|g| {
+                let prepared = prepare_stops(&g.stops);
                 // 2 stops → 1 exponential; more → one sub-fn per interval.
                 let n_subfns = if prepared.len() <= 2 {
                     1
@@ -476,8 +463,8 @@ impl PdfRenderer {
             gs.finish();
         }
 
-        for (shape, refs) in gradients.iter().zip(gradient_refs.iter()) {
-            emit_gradient_objects(&mut pdf, shape, refs);
+        for (gradient, refs) in gradients.iter().zip(gradient_refs.iter()) {
+            emit_gradient_objects(&mut pdf, gradient, refs);
         }
 
         self.bytes = pdf.finish();
@@ -549,11 +536,8 @@ fn rgb_components(c: Rgba) -> [f32; 3] {
     [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
 }
 
-fn emit_gradient_objects(pdf: &mut Pdf, shape: &GradientShape, refs: &GradientRefs) {
-    let stops = match shape {
-        GradientShape::Linear(g) => prepare_stops(&g.stops),
-        GradientShape::Radial(g) => prepare_stops(&g.stops),
-    };
+fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs) {
+    let stops = prepare_stops(&gradient.stops);
 
     // 1. Subfunctions + (optional) stitching function.
     let main_fn_ref = if stops.len() == 2 {
@@ -601,16 +585,16 @@ fn emit_gradient_objects(pdf: &mut Pdf, shape: &GradientShape, refs: &GradientRe
     {
         let mut sh = pdf.function_shading(refs.shading);
         sh.color_space().device_rgb();
-        match shape {
-            GradientShape::Linear(g) => {
+        match gradient.geom {
+            GradientGeom::Linear { x0, y0, x1, y1 } => {
                 sh.shading_type(FunctionShadingType::Axial);
-                sh.coords([g.x0, g.y0, g.x1, g.y1]);
+                sh.coords([x0, y0, x1, y1]);
             }
-            GradientShape::Radial(g) => {
+            GradientGeom::Radial { cx, cy, radius } => {
                 sh.shading_type(FunctionShadingType::Radial);
                 // (cx0, cy0, r0, cx1, cy1, r1) — SVG-style single center +
                 // radius: r0 = 0, r1 = radius, both centers equal.
-                sh.coords([g.cx, g.cy, 0.0, g.cx, g.cy, g.radius]);
+                sh.coords([cx, cy, 0.0, cx, cy, radius]);
             }
         }
         // PDF Type 2/3 shadings only support pad-or-transparent via /Extend.
@@ -916,12 +900,12 @@ mod tests {
         //  - the content stream using `cs /Pattern\n /P0 scn` for the fill.
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            fill: crate::scene::Paint::Linear(crate::scene::LinearGradient {
-                x0: 0.0,
-                y0: 0.0,
-                x1: 50.0,
-                y1: 0.0,
-                stops: vec![
+            fill: crate::scene::Paint::Gradient(crate::scene::Gradient::linear(
+                0.0,
+                0.0,
+                50.0,
+                0.0,
+                vec![
                     crate::scene::Stop {
                         offset: 0.0,
                         color: Rgba {
@@ -941,8 +925,7 @@ mod tests {
                         },
                     },
                 ],
-                ..crate::scene::LinearGradient::default()
-            }),
+            )),
             ..PathStyle::default()
         };
         rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
@@ -968,11 +951,11 @@ mod tests {
     fn radial_gradient_emits_radial_shading() {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            fill: crate::scene::Paint::Radial(crate::scene::RadialGradient {
-                cx: 25.0,
-                cy: 25.0,
-                radius: 20.0,
-                stops: vec![
+            fill: crate::scene::Paint::Gradient(crate::scene::Gradient::radial(
+                25.0,
+                25.0,
+                20.0,
+                vec![
                     crate::scene::Stop {
                         offset: 0.0,
                         color: Rgba {
@@ -992,8 +975,7 @@ mod tests {
                         },
                     },
                 ],
-                ..crate::scene::RadialGradient::default()
-            }),
+            )),
             ..PathStyle::default()
         };
         rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
@@ -1012,12 +994,12 @@ mod tests {
         // Type 2 sub-functions.
         let mut scene = Scene::new(60.0, 10.0);
         let style = PathStyle {
-            fill: crate::scene::Paint::Linear(crate::scene::LinearGradient {
-                x0: 0.0,
-                y0: 0.0,
-                x1: 60.0,
-                y1: 0.0,
-                stops: vec![
+            fill: crate::scene::Paint::Gradient(crate::scene::Gradient::linear(
+                0.0,
+                0.0,
+                60.0,
+                0.0,
+                vec![
                     crate::scene::Stop {
                         offset: 0.0,
                         color: Rgba {
@@ -1046,8 +1028,7 @@ mod tests {
                         },
                     },
                 ],
-                ..crate::scene::LinearGradient::default()
-            }),
+            )),
             ..PathStyle::default()
         };
         rect(&mut scene, style, 0.0, 0.0, 60.0, 10.0);

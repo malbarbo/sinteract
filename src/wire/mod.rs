@@ -25,16 +25,15 @@ use crate::event::{
 };
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
-    Bitmap, ClipPath, Element, FillRule, FontStyle, Geometry, LineCap, LineJoin, LinearGradient,
-    Paint, Path, PathStyle, RadialGradient, Rgba, Scene, SegmentKind, SpreadMode, Stop, TextNode,
+    Bitmap, ClipPath, Element, FillRule, FontStyle, Geometry, Gradient, GradientGeom, LineCap,
+    LineJoin, Paint, Path, PathStyle, Rgba, Scene, SegmentKind, SpreadMode, Stop, TextNode,
 };
 
 use crate::frame_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, KeyKind as WKeyKind, LineCap as WLineCap,
     LineJoin as WLineJoin, SpreadMode as WSpreadMode, bitmap_node, clip_path as wire_clip_path,
-    clipped as wire_clipped, element, input_event, key_event as wire_key_event,
-    linear_gradient as wire_linear_gradient, message, paint as wire_paint, path as wire_path,
-    path_style as wire_path_style, radial_gradient as wire_radial_gradient, rgba as wire_rgba,
+    clipped as wire_clipped, element, input_event, key_event as wire_key_event, message,
+    paint as wire_paint, path as wire_path, path_style as wire_path_style, rgba as wire_rgba,
     scene as wire_scene, stop as wire_stop, text_node,
 };
 
@@ -343,77 +342,72 @@ fn read_stop(r: wire_stop::Reader<'_>) -> Result<Stop, Error> {
     })
 }
 
-fn write_linear_gradient(mut b: wire_linear_gradient::Builder<'_>, g: &LinearGradient) {
-    b.set_x0(g.x0);
-    b.set_y0(g.y0);
-    b.set_x1(g.x1);
-    b.set_y1(g.y1);
-    b.set_spread(spread_to_wire(g.spread));
-    let mut stops = b.init_stops(g.stops.len() as u32);
-    for (i, s) in g.stops.iter().enumerate() {
-        write_stop(stops.reborrow().get(i as u32), *s);
+fn write_stops(mut b: capnp::struct_list::Builder<'_, wire_stop::Owned>, stops: &[Stop]) {
+    for (i, s) in stops.iter().enumerate() {
+        write_stop(b.reborrow().get(i as u32), *s);
     }
 }
 
-fn read_linear_gradient(r: wire_linear_gradient::Reader<'_>) -> Result<LinearGradient, Error> {
-    let mut stops = Vec::new();
-    if r.has_stops() {
-        for s in r.get_stops()?.iter() {
-            stops.push(read_stop(s)?);
-        }
-    }
-    Ok(LinearGradient {
-        x0: r.get_x0(),
-        y0: r.get_y0(),
-        x1: r.get_x1(),
-        y1: r.get_y1(),
-        stops,
-        spread: spread_from_wire(r.get_spread()?),
-    })
-}
-
-fn write_radial_gradient(mut b: wire_radial_gradient::Builder<'_>, g: &RadialGradient) {
-    b.set_cx(g.cx);
-    b.set_cy(g.cy);
-    b.set_radius(g.radius);
-    b.set_spread(spread_to_wire(g.spread));
-    let mut stops = b.init_stops(g.stops.len() as u32);
-    for (i, s) in g.stops.iter().enumerate() {
-        write_stop(stops.reborrow().get(i as u32), *s);
-    }
-}
-
-fn read_radial_gradient(r: wire_radial_gradient::Reader<'_>) -> Result<RadialGradient, Error> {
-    let mut stops = Vec::new();
-    if r.has_stops() {
-        for s in r.get_stops()?.iter() {
-            stops.push(read_stop(s)?);
-        }
-    }
-    Ok(RadialGradient {
-        cx: r.get_cx(),
-        cy: r.get_cy(),
-        radius: r.get_radius(),
-        stops,
-        spread: spread_from_wire(r.get_spread()?),
-    })
+fn read_stops(r: capnp::struct_list::Reader<'_, wire_stop::Owned>) -> Result<Vec<Stop>, Error> {
+    r.iter().map(read_stop).collect()
 }
 
 fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
     match p {
         Paint::Solid(c) => write_rgba(b.init_solid(), *c),
-        Paint::Linear(g) => write_linear_gradient(b.init_linear(), g),
-        Paint::Radial(g) => write_radial_gradient(b.init_radial(), g),
+        Paint::Gradient(g) => match g.geom {
+            GradientGeom::Linear { x0, y0, x1, y1 } => {
+                let mut b = b.init_linear();
+                b.set_x0(x0);
+                b.set_y0(y0);
+                b.set_x1(x1);
+                b.set_y1(y1);
+                b.set_spread(spread_to_wire(g.spread));
+                write_stops(b.init_stops(g.stops.len() as u32), &g.stops);
+            }
+            GradientGeom::Radial { cx, cy, radius } => {
+                let mut b = b.init_radial();
+                b.set_cx(cx);
+                b.set_cy(cy);
+                b.set_radius(radius);
+                b.set_spread(spread_to_wire(g.spread));
+                write_stops(b.init_stops(g.stops.len() as u32), &g.stops);
+            }
+        },
     }
 }
 
 fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, Error> {
     use wire_paint::Which;
-    Ok(match r.which()? {
-        Which::Solid(c) => Paint::Solid(read_rgba(c?)),
-        Which::Linear(g) => Paint::Linear(read_linear_gradient(g?)?),
-        Which::Radial(g) => Paint::Radial(read_radial_gradient(g?)?),
-    })
+    // A null stops pointer reads back as an empty list, so an absent ramp
+    // needs no separate guard here.
+    let (geom, stops, spread) = match r.which()? {
+        Which::Solid(c) => return Ok(Paint::Solid(read_rgba(c?))),
+        Which::Linear(g) => {
+            let g = g?;
+            let geom = GradientGeom::Linear {
+                x0: g.get_x0(),
+                y0: g.get_y0(),
+                x1: g.get_x1(),
+                y1: g.get_y1(),
+            };
+            (geom, read_stops(g.get_stops()?)?, g.get_spread()?)
+        }
+        Which::Radial(g) => {
+            let g = g?;
+            let geom = GradientGeom::Radial {
+                cx: g.get_cx(),
+                cy: g.get_cy(),
+                radius: g.get_radius(),
+            };
+            (geom, read_stops(g.get_stops()?)?, g.get_spread()?)
+        }
+    };
+    Ok(Paint::Gradient(Gradient {
+        geom,
+        stops,
+        spread: spread_from_wire(spread),
+    }))
 }
 
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
@@ -999,12 +993,12 @@ mod tests {
     #[test]
     fn linear_gradient_paint_round_trips() {
         let mut scene = Scene::new(50.0, 50.0);
-        let gradient = LinearGradient {
-            x0: 0.0,
-            y0: 0.0,
-            x1: 50.0,
-            y1: 0.0,
-            stops: vec![
+        let gradient = Gradient::linear(
+            0.0,
+            0.0,
+            50.0,
+            0.0,
+            vec![
                 Stop {
                     offset: 0.0,
                     color: Rgba {
@@ -1033,11 +1027,10 @@ mod tests {
                     },
                 },
             ],
-            ..LinearGradient::default()
-        };
+        );
         {
             let mut p = scene.path(PathStyle {
-                fill: Paint::Linear(gradient.clone()),
+                fill: Paint::Gradient(gradient.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
@@ -1050,7 +1043,7 @@ mod tests {
                 let Element::Path(p) = d.elements.first().unwrap() else {
                     panic!();
                 };
-                assert_eq!(p.style.fill, Paint::Linear(gradient));
+                assert_eq!(p.style.fill, Paint::Gradient(gradient));
             }
             _ => panic!(),
         }
@@ -1059,11 +1052,11 @@ mod tests {
     #[test]
     fn radial_gradient_paint_round_trips() {
         let mut scene = Scene::new(50.0, 50.0);
-        let gradient = RadialGradient {
-            cx: 25.0,
-            cy: 25.0,
-            radius: 20.0,
-            stops: vec![
+        let gradient = Gradient::radial(
+            25.0,
+            25.0,
+            20.0,
+            vec![
                 Stop {
                     offset: 0.0,
                     color: Rgba {
@@ -1083,11 +1076,10 @@ mod tests {
                     },
                 },
             ],
-            ..RadialGradient::default()
-        };
+        );
         {
             let mut p = scene.path(PathStyle {
-                fill: Paint::Radial(gradient.clone()),
+                fill: Paint::Gradient(gradient.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
@@ -1099,7 +1091,7 @@ mod tests {
                 let Element::Path(p) = d.elements.first().unwrap() else {
                     panic!();
                 };
-                assert_eq!(p.style.fill, Paint::Radial(gradient));
+                assert_eq!(p.style.fill, Paint::Gradient(gradient));
             }
             _ => panic!(),
         }
@@ -1110,13 +1102,12 @@ mod tests {
         // Linear with Reflect and Radial with Repeat — both should survive
         // a wire round-trip.
         let mut scene = Scene::new(50.0, 50.0);
-        let linear = LinearGradient {
-            x0: 0.0,
-            y0: 0.0,
-            x1: 25.0,
-            y1: 0.0,
-            spread: SpreadMode::Reflect,
-            stops: vec![
+        let linear = Gradient::linear(
+            0.0,
+            0.0,
+            25.0,
+            0.0,
+            vec![
                 Stop {
                     offset: 0.0,
                     color: Rgba {
@@ -1136,21 +1127,21 @@ mod tests {
                     },
                 },
             ],
-        };
+        )
+        .with_spread(SpreadMode::Reflect);
         {
             let mut p = scene.path(PathStyle {
-                fill: Paint::Linear(linear.clone()),
+                fill: Paint::Gradient(linear.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
             p.line_to(50.0, 50.0);
         }
-        let radial = RadialGradient {
-            cx: 25.0,
-            cy: 25.0,
-            radius: 10.0,
-            spread: SpreadMode::Repeat,
-            stops: vec![
+        let radial = Gradient::radial(
+            25.0,
+            25.0,
+            10.0,
+            vec![
                 Stop {
                     offset: 0.0,
                     color: Rgba {
@@ -1165,10 +1156,11 @@ mod tests {
                     color: Rgba::default(),
                 },
             ],
-        };
+        )
+        .with_spread(SpreadMode::Repeat);
         {
             let mut p = scene.path(PathStyle {
-                fill: Paint::Radial(radial.clone()),
+                fill: Paint::Gradient(radial.clone()),
                 ..PathStyle::default()
             });
             p.move_to(0.0, 0.0);
@@ -1180,11 +1172,11 @@ mod tests {
                 let Element::Path(p0) = &d.elements[0] else {
                     panic!();
                 };
-                assert_eq!(p0.style.fill, Paint::Linear(linear));
+                assert_eq!(p0.style.fill, Paint::Gradient(linear));
                 let Element::Path(p1) = &d.elements[1] else {
                     panic!();
                 };
-                assert_eq!(p1.style.fill, Paint::Radial(radial));
+                assert_eq!(p1.style.fill, Paint::Gradient(radial));
             }
             _ => panic!(),
         }

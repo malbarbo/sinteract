@@ -14,8 +14,8 @@ use tiny_skia::{
 
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Scene, Segment,
-    Segments, TextNode,
+    Bitmap, ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba,
+    Scene, Segment, Segments, TextNode,
 };
 
 /// A reusable raster surface. Owns its [`Pixmap`]; [`Renderer::render`] clears
@@ -324,34 +324,34 @@ fn sk_spread(s: crate::scene::SpreadMode) -> SkSpread {
 /// to construct (e.g. degenerate line, missing stops) collapse to the paint's
 /// primary color so the draw still produces output.
 fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
-    match p {
-        IrPaint::Solid(c) => SkShader::SolidColor(sk_color(*c)),
-        IrPaint::Linear(g) => {
-            let stops = sk_stops(&g.stops);
-            tiny_skia::LinearGradient::new(
-                SkPoint::from_xy(g.x0, g.y0),
-                SkPoint::from_xy(g.x1, g.y1),
-                stops,
-                sk_spread(g.spread),
-                Transform::identity(),
-            )
-            .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
-        }
-        IrPaint::Radial(g) => {
-            let center = SkPoint::from_xy(g.cx, g.cy);
-            let stops = sk_stops(&g.stops);
+    let g = match p {
+        IrPaint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
+        IrPaint::Gradient(g) => g,
+    };
+    let stops = sk_stops(&g.stops);
+    let spread = sk_spread(g.spread);
+    match g.geom {
+        GradientGeom::Linear { x0, y0, x1, y1 } => tiny_skia::LinearGradient::new(
+            SkPoint::from_xy(x0, y0),
+            SkPoint::from_xy(x1, y1),
+            stops,
+            spread,
+            Transform::identity(),
+        ),
+        GradientGeom::Radial { cx, cy, radius } => {
+            let center = SkPoint::from_xy(cx, cy);
             tiny_skia::RadialGradient::new(
                 center,
                 0.0,
                 center,
-                g.radius,
+                radius,
                 stops,
-                sk_spread(g.spread),
+                spread,
                 Transform::identity(),
             )
-            .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
         }
     }
+    .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
 }
 
 /// Rasterize a [`crate::scene::Scene`], optionally fitting the output to

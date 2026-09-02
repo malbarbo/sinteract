@@ -761,7 +761,7 @@ mod tests {
     // Gradient + dash rendering
     // -----------------------------------------------------------------------
 
-    use crate::scene::{LinearGradient, RadialGradient, Stop};
+    use crate::scene::{Gradient, Stop};
 
     #[test]
     fn rasterize_linear_gradient_left_to_right() {
@@ -770,12 +770,12 @@ mod tests {
         // middle a clearly-different gray in between.
         let mut scene = Scene::new(40.0, 10.0);
         let style = PathStyle {
-            fill: IrPaint::Linear(LinearGradient {
-                x0: 0.0,
-                y0: 0.0,
-                x1: 40.0,
-                y1: 0.0,
-                stops: vec![
+            fill: IrPaint::Gradient(Gradient::linear(
+                0.0,
+                0.0,
+                40.0,
+                0.0,
+                vec![
                     Stop {
                         offset: 0.0,
                         color: Rgba {
@@ -795,8 +795,7 @@ mod tests {
                         },
                     },
                 ],
-                ..LinearGradient::default()
-            }),
+            )),
             ..PathStyle::default()
         };
         rect_path(&mut scene, style, 0.0, 0.0, 40.0, 10.0);
@@ -818,11 +817,11 @@ mod tests {
         // center, transparent at the edge.
         let mut scene = Scene::new(40.0, 40.0);
         let style = PathStyle {
-            fill: IrPaint::Radial(RadialGradient {
-                cx: 20.0,
-                cy: 20.0,
-                radius: 20.0,
-                stops: vec![
+            fill: IrPaint::Gradient(Gradient::radial(
+                20.0,
+                20.0,
+                20.0,
+                vec![
                     Stop {
                         offset: 0.0,
                         color: Rgba {
@@ -842,8 +841,7 @@ mod tests {
                         },
                     },
                 ],
-                ..RadialGradient::default()
-            }),
+            )),
             ..PathStyle::default()
         };
         rect_path(&mut scene, style, 0.0, 0.0, 40.0, 40.0);
@@ -862,33 +860,35 @@ mod tests {
         // which Pad clamps to white but Reflect folds back to t=0.5 (gray).
         let mut scene = Scene::new(80.0, 10.0);
         let style = PathStyle {
-            fill: IrPaint::Linear(crate::scene::LinearGradient {
-                x0: 0.0,
-                y0: 0.0,
-                x1: 20.0,
-                y1: 0.0,
-                spread: crate::scene::SpreadMode::Reflect,
-                stops: vec![
-                    crate::scene::Stop {
-                        offset: 0.0,
-                        color: Rgba {
-                            r: 0,
-                            g: 0,
-                            b: 0,
-                            a: 1.0,
+            fill: IrPaint::Gradient(
+                crate::scene::Gradient::linear(
+                    0.0,
+                    0.0,
+                    20.0,
+                    0.0,
+                    vec![
+                        crate::scene::Stop {
+                            offset: 0.0,
+                            color: Rgba {
+                                r: 0,
+                                g: 0,
+                                b: 0,
+                                a: 1.0,
+                            },
                         },
-                    },
-                    crate::scene::Stop {
-                        offset: 1.0,
-                        color: Rgba {
-                            r: 255,
-                            g: 255,
-                            b: 255,
-                            a: 1.0,
+                        crate::scene::Stop {
+                            offset: 1.0,
+                            color: Rgba {
+                                r: 255,
+                                g: 255,
+                                b: 255,
+                                a: 1.0,
+                            },
                         },
-                    },
-                ],
-            }),
+                    ],
+                )
+                .with_spread(crate::scene::SpreadMode::Reflect),
+            ),
             ..PathStyle::default()
         };
         rect_path(&mut scene, style, 0.0, 0.0, 80.0, 10.0);

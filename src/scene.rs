@@ -39,34 +39,53 @@ impl SpreadMode {
     }
 }
 
-/// Linear gradient from (x0, y0) to (x1, y1) in path-local coordinates.
-/// The paint is rendered along the line; `stops` are pre-sorted by offset.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct LinearGradient {
-    pub x0: f32,
-    pub y0: f32,
-    pub x1: f32,
-    pub y1: f32,
+/// Where a gradient's color ramp is swept, in path-local coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GradientGeom {
+    /// Along the line from (x0, y0) to (x1, y1).
+    Linear { x0: f32, y0: f32, x1: f32, y1: f32 },
+    /// Outward from (cx, cy) to `radius`.
+    Radial { cx: f32, cy: f32, radius: f32 },
+}
+
+/// A color ramp and the geometry it is swept along. `stops` are pre-sorted by
+/// offset.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gradient {
+    pub geom: GradientGeom,
     pub stops: Vec<Stop>,
     pub spread: SpreadMode,
 }
 
-/// Radial gradient centred at (cx, cy) with the given radius.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct RadialGradient {
-    pub cx: f32,
-    pub cy: f32,
-    pub radius: f32,
-    pub stops: Vec<Stop>,
-    pub spread: SpreadMode,
+impl Gradient {
+    pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Self {
+        Self {
+            geom: GradientGeom::Linear { x0, y0, x1, y1 },
+            stops,
+            spread: SpreadMode::Pad,
+        }
+    }
+
+    pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Self {
+        Self {
+            geom: GradientGeom::Radial { cx, cy, radius },
+            stops,
+            spread: SpreadMode::Pad,
+        }
+    }
+
+    /// Override the [`SpreadMode::Pad`] the constructors default to.
+    pub fn with_spread(mut self, spread: SpreadMode) -> Self {
+        self.spread = spread;
+        self
+    }
 }
 
 /// Fill or stroke paint — solid color or gradient.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(Rgba),
-    Linear(LinearGradient),
-    Radial(RadialGradient),
+    Gradient(Gradient),
 }
 
 impl Default for Paint {
@@ -87,8 +106,7 @@ impl Paint {
     pub fn is_visible(&self) -> bool {
         match self {
             Self::Solid(c) => c.a > 0.0,
-            Self::Linear(g) => !g.stops.is_empty(),
-            Self::Radial(g) => !g.stops.is_empty(),
+            Self::Gradient(g) => !g.stops.is_empty(),
         }
     }
 
@@ -98,8 +116,7 @@ impl Paint {
     pub fn primary_color(&self) -> Rgba {
         match self {
             Self::Solid(c) => *c,
-            Self::Linear(g) => g.stops.first().map(|s| s.color).unwrap_or_default(),
-            Self::Radial(g) => g.stops.first().map(|s| s.color).unwrap_or_default(),
+            Self::Gradient(g) => g.stops.first().map(|s| s.color).unwrap_or_default(),
         }
     }
 }
