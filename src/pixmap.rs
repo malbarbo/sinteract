@@ -591,6 +591,43 @@ mod tests {
     }
 
     #[test]
+    fn streamed_paths_do_not_inherit_the_scratch() {
+        // Every path in a frame decodes into one reused `Path`. A long path
+        // followed by a short one is where a stale verb or coordinate would
+        // show up, so compare the whole frame against the in-memory render.
+        let mut scene = Scene::new(20.0, 20.0);
+        {
+            let mut p = scene.path(solid(0, 0, 255));
+            p.move_to(0.0, 0.0);
+            p.line_to(20.0, 0.0);
+            p.line_to(20.0, 8.0);
+            p.cubic_to(14.0, 10.0, 6.0, 10.0, 0.0, 8.0);
+        }
+        {
+            let mut p = scene.path(solid(255, 0, 0));
+            p.move_to(0.0, 12.0);
+            p.line_to(20.0, 20.0);
+        }
+        let bytes = crate::wire::encode_frame(&scene);
+
+        let mut direct = PixmapRenderer::new(1.0, scene.width, scene.height).expect("alloc");
+        let expected = direct.render(&scene).expect("render").clone();
+
+        let mut streamed = PixmapRenderer::new(1.0, scene.width, scene.height).expect("alloc");
+        let got = streamed.render_stream(&bytes[..]).expect("decode + render");
+
+        for y in 0..20 {
+            for x in 0..20 {
+                assert_eq!(
+                    pixel_rgba(&expected, x, y),
+                    pixel_rgba(got, x, y),
+                    "mismatch at ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn render_stream_handles_nested_clip() {
         // Capnp Frame with a Clipped subtree: with_clip runs the nested walk
         // with the clip active, then pops it.

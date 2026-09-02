@@ -279,10 +279,16 @@ impl ClipPath {
         ClipPathBuilder::new(fill_rule)
     }
 
-    /// Wire decode: pair a fill rule with geometry already validated by
-    /// [`Geometry::from_wire`].
-    pub(crate) fn from_wire(fill_rule: FillRule, geom: Geometry) -> Self {
-        Self { geom, fill_rule }
+    /// Wire decode into an existing clip, reusing its allocations. See
+    /// [`Geometry::refill_from_wire`] for the arity contract.
+    pub(crate) fn refill_from_wire<E>(
+        &mut self,
+        fill_rule: FillRule,
+        verbs: impl Iterator<Item = Result<SegmentKind, E>>,
+        coords: impl Iterator<Item = f32>,
+    ) -> Result<bool, E> {
+        self.fill_rule = fill_rule;
+        self.geom.refill_from_wire(verbs, coords)
     }
 
     /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal
@@ -682,13 +688,37 @@ impl Geometry {
         Segments::new(&self.verbs, &self.coords)
     }
 
-    /// Build from raw wire streams, validating that `coords` holds exactly the
-    /// verbs' total arity — the invariant the private fields exist to protect.
-    /// `None` when they disagree; the codec maps that to
-    /// [`wire::Error::PathLengthMismatch`](crate::wire::Error).
-    pub(crate) fn from_wire(verbs: Vec<SegmentKind>, coords: Vec<f32>) -> Option<Self> {
-        let needed: usize = verbs.iter().map(|v| v.coords()).sum();
-        (needed == coords.len()).then_some(Self { verbs, coords })
+    /// Refill from raw wire streams, reusing the allocations already here, and
+    /// validate that `coords` holds exactly the verbs' total arity — the
+    /// invariant the private fields exist to protect. `Ok(false)` reports a
+    /// disagreement, which the codec maps to
+    /// [`wire::Error::PathLengthMismatch`](crate::wire::Error). On either
+    /// failure the geometry is emptied rather than left half-decoded, so it is
+    /// consistent whatever the caller does with the error.
+    pub(crate) fn refill_from_wire<E>(
+        &mut self,
+        verbs: impl Iterator<Item = Result<SegmentKind, E>>,
+        coords: impl Iterator<Item = f32>,
+    ) -> Result<bool, E> {
+        self.verbs.clear();
+        self.coords.clear();
+        for v in verbs {
+            match v {
+                Ok(v) => self.verbs.push(v),
+                Err(e) => {
+                    self.verbs.clear();
+                    return Err(e);
+                }
+            }
+        }
+        self.coords.extend(coords);
+        let needed: usize = self.verbs.iter().map(|v| v.coords()).sum();
+        if needed != self.coords.len() {
+            self.verbs.clear();
+            self.coords.clear();
+            return Ok(false);
+        }
+        Ok(true)
     }
 }
 
@@ -794,10 +824,16 @@ impl Path {
         PathBuilder::new(style)
     }
 
-    /// Wire decode: pair a style with geometry already validated by
-    /// [`Geometry::from_wire`].
-    pub(crate) fn from_wire(style: PathStyle, geom: Geometry) -> Self {
-        Self { style, geom }
+    /// Wire decode into an existing path, reusing its allocations. See
+    /// [`Geometry::refill_from_wire`] for the arity contract.
+    pub(crate) fn refill_from_wire<E>(
+        &mut self,
+        style: PathStyle,
+        verbs: impl Iterator<Item = Result<SegmentKind, E>>,
+        coords: impl Iterator<Item = f32>,
+    ) -> Result<bool, E> {
+        self.style = style;
+        self.geom.refill_from_wire(verbs, coords)
     }
 
     /// Raw wire verbs, kept in lock-step with [`Self::coords`]. Crate-internal

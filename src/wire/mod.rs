@@ -25,9 +25,8 @@ use crate::event::{
 };
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
-    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Geometry, Gradient, GradientGeom,
-    LineCap, LineJoin, Paint, Path, PathStyle, Rgba, Scene, SegmentKind, SpreadMode, Stop,
-    TextNode,
+    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LineCap,
+    LineJoin, Paint, Path, PathStyle, Rgba, Scene, SegmentKind, SpreadMode, Stop, TextNode,
 };
 
 use crate::frame_capnp::{
@@ -451,8 +450,9 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
 }
 
 fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
-    b.set_verbs(&verbs_to_bytes(c.verbs()));
     b.set_fill_rule(fill_rule_to_wire(c.fill_rule));
+    let verbs = c.verbs();
+    write_verbs(b.reborrow().init_verbs(verbs.len() as u32), verbs);
     let coords = c.coords();
     let mut out = b.init_coords(coords.len() as u32);
     for (i, &v) in coords.iter().enumerate() {
@@ -461,11 +461,17 @@ fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
 }
 
 fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, Error> {
-    let geom = read_geometry(r.get_verbs()?, r.get_coords()?)?;
-    Ok(ClipPath::from_wire(
+    let (verbs, coords) = (r.get_verbs()?, r.get_coords()?);
+    let mut clip = ClipPath::default();
+    if clip.refill_from_wire(
         fill_rule_from_wire(r.get_fill_rule()?),
-        geom,
-    ))
+        wire_verbs(verbs),
+        wire_coords(coords),
+    )? {
+        Ok(clip)
+    } else {
+        Err(length_mismatch(verbs, coords))
+    }
 }
 
 fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &Bitmap) {
@@ -536,31 +542,36 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
 // Scene <-> wire
 // ---------------------------------------------------------------------------
 
-/// Decode the wire verb bytes and coordinate list into a validated
-/// [`Geometry`]. Rejects unknown verb bytes here and verb/coord length
-/// disagreement in [`Geometry::from_wire`], so both errors are structurally
-/// absent past this point. Shared by the path and clip readers.
-fn read_geometry(
-    bytes: &[u8],
-    coords: capnp::primitive_list::Reader<'_, f32>,
-) -> Result<Geometry, Error> {
-    let mut verbs = Vec::with_capacity(bytes.len());
-    for &b in bytes {
-        verbs.push(SegmentKind::from_u8(b).ok_or(Error::UnknownVerb(b))?);
-    }
-    let coords: Vec<f32> = (0..coords.len()).map(|i| coords.get(i)).collect();
-    let coords_len = coords.len();
-    Geometry::from_wire(verbs, coords).ok_or(Error::PathLengthMismatch {
-        verbs: bytes.len(),
-        coords: coords_len,
-    })
+/// The wire verb bytes as typed verbs, rejecting an unrecognised byte where it
+/// is read — so an invalid verb is structurally absent past this point.
+fn wire_verbs(bytes: &[u8]) -> impl Iterator<Item = Result<SegmentKind, Error>> + '_ {
+    bytes
+        .iter()
+        .map(|&b| SegmentKind::from_u8(b).ok_or(Error::UnknownVerb(b)))
 }
 
-/// Pack a typed verb stream into the byte representation the wire uses. One
-/// small allocation per encoded path; the `SegmentKind` discriminants are the wire
-/// bytes by construction, so this is `repr(u8)` cast on each element.
-fn verbs_to_bytes(verbs: &[SegmentKind]) -> Vec<u8> {
-    verbs.iter().map(|&v| v as u8).collect()
+/// The wire coordinate list as a plain iterator. Capnp primitive lists are
+/// read by index, not borrowed as a slice.
+fn wire_coords(coords: capnp::primitive_list::Reader<'_, f32>) -> impl Iterator<Item = f32> + '_ {
+    (0..coords.len()).map(move |i| coords.get(i))
+}
+
+/// The length mismatch [`Geometry::refill_from_wire`] reports as `false`.
+fn length_mismatch(bytes: &[u8], coords: capnp::primitive_list::Reader<'_, f32>) -> Error {
+    Error::PathLengthMismatch {
+        verbs: bytes.len(),
+        coords: coords.len() as usize,
+    }
+}
+
+/// Write a typed verb stream into the message's own buffer. The `SegmentKind`
+/// discriminants are the wire bytes by construction, so this is a `repr(u8)`
+/// cast per element — and writing in place means no `Vec<u8>` is packed per
+/// path just to be copied out of.
+fn write_verbs(out: capnp::data::Builder<'_>, verbs: &[SegmentKind]) {
+    for (dst, &v) in out.iter_mut().zip(verbs) {
+        *dst = v as u8;
+    }
 }
 
 fn write_path_parts(
@@ -570,17 +581,29 @@ fn write_path_parts(
     coords: &[f32],
 ) {
     write_path_style(b.reborrow().init_style(), style);
-    b.set_verbs(&verbs_to_bytes(verbs));
+    write_verbs(b.reborrow().init_verbs(verbs.len() as u32), verbs);
     let mut out = b.init_coords(coords.len() as u32);
     for (i, &c) in coords.iter().enumerate() {
         out.set(i as u32, c);
     }
 }
 
-fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
+/// Decode into `path`, reusing whatever it already holds. The streaming
+/// decoder keeps one of these alive for a whole frame.
+fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Result<(), Error> {
     let style = read_path_style(r.get_style()?)?;
-    let geom = read_geometry(r.get_verbs()?, r.get_coords()?)?;
-    Ok(Path::from_wire(style, geom))
+    let (verbs, coords) = (r.get_verbs()?, r.get_coords()?);
+    if path.refill_from_wire(style, wire_verbs(verbs), wire_coords(coords))? {
+        Ok(())
+    } else {
+        Err(length_mismatch(verbs, coords))
+    }
+}
+
+fn read_path(r: wire_path::Reader<'_>) -> Result<Path, Error> {
+    let mut path = Path::default();
+    read_path_into(r, &mut path)?;
+    Ok(path)
 }
 
 fn write_element(b: element::Builder<'_>, node: &Element) {
@@ -709,8 +732,9 @@ pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -
 /// `resize`, and paint its elements onto `paint`. The Cap'n Proto reader is
 /// walked lazily — the `List(Element)` is iterated without materializing a
 /// `Vec<Element>`, and `Clipped` subtrees recurse via [`Paint::with_clip`].
-/// Each path is decoded into a scratch [`Path`] (bounded by one path at a
-/// time) and handed to [`Paint::draw_path`].
+/// Every path in the frame is decoded into one scratch [`Path`], reused across
+/// elements, and handed to [`Paint::draw_path`] — so a frame's path decoding
+/// allocates only as much as its longest path.
 ///
 /// `resize` runs once, after the frame's dimensions are known and before any
 /// element is painted, so the backend owns allocation. Non-`Frame` messages
@@ -727,7 +751,8 @@ pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
             let frame = f?;
             paint.ensure_size(frame.get_width(), frame.get_height())?;
             if frame.has_elements() {
-                stream_elements(paint, frame.get_elements()?)?;
+                let mut scratch = Path::default();
+                stream_elements(paint, frame.get_elements()?, &mut scratch)?;
             }
             Ok(())
         }
@@ -737,16 +762,19 @@ pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
     }
 }
 
+/// `scratch` is the frame's single reusable [`Path`]; clips get a fresh one per
+/// level instead, since a nested clip is still live while its children decode.
 fn stream_elements<P: PaintSink>(
     paint: &mut P,
     list: capnp::struct_list::Reader<'_, element::Owned>,
+    scratch: &mut Path,
 ) -> Result<(), Error> {
     use element::Which;
     for node in list.iter() {
         match node.which()? {
             Which::Path(p) => {
-                let path = read_path(p?)?;
-                paint.draw_path(&path);
+                read_path_into(p?, scratch)?;
+                paint.draw_path(scratch);
             }
             Which::Clipped(c) => {
                 let c = c?;
@@ -754,7 +782,7 @@ fn stream_elements<P: PaintSink>(
                 let children = c.get_elements()?;
                 // with_clip returns the closure's value, so the nested walk's
                 // Result threads straight out — no parked error cell.
-                paint.with_clip(&clip, |p2| stream_elements(p2, children))?;
+                paint.with_clip(&clip, |p2| stream_elements(p2, children, &mut *scratch))?;
             }
             Which::Text(t) => {
                 let t = read_text_node(t?)?;
