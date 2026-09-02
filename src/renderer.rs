@@ -17,6 +17,13 @@
 //! step; it is paid where the backend sizes its surface and surfaced as a
 //! [`Result`], never carried as a nullable field threaded through every draw.
 //!
+//! `render` and `render_stream` are provided: a backend supplies `ensure_size`,
+//! the draw primitives, an optional `end_frame` and `output`, and the trait
+//! owns the order they run in — sizing the surface before painting is enforced
+//! by the default bodies rather than re-implemented (and possibly forgotten)
+//! per backend. Every step that mutates the surface is sealed; the one public
+//! addition, `output`, only re-borrows the last frame.
+//!
 //! The draw primitives live on the sealed `Paint` trait, in a private-to-the-crate
 //! module: a backend implements them and the crate's own scene/stream walkers
 //! call them, but application code can neither name nor invoke them. So "draw
@@ -40,6 +47,11 @@ pub(crate) mod sealed {
     /// private to the crate, so it is neither nameable nor implementable from
     /// outside `simage`.
     pub trait Paint: Sized {
+        /// Size the surface for a `width × height` frame and clear it,
+        /// reallocating only when the size changed. Allocation is the one
+        /// fallible step of a render, and it is paid here.
+        fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error>;
+
         /// Draw one fully-built [`Path`]. Its verb/coord streams agree by
         /// construction, so [`Path::segments`](crate::scene::Path::segments)
         /// cannot desync.
@@ -56,6 +68,11 @@ pub(crate) mod sealed {
         fn draw_bitmap(&mut self, bitmap: &Bitmap) {
             let _ = bitmap;
         }
+
+        /// Close out a frame once painting is done — for work a backend
+        /// defers to the end (the PDF backend assembles its document here).
+        /// Most backends draw straight into their surface and need nothing.
+        fn end_frame(&mut self) {}
 
         /// Run `inside` with `clip` active, then pop the clip, and return
         /// whatever `inside` returned (so a fallible walk threads its `Result`
@@ -93,15 +110,28 @@ pub trait Renderer: sealed::Paint {
     where
         Self: 'a;
 
-    /// Render a whole [`Scene`] into the surface and borrow the result. The
-    /// backend sizes and clears its buffer here (reallocating only on a size
-    /// change), so allocation is the one fallible step — [`Err`] on failure.
-    fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, crate::wire::Error>;
+    /// Borrow the most recently rendered frame. Takes `&self` and only
+    /// re-borrows what is already there, so calling it out of turn hands back
+    /// the previous frame rather than corrupting one.
+    fn output(&self) -> Self::Output<'_>;
+
+    /// Render a whole [`Scene`] into the surface and borrow the result.
+    /// [`Err`] only if sizing the surface fails.
+    fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, crate::wire::Error> {
+        self.ensure_size(scene.width, scene.height)?;
+        self.paint_elements(&scene.elements);
+        self.end_frame();
+        Ok(self.output())
+    }
 
     /// Decode exactly one Cap'n Proto `Frame` from `reader` and render it
     /// without materializing the [`Element`](crate::scene::Element) tree. The
     /// reader is walked lazily and `Clipped` subtrees recurse via
     /// the sealed `Paint::with_clip`. Non-`Frame` messages return
     /// [`wire::Error::WrongMessageKind`](crate::wire::Error::WrongMessageKind).
-    fn render_stream(&mut self, reader: impl Read) -> Result<Self::Output<'_>, crate::wire::Error>;
+    fn render_stream(&mut self, reader: impl Read) -> Result<Self::Output<'_>, crate::wire::Error> {
+        crate::wire::stream_frame(self, reader)?;
+        self.end_frame();
+        Ok(self.output())
+    }
 }

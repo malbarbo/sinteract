@@ -719,14 +719,13 @@ pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -
 pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
     paint: &mut P,
     reader: R,
-    resize: impl FnOnce(&mut P, f32, f32) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let msg = serialize::read_message(reader, ReaderOptions::new())?;
     let m: message::Reader = msg.get_root()?;
     match m.which()? {
         message::Frame(f) => {
             let frame = f?;
-            resize(paint, frame.get_width(), frame.get_height())?;
+            paint.ensure_size(frame.get_width(), frame.get_height())?;
             if frame.has_elements() {
                 stream_elements(paint, frame.get_elements()?)?;
             }

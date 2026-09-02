@@ -27,7 +27,7 @@ use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba,
-    Scene, Segment, Segments, Stop, TextNode,
+    Segment, Segments, Stop, TextNode,
 };
 
 /// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
@@ -81,22 +81,6 @@ impl PdfRenderer {
             gradients: Vec::new(),
             bytes: Vec::new(),
         }
-    }
-
-    /// Reset the content stream and resources for a fresh `width × height`
-    /// page and emit the base transform. PDF allocation never fails, so this
-    /// is infallible — the `Result` only matches the streaming resize hook.
-    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
-        self.width = width.max(1.0);
-        self.height = height.max(1.0);
-        self.gstates.clear();
-        self.gradients.clear();
-        // y-flip + px→pt scale (see module docs); s=PX_TO_PT gives a=s, d=-s, f=s*h.
-        let s = PX_TO_PT;
-        let mut content = Content::new();
-        content.transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
-        self.content = content;
-        Ok(())
     }
 
     /// Consume the renderer and hand back the assembled document bytes (for
@@ -221,6 +205,23 @@ impl Drop for RestoreGuard<'_> {
 }
 
 impl Paint for PdfRenderer {
+    /// Reset the content stream and resources for a fresh `width × height`
+    /// page and emit the base transform. PDF allocation never fails, so this
+    /// is infallible — the `Result` is the trait's, for backends that do
+    /// allocate here.
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
+        self.width = width.max(1.0);
+        self.height = height.max(1.0);
+        self.gstates.clear();
+        self.gradients.clear();
+        // y-flip + px→pt scale (see module docs); s=PX_TO_PT gives a=s, d=-s, f=s*h.
+        let s = PX_TO_PT;
+        let mut content = Content::new();
+        content.transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
+        self.content = content;
+        Ok(())
+    }
+
     fn draw_path(&mut self, path: &Path) {
         // For solid paints: alpha rides the path. For gradients: PDF
         // gradients here are RGB-only; per-stop alpha is dropped, and a
@@ -281,6 +282,10 @@ impl Paint for PdfRenderer {
         self.content.restore_state();
     }
 
+    fn end_frame(&mut self) {
+        self.assemble();
+    }
+
     fn draw_text(&mut self, node: &TextNode) {
         render_text(node, self);
     }
@@ -309,15 +314,8 @@ impl Paint for PdfRenderer {
 impl Renderer for PdfRenderer {
     type Output<'a> = &'a [u8];
 
-    fn render(&mut self, scene: &Scene) -> Result<&[u8], crate::wire::Error> {
-        self.ensure_size(scene.width, scene.height)?;
-        self.paint_elements(&scene.elements);
-        Ok(self.assemble())
-    }
-
-    fn render_stream(&mut self, reader: impl std::io::Read) -> Result<&[u8], crate::wire::Error> {
-        crate::wire::stream_frame(self, reader, |s, w, h| s.ensure_size(w, h))?;
-        Ok(self.assemble())
+    fn output(&self) -> &[u8] {
+        &self.bytes
     }
 }
 
@@ -356,11 +354,10 @@ struct GradientRefs {
 }
 
 impl PdfRenderer {
-    /// Assemble the accumulated content + resources into a one-page document,
-    /// store it in `self.bytes`, and borrow it out. Takes the content and
-    /// resource maps by value (leaving fresh empties), so the next render
-    /// starts clean.
-    fn assemble(&mut self) -> &[u8] {
+    /// Assemble the accumulated content + resources into a one-page document
+    /// and store it in `self.bytes`. Takes the content and resource maps by
+    /// value (leaving fresh empties), so the next render starts clean.
+    fn assemble(&mut self) {
         let w = self.width;
         let h = self.height;
         let gstates = std::mem::take(&mut self.gstates);
@@ -463,7 +460,6 @@ impl PdfRenderer {
         }
 
         self.bytes = pdf.finish();
-        &self.bytes
     }
 }
 
@@ -815,6 +811,20 @@ mod tests {
 
     /// The underline contour is emitted through the same `PdfOutline` adapter
     /// as the glyphs, so it must add path ops beyond the un-underlined run.
+    #[test]
+    fn output_reborrows_the_last_assembled_document() {
+        // assemble() now stores into self.bytes and output() only borrows, so
+        // the two must agree and a second look must not re-assemble an empty
+        // document.
+        let mut scene = Scene::new(20.0, 20.0);
+        rect(&mut scene, red_fill(1.0), 0.0, 0.0, 10.0, 10.0);
+        let mut renderer = PdfRenderer::new();
+        let rendered = renderer.render(&scene).expect("render").to_vec();
+        assert!(!rendered.is_empty());
+        assert_eq!(renderer.output(), &rendered[..]);
+        assert_eq!(renderer.output(), &rendered[..]);
+    }
+
     #[test]
     fn underline_adds_path_ops() {
         let render = |underline: bool| {

@@ -3,8 +3,6 @@
 //! so it builds on wasm too; the terminal and window backends drive it and then
 //! present the pixels their own way.
 
-use std::io;
-
 use tiny_skia::{
     Color as SkColor, FillRule as SkFillRule, GradientStop as SkStop, LineCap as SkLineCap,
     LineJoin as SkLineJoin, Mask, Paint as SkPaint, PathBuilder, Pixmap, Point as SkPoint,
@@ -13,8 +11,8 @@ use tiny_skia::{
 
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
-    ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Scene,
-    Segment, Segments, TextNode,
+    ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Segment,
+    Segments, TextNode,
 };
 
 /// A reusable raster surface. Owns its [`Pixmap`]; [`Renderer::render`] clears
@@ -102,27 +100,6 @@ impl PixmapRenderer {
         })
     }
 
-    /// Prepare the surface for a `width × height` frame: reallocate if the
-    /// scaled size changed, otherwise clear the existing buffer in place —
-    /// reusing the allocation across same-size frames. The clip stack is
-    /// always reset.
-    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
-        let (out_w, out_h, base) = fit(width, height, self.target_px, self.max_scale);
-        self.base = base;
-        self.clip_stack.clear();
-        if (out_w, out_h) == (self.out_w, self.out_h) {
-            self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
-        } else {
-            self.pixmap = new_pixmap(out_w, out_h).ok_or(crate::wire::Error::Alloc {
-                width: out_w,
-                height: out_h,
-            })?;
-            self.out_w = out_w;
-            self.out_h = out_h;
-        }
-        Ok(())
-    }
-
     /// Consume the renderer and hand back the owned pixmap (for one-shot
     /// callers that want to move the result out rather than borrow it).
     fn into_pixmap(self) -> Pixmap {
@@ -184,6 +161,27 @@ impl Drop for ClipGuard<'_> {
 }
 
 impl Paint for PixmapRenderer {
+    /// Prepare the surface for a `width × height` frame: reallocate if the
+    /// scaled size changed, otherwise clear the existing buffer in place —
+    /// reusing the allocation across same-size frames. The clip stack is
+    /// always reset.
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
+        let (out_w, out_h, base) = fit(width, height, self.target_px, self.max_scale);
+        self.base = base;
+        self.clip_stack.clear();
+        if (out_w, out_h) == (self.out_w, self.out_h) {
+            self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        } else {
+            self.pixmap = new_pixmap(out_w, out_h).ok_or(crate::wire::Error::Alloc {
+                width: out_w,
+                height: out_h,
+            })?;
+            self.out_w = out_w;
+            self.out_h = out_h;
+        }
+        Ok(())
+    }
+
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
         let mut builder = PathBuilder::new();
@@ -251,15 +249,8 @@ impl Paint for PixmapRenderer {
 impl Renderer for PixmapRenderer {
     type Output<'a> = &'a Pixmap;
 
-    fn render(&mut self, scene: &Scene) -> Result<&Pixmap, crate::wire::Error> {
-        self.ensure_size(scene.width, scene.height)?;
-        self.paint_elements(&scene.elements);
-        Ok(&self.pixmap)
-    }
-
-    fn render_stream(&mut self, reader: impl io::Read) -> Result<&Pixmap, crate::wire::Error> {
-        crate::wire::stream_frame(self, reader, |s, w, h| s.ensure_size(w, h))?;
-        Ok(&self.pixmap)
+    fn output(&self) -> &Pixmap {
+        &self.pixmap
     }
 }
 
@@ -451,7 +442,7 @@ impl<'a> crate::text::OutlineBuilder for SkiaOutline<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::PathStyle;
+    use crate::scene::{PathStyle, Scene};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
