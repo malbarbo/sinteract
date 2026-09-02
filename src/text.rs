@@ -132,12 +132,19 @@ pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
         return embedded(&SANS[v]);
     }
 
-    let key = family.trim().to_ascii_lowercase();
-    let alias = match key.as_str() {
-        "" | "sans-serif" | "sans" | "liberation sans" => Some(&SANS),
-        "serif" | "liberation serif" => Some(&SERIF),
-        "monospace" | "mono" | "liberation mono" => Some(&MONO),
-        _ => None,
+    // Compared case-insensitively in place rather than against a lowercased
+    // copy: this runs per text node per frame, and the copy was a heap
+    // allocation to match eight fixed names.
+    let key = family.trim();
+    let is = |names: &[&str]| names.iter().any(|n| key.eq_ignore_ascii_case(n));
+    let alias = if is(&["", "sans-serif", "sans", "liberation sans"]) {
+        Some(&SANS)
+    } else if is(&["serif", "liberation serif"]) {
+        Some(&SERIF)
+    } else if is(&["monospace", "mono", "liberation mono"]) {
+        Some(&MONO)
+    } else {
+        None
     };
     if let Some(family_arr) = alias {
         return embedded(&family_arr[v]);
@@ -347,14 +354,30 @@ pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size_px: i32) -> f64 
     (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * scale
 }
 
+/// Glyph outlines for `text`, measuring the placement itself. A renderer that
+/// already has a [`TextLayout`] should call [`outline_layout`] instead.
 pub fn outline_with(face: &Face<'_>, text: &str, size_px: i32, out: &mut dyn OutlineBuilder) {
     if text.is_empty() || size_px <= 0 {
         return;
     }
-    let scale = f64::from(size_px) / f64::from(face.units_per_em());
-    let baseline_y = measure_y_offset_with(face, text, size_px) as f32;
     let start_x = measure_x_offset_with(face, text, size_px) as f32;
+    let baseline_y = measure_y_offset_with(face, text, size_px) as f32;
+    outline_at(face, text, size_px, start_x, baseline_y, out);
+}
 
+/// Glyph outlines placed at an already-measured origin.
+fn outline_at(
+    face: &Face<'_>,
+    text: &str,
+    size_px: i32,
+    start_x: f32,
+    baseline_y: f32,
+    out: &mut dyn OutlineBuilder,
+) {
+    if text.is_empty() || size_px <= 0 {
+        return;
+    }
+    let scale = f64::from(size_px) / f64::from(face.units_per_em());
     let mut pen_x: f64 = 0.0;
     for c in text.chars() {
         let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
@@ -413,6 +436,20 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
         baseline_y: measure_y_offset_with(face, &node.text, size_i) as f32,
         x_left: (-measured / 2.0) as f32,
     })
+}
+
+/// Glyph outlines for a node already measured by [`layout_text`]. Renderers use
+/// this rather than [`outline_with`], which walks the string twice more to
+/// recover the origin the layout is already holding.
+pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
+    outline_at(
+        layout.face,
+        text,
+        layout.size_i,
+        layout.x_left,
+        layout.baseline_y,
+        out,
+    );
 }
 
 /// Emit the underline rectangle for a laid-out node as a closed contour.
@@ -668,6 +705,24 @@ mod tests {
         assert!(b.moves > 0, "no moves emitted");
         assert!(b.lines > 0 || b.quads > 0, "no draw segments emitted");
         assert!(b.closes > 0, "outline did not close");
+    }
+
+    #[test]
+    fn outline_layout_places_glyphs_exactly_like_outline_with() {
+        let node = TextNode {
+            size: 24.0,
+            text: "Olá, mundo".to_string(),
+            ..TextNode::default()
+        };
+        let layout = layout_text(&node).expect("node draws");
+
+        let mut measured = Recorder { ops: Vec::new() };
+        outline_with(layout.face, &node.text, layout.size_i, &mut measured);
+        let mut reused = Recorder { ops: Vec::new() };
+        outline_layout(&layout, &node.text, &mut reused);
+
+        assert_eq!(measured.ops, reused.ops);
+        assert!(!reused.ops.is_empty());
     }
 
     #[test]

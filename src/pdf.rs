@@ -666,7 +666,7 @@ fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
         // through the contour, `close` included, so this adapter does not have
         // to guess it from the ops it already pushed.
         let mut out = crate::text::ElevateQuads::new(&mut adapter);
-        crate::text::outline_with(layout.face, &node.text, layout.size_i, &mut out);
+        crate::text::outline_layout(&layout, &node.text, &mut out);
         if node.underline {
             crate::text::outline_underline(&layout, &mut out);
         }

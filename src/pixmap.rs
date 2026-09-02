@@ -359,7 +359,7 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
 
     let mut builder = PathBuilder::new();
     let mut adapter = SkiaOutline { b: &mut builder };
-    crate::text::outline_with(layout.face, &node.text, layout.size_i, &mut adapter);
+    crate::text::outline_layout(&layout, &node.text, &mut adapter);
 
     if node.underline {
         crate::text::outline_underline(&layout, &mut adapter);
