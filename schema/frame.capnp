@@ -1,6 +1,6 @@
 @0x9e6ad945a7c8b88a;
 
-# simage wire format.
+# sinteract wire format.
 #
 # Three messages travel between the server, which runs the engine, and the
 # client, which renders. Asset uploads a bitmap once, at the start of the
@@ -126,7 +126,7 @@ struct ClipPath {
 
 # The affine maps the image pixels (0..img_w, 0..img_h) onto the canvas, in
 # the convention of TextNode. The producer puts the fit, the rotation and the
-# mirroring into it (see simage::scene::bitmap_box_affine).
+# mirroring into it (see sinteract::scene::bitmap_box_affine).
 struct BitmapNode {
     id @0 :UInt32;
     m0 @1 :Float32;
@@ -143,7 +143,7 @@ struct BitmapNode {
 #   x' = m0 * x + m2 * y + m4
 #   y' = m1 * x + m3 * y + m5
 # The producer puts the fit, the rotation and the mirroring into it (see
-# simage::scene::text_box_affine).
+# sinteract::scene::text_box_affine).
 struct TextNode {
     fill        @0  :Rgba;
     stroke      @1  :Rgba;
@@ -248,7 +248,7 @@ struct Message {
 }
 
 # The verb bytes, for a host that is not Rust. Rust uses
-# simage::scene::SegmentKind.
+# sinteract::scene::SegmentKind.
 const verbMove  :UInt8 = 0;
 const verbLine  :UInt8 = 1;
 const verbQuad  :UInt8 = 2;

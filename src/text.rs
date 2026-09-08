@@ -777,7 +777,7 @@ mod tests {
     fn unknown_family_falls_back_to_sans_when_not_in_fontdb() {
         // No system has a font with this name, so resolve falls through to
         // Liberation Sans.
-        let f = resolve("ZZZ_SimageNonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
+        let f = resolve("ZZZ_NonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
     }
 }

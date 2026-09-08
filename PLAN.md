@@ -1,11 +1,11 @@
-# simage — Plano de modo servidor / cliente / multiplayer
+# sinteract — Plano de modo servidor / cliente / multiplayer
 
 Plano consolidado da discussão de design. WebSocket / networking concreto fica
 para a última fase — primeiro construir toda a infra local.
 
 ## Objetivo
 
-simage é a lib gráfica compartilhada por **spython** (já) e **sgleam** (em
+sinteract é a lib gráfica compartilhada por **spython** (já) e **sgleam** (em
 breve). Adicionar suporte para:
 
 - **Servidor de jogos**: spython/sgleam roda como subprocesso de um servidor;
@@ -111,7 +111,7 @@ DrawList de engine local OU de WebSocket — não sabe a diferença.
 ### D. Topologia
 
 - spython/sgleam: 3 modos via flag (`--server`, `--client URL`, default).
-- simage hospeda toda lib genérica.
+- sinteract hospeda toda lib genérica.
 - **Frontend é enum** (sem `Box<dyn>`, sem custo de vtable):
   ```rust
   pub enum Frontend {
@@ -120,15 +120,15 @@ DrawList de engine local OU de WebSocket — não sabe a diferença.
       Stdio(StdioFrontend),
   }
   ```
-- Servidor de jogos é processo separado (não em simage). Pode crescer no
+- Servidor de jogos é processo separado (não em sinteract). Pode crescer no
   `simplecode/server` ou ser binário novo. Recebe WebSocket, spawna
   `spython --server` subprocess, liga stdio.
 - **WebSocket fica pra Fase 8** (deferred).
 
-## Estrutura de arquivos em simage
+## Estrutura de arquivos em sinteract
 
 ```
-simage/src/
+sinteract/src/
 ├── ir.rs          (existe, alterar) — DrawList, TextNode com family/weight
 ├── sink.rs        (existe)          — DrawSink trait
 ├── pdf.rs         (existe, alterar) — fontes reais por variante
@@ -142,10 +142,10 @@ simage/src/
 └── client.rs      (NOVO, parcial)   — Transport trait + run<T>(t, frontend)
                                        (WebSocket impl deferred)
 
-simage/schema/
+sinteract/schema/
 └── frame.fbs      (NOVO)            — schema FlatBuffers
 
-simage/fonts/
+sinteract/fonts/
 ├── LiberationSans-{Regular,Bold,Italic,BoldItalic}.ttf
 ├── LiberationSerif-{Regular,Bold,Italic,BoldItalic}.ttf
 └── LiberationMono-{Regular,Bold,Italic,BoldItalic}.ttf
@@ -158,7 +158,7 @@ simage/fonts/
 
 - `cli/src/main.rs`: parsing de `--server` / `--client URL`.
 - `engine/src/lib.rs`: aceitar `Frontend` em vez de chamar `host::*`.
-- `engine/src/host/native.rs`: virar `pick_native()` em simage, deletar daqui.
+- `engine/src/host/native.rs`: virar `pick_native()` em sinteract, deletar daqui.
 - `engine/src/host/wasm.rs`: ajustar pra escrever FB no shared buffer (em vez
   de SVG via env).
 - `lib/spython/image.py`: passar `style` em vez de `italic`, adicionar `font` +
@@ -176,8 +176,8 @@ Replicar mesma estrutura.
 - `src/ui_channel.ts`: renomear "key" → "input"; adicionar TICK type;
   adicionar FRAME_READY slot e frame output buffer no layout.
 - `src/worker.ts`: ler FB do output buffer; escrever no canvas via novo
-  `simage-render.ts`.
-- `src/simage-render.ts` (NOVO): decoder FlatBuffers + Canvas 2D painter;
+  `sinteract-render.ts`.
+- `src/sinteract-render.ts` (NOVO): decoder FlatBuffers + Canvas 2D painter;
   carrega WOFF2 via `@font-face`.
 - `src/main.ts`: rAF loop com push Tick + notify worker.
 - Servir Liberation WOFF2 estaticamente (preload sans, lazy serif/mono).
@@ -189,13 +189,13 @@ Replicar mesma estrutura.
 1. Adicionar `family: String`, `weight: u16` em `TextNode`. Atualizar testes.
 2. Adicionar `DrawCmd::Bitmap { id, cx, cy, w, h, angle, flip_h, flip_v }`
    (hoje é placeholder vazio).
-3. Definir `simage::event::InputEvent` (KEYPRESS/KEYDOWN/KEYUP/TICK/CLOSE).
-4. Escrever `simage/schema/frame.fbs` (DrawList, Asset, Event, Message).
-5. Adicionar `simage::wire` com encode/decode FB + testes round-trip.
+3. Definir `sinteract::event::InputEvent` (KEYPRESS/KEYDOWN/KEYUP/TICK/CLOSE).
+4. Escrever `sinteract/schema/frame.fbs` (DrawList, Asset, Event, Message).
+5. Adicionar `sinteract::wire` com encode/decode FB + testes round-trip.
 
-### Fase 2 — Frontend enum (refator interno simage)
+### Fase 2 — Frontend enum (refator interno sinteract)
 
-6. Definir `simage::frontend::Frontend` enum.
+6. Definir `sinteract::frontend::Frontend` enum.
 7. Refatorar `terminal.rs` pra implementar TerminalFrontend (state em struct,
    não global).
 8. Refatorar `window.rs` pra implementar WindowFrontend.
@@ -206,7 +206,7 @@ Replicar mesma estrutura.
 
 ### Fase 3 — StdioFrontend
 
-11. `simage::stdio::StdioFrontend` — bloqueia em stdin com FB framing.
+11. `sinteract::stdio::StdioFrontend` — bloqueia em stdin com FB framing.
 12. Suporte: FRAME → stdout, EVENT → lê via stdin, ASSET → upload via stdin.
 13. Testes de integração (mock stdin/stdout).
 
@@ -221,7 +221,7 @@ Replicar mesma estrutura.
 
 ### Fase 5 — Integração spython
 
-18. `engine/src/host/native.rs` → mudar pra simage `pick_native()`.
+18. `engine/src/host/native.rs` → mudar pra sinteract `pick_native()`.
 19. `engine/src/lib.rs` aceita `Frontend`.
 20. CLI ganha `--server` / `--client`.
 21. `lib/spython/world.py` muda pra wait_event loop.
@@ -229,7 +229,7 @@ Replicar mesma estrutura.
 
 ### Fase 6 — Integração simplecode (browser singleplayer)
 
-23. `simage-render.ts` — decoder FB + canvas painter.
+23. `sinteract-render.ts` — decoder FB + canvas painter.
 24. `ui_channel.ts` — adicionar TICK, FRAME_READY, frame output buffer.
 25. `env.ts` — `wait_event` via Atomics.wait.
 26. rAF loop em `main.ts`.
@@ -241,16 +241,16 @@ Replicar mesma estrutura.
 
 ### Fase 8 — Networking (deferred)
 
-29. `WebSocketTransport` em simage atrás de feature `websocket`.
-30. `simage::client::run` completo.
+29. `WebSocketTransport` em sinteract atrás de feature `websocket`.
+30. `sinteract::client::run` completo.
 31. CLI client mode em spython funciona end-to-end.
 32. Servidor de jogos (no simplecode/server ou novo binário).
 
 ## Pontos abertos
 
-- Multiplexar input local + rede em `simage::client::run` — resolver na fase 8.
+- Multiplexar input local + rede em `sinteract::client::run` — resolver na fase 8.
 - Protocolo de handshake (Hello, Join, AssetManifest) — definir antes da fase 8.
-- `tungstenite` em simage atrás de feature `websocket` (decisão tomada).
+- `tungstenite` em sinteract atrás de feature `websocket` (decisão tomada).
 - Timing exato do throttle no rAF: `t - lastTick >= 1000/tick_rate`.
 - Multi-jogador num jogo (vários inputs pra mesma engine): servidor multiplexa
   em `Event { player_id, input }`.
@@ -260,23 +260,23 @@ Replicar mesma estrutura.
 - ✅ Decisões A, B, C, D consolidadas.
 - ✅ Mudança preparatória: `FontItalic` → `FontStyle` (variante `Slant` →
   `Oblique`), `TextNode.italic` → `TextNode.style`. Aplicado em
-  `simage/src/{ir,terminal,pdf}.rs` e
+  `sinteract/src/{ir,terminal,pdf}.rs` e
   `spython/engine/src/drawlist.rs`.
 - ✅ **Fase 1 completa.**
   - `TextNode` ganhou `family: String` e `weight: u16`. `Default` impl
     adicionada (weight=400, family="").
   - `DrawCmd::Bitmap(BitmapNode { id, cx, cy, w, h, angle, flip_h, flip_v })`.
-  - `simage::event` módulo: `InputEvent`, `KeyEvent`, `KeyKind`, MOD_*
+  - `sinteract::event` módulo: `InputEvent`, `KeyEvent`, `KeyKind`, MOD_*
     bitmask. Compatível com wasm32.
   - `schema/frame.capnp` (Cap'n Proto). Bindings geradas em
     `src/wire/frame_capnp.rs` (commit). Para regenerar:
     `capnp compile -orust --src-prefix=schema -o src/wire schema/frame.capnp`.
     `Message`, `DrawCmd` e `InputEvent` usam unions nativas — sem wrapper
     intermediário. `DrawList` é payload direto da `Message::frame`.
-  - `simage::wire` com `encode_frame/event/asset/close` + `decode` →
+  - `sinteract::wire` com `encode_frame/event/asset/close` + `decode` →
     `Decoded`. Round-trip testes passam. Cap'n Proto self-frames cada
     mensagem; stdio framing externo `[SIMG][u32 LE len][bytes]` é
-    defesa adicional contra peer não-simage no pipe.
+    defesa adicional contra peer não-sinteract no pipe.
   - **Migrações de wire** (2026-05-08): planus → flatbuffers (descobrimos
     que planus 1.3 produz `[file_id][root_offset][body]`, oposto ao spec)
     → Cap'n Proto. flatbuffers oficial seguia o spec mas o gerador Rust
@@ -299,7 +299,7 @@ Replicar mesma estrutura.
       preservada — a montagem do `Path` acontece em buffer interno
       (`open: Option<OpenPath>`), commit-on-terminator.
 - ✅ **Fase 2 completa.**
-  - `simage::frontend::Frontend` enum: `Terminal | Window | Stdio`. Métodos
+  - `sinteract::frontend::Frontend` enum: `Terminal | Window | Stdio`. Métodos
     `enter/exit/set_tick_rate/wait_event/present/push_asset`.
   - `TickClock` helper para agendar Ticks com `tick_rate` configurável.
   - `key_event_from_legacy()` adapta a tupla `(i32, String, [bool;5])` que
@@ -309,7 +309,7 @@ Replicar mesma estrutura.
     enquanto). Funções livres continuam disponíveis para o spython
     integrar gradualmente.
 - ✅ **Fase 3 completa.**
-  - `simage::stdio::StdioFrontend` com framing
+  - `sinteract::stdio::StdioFrontend` com framing
     `[SIMG][u32 LE len][bytes]` em ambos os sentidos.
   - `wait_event` lê e decodifica mensagens de stdin; mensagens
     inesperadas viram log + continua. EOF → `None`. Erro de framing →
@@ -318,8 +318,8 @@ Replicar mesma estrutura.
     + corrupção de magic.
 - ✅ **Fase 4 completa.**
   - 12 fontes Liberation embutidas (Sans/Serif/Mono × Regular/Bold/Italic/
-    BoldItalic) em `simage/fonts/`.
-  - `simage::text::resolve(family, weight, style) -> ResolvedFont`.
+    BoldItalic) em `sinteract/fonts/`.
+  - `sinteract::text::resolve(family, weight, style) -> ResolvedFont`.
     Aliases (sans-serif/serif/monospace/mono/Liberation X, case-insensitive),
     fallback por `fontdb` com leak controlado de `Face<'static>`,
     fallback final para Liberation Sans.
@@ -333,7 +333,7 @@ Replicar mesma estrutura.
 
 ### Resumo de testes / estado
 
-- 72 testes da simage passam.
+- 72 testes da sinteract passam.
 - spython compila sem mudanças (drawlist.rs preenche `family=""` e
   `weight=400` por enquanto).
 - planus-cli (1.3.0) instalado em `~/.cargo/bin/planus`. Necessário só

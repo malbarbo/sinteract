@@ -120,7 +120,7 @@ fn warn_bitmaps_once(warned: &mut bool, scene: &Scene, backend: &str) {
     if !*warned && scene.has_bitmaps() {
         *warned = true;
         eprintln!(
-            "[simage] the {backend} renderer does not support bitmaps; drawing without them."
+            "[sinteract] the {backend} renderer does not support bitmaps; drawing without them."
         );
     }
 }

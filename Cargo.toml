@@ -1,10 +1,10 @@
 [package]
-name = "simage"
+name = "sinteract"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Draw-list based 2D graphics with terminal (Kitty/Sixel/half-blocks) and PDF outputs. Originated in spython; designed to be shared with sgleam."
-repository = "https://github.com/malbarbo/simage"
+repository = "https://github.com/malbarbo/sinteract"
 readme = "README.md"
 
 [dependencies]
@@ -53,5 +53,5 @@ windows-sys = { version = "0.60", features = [
 ] }
 
 [lib]
-name = "simage"
+name = "sinteract"
 path = "src/lib.rs"

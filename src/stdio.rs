@@ -95,16 +95,16 @@ impl StdioFrontend {
                     Ok(Decoded::Close) => return Some(InputEvent::Close),
                     Ok(other) => {
                         eprintln!(
-                            "[simage::stdio] ignoring unexpected message from server: {other:?}"
+                            "[sinteract::stdio] ignoring unexpected message from server: {other:?}"
                         );
                     }
                     Err(e) => {
-                        eprintln!("[simage::stdio] decode error: {e}");
+                        eprintln!("[sinteract::stdio] decode error: {e}");
                         return Some(InputEvent::Close);
                     }
                 },
                 Err(e) => {
-                    eprintln!("[simage::stdio] read error: {e}");
+                    eprintln!("[sinteract::stdio] read error: {e}");
                     return Some(InputEvent::Close);
                 }
             }
@@ -124,7 +124,7 @@ impl StdioFrontend {
         {
             // The peer is gone. The host learns it when the next wait_event
             // hits EOF.
-            eprintln!("[simage::stdio] write to stdout failed; peer may have closed");
+            eprintln!("[sinteract::stdio] write to stdout failed; peer may have closed");
         }
     }
 

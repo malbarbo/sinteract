@@ -210,7 +210,7 @@ pub fn enter_animation(title: &str) {
         let event_loop = match EventLoop::<()>::with_user_event().build() {
             Ok(el) => el,
             Err(e) => {
-                eprintln!("[simage] failed to create window event loop: {e}");
+                eprintln!("[sinteract] failed to create window event loop: {e}");
                 return;
             }
         };

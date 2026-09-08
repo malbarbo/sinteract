@@ -34,7 +34,7 @@ use crate::frame_capnp::{
 };
 
 /// Magic of the stdio framing. Cap'n Proto already length-prefixes each
-/// message, and `simage::stdio` wraps the payload in `[SIMG][u32 LE len]` as
+/// message, and `sinteract::stdio` wraps the payload in `[SIMG][u32 LE len]` as
 /// well, so that text from another writer on the same pipe is rejected before
 /// it reaches the Cap'n Proto reader.
 pub const FILE_IDENTIFIER: [u8; 4] = *b"SIMG";

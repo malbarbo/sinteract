@@ -1,15 +1,15 @@
-# simage
+# sinteract
 
 A 2D graphics library for [spython](https://github.com/malbarbo/spython)
 and [sgleam](https://github.com/malbarbo/sgleam). A program builds a
-`Scene`, a list of paths, text, bitmaps and clipped subtrees, and simage
+`Scene`, a list of paths, text, bitmaps and clipped subtrees, and sinteract
 shows it in the terminal, in a window, or writes it as PDF. The terminal
 output uses the Kitty graphics protocol, DEC Sixel, or 24-bit half-blocks,
 whichever the terminal supports. The PDF output is vector, with text as
 glyph outlines.
 
 ```rust
-use simage::scene::{Paint, PathStyle, Scene};
+use sinteract::scene::{Paint, PathStyle, Scene};
 
 let mut scene = Scene::new(40.0, 30.0);
 scene
@@ -22,8 +22,8 @@ scene
     .line_to(40.0, 30.0)
     .line_to(0.0, 30.0);
 
-simage::terminal::show_image(&scene);
-let pdf: Vec<u8> = simage::pdf::render_to_pdf(&scene);
+sinteract::terminal::show_image(&scene);
+let pdf: Vec<u8> = sinteract::pdf::render_to_pdf(&scene);
 ```
 
 `Scene::path` returns a scope that commits the path when it is dropped, and
