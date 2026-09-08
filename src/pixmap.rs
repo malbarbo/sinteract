@@ -1,7 +1,6 @@
-//! Reusable tiny-skia raster surface: renders a [`crate::scene::Scene`] (or a
-//! wire stream) into an owned [`Pixmap`]. Pure computation — no tty or window —
-//! so it builds on wasm too; the terminal and window backends drive it and then
-//! present the pixels their own way.
+//! Rasterize a [`crate::scene::Scene`] into a tiny-skia [`Pixmap`]. It needs
+//! no tty or window, so it builds on wasm. The terminal and the window
+//! present the pixels.
 
 use tiny_skia::{
     Color as SkColor, FillRule as SkFillRule, GradientStop as SkStop, LineCap as SkLineCap,
@@ -15,25 +14,19 @@ use crate::scene::{
     Segments, TextNode,
 };
 
-/// A reusable raster surface. Owns its [`Pixmap`]; [`Renderer::render`] clears
-/// and redraws into it, reallocating only when the frame size changes, so a
-/// redraw loop reuses one allocation.
+/// A raster surface. It reallocates its pixmap only when the frame size
+/// changes.
 struct PixmapRenderer {
-    /// Output pixmap, sized in [`Self::ensure_size`]. Never absent while the
-    /// renderer is live — allocation failure is surfaced as an error there,
-    /// so no draw op has to reason about a missing surface.
     pixmap: Pixmap,
-    /// `input → output` scale folded into a transform applied to every path.
+    /// The scale as a transform, applied to every path.
     base: Transform,
     clip_stack: Vec<Mask>,
-    /// Masks popped off `clip_stack`, kept for the next push. Every mask is
-    /// canvas-sized, so a freed one always fits — which is what makes clipping
-    /// allocation-free after the first few nodes.
+    /// Masks popped off `clip_stack`, for the next push. Every mask is
+    /// canvas-sized, so any one fits.
     mask_pool: Vec<Mask>,
     out_w: u32,
     out_h: u32,
-    /// Uniform input→output scale, decided by the caller. Whether a frame may
-    /// grow to fill its output is presentation policy and belongs there.
+    /// The scale from the caller, who decides whether a frame may grow.
     scale: f32,
 }
 
@@ -42,9 +35,8 @@ fn frame_px(width: f32, height: f32) -> (u32, u32) {
     (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32)
 }
 
-/// Uniform scale that fits a `width × height` frame inside `target` pixels,
-/// preserving aspect ratio. Pure geometry — whether the result may exceed 1.0,
-/// i.e. whether the frame is allowed to grow, is the caller's to decide.
+/// The uniform scale that fits a `width × height` frame inside `target`
+/// pixels. It can exceed 1.0. The caller caps it.
 pub(crate) fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
     let (tw, th) = target;
     if tw == 0 || th == 0 {
@@ -54,8 +46,7 @@ pub(crate) fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
     (tw as f32 / w as f32).min(th as f32 / h as f32)
 }
 
-/// Scaled output dimensions and the input→output transform for a `width ×
-/// height` frame at `scale`.
+/// The output size and the transform of a frame at `scale`.
 fn fit(width: f32, height: f32, scale: f32) -> (u32, u32, Transform) {
     let (w, h) = frame_px(width, height);
     // A zero or negative scale would allocate nothing to draw into.
@@ -65,8 +56,8 @@ fn fit(width: f32, height: f32, scale: f32) -> (u32, u32, Transform) {
     (out_w, out_h, Transform::from_scale(s, s))
 }
 
-/// Allocate an `out_w × out_h` pixmap with a transparent background (so the
-/// backend's own background shows through). `None` on allocation failure.
+/// A transparent pixmap, so the background of the backend shows through.
+/// `None` when the allocation fails.
 fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
     Pixmap::new(out_w, out_h).map(|mut pm| {
         pm.fill(tiny_skia::Color::TRANSPARENT);
@@ -74,9 +65,8 @@ fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
     })
 }
 
-/// Append `segments` to a tiny-skia path builder. Returns whether any segment
-/// was emitted (a lone move counts). Shared by path fill/stroke and clip-mask
-/// construction so the segment→builder mapping lives in one place.
+/// Returns `true` if any segment was appended, a lone move included, `false`
+/// otherwise.
 fn append_segments(builder: &mut PathBuilder, segments: Segments<'_>) -> bool {
     let mut any = false;
     for seg in segments {
@@ -99,8 +89,7 @@ fn append_segments(builder: &mut PathBuilder, segments: Segments<'_>) -> bool {
 }
 
 impl PixmapRenderer {
-    /// Allocate a renderer whose surface holds `width × height` at `scale`.
-    /// `None` if the surface cannot be allocated.
+    /// `None` when the surface cannot be allocated.
     fn new(scale: f32, width: f32, height: f32) -> Option<Self> {
         let (out_w, out_h, base) = fit(width, height, scale);
         Some(Self {
@@ -114,22 +103,18 @@ impl PixmapRenderer {
         })
     }
 
-    /// Consume the renderer and hand back the owned pixmap (for one-shot
-    /// callers that want to move the result out rather than borrow it).
     fn into_pixmap(self) -> Pixmap {
         self.pixmap
     }
 
-    /// Build a clip mask from `clip`, intersect it with the current one, and
-    /// push it. Returns whether a mask was actually pushed — an empty or
-    /// unbuildable clip pushes nothing, and [`Paint::with_clip`]'s guard pops
-    /// only what was pushed (so the stack stays balanced regardless).
+    /// Returns `true` if a mask was pushed, `false` otherwise. An empty clip
+    /// pushes nothing, and the guard in [`Paint::with_clip`] pops only what
+    /// was pushed.
     fn push_clip(&mut self, clip: &ClipPath) -> bool {
         let mut builder = PathBuilder::new();
         append_segments(&mut builder, clip.segments());
-        // SVG `<clipPath>` semantics: sub-paths are filled, so close before
-        // intersecting. tiny_skia tolerates an explicit close on an already-
-        // closed contour.
+        // A sub-path of a clip is closed, as in an SVG clipPath. tiny_skia
+        // accepts a close on a closed contour.
         builder.close();
         let Some(path) = builder.finish() else {
             return false;
@@ -139,9 +124,8 @@ impl PixmapRenderer {
         };
         mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
         if let Some(parent) = self.clip_stack.last() {
-            // `Mask::intersect_path` would rasterize the same coverage into a
-            // fresh canvas-sized mask of its own; it is already here, so
-            // combine in place.
+            // Mask::intersect_path would rasterize into a second canvas-sized
+            // mask.
             for (a, b) in mask.data_mut().iter_mut().zip(parent.data()) {
                 *a = mask_mul(*a, *b);
             }
@@ -150,9 +134,9 @@ impl PixmapRenderer {
         true
     }
 
-    /// A zeroed canvas-sized mask, recycled when one is free. `fill_path`
-    /// draws on top of what a mask already holds, so a reused buffer has to be
-    /// cleared before it is filled.
+    /// A cleared canvas-sized mask, from the pool when one is there.
+    /// `fill_path` adds to the coverage a mask holds, so a reused one has to
+    /// be cleared.
     fn take_mask(&mut self) -> Option<Mask> {
         match self.mask_pool.pop() {
             Some(mut m) => {
@@ -164,15 +148,15 @@ impl PixmapRenderer {
     }
 }
 
-/// `a * b / 255`, rounded — tiny-skia's own coverage product, so a mask
-/// intersected here matches one intersected by `Mask::intersect_path`.
+/// `a * b / 255`, rounded as tiny-skia does, so the result matches
+/// `Mask::intersect_path`.
 fn mask_mul(a: u8, b: u8) -> u8 {
     let prod = u32::from(a) * u32::from(b) + 128;
     ((prod + (prod >> 8)) >> 8) as u8
 }
 
-/// Pops the clip pushed by [`Paint::with_clip`] on scope exit — including on
-/// unwind — so the clip stack cannot leak if the `inside` body panics.
+/// Pops the clip of [`Paint::with_clip`] when dropped, so the stack stays
+/// balanced when the body panics.
 struct ClipGuard<'a> {
     canvas: &'a mut PixmapRenderer,
     pushed: bool,
@@ -189,15 +173,12 @@ impl Drop for ClipGuard<'_> {
 }
 
 impl Paint for PixmapRenderer {
-    /// Prepare the surface for a `width × height` frame: reallocate if the
-    /// scaled size changed, otherwise clear the existing buffer in place —
-    /// reusing the allocation across same-size frames. The clip stack is
-    /// always reset.
+    /// Clears the surface, and reallocates it when the scaled size changed.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
         let (out_w, out_h, base) = fit(width, height, self.scale);
         self.base = base;
-        // Reclaim rather than drop: at the same size these buffers are exactly
-        // what the next frame's clips need.
+        // A frame ends with an empty clip stack, and its masks serve the next
+        // frame.
         self.mask_pool.append(&mut self.clip_stack);
         if (out_w, out_h) == (self.out_w, self.out_h) {
             self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
@@ -328,9 +309,8 @@ fn sk_spread(s: crate::scene::SpreadMode) -> SkSpread {
     }
 }
 
-/// Convert an IR [`IrPaint`] to a tiny-skia [`SkShader`]. Gradients that fail
-/// to construct (e.g. degenerate line, missing stops) collapse to the paint's
-/// primary color so the draw still produces output.
+/// A gradient that tiny-skia rejects, for a degenerate line or no stops,
+/// falls back to the primary color, so the path still draws.
 fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
     let g = match p {
         IrPaint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
@@ -362,9 +342,8 @@ fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
     .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
 }
 
-/// Rasterize a [`crate::scene::Scene`] at `scale` (1.0 = the frame's own
-/// pixels). Callers pick the scale — see [`fit_scale`] for the fit-into-a-box
-/// half of that decision.
+/// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
+/// own pixels. See [`fit_scale`].
 pub(crate) fn rasterize_scene(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
     let mut renderer = PixmapRenderer::new(scale, scene.width, scene.height)?;
     renderer.render(scene).ok()?;
@@ -372,7 +351,7 @@ pub(crate) fn rasterize_scene(scene: &crate::scene::Scene, scale: f32) -> Option
 }
 
 // -----------------------------------------------------------------------------
-// Text rendering (T tag → text node)
+// Text
 // -----------------------------------------------------------------------------
 
 fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Transform) {
@@ -392,8 +371,8 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
         return;
     };
 
-    // `node.transform` follows the PDF `cm` / SVG `matrix(...)` convention,
-    // which is exactly tiny_skia's `Transform::from_row` row order.
+    // The transform is in the `cm` convention, which is the order of
+    // Transform::from_row.
     let local = Transform::from_row(
         node.transform[0],
         node.transform[1],
@@ -402,24 +381,22 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
         node.transform[4],
         node.transform[5],
     );
-    // `post_concat(base)` => final = base * local: apply the local text
-    // transform first, then the global pixmap-scale.
+    // The text transform applies first, then the scale.
     let transform = local.post_concat(base);
 
     if node.fill.a > 0.0 {
         let mut paint = SkPaint::default();
         paint.set_color(sk_color(node.fill));
         paint.anti_alias = true;
-        // Text glyphs are TrueType; non-zero winding is the standard fill rule.
+        // A TrueType glyph fills with non-zero winding.
         pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
     }
     if node.stroke.a > 0.0 && node.stroke_width > 0.0 {
         let mut paint = SkPaint::default();
         paint.set_color(sk_color(node.stroke));
         paint.anti_alias = true;
-        // Text outlines are closed contours on smooth curves — cap/join
-        // tweaks are imperceptible, so we don't carry them through the
-        // wire. tiny_skia's defaults (butt cap, miter join) are fine.
+        // A glyph is a closed smooth contour, so the cap and the join do not
+        // show.
         let stroke = Stroke {
             width: node.stroke_width,
             miter_limit: 10.0,
@@ -480,8 +457,7 @@ mod tests {
 
     #[test]
     fn fit_scale_is_uncapped_geometry() {
-        // Shrinking and growing are the same computation here; capping growth
-        // is the terminal's policy, not this module's.
+        // Capping growth is the policy of the terminal.
         assert_eq!(fit_scale(200.0, 100.0, (50, 50)), 0.25);
         assert_eq!(fit_scale(10.0, 10.0, (1000, 1000)), 100.0);
         // A degenerate target leaves the frame at its own size.
@@ -490,8 +466,6 @@ mod tests {
 
     #[test]
     fn draw_path_paints_rectangle() {
-        // Drive the paint primitives directly — no Scene materialization.
-        // `into_pixmap` moves the owned buffer out.
         let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
         let path = Path::builder(solid(0, 255, 0))
             .move_to(0.0, 0.0)
@@ -506,8 +480,6 @@ mod tests {
 
     #[test]
     fn with_clip_excludes_outside() {
-        // The `inside` body runs with the clip active; the clip pops when the
-        // body returns.
         let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
         let clip = ClipPath::builder(FillRule::NonZero)
             .move_to(0.0, 0.0)
@@ -525,16 +497,12 @@ mod tests {
             c.draw_path(&path);
         });
         let pm = r.into_pixmap();
-        // Inside the clip box: blue. Outside (e.g. 15,15): transparent.
         assert_eq!(pixel_rgba(&pm, 5, 5), (0, 0, 255, 255));
         assert_eq!(pixel_rgba(&pm, 15, 15).3, 0);
     }
 
     #[test]
     fn render_stream_matches_render_for_flat_path() {
-        // Build a scene with a single red square, encode it as a capnp Frame,
-        // feed the bytes to render_stream — pixel result must match the
-        // in-memory render path.
         let mut scene = Scene::new(10.0, 10.0);
         rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
         let bytes = crate::wire::encode_frame(&scene);
@@ -542,7 +510,7 @@ mod tests {
         let mut r_atomic = PixmapRenderer::new(1.0, scene.width, scene.height).expect("alloc");
         let pm_atomic = r_atomic.render(&scene).expect("render");
 
-        // Construct at a different size to exercise the resize-on-render path.
+        // A different size, so render_stream has to resize.
         let mut r_stream = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let pm_streamed = r_stream.render_stream(&bytes[..]).expect("decode + render");
 
@@ -560,8 +528,7 @@ mod tests {
 
     #[test]
     fn a_recycled_mask_does_not_leak_the_previous_clip() {
-        // Sibling clips reuse the same mask buffer; the second must not see
-        // the first's coverage.
+        // Sibling clips reuse one mask buffer.
         let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
         let cover = |c: &mut PixmapRenderer| {
             let path = Path::builder(solid(0, 0, 255))
@@ -584,7 +551,7 @@ mod tests {
         r.with_clip(&box_at(10.0), cover);
 
         let pm = r.into_pixmap();
-        // Each clip painted its own box; neither painted the gap between them.
+        // Each clip painted its own box, and neither painted the gap.
         assert_eq!(pixel_rgba(&pm, 4, 4), (0, 0, 255, 255));
         assert_eq!(pixel_rgba(&pm, 14, 4), (0, 0, 255, 255));
         assert_eq!(pixel_rgba(&pm, 9, 4).3, 0);
@@ -592,9 +559,8 @@ mod tests {
 
     #[test]
     fn streamed_paths_do_not_inherit_the_scratch() {
-        // Every path in a frame decodes into one reused `Path`. A long path
-        // followed by a short one is where a stale verb or coordinate would
-        // show up, so compare the whole frame against the in-memory render.
+        // Every path of a frame decodes into one reused Path. A stale segment
+        // would show after a long path followed by a short one.
         let mut scene = Scene::new(20.0, 20.0);
         {
             let mut p = scene.path(solid(0, 0, 255));
@@ -629,8 +595,6 @@ mod tests {
 
     #[test]
     fn render_stream_handles_nested_clip() {
-        // Capnp Frame with a Clipped subtree: with_clip runs the nested walk
-        // with the clip active, then pops it.
         let mut scene = Scene::new(20.0, 20.0);
         {
             let clip = ClipPath::builder(FillRule::NonZero)

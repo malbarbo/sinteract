@@ -10,13 +10,10 @@ readme = "README.md"
 [dependencies]
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 kurbo = { version = "0.13", default-features = false, features = ["std"] }
-# Wire format. The schema lives in `schema/frame.capnp`; bindings are
-# generated offline by `capnp compile` (see top of `schema/frame.capnp` for
-# the regen command) and committed in `src/wire/frame_capnp.rs` so we do not
-# depend on the Cap'n Proto CLI at build time.
+# The bindings for schema/frame.capnp are generated offline and committed
+# in src/wire/frame_capnp.rs, so the build does not need the capnp CLI.
 capnp = "0.25"
-# Pure-computation deps — no syscalls, so they build for wasm too and let the
-# `text`/`pdf` pipelines run in a browser client.
+# These make no syscalls, so text and pdf build on wasm too.
 ttf-parser = { version = "0.25", default-features = false, features = [
     "std",
     "opentype-layout",
@@ -25,9 +22,7 @@ ttf-parser = { version = "0.25", default-features = false, features = [
 pdf-writer = "0.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# System font discovery for fonts the embedded Sans/Serif/Mono families
-# don't cover. Lazy: only consulted when the caller asks for an exact
-# family name that does not match an embedded one.
+# Looks up a family the embedded fonts do not cover.
 fontdb = "0.23"
 crossterm = "0.29"
 base64 = "0.22"

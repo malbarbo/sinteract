@@ -1,32 +1,13 @@
-//! [`StdioFrontend`] — frontend that talks the wire protocol over
-//! stdin/stdout. Used when an engine host (`spython --server` /
-//! `sgleam --server`) is launched as a subprocess of a game server: the
-//! server feeds [`crate::event::InputEvent`]s on stdin and reads
-//! [`crate::scene::Scene`] frames from stdout.
+//! [`StdioFrontend`] talks the wire protocol over stdin and stdout. A game
+//! server runs the engine host (`spython --server`, `sgleam --server`) as a
+//! subprocess, writes [`crate::event::InputEvent`]s to its stdin and reads
+//! [`crate::scene::Scene`] frames from its stdout.
 //!
-//! ## Framing
-//!
-//! Each direction is a stream of length-prefixed Cap'n Proto `Message`s
-//! wrapped in a tiny stdio envelope:
-//!
-//! ```text
-//! +----+----+----+----+----+----+----+----+--------+
-//! | S  | I  | M  | G  | u32 LE length     | bytes... |
-//! +----+----+----+----+----+----+----+----+--------+
-//! ```
-//!
-//! Cap'n Proto's `serialize::write_message` already emits a self-framed
-//! payload (segment count + per-segment word counts), so the outer
-//! `[SIMG][len]` is strictly defense in depth: it lets us reject garbage
-//! from an accidental non-`simage` peer (a `print(...)` on the same pipe,
-//! a shell prompt, …) *before* feeding bytes into the Cap'n Proto reader.
-//!
-//! ## Status
-//!
-//! [`StdioFrontend::wait_event`] and [`StdioFrontend::present`] are wired
-//! through stdin/stdout and tested against in-memory mocks. The host-side
-//! integration (CLI flag, world.run wiring) lives in `spython` / `sgleam`
-//! and is intentionally deferred — see `simage/PLAN.md`, fase 5.
+//! Each message is a Cap'n Proto `Message` inside an envelope of the four
+//! bytes `SIMG` and a little-endian `u32` length. Cap'n Proto already frames
+//! its own payload. The envelope rejects text from another writer on the
+//! same pipe, such as a stray `print`, before the bytes reach the Cap'n Proto
+//! reader.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::Mutex;
@@ -36,16 +17,13 @@ use crate::event::InputEvent;
 use crate::scene::Scene;
 use crate::wire::{self, Decoded, FILE_IDENTIFIER};
 
-/// Maximum payload size we will accept on the read side. Hard cap so a
-/// corrupted length prefix cannot make the frontend allocate gigabytes.
-/// 64 MiB is well above any realistic frame (a 1080p RGBA pixmap is ~8 MiB).
+/// Cap on the read side, so a corrupted length prefix cannot make the
+/// frontend allocate gigabytes. A 1080p RGBA pixmap is about 8 MiB.
 const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
-/// Frontend that talks the wire protocol on stdin/stdout. Construct with
-/// [`StdioFrontend::new`] (uses real stdin/stdout) or
-/// [`StdioFrontend::with_streams`] for tests. The peer (server/client on the
-/// other side of the pipe) is responsible for emitting Vsync events — this
-/// frontend is purely the protocol carrier.
+/// Construct with [`StdioFrontend::new`] for the real stdin and stdout, or
+/// with [`StdioFrontend::with_streams`] in a test. The peer emits the Vsync
+/// events. This frontend only carries the protocol.
 pub struct StdioFrontend {
     inner: Mutex<Inner>,
 }
@@ -56,10 +34,8 @@ struct Inner {
 }
 
 impl StdioFrontend {
-    /// Real stdio. The framing is binary, so callers must make sure the
-    /// host did not also write text to stdout (e.g. `print(...)` would
-    /// corrupt the stream). Hosts typically rebind `stdout` to stderr for
-    /// non-protocol output.
+    /// The framing is binary, so the host must not write text to stdout. A
+    /// host rebinds stdout to stderr for its other output.
     pub fn new() -> Self {
         Self::with_streams(BufReader::new(io::stdin()), io::stdout())
     }
@@ -76,47 +52,44 @@ impl StdioFrontend {
         }
     }
 
-    /// No-op for stdio — the framing is the protocol; there is no
-    /// "screen" to enter. Hosts call this to keep the lifecycle symmetric
-    /// with terminal/window frontends.
+    /// The framing needs no setup. `enter` and `exit` exist so the host
+    /// drives every frontend the same way.
     pub fn enter(&mut self) {}
     pub fn exit(&mut self) {}
 
-    /// Send a frame to stdout. `flush` is performed so the consuming server
-    /// sees the bytes immediately.
+    /// Send a frame and flush, so the server sees it at once.
     pub fn present(&mut self, scene: &Scene) {
         let bytes = wire::encode_frame(scene);
         self.write_framed(&bytes);
     }
 
-    /// Send a bitmap upload. Callers must do this *before* the first
-    /// [`Self::present`] that references `id` — the server / client may
-    /// stream-process and need the asset on hand to resolve the id.
+    /// Send a bitmap upload. Call it before the first [`Self::present`] that
+    /// references `id`, because the peer may process the stream as it
+    /// arrives.
     pub fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) {
         let bytes = wire::encode_asset(id, blob, mime);
         self.write_framed(&bytes);
     }
 
-    /// Send an explicit close. Most hosts do not need this — closing
-    /// stdin / stdout (process exit) is enough.
+    /// Send an explicit close. Closing stdout at process exit is enough for
+    /// most hosts.
     pub fn close(&mut self) {
         let bytes = wire::encode_close();
         self.write_framed(&bytes);
     }
 
-    /// Block on stdin for the next [`InputEvent`]. Non-event messages
-    /// (`Asset`, `Frame`) are protocol errors when received from a server
-    /// upstream; we log to stderr and keep reading. `Close` terminates the
-    /// session and surfaces as [`InputEvent::Close`].
+    /// Block on stdin for the next [`InputEvent`]. An `Asset` or a `Frame`
+    /// is a protocol error from the server, logged to stderr and skipped.
+    /// `Close` arrives as [`InputEvent::Close`], and so does a read or a
+    /// decode error. EOF returns `None`.
     ///
-    /// The `_deadline` argument is currently ignored — stdio reads are
-    /// blocking on most platforms and we do not have a portable
-    /// "read with timeout" yet. Tick scheduling is the server's
-    /// responsibility (it sends `Tick` events on its own clock).
+    /// `_deadline` is ignored. A stdio read blocks, and there is no portable
+    /// read with a timeout. The server sends the Vsync events on its own
+    /// clock.
     pub fn wait_event(&mut self, _deadline: Option<Instant>) -> Option<InputEvent> {
         loop {
             match self.read_framed() {
-                Ok(None) => return None, // EOF
+                Ok(None) => return None,
                 Ok(Some(bytes)) => match wire::decode(&bytes) {
                     Ok(Decoded::Event(ev)) => return Some(ev),
                     Ok(Decoded::Close) => return Some(InputEvent::Close),
@@ -149,9 +122,8 @@ impl StdioFrontend {
             || g.writer.write_all(payload).is_err()
             || g.writer.flush().is_err()
         {
-            // The peer has gone away — there is no recovery from here.
-            // Hosts observe the error indirectly: subsequent wait_event
-            // will hit EOF and surface InputEvent::Close.
+            // The peer is gone. The host learns it when the next wait_event
+            // hits EOF.
             eprintln!("[simage::stdio] write to stdout failed; peer may have closed");
         }
     }
@@ -205,7 +177,7 @@ mod tests {
     use std::io::Cursor;
     use std::sync::{Arc, Mutex as StdMutex};
 
-    /// `Vec<u8>` writer that can be inspected after the test runs.
+    /// A writer whose bytes the test reads back.
     #[derive(Clone, Default)]
     struct SharedWriter(Arc<StdMutex<Vec<u8>>>);
 
@@ -252,7 +224,6 @@ mod tests {
         assert_eq!(&buf[0..4], &FILE_IDENTIFIER);
         let len = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
         assert_eq!(buf.len(), 8 + len, "framing length mismatch");
-        // The payload should round-trip through wire::decode as a Frame.
         match wire::decode(&buf[8..]).expect("decode") {
             Decoded::Frame(d) => {
                 assert_eq!(d.width, 10.0);
@@ -293,9 +264,6 @@ mod tests {
 
     #[test]
     fn wait_event_skips_unexpected_messages() {
-        // First message: an Asset (server should not send this on stdin,
-        // but it may happen during protocol bring-up). Second: a real
-        // KeyEvent. The frontend logs the first and yields the second.
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&wire::encode_asset(1, b"png", Some("image/png"))));
         stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
@@ -319,7 +287,6 @@ mod tests {
         bad.extend_from_slice(&[0u8; 4]);
         let mut fr =
             StdioFrontend::with_streams(BufReader::new(Cursor::new(bad)), Vec::<u8>::new());
-        // wait_event surfaces the error as Close, not a panic.
         assert!(fr.wait_event(None).unwrap().is_close());
     }
 
@@ -333,7 +300,6 @@ mod tests {
         fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"));
         fr.present(&Scene::new(8.0, 8.0));
         let buf = written.0.lock().unwrap().clone();
-        // Two framed messages back-to-back.
         assert!(buf.len() > 16);
         assert_eq!(&buf[0..4], &FILE_IDENTIFIER);
         let len1 = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;

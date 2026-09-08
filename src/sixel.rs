@@ -1,50 +1,39 @@
-//! Sixel encoder for terminals that don't support the Kitty graphics protocol
-//! but do support DEC Sixel (Windows Terminal ≥ 1.22, mlterm, foot, mintty,
-//! recent xterm with `--enable-sixel-graphics`, …).
+//! Sixel encoder, for a terminal that supports DEC Sixel and not the Kitty
+//! protocol, such as Windows Terminal 1.22, mlterm, foot and mintty.
 //!
-//! Strategy:
-//! - Quantize each pixel to the 216-color "web safe" palette (R/G/B each
-//!   rounded to 6 levels: 0, 51, 102, 153, 204, 255). Cheap, deterministic,
-//!   and good enough for the flat-color SVG output of `spython.image`.
-//! - Build a per-image palette from the unique quantized colors actually used,
-//!   so the emitted Sixel only declares as many colors as the image needs.
-//! - Encode in 6-row bands, run-length-encoding sixel character runs of 4 or
-//!   more so a uniform background does not blow up the payload.
-//!
-//! The output is wrapped in `\x1bPq … \x1b\\` (DCS … ST). Background pixels
-//! of the input pixmap should already be opaque — Sixel cannot represent
-//! transparent pixels in a way that preserves the previous frame, so the
-//! caller composites against a solid background before encoding.
+//! The encoder quantizes each pixel to the 216 colors of the web palette,
+//! six levels per channel, which is cheap and enough for a flat-color
+//! drawing. The palette in the output holds only the colors the image uses.
+//! The image goes out in bands of six rows, and a run of four or more equal
+//! sixels is run-length encoded, so a flat background stays small. Sixel has
+//! no transparency that keeps the previous frame, so the caller passes a
+//! background and the encoder composites every pixel over it.
 
 use tiny_skia::Pixmap;
 
-/// Whether the terminal supports DEC Sixel. Asks the terminal directly via
-/// a Device Attributes (DA1) query (see `term_query`); env-based heuristics
-/// are unreliable across SSH and terminal multiplexers, and the probe is
-/// cached so the cost is paid at most once per process. Native-only — the
-/// probe reads a tty; the encoder itself builds anywhere.
+/// Returns `true` if the terminal supports DEC Sixel, `false` otherwise. The
+/// answer comes from a DA1 query to the terminal, because the environment
+/// variables are wrong over ssh and under a multiplexer. The probe runs once
+/// per process and needs a tty, so the function is native only.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sixel_supported() -> bool {
     crate::term_query::graphics_caps().sixel
 }
 
-/// Encode `pixmap` as a Sixel byte sequence, including the DCS introducer and
-/// String Terminator. The pixmap's pixels are demultiplied and composited
-/// against `bg` (RGB) before quantization.
+/// Encode `pixmap` as Sixel, with the DCS introducer and the string
+/// terminator. The encoder composites every pixel over `bg` before it
+/// quantizes.
 pub fn encode(pixmap: &Pixmap, bg: (u8, u8, u8)) -> Vec<u8> {
     let w = pixmap.width() as usize;
     let h = pixmap.height() as usize;
 
-    // Step 1 — quantize every pixel to the 216-color web palette and build a
-    // compact palette of the colors actually used.
     let (palette, indices) = quantize(pixmap, bg);
 
-    // Step 2 — emit the Sixel stream.
     let mut out: Vec<u8> = Vec::with_capacity(w * h / 4);
     out.extend_from_slice(b"\x1bPq");
 
-    // Raster attributes: pixel aspect ratio numerator;denominator;width;height
-    // Helps terminals reserve the correct cell area before painting.
+    // Raster attributes, aspect ratio 1:1 and the size, so the terminal
+    // reserves the cell area before it paints.
     write_u32(&mut out, b'"', 1);
     out.push(b';');
     push_dec(&mut out, 1);
@@ -53,7 +42,7 @@ pub fn encode(pixmap: &Pixmap, bg: (u8, u8, u8)) -> Vec<u8> {
     out.push(b';');
     push_dec(&mut out, h as u64);
 
-    // Declare every palette color: #N;2;Pr;Pg;Pb where Pr/Pg/Pb are 0..100.
+    // #N;2;R;G;B with the channels in 0..100.
     for (idx, &(r, g, b)) in palette.iter().enumerate() {
         out.push(b'#');
         push_dec(&mut out, idx as u64);
@@ -65,9 +54,8 @@ pub fn encode(pixmap: &Pixmap, bg: (u8, u8, u8)) -> Vec<u8> {
         push_dec(&mut out, scale_to_100(b));
     }
 
-    // Pre-compute which colors appear in each 6-row band — most images have
-    // wide flat-color regions, so for each band we only iterate over the
-    // colors actually present.
+    // Most images have flat regions, so a band visits only the colors it
+    // holds.
     let bands = h.div_ceil(6);
     let mut band_buf: Vec<u8> = Vec::with_capacity(w);
     for band in 0..bands {
@@ -75,7 +63,6 @@ pub fn encode(pixmap: &Pixmap, bg: (u8, u8, u8)) -> Vec<u8> {
         let y_end = (y0 + 6).min(h);
         let band_rows = y_end - y0;
 
-        // Find colors present in this band.
         let mut used = vec![false; palette.len()];
         for y in y0..y_end {
             let row = &indices[y * w..y * w + w];
@@ -107,11 +94,10 @@ pub fn encode(pixmap: &Pixmap, bg: (u8, u8, u8)) -> Vec<u8> {
                 }
                 band_buf.push(b'?' + bits);
             }
-            // Run-length-encode runs of identical sixel chars.
             rle_emit(&band_buf, &mut out);
         }
-        // End of band — '-' moves down one band; omit on the very last band
-        // so we don't leave an extra blank line below the image.
+        // '-' moves to the next band. The last band has none, or the image
+        // would end with a blank line.
         if band + 1 < bands {
             out.push(b'-');
         }
@@ -142,7 +128,7 @@ fn push_dec(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&buf[i..]);
 }
 
-/// Emit sixel chars with RLE (`!N<char>`) for runs of length ≥ 4.
+/// Emit the sixels, with `!N<char>` for a run of four or more.
 fn rle_emit(chars: &[u8], out: &mut Vec<u8>) {
     let mut i = 0;
     while i < chars.len() {
@@ -165,16 +151,16 @@ fn rle_emit(chars: &[u8], out: &mut Vec<u8>) {
 }
 
 fn scale_to_100(channel_0_255: u8) -> u64 {
-    // Round to nearest, not floor, so 255 → 100 and 51 → 20.
+    // Round, so 255 gives 100 and 51 gives 20.
     ((u32::from(channel_0_255) * 100 + 127) / 255) as u64
 }
 
-/// Quantize the pixmap to the 216-color web palette, building a compact
-/// per-image palette of the colors actually used.
+/// Quantize the pixmap to the web palette. Returns the palette of the colors
+/// the image uses and the palette index of each pixel.
 fn quantize(pixmap: &Pixmap, bg: (u8, u8, u8)) -> (Vec<(u8, u8, u8)>, Vec<u8>) {
     let w = pixmap.width() as usize;
     let h = pixmap.height() as usize;
-    // 6×6×6 lookup → palette index, sentinel 0xFF for "not seen yet".
+    // Index into the 6×6×6 cube. 0xFF marks a color not seen yet.
     let mut lut = [0xFFu8; 216];
     let mut palette: Vec<(u8, u8, u8)> = Vec::new();
     let mut indices: Vec<u8> = Vec::with_capacity(w * h);
@@ -183,8 +169,7 @@ fn quantize(pixmap: &Pixmap, bg: (u8, u8, u8)) -> (Vec<(u8, u8, u8)>, Vec<u8>) {
     for y in 0..h {
         for x in 0..w {
             let p = pixels[y * w + x];
-            // Straight color, then composite over bg; `composite` folds in the
-            // a==0 (→bg) and a==255 (→straight) ends.
+            // composite covers alpha 0 and 255, so there is no special case.
             let (sr, sg, sb) = crate::pixel::unpremultiply(p);
             let (r, g, b) = composite(sr, sg, sb, p.alpha(), bg);
 
@@ -219,7 +204,7 @@ fn composite(r: u8, g: u8, b: u8, a: u8, bg: (u8, u8, u8)) -> (u8, u8, u8) {
 
 /// Map 0..255 to the closest of 6 levels (0, 51, 102, 153, 204, 255).
 fn quant6(v: u8) -> usize {
-    // Round each channel; thresholds at 25, 76, 127, 178, 229.
+    // Thresholds at 25, 76, 127, 178, 229.
     ((u32::from(v) * 5 + 127) / 255) as usize
 }
 
@@ -278,9 +263,9 @@ mod tests {
         let bytes = encode(&pm, (255, 255, 255));
         assert!(bytes.starts_with(b"\x1bPq"));
         assert!(bytes.ends_with(b"\x1b\\"));
-        // Single color → palette index 0, declared as #0;2;100;0;0
+        // One color, palette index 0, declared as #0;2;100;0;0.
         assert!(window_contains(&bytes, b"#0;2;100;0;0"));
-        // RLE: 8 columns of identical sixels → "!8" + char.
+        // Eight equal columns give !8 and the sixel.
         assert!(window_contains(&bytes, b"!8"));
     }
 
@@ -288,7 +273,7 @@ mod tests {
     fn encode_transparent_uses_background() {
         let pm = make_solid(4, 4, [0, 0, 0, 0]);
         let bytes = encode(&pm, (255, 255, 255));
-        // Background white → palette declares "100;100;100".
+        // A white background declares 100;100;100.
         assert!(window_contains(&bytes, b";100;100;100"));
     }
 

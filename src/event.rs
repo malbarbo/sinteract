@@ -1,8 +1,7 @@
-//! Input events delivered to the engine via [`crate::frontend::Frontend`].
+//! The input events a [`crate::frontend::Frontend`] delivers.
 //!
-//! Every frontend (terminal, window, stdio, future browser) collapses native
-//! input into the same [`InputEvent`] stream. The host's main loop blocks on
-//! `wait_event` and dispatches:
+//! Every frontend turns its input into the same [`InputEvent`] stream, and
+//! the host loop blocks on `wait_event` and dispatches:
 //!
 //! ```text
 //! while let Some(ev) = frontend.wait_event(deadline) {
@@ -15,24 +14,19 @@
 //! }
 //! ```
 //!
-//! `Vsync` is a frame-opportunity event: the frontend (its OS swap chain in a
-//! window, an internal timer in the terminal, rAF in the browser, the peer in
-//! stdio multiplayer) decides when one lands. The engine does not own the
-//! clock. The host loop is free to derive its own "tick" (logical simulation
-//! step) on top by accumulating elapsed time between Vsyncs.
+//! The frontend decides when a `Vsync` arrives, with a timer in the
+//! terminal, the swap chain in the window, rAF in the browser and the peer
+//! on stdio. The host derives a simulation tick from the time between two.
 
-/// Modifier-key bitmask. Matches the order spython has historically used in
-/// its FFI `[bool; 5]`: `[alt, ctrl, shift, meta, repeat]`.
+/// The modifier bits, in the order of the spython FFI.
 pub const MOD_ALT: u8 = 1 << 0;
 pub const MOD_CTRL: u8 = 1 << 1;
 pub const MOD_SHIFT: u8 = 1 << 2;
 pub const MOD_META: u8 = 1 << 3;
 pub const MOD_REPEAT: u8 = 1 << 4;
 
-/// Distinguishes press from down/up. Terminals only ever produce `Press`
-/// (they do not separate down from up); native windows and the browser
-/// produce all three. Hosts that want the lowest-common-denominator API can
-/// match on `Press` only.
+/// A terminal produces only `Press`, since it does not tell down from up.
+/// The window and the browser produce all three.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum KeyKind {
@@ -52,9 +46,7 @@ impl KeyKind {
     }
 }
 
-/// A single keyboard event. `key` is the JS-style key name
-/// (`"ArrowLeft"`, `"Enter"`, `"a"`, …) — same convention as the existing
-/// host code so renames are minimal.
+/// `key` is the JS key name, such as `"ArrowLeft"`, `"Enter"` or `"a"`.
 #[derive(Clone, Debug, Default)]
 pub struct KeyEvent {
     pub kind: KeyKind,
@@ -80,17 +72,12 @@ impl KeyEvent {
     }
 }
 
-/// What landed on the input queue. `Vsync` and `Close` are not key events;
-/// they are first-class so handlers do not have to invent sentinel keys.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
     Key(KeyEvent),
-    /// One frame opportunity — the surface can be repainted now. Emitted by
-    /// each frontend at its native cadence (timer in terminal, swap-chain
-    /// vsync in window, rAF in browser, peer in stdio).
+    /// The surface can be repainted now.
     Vsync,
-    /// Window/terminal closed, or transport shut down. The host loop should
-    /// exit cleanly.
+    /// The window or the terminal closed, or the transport shut down.
     Close,
 }
 

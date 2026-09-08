@@ -1,19 +1,14 @@
-//! Wire format for the server / client protocol.
+//! Codec for the server and client protocol.
 //!
-//! `simage::wire` is a thin layer over the Cap'n Proto schema in
-//! `schema/frame.capnp`. The generated Rust bindings (committed at
-//! `src/wire/frame_capnp.rs`) are kept private — callers go through the high-level
-//! [`encode_frame`], [`encode_event`], [`encode_asset`], [`encode_close`],
-//! and [`decode`] entry points. They:
+//! The generated bindings in `src/wire/frame_capnp.rs` stay private. A
+//! caller goes through [`encode_frame`], [`encode_event`], [`encode_asset`],
+//! [`encode_close`] and [`decode`], which convert between the types of
+//! [`crate::scene`] and [`crate::event`] and the Cap'n Proto messages. The
+//! bytes are the standard `serialize::write_message` format, so every Cap'n
+//! Proto binding reads them.
 //!
-//!   * convert between the typed scene ([`crate::scene`], [`crate::event`]) and
-//!     the Cap'n Proto messages;
-//!   * use `capnp::serialize::write_message` / `read_message`, the
-//!     spec-conformant length-prefixed message format every Cap'n Proto
-//!     binding (Rust, JS via `capnp-ts`, C++, …) produces and consumes.
-//!
-//! The schema is the source of truth for evolution. To regenerate, see the
-//! comment at the top of `schema/frame.capnp`.
+//! The schema in `schema/frame.capnp` is the source of truth, and its header
+//! says how to regenerate the bindings.
 
 use std::io::Cursor;
 
@@ -38,32 +33,30 @@ use crate::frame_capnp::{
     scene as wire_scene, stop as wire_stop, text_node,
 };
 
-/// Stdio-framing magic. Cap'n Proto's own `serialize::write_message` already
-/// length-prefixes every message, but `simage::stdio` wraps each payload in
-/// `[SIMG][u32 LE len][bytes]` as an extra guard against accidental
-/// non-protocol writers on the same pipe.
+/// Magic of the stdio framing. Cap'n Proto already length-prefixes each
+/// message, and `simage::stdio` wraps the payload in `[SIMG][u32 LE len]` as
+/// well, so that text from another writer on the same pipe is rejected before
+/// it reaches the Cap'n Proto reader.
 pub const FILE_IDENTIFIER: [u8; 4] = *b"SIMG";
 
 /// Errors surfaced from [`decode`].
 #[derive(Debug)]
 pub enum Error {
-    /// The buffer could not be parsed (malformed, truncated, or wrong root).
+    /// Cap'n Proto rejected the bytes as malformed, truncated, or of the
+    /// wrong root.
     Parse(capnp::Error),
-    /// `Message`'s union discriminant did not match any known variant.
+    /// A union discriminant matches no known variant.
     UnknownVariant(&'static str, u16),
-    /// Required nested struct/list was unset.
+    /// A required nested struct or list is unset.
     MissingField(&'static str),
-    /// A `Path` arrived with a verb stream whose argument count does not
-    /// match the float coordinates: e.g. 1 cubic verb (6 floats) but only
-    /// 4 floats provided.
+    /// The verbs of a `Path` claim a number of floats that its coords do not
+    /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
-    /// A `Path` carried a verb byte we don't know how to consume.
+    /// A `Path` carries a verb byte this crate does not know.
     UnknownVerb(u8),
-    /// The stream decoder saw a `Message` whose union arm was not `Frame`
-    /// (e.g. `Asset`, `Event`, `SessionClose`).
+    /// The stream decoder saw a `Message` that is not a `Frame`.
     WrongMessageKind,
-    /// A backend could not allocate its drawing surface at the requested
-    /// size (a width×height too large to fit in memory).
+    /// A backend could not allocate a surface of this size.
     Alloc { width: u32, height: u32 },
 }
 
@@ -110,8 +103,7 @@ impl From<std::str::Utf8Error> for Error {
     }
 }
 
-/// One decoded message. Mirrors the four arms of the schema's `Message`
-/// union, with bytes already converted to typed IR.
+/// One decoded message, one variant per arm of the `Message` union.
 #[derive(Clone, Debug)]
 pub enum Decoded {
     Asset {
@@ -134,7 +126,7 @@ fn finish(builder: MessageBuilder<capnp::message::HeapAllocator>) -> Vec<u8> {
     bytes
 }
 
-/// Encode a draw list as `Message::Frame`.
+/// Encode a scene as `Message::Frame`.
 pub fn encode_frame(scene: &Scene) -> Vec<u8> {
     let mut builder = MessageBuilder::new_default();
     {
@@ -171,7 +163,7 @@ pub fn encode_asset(id: u32, blob: &[u8], mime: Option<&str>) -> Vec<u8> {
     finish(builder)
 }
 
-/// Encode a session close (the union arm has no payload).
+/// Encode a session close.
 pub fn encode_close() -> Vec<u8> {
     let mut builder = MessageBuilder::new_default();
     {
@@ -380,8 +372,8 @@ fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
 
 fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, Error> {
     use wire_paint::Which;
-    // A null stops pointer reads back as an empty list, so an absent ramp
-    // needs no separate guard here.
+    // A null stops pointer reads as an empty list, so an absent ramp needs
+    // no guard.
     let (geom, stops, spread) = match r.which()? {
         Which::Solid(c) => return Ok(Paint::Solid(read_rgba(c?))),
         Which::Linear(g) => {
@@ -430,8 +422,8 @@ fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
 }
 
 fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, Error> {
-    // An empty array is no dash at all, so Dash::new folds it back to None
-    // along with any stray offset.
+    // An empty array is a solid stroke, so Dash::new returns None and drops
+    // any stray offset.
     let dash = Dash::new(
         r.get_dash_array()?.iter().collect::<Vec<_>>(),
         r.get_dash_offset(),
@@ -534,28 +526,25 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
 // Scene <-> wire
 // ---------------------------------------------------------------------------
 
-// The flat verb/coord pair is the wire's representation, not the scene's: a
-// `Path` holds typed `Segment`s, and the functions below are the only place
-// the two forms meet.
+// A `Path` holds typed segments. The flat verb and coord pair exists only on
+// the wire, and the functions below are the only place where the two forms
+// meet.
 
-/// Floats the flat coord stream needs for `segs`.
+/// Number of floats that `segs` take on the wire.
 fn coord_count(segs: Segments<'_>) -> u32 {
     segs.map(|s| s.kind().coords() as u32).sum()
 }
 
-/// Flatten typed segments into the message's own verb buffer. The
-/// `SegmentKind` discriminants are the wire bytes by construction, so a verb
-/// is a `repr(u8)` cast; writing in place means nothing is staged in a `Vec`
-/// per path just to be copied out of. Coords go in a second pass because a
-/// capnp builder hands out one field at a time.
+/// A `SegmentKind` discriminant is the wire byte, so a verb is a cast. The
+/// coords go in a second pass because a capnp builder hands out one field at
+/// a time.
 fn write_verbs(out: capnp::data::Builder<'_>, segs: Segments<'_>) {
     for (dst, seg) in out.iter_mut().zip(segs) {
         *dst = seg.kind() as u8;
     }
 }
 
-/// Flatten typed segments into the message's own coordinate list, in verb
-/// order — the layout [`read_segments`] expects.
+/// Write the coordinates in verb order, the layout that [`read_segments`] reads.
 fn write_coords(out: &mut capnp::primitive_list::Builder<'_, f32>, segs: Segments<'_>) {
     let mut i = 0;
     for seg in segs {
@@ -566,10 +555,9 @@ fn write_coords(out: &mut capnp::primitive_list::Builder<'_, f32>, segs: Segment
     }
 }
 
-/// Rebuild typed segments from the flat wire streams into `out`, reusing its
-/// allocation. Rejects an unknown verb byte, and a coord stream that does not
-/// hold exactly what the verbs claim — the two ways the flat pair can be
-/// malformed, and the reason it is confined to this module.
+/// Rebuild the segments into `out`, reusing its allocation. Rejects an
+/// unknown verb byte and a coord stream that does not hold exactly what the
+/// verbs claim.
 fn read_segments(
     out: &mut Vec<Segment>,
     verbs: &[u8],
@@ -608,8 +596,7 @@ fn read_segments(
         });
         i += kind.coords() as u32;
     }
-    // Trailing coords no verb claims mean the streams disagree just as surely
-    // as a short one does.
+    // Coords that no verb claims are a mismatch too.
     if i != coords.len() {
         return Err(mismatch());
     }
@@ -625,8 +612,8 @@ fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
     write_coords(&mut b.init_coords(coord_count(p.segments())), p.segments());
 }
 
-/// Decode into `path`, reusing whatever it already holds. The streaming
-/// decoder keeps one of these alive for a whole frame.
+/// Decode into `path`, reusing its allocations. The streaming decoder keeps
+/// one for a whole frame.
 fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Result<(), Error> {
     path.style = read_path_style(r.get_style()?)?;
     read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)
@@ -757,21 +744,19 @@ pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -
 }
 
 // ---------------------------------------------------------------------------
-// Streaming entry point — capnp Reader → Paint primitives
+// Streaming entry point
 // ---------------------------------------------------------------------------
 
-/// Decode exactly one `Message::Frame` from `reader`, size the surface via
-/// `resize`, and paint its elements onto `paint`. The Cap'n Proto reader is
-/// walked lazily — the `List(Element)` is iterated without materializing a
-/// `Vec<Element>`, and `Clipped` subtrees recurse via [`Paint::with_clip`].
-/// Every path in the frame is decoded into one scratch [`Path`], reused across
-/// elements, and handed to [`Paint::draw_path`] — so a frame's path decoding
-/// allocates only as much as its longest path.
+/// Decode one `Message::Frame` from `reader` and paint it onto `paint`. The
+/// reader is walked lazily, so the element list never becomes a
+/// `Vec<Element>`, and a `Clipped` subtree recurses through
+/// [`Paint::with_clip`]. Every path decodes into one scratch [`Path`] that
+/// the whole frame reuses, so decoding allocates about as much as the
+/// longest path.
 ///
-/// `resize` runs once, after the frame's dimensions are known and before any
-/// element is painted, so the backend owns allocation. Non-`Frame` messages
-/// (`Asset`, `Event`, `SessionClose`) return [`Error::WrongMessageKind`] —
-/// peek the kind separately or use [`decode`] for those.
+/// The surface is sized once, after the dimensions are known and before any
+/// element is painted. Any other message returns [`Error::WrongMessageKind`].
+/// Use [`decode`] for those.
 pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
     paint: &mut P,
     reader: R,
@@ -794,8 +779,8 @@ pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
     }
 }
 
-/// `scratch` is the frame's single reusable [`Path`]; clips get a fresh one per
-/// level instead, since a nested clip is still live while its children decode.
+/// `scratch` is the one [`Path`] of the frame. A clip gets its own, because
+/// it is still live while its children decode.
 fn stream_elements<P: PaintSink>(
     paint: &mut P,
     list: capnp::struct_list::Reader<'_, element::Owned>,
@@ -812,8 +797,8 @@ fn stream_elements<P: PaintSink>(
                 let c = c?;
                 let clip = read_clip_path(c.get_clip()?)?;
                 let children = c.get_elements()?;
-                // with_clip returns the closure's value, so the nested walk's
-                // Result threads straight out — no parked error cell.
+                // with_clip returns the value of the closure, so the Result
+                // of the nested walk comes straight out.
                 paint.with_clip(&clip, |p2| stream_elements(p2, children, &mut *scratch))?;
             }
             Which::Text(t) => {
@@ -990,9 +975,7 @@ mod tests {
 
     #[test]
     fn a_path_with_coords_no_verb_claims_is_rejected() {
-        // The mirror of the short case: verbs=[MOVE] wants 2 floats and 4 are
-        // present. The scene has no room for the extra two, so the frame is
-        // malformed rather than silently truncated.
+        // One Move claims 2 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
         {
             let msg = builder.init_root::<message::Builder>();
@@ -1023,8 +1006,7 @@ mod tests {
 
     #[test]
     fn malformed_path_is_rejected() {
-        // Hand-build a Path with verbs=[CUBIC] (needs 6 floats) but only
-        // 4 coords → decoder must reject with PathLengthMismatch.
+        // One Cubic claims 6 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
         {
             let msg = builder.init_root::<message::Builder>();
@@ -1032,7 +1014,6 @@ mod tests {
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
-            // style left default
             let _ = p.reborrow().init_style();
             p.set_verbs(&[SegmentKind::Cubic as u8]);
             let mut coords = p.init_coords(4);
@@ -1193,8 +1174,6 @@ mod tests {
 
     #[test]
     fn gradient_spread_mode_round_trips() {
-        // Linear with Reflect and Radial with Repeat — both should survive
-        // a wire round-trip.
         let mut scene = Scene::new(50.0, 50.0);
         let linear = Gradient::linear(
             0.0,
@@ -1278,10 +1257,8 @@ mod tests {
 
     #[test]
     fn clip_path_round_trips() {
-        // Build a clip path directly (not via clip_rect) with a quadratic
-        // segment + even-odd rule to exercise verb walking and fill-rule
-        // preservation across the wire. Also drop a child element inside the
-        // clip so the nested elements list is non-trivial.
+        // Built without clip_rect, so the walk sees a quadratic and the
+        // even-odd rule.
         let mut scene = Scene::new(50.0, 50.0);
         {
             let mut clip = scene.clip(
@@ -1327,9 +1304,7 @@ mod tests {
 
     #[test]
     fn malformed_clip_path_is_rejected() {
-        // Hand-build a Clipped whose clip carries CUBIC (needs 6 floats) but
-        // only 2 coords; decoder must reject it the same way it rejects
-        // malformed Paths.
+        // One Cubic claims 6 floats and 2 are present.
         let mut builder = MessageBuilder::new_default();
         {
             let msg = builder.init_root::<message::Builder>();
@@ -1359,8 +1334,6 @@ mod tests {
 
     #[test]
     fn nested_clips_round_trip() {
-        // Two levels of clip with elements at each depth; structure should
-        // come back identical.
         let mut scene = Scene::new(100.0, 100.0);
         {
             let mut outer = scene.clip_rect(50.0, 50.0, 80.0, 80.0, 0.0, FillRule::NonZero);
@@ -1402,9 +1375,6 @@ mod tests {
 
     #[test]
     fn default_style_uses_solid_transparent_paint() {
-        // Encode/decode with all defaults: paint should be Solid(transparent),
-        // dash empty, miter_limit at SVG default. Guards against future
-        // accidental changes to Default.
         let mut scene = Scene::new(10.0, 10.0);
         {
             let mut p = scene.path(PathStyle::default());

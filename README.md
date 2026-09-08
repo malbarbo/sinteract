@@ -1,68 +1,45 @@
 # simage
 
-A small 2D graphics library built around a typed `Scene` (draw list) and a
-`Renderer` trait. Front ends build a `simage::scene::Scene` via RAII
-builders; renderers replay it through the trait.
-
-Outputs:
-
-- **Raster** — `tiny_skia::Pixmap` via `PixmapRenderer` (in `terminal`).
-- **Terminal display** — Kitty graphics protocol, DEC Sixel, or 24-bit
-  ANSI half-blocks (`▀`), chosen automatically per the active terminal.
-- **PDF** — vector path output via `PdfRenderer`, with text rendered as
-  outlined glyph paths.
-- **Animation** — terminal alt-screen + raw-mode driver with key polling.
-
-Designed to be shared between teaching tools that need to display geometric
-images: originally extracted from
-[spython](https://github.com/malbarbo/spython) and intended for use in
-[sgleam](https://github.com/malbarbo/sgleam).
-
-## Pipeline
-
-```
-front end         simage::scene::Scene            simage::renderer::Renderer
-─────────         ────────────────────            ──────────────────────────
-build via    →    Vec<Element>             →     PixmapRenderer (terminal)
-RAII guards       (Path, Clipped, Text, ...)      PdfRenderer    (PDF)
-                                                  your impl      (custom)
-```
-
-A `Path` carries `(style, verbs, coords)` — `verbs` is a `Vec<Verb>` (a
-`#[repr(u8)]` enum: `Move=0, Line=1, Quad=2, Cubic=3`) consuming 2/2/4/6
-floats per verb from `coords`. The wire format carries the same bytes
-(`verbMove`/`verbLine`/`verbQuad`/`verbCubic` in `schema/frame.capnp`);
-the boundary parses them back into typed verbs and rejects unknown bytes.
-
-Arcs are pre-expanded to cubics in `PathBuilder::arc_to`, so every renderer
-only sees move / line / quad / cubic primitives. Paths and clip scopes are
-RAII: `Scene::path` returns a `PathBuilder` that commits the path on drop;
-`Scene::clip` / `Scene::clip_rect` return a `ClipBuilder` that accumulates
-the elements drawn inside the clip and commits a single
-`Element::Clipped { clip, elements }` on drop — balanced nesting is
-structural, not bookkeeping.
-
-## Example
+A 2D graphics library for [spython](https://github.com/malbarbo/spython)
+and [sgleam](https://github.com/malbarbo/sgleam). A program builds a
+`Scene`, a list of paths, text, bitmaps and clipped subtrees, and simage
+shows it in the terminal, in a window, or writes it as PDF. The terminal
+output uses the Kitty graphics protocol, DEC Sixel, or 24-bit half-blocks,
+whichever the terminal supports. The PDF output is vector, with text as
+glyph outlines.
 
 ```rust
-use simage::scene::{Scene, PathStyle, Rgba};
+use simage::scene::{Paint, PathStyle, Scene};
 
 let mut scene = Scene::new(40.0, 30.0);
-{
-    let mut p = scene.path(PathStyle {
-        fill: Rgba { r: 0, g: 0, b: 255, a: 1.0 },
+scene
+    .path(PathStyle {
+        fill: Paint::rgba(0, 0, 255, 1.0),
         ..PathStyle::default()
-    });
-    p.move_to(0.0, 0.0);
-    p.line_to(40.0, 0.0);
-    p.line_to(40.0, 30.0);
-    p.line_to(0.0, 30.0);
-}
+    })
+    .move_to(0.0, 0.0)
+    .line_to(40.0, 0.0)
+    .line_to(40.0, 30.0)
+    .line_to(0.0, 30.0);
 
-simage::terminal::show_image(&scene);          // terminal
+simage::terminal::show_image(&scene);
 let pdf: Vec<u8> = simage::pdf::render_to_pdf(&scene);
 ```
 
+`Scene::path` returns a scope that commits the path when it is dropped, and
+`Scene::clip` returns a scope that collects what is drawn inside it into one
+clipped element. An arc becomes cubics inside the scope, so a renderer only
+sees moves, lines, quadratics and cubics.
+
+For an animation, a `Frontend` owns the terminal or the window, presents a
+scene per frame and delivers the input as a stream of `InputEvent`. The
+same loop runs over stdio, where the frames go to a peer as Cap'n Proto
+messages and the input comes back. The schema is in `schema/frame.capnp`,
+and `PLAN.md` describes the server and client modes.
+
+The scene, the rasterizer, the text measuring and the PDF writer build on
+`wasm32`, so a browser client can paint a scene without a native host.
+
 ## License
 
-Dual-licensed under MIT or Apache-2.0.
+MIT or Apache-2.0.

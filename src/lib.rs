@@ -1,26 +1,17 @@
-//! `simage` — typed-IR 2D graphics with terminal and PDF outputs.
+//! 2D graphics with terminal, window and PDF outputs.
 //!
-//! Front ends build a [`scene::Scene`] via builder methods and replay it
-//! through a [`renderer::Renderer`]. The crate ships two renderers:
-//! `PixmapRenderer` (tiny-skia raster, in [`pixmap`]) and `PdfRenderer`
-//! (PDF byte stream, in [`pdf`]).
+//! A front end builds a [`scene::Scene`] and a [`renderer::Renderer`]
+//! replays it. [`pixmap`] rasterizes a scene to a tiny-skia `Pixmap`,
+//! [`pdf`] writes it as PDF with the text as glyph outlines, [`text`] holds
+//! the embedded Liberation families and measures and outlines glyphs, and
+//! [`sixel`] encodes a `Pixmap` as DEC Sixel. These build on wasm32 too,
+//! except the system font lookup of `text`.
 //!
-//! Pure-computation modules build everywhere, including `wasm32`, so a
-//! browser client can rasterize, measure text, and emit PDF without a native
-//! host:
-//! - [`pixmap`] — rasterize a [`scene::Scene`] to an owned tiny-skia `Pixmap`.
-//! - [`text`] — embedded Liberation families, glyph measurement and outline
-//!   (system-font lookup is native-only).
-//! - [`pdf`] — render a [`scene::Scene`] directly to PDF (text as outlined paths).
-//! - [`sixel`] — encode a `Pixmap` as DEC Sixel.
-//!
-//! Native-only modules need a tty, an OS window, or platform FFI:
-//! - [`term_query`] — synchronous Kitty / Sixel capability probe.
-//! - [`terminal`] — terminal renderer (Kitty / Sixel / half-blocks),
-//!   animation lifecycle, key polling.
-//! - [`window`] — native OS window renderer (winit + softbuffer), with the
-//!   same lifecycle shape as `terminal`.
-//! - [`frontend`] — the unified native driver over terminal / window / stdio.
+//! [`terminal`] shows a pixmap through Kitty, Sixel or half-blocks and runs
+//! the animation loop with key polling, [`term_query`] probes what the
+//! terminal supports, [`window`] shows a pixmap in a winit window, and
+//! [`frontend`] drives the terminal, the window or stdio through one loop.
+//! These need a tty, a window or platform FFI, so they are native only.
 
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
@@ -29,8 +20,7 @@ pub mod renderer;
 pub mod scene;
 pub mod wire;
 
-// VERB_* constants are emitted for non-Rust hosts (JS, Python); Rust uses
-// the `scene::SegmentKind` enum directly.
+// The VERB_* constants exist for the JS and Python hosts.
 #[path = "wire/frame_capnp.rs"]
 #[allow(dead_code)]
 mod frame_capnp;

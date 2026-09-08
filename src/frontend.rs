@@ -1,8 +1,6 @@
-//! `Frontend` — the unified driver type that hosts (spython, sgleam, future
-//! sgleam wasm, etc.) talk to.
-//!
-//! All concrete frontends — terminal, window, stdio — share the same
-//! method surface. Hosts construct one [`Frontend`] up front and drive it:
+//! [`Frontend`] is the driver a host (spython, sgleam) talks to. The
+//! terminal, the window and stdio share one method surface. The host
+//! constructs one and drives it:
 //!
 //! ```ignore
 //! let mut fr = Frontend::pick_native("My game");
@@ -18,9 +16,8 @@
 //! fr.exit();
 //! ```
 //!
-//! The variants are an enum (not `Box<dyn Frontend>`) on purpose: dispatch
-//! is monomorphic, no vtable, and the compiler can specialize each call
-//! site. The host's main loop is hot, so the indirection cost matters.
+//! `Frontend` is an enum and not a `Box<dyn Frontend>`, so that the call in
+//! the main loop of the host dispatches without a vtable.
 
 use std::time::{Duration, Instant};
 
@@ -31,14 +28,12 @@ use crate::scene::Scene;
 
 use crate::stdio::StdioFrontend;
 
-/// [`Duration`] period from a frequency in Hz.
 const fn period_from_hz(hz: u32) -> Duration {
     Duration::from_nanos(1_000_000_000 / hz as u64)
 }
 
-/// Public driver. Construct one with [`Frontend::terminal`],
-/// [`Frontend::window`], or [`Frontend::stdio`]; the host then drives it
-/// for the whole session.
+/// Construct one with [`Frontend::terminal`], [`Frontend::window`] or
+/// [`Frontend::stdio`], and drive it for the whole session.
 pub enum Frontend {
     Terminal(TerminalFrontend),
     Window(WindowFrontend),
@@ -46,14 +41,10 @@ pub enum Frontend {
 }
 
 impl Frontend {
-    /// Pick the right native frontend automatically. Today: prefer terminal
-    /// when stdout is a tty with graphics support, otherwise window. Hosts
-    /// that need explicit control should call the per-variant constructors.
-    /// `title` is used only when the chosen backend is a window — terminals
-    /// inherit their title from the shell.
+    /// Prefer the terminal when stdout is a tty with graphics, and the window
+    /// otherwise. `title` only matters for a window. A terminal keeps the
+    /// title of the shell.
     pub fn pick_native(title: &str) -> Self {
-        // Defer to the existing terminal capability probe — same heuristic
-        // spython has been using.
         if crate::terminal::kitty_supported()
             || crate::sixel::sixel_supported()
             || crate::terminal::text_blocks_supported()
@@ -92,9 +83,9 @@ impl Frontend {
         }
     }
 
-    /// Block until the next input event or `deadline` elapses. `None`
-    /// means "wait forever". Returns `None` only if the frontend has shut
-    /// down (window closed, stdin EOF) — callers treat that as terminal.
+    /// Block until the next input event or until `deadline`, or forever when
+    /// it is `None`. Returns `None` only when the frontend has shut down, on
+    /// a closed window or on EOF at stdin.
     pub fn wait_event(&mut self, deadline: Option<Instant>) -> Option<InputEvent> {
         match self {
             Frontend::Terminal(f) => f.wait_event(deadline),
@@ -112,8 +103,8 @@ impl Frontend {
         }
     }
 
-    /// Upload a bitmap to be referenced by `BitmapNode.id`. Frontends that
-    /// do not support bitmaps (terminal, pdf, current window) ignore this.
+    /// Upload a bitmap for `Bitmap.id`. The terminal and the window do not
+    /// support bitmaps and ignore it.
     pub fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) {
         match self {
             Frontend::Terminal(_) | Frontend::Window(_) => {}
@@ -122,10 +113,9 @@ impl Frontend {
     }
 }
 
-/// Say once per frontend — not once per process — that this backend drops the
-/// bitmaps in the frame. A process-global flag would silence every session
-/// after the first, which is precisely the case that needs telling in server
-/// mode.
+/// Say once per frontend that this backend drops the bitmaps of the frame. A
+/// process-global flag would stay silent for every session after the first,
+/// and a server hosts many sessions.
 fn warn_bitmaps_once(warned: &mut bool, scene: &Scene, backend: &str) {
     if !*warned && scene.has_bitmaps() {
         *warned = true;
@@ -139,15 +129,14 @@ fn warn_bitmaps_once(warned: &mut bool, scene: &Scene, backend: &str) {
 // Common vsync-scheduling helper
 // ---------------------------------------------------------------------------
 
-/// Software-timed vsync emitter. Each backend constructs one with its own
-/// period (terminal vs window vs others). Real-vsync integration (winit
-/// swap chain, browser rAF) bypasses this helper and emits Vsync events
-/// directly from the platform callback.
+/// Software-timed vsync. Each backend constructs one with its own period. A
+/// backend with a platform vsync emits the event from the platform callback
+/// and does not use this.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VsyncClock {
     period: Duration,
-    /// `None` until the first vsync has been emitted; lets the very first
-    /// `wait_event` fire `Vsync` immediately.
+    /// `None` until the first vsync, so the first `wait_event` fires `Vsync`
+    /// at once.
     last_vsync: Option<Instant>,
 }
 
@@ -159,7 +148,6 @@ impl VsyncClock {
         }
     }
 
-    /// Time at which the next Vsync should fire.
     pub(crate) fn next_vsync_at(&self) -> Instant {
         match self.last_vsync {
             None => Instant::now(),
@@ -167,22 +155,20 @@ impl VsyncClock {
         }
     }
 
-    /// Mark a vsync as fired now. Returns the [`InputEvent::Vsync`] for
-    /// convenience.
+    /// Record a vsync now. Returns the [`InputEvent::Vsync`] to deliver.
     pub(crate) fn fire(&mut self) -> InputEvent {
         self.last_vsync = Some(Instant::now());
         InputEvent::Vsync
     }
 
-    /// `true` if a Vsync is due (ignoring overshoot). Saves an `Instant::now`
-    /// when the caller already knows the time.
+    /// Returns `true` if a Vsync is due at `now`, `false` otherwise. Takes
+    /// `now` so the caller does not read the clock twice.
     pub(crate) fn is_due(&self, now: Instant) -> bool {
         now >= self.next_vsync_at()
     }
 }
 
-/// Combine the caller's deadline with the next vsync deadline, returning the
-/// tightest `Duration` we can wait on the OS poll.
+/// The shortest wait among the deadline of the caller and the next vsync.
 pub(crate) fn poll_timeout(deadline: Option<Instant>, next_vsync: Instant) -> Duration {
     let now = Instant::now();
     let mut out = next_vsync.saturating_duration_since(now);
@@ -192,8 +178,8 @@ pub(crate) fn poll_timeout(deadline: Option<Instant>, next_vsync: Instant) -> Du
     out
 }
 
-/// Translate the `[alt, ctrl, shift, meta, repeat]` tuple historic spython
-/// uses into an [`InputEvent`] modifier bitmask.
+/// Build an [`InputEvent`] from the tuple that `poll_key_event` returns in
+/// `terminal` and `window`. `flags` is `[alt, ctrl, shift, meta, repeat]`.
 pub(crate) fn key_event_from_legacy(event_type: i32, key: String, flags: [bool; 5]) -> InputEvent {
     let kind = match event_type {
         1 => KeyKind::Down,
@@ -234,9 +220,8 @@ pub struct TerminalFrontend {
 }
 
 impl TerminalFrontend {
-    /// Vsync cadence in the terminal. There is no hardware refresh to sync
-    /// against; 60 Hz is enough for smooth half-block animation without
-    /// flooding the pty with escape codes.
+    /// There is no hardware refresh in a terminal. 60 Hz is smooth for
+    /// half-block animation and does not flood the pty with escape codes.
     const VSYNC_PERIOD: Duration = period_from_hz(60);
 
     pub fn new() -> Self {
@@ -267,15 +252,13 @@ impl TerminalFrontend {
     }
 
     pub fn wait_event(&mut self, deadline: Option<Instant>) -> Option<InputEvent> {
-        // Fast path: vsync due before we even poll.
         if self.clock.is_due(Instant::now()) {
             return Some(self.clock.fire());
         }
         loop {
-            // crossterm's event::poll has its own non-blocking shape, so we
-            // implement a busy-ish loop with bounded sleeps. That is fine
-            // here because terminals do not emit thousands of events per
-            // second; the bottleneck is IO, not the poll period.
+            // The loop sleeps in short steps instead of blocking on
+            // crossterm. A terminal emits few events per second, so the
+            // poll costs nothing that matters.
             let now = Instant::now();
             if let Some(d) = deadline
                 && now >= d
@@ -294,7 +277,8 @@ impl TerminalFrontend {
             }
             let next_vsync = self.clock.next_vsync_at();
             let timeout = poll_timeout(deadline, next_vsync);
-            // Hard floor so we don't burn CPU when the next vsync is microseconds away.
+            // Sleep at most 8 ms, so a key or a close is seen soon even when
+            // the deadline is far.
             std::thread::sleep(timeout.min(Duration::from_millis(8)));
         }
     }
@@ -318,10 +302,8 @@ pub struct WindowFrontend {
 }
 
 impl WindowFrontend {
-    /// Software-timed vsync cadence used by the current window stub. Once
-    /// the window switches to a real swap chain (winit + wgpu present), the
-    /// clock will be replaced by platform vsync callbacks and this constant
-    /// becomes irrelevant.
+    /// The window paints through softbuffer without a swap chain, so its
+    /// cadence is software-timed too.
     const VSYNC_PERIOD: Duration = period_from_hz(60);
 
     pub fn new(title: &str) -> Self {

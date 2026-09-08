@@ -1,25 +1,10 @@
-//! Terminal renderer for `World` and inline images using the Kitty graphics
-//! protocol.
+//! Terminal display of a [`crate::scene::Scene`] through the Kitty graphics
+//! protocol, DEC Sixel or truecolor half-blocks, and the animation lifecycle
+//! of alt screen and raw mode with key polling. An animation frame replaces
+//! the previous one at (0, 0).
 //!
-//! On Kitty-compatible terminals (Kitty, Ghostty, WezTerm, modern Konsole),
-//! `show_image` rasterizes a [`crate::scene::Scene`] directly with
-//! `tiny-skia` and transmits it as an RGBA payload. Animations (`World.run`)
-//! drive into alt-screen + raw mode via `enter_animation` / `exit_animation`,
-//! and each frame replaces the previous image at (0, 0). Keyboard events are
-//! polled non-blocking via `crossterm`.
-//!
-//! On terminals without Kitty graphics support, `show_svg` is invoked instead
-//! and prints the SVG source (preserving the prior native behavior).
-//!
-//! Limitations:
-//! - Terminals do not distinguish keydown from keyup, so all key events are
-//!   reported as KEYPRESS (event_type = 0). `on_key_down` / `on_key_up`
-//!   handlers therefore behave like `on_key_press`.
-//! - Text resolves through [`crate::text::resolve`] — Liberation Sans /
-//!   Serif / Mono are embedded in all four variants; unknown families fall
-//!   back to a system font (via fontdb) or to Liberation Sans.
-//! - Bitmap nodes are not rendered (the renderer logs a warning and skips
-//!   them); SVG output remains the canonical form.
+//! A terminal does not tell a key down from a key up, so every key event is
+//! a press.
 
 use std::io::{self, Write};
 use std::sync::Mutex;
@@ -41,13 +26,13 @@ pub(crate) const KEYPRESS: i32 = 0;
 pub(crate) const KEYDOWN: i32 = 1;
 pub(crate) const KEYUP: i32 = 2;
 
-// Fallback when the `CSI 16 t` probe returns nothing; see `cell_pixels`.
+// Fallback when the terminal does not answer the `CSI 16 t` probe.
 const CELL_W_DEFAULT: u32 = 8;
 const CELL_H_DEFAULT: u32 = 16;
 
-/// Pixel size of one terminal cell — queried via `CSI 16 t` and cached by
-/// [`crate::term_query`]. Falls back to `(8, 16)` when the terminal didn't
-/// reply (multiplexers, ancient terminals, non-tty stdout).
+/// Pixel size of one terminal cell, from the cached probe in
+/// [`crate::term_query`]. A terminal under a multiplexer or without a tty
+/// does not answer, and gets 8 by 16.
 fn cell_pixels() -> (u32, u32) {
     crate::term_query::graphics_caps()
         .cell_px
@@ -67,7 +52,7 @@ struct State {
     image_displayed: bool,
     next_oneshot_id: u32,
     text_blocks_lines: u16,
-    /// Ctrl-C during animation; surfaced as [`InputEvent::Close`], not a process kill.
+    /// Set by Ctrl-C during an animation. The frontend reports it as a close.
     closed: bool,
 }
 
@@ -80,9 +65,8 @@ static STATE: Mutex<State> = Mutex::new(State {
     closed: false,
 });
 
-/// Best-effort detection of terminals that report 24-bit truecolor support
-/// — the prerequisite for the half-blocks (`▀`) ANSI fallback used when
-/// neither Kitty nor Sixel is available.
+/// Returns `true` if the terminal reports 24-bit color, `false` otherwise.
+/// The half-blocks fallback needs it.
 pub fn text_blocks_supported() -> bool {
     use std::io::IsTerminal;
     if !std::io::stdout().is_terminal() {
@@ -99,8 +83,7 @@ pub fn text_blocks_supported() -> bool {
     {
         return true;
     }
-    // Common modern terminals advertise truecolor implicitly. These envs are
-    // strong signals; conservative-but-useful for v1.
+    // These terminals support truecolor without setting COLORTERM.
     if std::env::var_os("KITTY_WINDOW_ID").is_some() {
         return true;
     }
@@ -119,11 +102,10 @@ pub fn text_blocks_supported() -> bool {
     false
 }
 
-/// Whether the terminal speaks the Kitty graphics protocol. Asks the
-/// terminal directly via a synchronous capability query (see `term_query`)
-/// — env-based heuristics lie (SSH strips them, multiplexers don't, custom
-/// shells override them). The probe is cached, so the I/O cost is paid at
-/// most once per process.
+/// Returns `true` if the terminal speaks the Kitty graphics protocol,
+/// `false` otherwise. The answer comes from a query to the terminal, because
+/// the environment variables are wrong over ssh and under a multiplexer.
+/// The probe runs at most once per process.
 pub fn kitty_supported() -> bool {
     crate::term_query::graphics_caps().kitty
 }
@@ -132,16 +114,14 @@ pub fn kitty_supported() -> bool {
 // Terminal-aware sizing + half-blocks renderer
 // -----------------------------------------------------------------------------
 
-/// Target pixel box for the active backend, derived from `terminal::size()`.
-/// `None` means "no constraint" (used when crossterm fails or stdout isn't a
-/// terminal, e.g. in tests piped to a file).
+/// Pixel box available for the image, from the terminal size. `None` when
+/// crossterm cannot read the size, as when stdout is a file.
 fn target_pixels_for_backend(backend: Backend) -> Option<(u32, u32)> {
     let (cols, rows) = terminal::size().ok()?;
     if cols == 0 || rows == 0 {
         return None;
     }
-    // Reserve one row so the prompt that follows the image (or the prompt
-    // sitting above an alt-screen animation) doesn't push the last row off.
+    // One row stays free for the prompt that follows the image.
     let rows_avail = rows.saturating_sub(1).max(1);
     let (cw, ch) = cell_pixels();
     Some(match backend {
@@ -152,14 +132,11 @@ fn target_pixels_for_backend(backend: Backend) -> Option<(u32, u32)> {
     })
 }
 
-/// Per-backend upper bound on the rasterizer's uniform scale factor.
-///
-/// For Kitty/Sixel each pixmap pixel is one screen pixel, so capping at
-/// `1.0` keeps the image at native size or smaller. For half-blocks each
-/// pixmap pixel covers `cell_w × cell_h/2` screen pixels — uncapped, a 100×100
-/// logical image would stretch to ~`100·cell_w` screen pixels wide. Cap at
-/// `1 / max(cell_w, cell_h/2)` so a logical pixel never expands past one
-/// screen pixel.
+/// Upper bound on the scale of the rasterizer for `backend`. In Kitty and
+/// Sixel a pixmap pixel is a screen pixel, so the cap of 1.0 keeps the image
+/// at native size or smaller. In half-blocks a pixmap pixel covers a cell
+/// width by half a cell height, so the cap is the inverse of the larger of
+/// the two, and a logical pixel never grows past a screen pixel.
 fn max_scale_for_backend(backend: Backend) -> f32 {
     match backend {
         Backend::Kitty | Backend::Sixel => 1.0,
@@ -170,10 +147,10 @@ fn max_scale_for_backend(backend: Backend) -> f32 {
     }
 }
 
-/// Uniform input→output scale for a `width × height` frame on `backend`:
-/// shrink to fit the cell grid when its size is known, capped so one logical
-/// pixel never expands past one screen pixel. With no known grid the cap is
-/// the whole policy — half-blocks still have to pack 2:1.
+/// Scale for a `width` by `height` frame on `backend`. The frame shrinks to
+/// fit the cell grid when the grid size is known, and the cap of the backend
+/// applies either way, because half-blocks pack two rows per cell even
+/// without a known grid.
 fn scale_for_backend(backend: Backend, width: f32, height: f32) -> f32 {
     let cap = max_scale_for_backend(backend);
     match target_pixels_for_backend(backend) {
@@ -182,9 +159,9 @@ fn scale_for_backend(backend: Backend, width: f32, height: f32) -> f32 {
     }
 }
 
-/// Render a pixmap to truecolor ANSI half-blocks (`▀`). Each pair of pixmap
-/// rows becomes one terminal cell row; the foreground holds the upper pixel
-/// and the background holds the lower one. Alpha is composited over black.
+/// Write `pixmap` as truecolor half-blocks (`▀`). Each pair of rows becomes
+/// one cell row, with the upper pixel in the foreground and the lower one in
+/// the background, both composited over black.
 fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<u16> {
     let w = pixmap.width() as usize;
     let h = pixmap.height() as usize;
@@ -207,17 +184,15 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<u16>
                 Some(b) => blend_on_black(b[x]),
                 None => (0, 0, 0),
             };
-            // Combined SGR is shorter on the wire and avoids partial state
-            // if the write is interrupted.
+            // One SGR for both colors is shorter and leaves no partial state
+            // if the write stops.
             write!(
                 out,
                 "\x1b[38;2;{};{};{};48;2;{};{};{}m▀",
                 tr, tg, tb, br, bg, bb
             )?;
         }
-        // CRLF — in animation mode the tty is in raw mode and a bare LF
-        // wouldn't return the cursor to column 0, so each line would start
-        // wherever the previous one ended.
+        // In raw mode a bare LF does not return the cursor to column 0.
         out.write_all(b"\x1b[0m\r\n")?;
         lines = lines.saturating_add(1);
         y += 2;
@@ -226,8 +201,7 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<u16>
 }
 
 fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
-    // tiny-skia stores RGB premultiplied with alpha. Composite-over-black
-    // collapses to `pre.rgb` since black contributes nothing.
+    // The pixel is premultiplied, so compositing over black changes nothing.
     (p.red(), p.green(), p.blue())
 }
 
@@ -235,8 +209,8 @@ fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
 // Kitty graphics protocol I/O
 // -----------------------------------------------------------------------------
 
-/// Emit the Kitty graphics protocol escape sequences to display `pixmap` at
-/// the current cursor position. Uses RGBA raw transmission, chunked.
+/// Write the Kitty escape sequences that show `pixmap` at the cursor, as raw
+/// RGBA in chunks.
 fn emit_kitty<W: Write>(w: &mut W, pixmap: &Pixmap, id: u32) -> io::Result<()> {
     let encoded = B64.encode(pixmap.data());
     let bytes = encoded.as_bytes();
@@ -270,9 +244,8 @@ fn delete_kitty_image<W: Write>(w: &mut W, id: u32) -> io::Result<()> {
 // Public entry points
 // -----------------------------------------------------------------------------
 
-/// `show_image` handler installed into the engine on native targets.
-/// Receives a pre-built [`crate::scene::Scene`] and dispatches to Kitty when
-/// supported, otherwise to Sixel, otherwise to half-blocks ANSI.
+/// Show `scene` in the terminal, through Kitty when the terminal supports
+/// it, else Sixel, else half-blocks.
 pub fn show_image(scene: &crate::scene::Scene) {
     let Some(backend) = pick_backend() else {
         return;
@@ -293,8 +266,6 @@ fn pick_backend() -> Option<Backend> {
     } else if text_blocks_supported() {
         Some(Backend::TextBlocks)
     } else {
-        // Python only calls show_image when at least one path is supported,
-        // but be defensive.
         None
     }
 }
@@ -306,17 +277,15 @@ fn paint_pixmap(backend: Backend, pixmap: Pixmap) {
     match backend {
         Backend::Kitty => {
             if state.in_animation {
-                // Re-transmit with the same image ID at (0, 0). Kitty replaces
-                // the previous frame in place; an explicit delete-then-transmit
-                // cycle shows the cleared cell for one terminal refresh and
-                // causes flicker.
+                // The same image id replaces the frame in place. A delete
+                // followed by a transmit shows the cleared cells for one
+                // refresh and flickers.
                 let _ = queue!(stdout, cursor::MoveTo(0, 0));
                 let _ = emit_kitty(&mut stdout, &pixmap, KITTY_ANIMATION_ID);
                 state.image_displayed = true;
             } else {
-                // One-shot inline display (e.g. REPL displayhook): rotate the
-                // image id so successive renders do not collide on the same
-                // Kitty placement.
+                // A new id per image, so successive images do not replace
+                // each other.
                 let id = state.next_oneshot_id;
                 state.next_oneshot_id = state
                     .next_oneshot_id
@@ -327,9 +296,9 @@ fn paint_pixmap(backend: Backend, pixmap: Pixmap) {
             }
         }
         Backend::Sixel => {
-            // Sixel: no image-id replacement, so animations must paint over an
-            // opaque background or each frame would leave a trail of stale pixels
-            // wherever the new frame is transparent.
+            // Sixel has no image id, so a frame paints over an opaque
+            // background, or its transparent pixels would show the previous
+            // frame.
             let bytes = sixel::encode(&pixmap, (255, 255, 255));
             if state.in_animation {
                 let _ = queue!(stdout, cursor::MoveTo(0, 0));
@@ -342,8 +311,7 @@ fn paint_pixmap(backend: Backend, pixmap: Pixmap) {
         }
         Backend::TextBlocks => {
             if state.in_animation {
-                // Alt screen + raw mode is already active. Repaint from the
-                // top so each frame fully overwrites the previous one.
+                // Repaint from the top, so a frame overwrites the previous one.
                 let _ = queue!(stdout, cursor::MoveTo(0, 0));
                 let lines =
                     render_text_blocks(&mut stdout, &pixmap).unwrap_or(state.text_blocks_lines);
@@ -357,9 +325,7 @@ fn paint_pixmap(backend: Backend, pixmap: Pixmap) {
     let _ = stdout.flush();
 }
 
-/// `show_svg` handler installed into the engine on native targets. Falls back
-/// to printing the SVG source — used on terminals without Kitty graphics
-/// support, since the Python side prefers `show_image` when Kitty is available.
+/// Print the SVG source. A host uses it when the terminal has no graphics.
 pub fn show_svg(svg: &str) {
     println!("{svg}");
 }
@@ -369,7 +335,8 @@ pub fn enter_animation() {
     if state.in_animation {
         return;
     }
-    // Clear before any early-return, else a prior session's Ctrl-C closes this one.
+    // Reset before any early return, or the Ctrl-C of a previous session
+    // closes this one.
     state.closed = false;
     if !kitty_supported() && !sixel::sixel_supported() && !text_blocks_supported() {
         eprintln!(
@@ -398,9 +365,8 @@ pub fn exit_animation() {
         return;
     }
     let mut stdout = io::stdout().lock();
-    // Kitty: image storage persists across the alt screen flip — delete by id.
-    // Sixel + TextBlocks: output lives in the alt-screen grid and disappears
-    // when we leave it, no extra cleanup needed.
+    // Kitty keeps the image across the alt screen flip, so delete it by id.
+    // Sixel and half-blocks output lives in the alt screen and goes with it.
     if state.image_displayed && kitty_supported() {
         let _ = delete_kitty_image(&mut stdout, KITTY_ANIMATION_ID);
     }
@@ -416,7 +382,7 @@ pub fn exit_animation() {
     state.text_blocks_lines = 0;
 }
 
-/// Map a `crossterm` `KeyCode` to the string the WASM frontend produces.
+/// Map a crossterm key code to the key name of the W3C UI Events spec.
 fn key_code_to_string(code: KeyCode) -> Option<String> {
     Some(match code {
         KeyCode::Char(c) => c.to_string(),
@@ -439,7 +405,8 @@ fn key_code_to_string(code: KeyCode) -> Option<String> {
     })
 }
 
-/// `poll_key_event` handler installed into the engine on native targets.
+/// Return the next key event without blocking, as
+/// `(kind, key, [alt, ctrl, shift, meta, repeat])`.
 pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
     {
         let state = STATE.lock().unwrap();
@@ -462,15 +429,15 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
         return None;
     };
 
-    // Flag closed, not `process::exit` — that would kill a server hosting
-    // other sessions. `wait_event` turns the flag into `InputEvent::Close`.
+    // process::exit would kill a server that hosts other sessions, so the
+    // frontend reports a close instead.
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
         STATE.lock().unwrap().closed = true;
         return None;
     }
 
-    // Most terminals only emit Press; Release requires the kitty keyboard
-    // protocol which we do not enable. Repeat is reported as Press too.
+    // A terminal reports a release only with the kitty keyboard protocol,
+    // which is off, and reports a repeat as a press.
     let event_type = match kind {
         KeyEventKind::Release => KEYUP,
         _ => KEYPRESS,
@@ -485,18 +452,14 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
     Some((event_type, key, [alt, ctrl, shift, meta, repeat]))
 }
 
-/// Ctrl-C since [`enter_animation`]? `TerminalFrontend` polls it to emit
-/// [`crate::event::InputEvent::Close`].
+/// Returns `true` if the user pressed Ctrl-C since [`enter_animation`],
+/// `false` otherwise.
 pub fn closed() -> bool {
     STATE.lock().unwrap().closed
 }
 
-/// Install a panic hook so a crashed animation does not leave the terminal
-/// in raw mode. Idempotent — calling more than once chains the hooks.
-///
-/// Note: This is purely a safety net. Hosts (spython, sgleam) typically
-/// also wire `enter_animation` / `exit_animation` into their own scripted
-/// lifecycle.
+/// Install a panic hook that takes the terminal out of raw mode after a
+/// crash. A second call chains the hooks.
 pub fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -587,8 +550,7 @@ mod tests {
 
     #[test]
     fn rasterize_clip_excludes_outside() {
-        // Blue rectangle clipped to a 20×20 box centered at (10, 10) — pixel
-        // (35, 25) would lie outside the clip if the full rect made it through.
+        // The rectangle is larger than the clip box.
         let mut scene = Scene::new(20.0, 20.0);
         {
             let mut clip = scene.clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
@@ -607,7 +569,7 @@ mod tests {
 
     #[test]
     fn rasterize_default_background_is_transparent() {
-        // Empty image (no commands) should leave the pixmap fully transparent.
+        // An empty scene leaves the pixmap transparent.
         let scene = Scene::new(5.0, 5.0);
         let pm = rasterize(&scene);
         assert_eq!(pixel_rgba(&pm, 2, 2).3, 0);
@@ -644,8 +606,7 @@ mod tests {
 
     #[test]
     fn rasterize_text_handles_multibyte_utf8() {
-        // Portuguese "Olá" — multi-byte UTF-8. Render must not panic and must
-        // paint pixels.
+        // A multi-byte UTF-8 string.
         let mut scene = Scene::new(100.0, 40.0);
         scene.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Olá"));
         let pm = rasterize(&scene);
@@ -654,8 +615,7 @@ mod tests {
 
     #[test]
     fn rasterize_text_underline_adds_pixels() {
-        // Same text twice — once with underline and once without. Underline
-        // should produce strictly more painted pixels.
+        // The same text with and without underline.
         let mut without = Scene::new(100.0, 40.0);
         without.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
         let mut with = Scene::new(100.0, 40.0);
@@ -670,22 +630,21 @@ mod tests {
 
     #[test]
     fn rasterize_text_empty_renders_nothing() {
-        // Empty string + valid box should leave the canvas transparent.
         let mut scene = Scene::new(10.0, 10.0);
         scene.text(text_node(5.0, 5.0, 10.0, 10.0, 24.0, ""));
         let pm = rasterize(&scene);
         assert_eq!(count_opaque_pixels(&pm), 0);
     }
 
-    /// What `scale_for_backend` does once the target box is known: fit, then
-    /// apply the backend's cap.
+    /// Fit into `target`, then apply `cap`, as `scale_for_backend` does when
+    /// the grid is known.
     fn fit_capped(scene: &Scene, target: (u32, u32), cap: f32) -> f32 {
         crate::pixmap::fit_scale(scene.width, scene.height, target).min(cap)
     }
 
     #[test]
     fn scale_to_fit_preserves_aspect() {
-        // 200×100 input + 50×50 target → fit width: scale=0.25 → 50×25 output.
+        // 200×100 into 50×50 fits the width, scale 0.25, output 50×25.
         let mut scene = Scene::new(200.0, 100.0);
         rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0);
         let pm = rasterize_scene(&scene, fit_capped(&scene, (50, 50), 1.0)).expect("pixmap");
@@ -696,7 +655,7 @@ mod tests {
 
     #[test]
     fn scale_to_fit_does_not_upscale() {
-        // Tiny 10×10 image + huge 1000×1000 target should keep native dims.
+        // A 10×10 image keeps its size in a 1000×1000 target.
         let mut scene = Scene::new(10.0, 10.0);
         rect_path(&mut scene, solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0);
         let pm = rasterize_scene(&scene, fit_capped(&scene, (1000, 1000), 1.0)).expect("pixmap");
@@ -706,7 +665,7 @@ mod tests {
 
     #[test]
     fn scale_to_fit_height_constrained() {
-        // 100×200 input + 200×50 target → fit height: scale=0.25 → 25×50 output.
+        // 100×200 into 200×50 fits the height, scale 0.25, output 25×50.
         let mut scene = Scene::new(100.0, 200.0);
         rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0);
         let pm = rasterize_scene(&scene, fit_capped(&scene, (200, 50), 1.0)).expect("pixmap");
@@ -716,13 +675,11 @@ mod tests {
 
     #[test]
     fn text_blocks_max_scale_caps_below_native() {
-        // A 100×100 image rendered for half-blocks (cell 8×16) must shrink to
-        // ~native screen pixels: 100 px → P_w = 100/8 ≈ 12 image px. With the
-        // old cap of 1.0 the pixmap was 100×100, which painted 100 cols × 50
-        // cell rows on screen — way bigger than the native logical size.
+        // A 100×100 image for half-blocks with 8×16 cells shrinks to about
+        // 100 / 8 pixels wide.
         let mut scene = Scene::new(100.0, 100.0);
         rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
-        // target is the half-blocks bounding box for an 80×24 terminal.
+        // The target is the half-blocks box of an 80×24 terminal.
         let pm = rasterize_scene(&scene, fit_capped(&scene, (80, 48), 1.0 / 8.0)).expect("pixmap");
         assert!(pm.width() <= 13, "got width {}", pm.width());
         assert!(pm.height() <= 13, "got height {}", pm.height());
@@ -736,7 +693,7 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
         assert_eq!(lines, 2);
-        // Half-block character is U+2580 (UTF-8: E2 96 80).
+        // U+2580 in UTF-8.
         assert!(buf.windows(3).any(|w| w == [0xE2, 0x96, 0x80]));
     }
 
@@ -755,19 +712,19 @@ mod tests {
 
     #[test]
     fn text_blocks_handles_odd_height() {
-        // 3×3: last cell row has no bottom pixel and must default to black.
+        // The last cell row has no bottom pixel and takes black.
         let mut scene = Scene::new(3.0, 3.0);
         rect_path(&mut scene, solid(255, 255, 255), 0.0, 0.0, 3.0, 3.0);
         let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
         let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
-        // ceil(3/2) = 2 cell rows.
+        // ceil(3 / 2) rows.
         assert_eq!(lines, 2);
     }
 
     #[test]
     fn text_blocks_empty_pixmap_is_noop() {
-        // Defensive: 1×1 pixmap should still produce one row, not panic.
+        // A 1×1 pixmap gives one row.
         let pm = Pixmap::new(1, 1).unwrap();
         let mut buf: Vec<u8> = Vec::new();
         let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
@@ -782,9 +739,8 @@ mod tests {
 
     #[test]
     fn rasterize_linear_gradient_left_to_right() {
-        // 40×10 rect, linear gradient from black (x=0) to white (x=40). The
-        // leftmost pixel should be ≈ black, the rightmost ≈ white, and the
-        // middle a clearly-different gray in between.
+        // Black at x=0 to white at x=40. The left pixel is near black, the
+        // right near white, and the middle a gray between them.
         let mut scene = Scene::new(40.0, 10.0);
         let style = PathStyle {
             fill: IrPaint::gradient(Gradient::linear(
@@ -830,8 +786,7 @@ mod tests {
 
     #[test]
     fn rasterize_radial_gradient_center_bright_edge_dark() {
-        // 40×40, radial gradient centered at (20, 20) radius 20: white at
-        // center, transparent at the edge.
+        // White at the center, transparent at the edge.
         let mut scene = Scene::new(40.0, 40.0);
         let style = PathStyle {
             fill: IrPaint::gradient(Gradient::radial(
@@ -871,10 +826,9 @@ mod tests {
 
     #[test]
     fn rasterize_linear_gradient_reflect_mirrors_past_axis() {
-        // 80×10 rect, gradient axis (0,0)→(20,0): with Reflect, the gradient
-        // tiles like an even mirror over t periods of length 2. Pixel at
-        // x=10 sits at t=0.5 (mid-axis, gray). Pixel at x=30 sits at t=1.5,
-        // which Pad clamps to white but Reflect folds back to t=0.5 (gray).
+        // The axis goes from x=0 to x=20. Reflect mirrors the gradient with
+        // period 2, so x=10 (t=0.5) and x=30 (t=1.5) are both gray, where Pad
+        // would clamp x=30 to white.
         let mut scene = Scene::new(80.0, 10.0);
         let style = PathStyle {
             fill: IrPaint::gradient(
@@ -910,11 +864,9 @@ mod tests {
         };
         rect_path(&mut scene, style, 0.0, 0.0, 80.0, 10.0);
         let pm = rasterize(&scene);
-        let mid_axis = pixel_rgba(&pm, 10, 5).0; // t = 0.5 → ~gray
-        let pad_zone = pixel_rgba(&pm, 30, 5).0; // t = 1.5 → reflect → ~gray
-        let pad_far = pixel_rgba(&pm, 50, 5).0; // t = 2.5 → reflect → mid again
-        // With Pad these would all clamp to white past x=20; with Reflect they
-        // should mirror back into the gradient.
+        let mid_axis = pixel_rgba(&pm, 10, 5).0; // t = 0.5
+        let pad_zone = pixel_rgba(&pm, 30, 5).0; // t = 1.5
+        let pad_far = pixel_rgba(&pm, 50, 5).0; // t = 2.5
         assert!(
             (mid_axis as i32 - pad_zone as i32).abs() < 30,
             "expected mirror near t=1.5; got mid={mid_axis} reflected={pad_zone}"
@@ -927,9 +879,8 @@ mod tests {
 
     #[test]
     fn rasterize_dash_stroke_has_gaps() {
-        // Horizontal stroke from (5,10) to (95,10) with a [10, 10] dash.
-        // Sample on the line: x=10 sits inside an "on" segment (opaque); x=20
-        // sits inside an "off" segment (transparent).
+        // A [10, 10] dash on a stroke that starts at x=5. x=10 falls in an on
+        // segment and x=20 in an off segment.
         let mut scene = Scene::new(100.0, 20.0);
         {
             let mut p = scene.path(PathStyle {

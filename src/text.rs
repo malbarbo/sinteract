@@ -1,22 +1,14 @@
-//! Text measurement and outline extraction.
+//! Text measurement and glyph outlines.
 //!
-//! Three font families are embedded — Liberation Sans, Serif, and Mono, in
-//! Regular / Bold / Italic / BoldItalic. Aliases (`sans-serif`, `serif`,
-//! `monospace`, `mono`, "Liberation X") map to the embedded variants.
-//! Anything else falls back to a [`fontdb`] system query (native only, since
-//! wasm has no font directory), with the ultimate fallback being Liberation
-//! Sans — so the embedded-font path measures identically on every target.
+//! The crate embeds Liberation Sans, Serif and Mono in Regular, Bold, Italic
+//! and BoldItalic. An alias such as `sans-serif`, `serif`, `monospace` or
+//! `mono` maps to an embedded family. Any other name goes to a [`fontdb`]
+//! system query on native targets and falls back to Liberation Sans, so a
+//! text in an embedded family measures the same on every target.
 //!
-//! Used by:
-//!   - the CLI terminal renderer (`terminal::rasterize_scene`),
-//!   - the PDF renderer (`pdf::render_text`),
-//!   - tests / hosts that need to lay out text without a renderer.
-//!
-//! The measurements return offsets relative to the *box center* — text
-//! spans (-width/2, -height/2) to (width/2, height/2) in box-local
-//! coordinates. The caller composes
-//! `translate(cx, cy) * rotate(angle) * scale(sx, sy)` to place the text
-//! in world coordinates.
+//! A measurement is an offset from the center of the text box. The text
+//! spans (-width/2, -height/2) to (width/2, height/2), and the caller places
+//! it with `translate(cx, cy) * rotate(angle) * scale(sx, sy)`.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
@@ -30,8 +22,7 @@ use crate::scene::{FontStyle, TextNode};
 // Embedded fonts
 // ---------------------------------------------------------------------------
 
-/// One embedded TTF: bytes + a parsed [`Face`] cached with a `OnceLock`. We
-/// pay the parse cost once, then reuse for the rest of the process.
+/// An embedded TTF, parsed once per process.
 struct EmbeddedFont {
     name: &'static str,
     bytes: &'static [u8],
@@ -77,7 +68,7 @@ static MONO: [EmbeddedFont; 4] = [
     embed!("Liberation Mono", "../fonts/LiberationMono-BoldItalic.ttf"),
 ];
 
-/// CSS weight at and above which we treat the request as "bold".
+/// A CSS weight at or above this picks the bold face.
 const BOLD_THRESHOLD: u16 = 600;
 
 fn variant_index(weight: u16, style: FontStyle) -> usize {
@@ -95,17 +86,14 @@ fn variant_index(weight: u16, style: FontStyle) -> usize {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// A resolved font: which family / variant the renderer ended up using.
-/// Hosts echo `family` back on the wire so multiplayer clients pick the
-/// same variant the server measured against.
+/// The result of resolving a request. A host sends `family` on the wire, so a
+/// client measures with the same face as the server.
 #[derive(Clone, Copy, Debug)]
 pub struct ResolvedFont {
-    /// Display name of the family that was actually used. Always one of
     /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or
-    /// the system-discovered name.
+    /// the name fontdb reports.
     pub family: &'static str,
-    /// `true` if the resolution required a system lookup. Tests rely on
-    /// this to detect fallback paths.
+    /// `true` if the face came from a system lookup, `false` otherwise.
     pub from_system: bool,
     face: &'static Face<'static>,
 }
@@ -116,15 +104,12 @@ impl ResolvedFont {
     }
 }
 
-/// Resolve a `family + weight + style` request into a concrete font.
+/// Resolve a family, a weight and a style to a face.
 ///
-/// The resolution rules, in order:
-/// 1. **Empty** family → `Liberation Sans`.
-/// 2. **Aliases** (`sans-serif`, `serif`, `monospace`, `mono`,
-///    `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`,
-///    case-insensitive) → the embedded family.
-/// 3. **System font** matching `family` via [`fontdb`].
-/// 4. **Fallback** → `Liberation Sans`.
+/// An empty family is Liberation Sans. An alias (`sans-serif`, `serif`,
+/// `monospace`, `mono`, or an embedded family name, in any case) is the
+/// embedded family. Any other name goes to a [`fontdb`] query, and to
+/// Liberation Sans when the query finds nothing.
 pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
     let v = variant_index(weight, style);
 
@@ -132,9 +117,8 @@ pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
         return embedded(&SANS[v]);
     }
 
-    // Compared case-insensitively in place rather than against a lowercased
-    // copy: this runs per text node per frame, and the copy was a heap
-    // allocation to match eight fixed names.
+    // This runs once per text node per frame, so the comparison allocates
+    // nothing.
     let key = family.trim();
     let is = |names: &[&str]| names.iter().any(|n| key.eq_ignore_ascii_case(n));
     let alias = if is(&["", "sans-serif", "sans", "liberation sans"]) {
@@ -167,7 +151,7 @@ fn embedded(f: &'static EmbeddedFont) -> ResolvedFont {
 }
 
 // ---------------------------------------------------------------------------
-// System font lookup (via fontdb) — native only; wasm has no font directory
+// System font lookup. Native only, since wasm has no font directory.
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -180,11 +164,9 @@ fn font_db() -> &'static fontdb::Database {
     })
 }
 
-/// Mapping from a fontdb face id to the leaked face we've already parsed.
-/// Each system font is loaded into memory and parsed once, then leaked so
-/// the resulting `Face<'static>` matches the embedded fonts' lifetime
-/// shape. The number of unique fonts a process touches is bounded, so the
-/// leak is benign.
+/// The system faces already parsed, by fontdb id. Each one is leaked so it
+/// has the `'static` lifetime of an embedded face. A process touches few
+/// distinct fonts, so the leak is bounded.
 #[cfg(not(target_arch = "wasm32"))]
 fn system_cache() -> &'static Mutex<Vec<(fontdb::ID, ResolvedFont)>> {
     static CACHE: OnceLock<Mutex<Vec<(fontdb::ID, ResolvedFont)>>> = OnceLock::new();
@@ -215,15 +197,12 @@ fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFo
     }
 
     let face_data = db.with_face_data(id, |bytes, _idx| -> Option<ResolvedFont> {
-        // Leak the bytes so the parsed face has a 'static lifetime,
-        // matching our embedded-font shape.
+        // The face borrows the bytes, so both are leaked.
         let owned: Box<[u8]> = bytes.to_vec().into_boxed_slice();
         let static_bytes: &'static [u8] = Box::leak(owned);
         let face = Face::parse(static_bytes, 0).ok()?;
-        // Also leak the parsed face so we can hand out a `&'static Face`.
         let face_static: &'static Face<'static> = Box::leak(Box::new(face));
-        // Echo the resolved canonical family name so multiplayer clients
-        // can pick the same one. Leaking the String → &'static str.
+        // The name fontdb reports, so a client resolves the same face.
         let canonical = db
             .face(id)
             .map(|info| {
@@ -249,16 +228,15 @@ fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFo
 }
 
 // ---------------------------------------------------------------------------
-// Convenience wrappers — preserve the historic API for callers that
-// only need the default Sans Regular variant.
+// Measurement and outlines
 // ---------------------------------------------------------------------------
 
 fn default_face() -> &'static Face<'static> {
     SANS[0].face()
 }
 
-/// Receiver for outline path commands. Coordinates are in the same space as
-/// the values returned by the `measure_*` functions (y increases downward).
+/// Receives the outline of a glyph. Coordinates are box-local with y down,
+/// as in the `measure_*` functions.
 pub trait OutlineBuilder {
     fn move_to(&mut self, x: f32, y: f32);
     fn line_to(&mut self, x: f32, y: f32);
@@ -267,10 +245,10 @@ pub trait OutlineBuilder {
     fn close(&mut self);
 }
 
-/// Wraps an [`OutlineBuilder`] that has no quadratic operator, elevating every
-/// quad to a cubic on the way through. The current point is tracked here —
-/// including across `close`, which returns it to the start of the subpath —
-/// so a backend never has to reconstruct it from what it has already emitted.
+/// Turns every quadratic into a cubic for an [`OutlineBuilder`] that has no
+/// quadratic operator. It tracks the current point itself, and `close`
+/// returns the point to the start of the subpath, so the backend does not
+/// reconstruct it.
 pub struct ElevateQuads<'a, B: ?Sized> {
     inner: &'a mut B,
     start: Option<(f32, f32)>,
@@ -300,8 +278,8 @@ impl<B: OutlineBuilder + ?Sized> OutlineBuilder for ElevateQuads<'_, B> {
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        // A contour opening on a quad has no anchor; drop it rather than
-        // inventing a control point from the endpoint.
+        // A contour that opens on a quadratic has no start point, so the
+        // quadratic is dropped.
         let Some(p0) = self.last else { return };
         let (c1x, c1y, c2x, c2y) = crate::scene::quad_to_cubic(p0, cx, cy, x, y);
         self.last = Some((x, y));
@@ -354,8 +332,8 @@ pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size_px: i32) -> f64 
     (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * scale
 }
 
-/// Glyph outlines for `text`, measuring the placement itself. A renderer that
-/// already has a [`TextLayout`] should call [`outline_layout`] instead.
+/// Glyph outlines for `text`, placed by measuring it. A renderer that has a
+/// [`TextLayout`] calls [`outline_layout`].
 pub fn outline_with(face: &Face<'_>, text: &str, size_px: i32, out: &mut dyn OutlineBuilder) {
     if text.is_empty() || size_px <= 0 {
         return;
@@ -365,7 +343,7 @@ pub fn outline_with(face: &Face<'_>, text: &str, size_px: i32, out: &mut dyn Out
     outline_at(face, text, size_px, start_x, baseline_y, out);
 }
 
-/// Glyph outlines placed at an already-measured origin.
+/// Glyph outlines placed at a measured origin.
 fn outline_at(
     face: &Face<'_>,
     text: &str,
@@ -393,36 +371,32 @@ fn outline_at(
 }
 
 // ---------------------------------------------------------------------------
-// Per-node layout — the measurement prelude every renderer runs before it
-// emits glyphs, so each backend only spells out its own drawing.
+// Layout of a text node, shared by the renderers
 // ---------------------------------------------------------------------------
 
-/// Resolved face + box-local metrics for one [`TextNode`], measured once.
+/// The face and the box-local metrics of one [`TextNode`].
 pub struct TextLayout {
     pub face: &'static Face<'static>,
-    /// `int(size)` — the integral pixel size used for measurement and outlines,
-    /// matching the front end's `int(f.size)`.
+    /// The size truncated to whole pixels, as the front end measures.
     pub size_i: i32,
-    /// The node's fractional size, needed for underline metric scaling.
+    /// The size as given, for the underline metrics.
     pub size: f32,
-    /// Measured horizontal advance (box-local).
+    /// The horizontal advance.
     pub width: f32,
     pub baseline_y: f32,
     pub x_left: f32,
 }
 
-/// Resolve and measure a text node. Returns `None` when the node draws nothing —
-/// non-positive size, empty text, or zero measured width — so callers early-return.
+/// Resolve and measure a text node. Returns `None` when the node draws
+/// nothing, because the size is not positive, the text is empty or the width
+/// measures zero.
 pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
     let size_i = node.size as i32;
     if size_i <= 0 || node.text.is_empty() {
         return None;
     }
-    // Empty family resolves to Liberation Sans — keeps the historic render
-    // fixtures pinned to the same face.
     let face = resolve(&node.family, node.weight, node.style).face();
-    // Measure once: `measure_x_offset_with` is `-width / 2.0`, so calling it
-    // here would walk the string a second time.
+    // x_left is -width / 2, computed here so the string is walked once.
     let measured = measure_width_with(face, &node.text, size_i);
     let width = measured as f32;
     if width <= 0.0 {
@@ -438,9 +412,8 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
     })
 }
 
-/// Glyph outlines for a node already measured by [`layout_text`]. Renderers use
-/// this rather than [`outline_with`], which walks the string twice more to
-/// recover the origin the layout is already holding.
+/// Glyph outlines for a node measured by [`layout_text`]. Unlike
+/// [`outline_with`], it does not measure the string again.
 pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
     outline_at(
         layout.face,
@@ -452,9 +425,7 @@ pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuil
     );
 }
 
-/// Emit the underline rectangle for a laid-out node as a closed contour.
-/// Backends share this so the rect→verbs step is written once rather than
-/// once per renderer.
+/// The underline of a laid-out node as a closed contour.
 pub fn outline_underline(layout: &TextLayout, out: &mut dyn OutlineBuilder) {
     let u = underline_rect(layout);
     out.move_to(u.x_l, u.y_top);
@@ -472,16 +443,15 @@ pub struct UnderlineRect {
     pub y_bot: f32,
 }
 
-/// The underline rectangle for a laid-out node. Reads the face's own underline
-/// metrics so non-Sans faces (Serif / Mono / system) get a design-matched
-/// position instead of hardcoded Liberation Sans values.
+/// The underline rectangle of a laid-out node, from the underline metrics of
+/// its face.
 pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     let face_units = layout.face.units_per_em() as f32;
     let scale = layout.size / face_units;
     let metrics = layout.face.underline_metrics();
     let pos_units = metrics.map(|m| m.position as f32).unwrap_or(-217.0);
     let thickness_units = metrics.map(|m| m.thickness as f32).unwrap_or(150.0);
-    let underline_pos = -pos_units * scale; // font y-up → +y in box-local
+    let underline_pos = -pos_units * scale; // font y is up, box y is down
     let thickness = (thickness_units * scale).max(1.0);
     let y_top = layout.baseline_y + underline_pos - thickness / 2.0;
     UnderlineRect {
@@ -492,8 +462,7 @@ pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     }
 }
 
-// Historic `measure_*` API — uses Liberation Sans Regular. Kept for
-// callers that have not migrated to the family/weight/style resolver yet.
+// The same in Liberation Sans Regular, for a caller that picks no font.
 
 pub fn measure_width(text: &str, size_px: i32) -> f64 {
     measure_width_with(default_face(), text, size_px)
@@ -560,8 +529,7 @@ impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
 mod tests {
     use super::*;
 
-    /// Records what reached the wrapped builder, so a test can assert the
-    /// exact ops rather than counts.
+    /// Records the ops, so a test asserts them exactly.
     #[derive(Default)]
     struct Recorder {
         ops: Vec<String>,
@@ -587,9 +555,8 @@ mod tests {
 
     #[test]
     fn elevate_quads_tracks_the_point_across_close() {
-        // The current point after `close` is the start of the subpath. An
-        // adapter that reconstructs it from the last emitted op cannot see
-        // that, and would anchor the quad at its own endpoint instead.
+        // After `close` the current point is the start of the subpath, not
+        // the end of the last op.
         let mut sink = Recorder::default();
         {
             let mut out = ElevateQuads::new(&mut sink);
@@ -604,7 +571,7 @@ mod tests {
                 "M 0 0".to_string(),
                 "L 6 0".to_string(),
                 "Z".to_string(),
-                // Anchored at (0, 0), the subpath start — not at (6, 0).
+                // anchored at (0, 0), the start of the subpath
                 "C 2 2 4 2 6 0".to_string(),
             ]
         );
@@ -679,8 +646,7 @@ mod tests {
     #[test]
     fn measure_height_uses_font_metrics() {
         let h = measure_height("anything", 20);
-        // Liberation Sans at 20px: ascender 1854, descender -434, em 2048
-        // → (1854 - (-434)) * 20 / 2048 ≈ 22.34
+        // Liberation Sans at 20px. (1854 + 434) * 20 / 2048 is about 22.34.
         assert!(h > 18.0 && h < 26.0, "unexpected height: {h}");
     }
 
@@ -786,7 +752,6 @@ mod tests {
         let bold = resolve("", 700, FontStyle::Normal);
         let w_reg = measure_width_with(regular.face(), "Hello", 20);
         let w_bold = measure_width_with(bold.face(), "Hello", 20);
-        // Bold "Hello" is wider than regular "Hello" in Liberation Sans.
         assert!(
             w_bold > w_reg,
             "expected bold wider than regular: {w_bold} vs {w_reg}"
@@ -795,9 +760,7 @@ mod tests {
 
     #[test]
     fn italic_resolves_to_italic_face() {
-        // Glyph 'a' has slightly different metrics in Italic vs Regular —
-        // we just check the face actually changed by walking the outlines
-        // and counting points.
+        // The italic 'a' has a different outline from the regular one.
         let regular = resolve("", 400, FontStyle::Normal);
         let italic = resolve("", 400, FontStyle::Italic);
         let mut b1 = empty_builder();
@@ -812,10 +775,8 @@ mod tests {
 
     #[test]
     fn unknown_family_falls_back_to_sans_when_not_in_fontdb() {
-        // A name nobody ships should resolve to Liberation Sans (the safety
-        // net at the bottom of `resolve`). We don't depend on fontconfig's
-        // exact behavior for this name; instead we pick something so
-        // implausible that no system would have it.
+        // No system has a font with this name, so resolve falls through to
+        // Liberation Sans.
         let f = resolve("ZZZ_SimageNonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
     }

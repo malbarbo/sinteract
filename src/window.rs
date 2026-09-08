@@ -1,38 +1,16 @@
-//! Window display backend — paints [`crate::scene::Scene`]s into a native
-//! OS window via `winit` + `softbuffer`. Peer of [`crate::terminal`] for
-//! environments where the terminal is not graphics-capable (or when the
-//! user prefers a real window).
+//! Window display of a [`crate::scene::Scene`] through winit and softbuffer,
+//! with the lifecycle of [`crate::terminal`]. [`enter_animation`] sets the
+//! state up, [`show_image`] rasterizes a scene and presents it,
+//! [`poll_key_event`] returns the next key event in the shape of
+//! [`crate::terminal::poll_key_event`], and [`exit_animation`] destroys the
+//! window.
 //!
-//! ## Lifecycle
-//!
-//! Mirrors [`crate::terminal`]:
-//!
-//! - [`enter_animation`] — initialize the window state. Idempotent.
-//! - [`show_image`] — rasterize a draw list and present it to the window.
-//! - [`poll_key_event`] — non-blocking poll, returns the next queued
-//!   keyboard event in the same shape as [`crate::terminal::poll_key_event`]:
-//!   `(event_type, key, [alt, ctrl, shift, meta, repeat])`.
-//! - [`exit_animation`] — destroy the window.
-//!
-//! ## Threading
-//!
-//! `winit` requires the event loop to live on the main thread (especially on
-//! macOS). All state is held in a `thread_local!` and the API panics if the
-//! caller drives the window from a non-main thread. Hosts that embed an
-//! interpreter (spython, sgleam) already keep the script on the main thread,
-//! so this restriction is met by construction.
-//!
-//! ## DPI and resize
-//!
-//! The window is created with a logical size matching the [`crate::scene::Scene`]
-//! dimensions. On every present we rasterize the draw list to the *physical*
-//! surface size, so HiDPI scaling and user resizes are handled by re-rendering
-//! at the surface resolution while preserving aspect ratio (letterboxed).
-//!
-//! Unlike [`crate::terminal`], there is no `kitty_supported`/`sixel_supported`
-//! capability dance — opening a window either succeeds or fails with a clear
-//! error. Hosts that want a fallback (e.g. SVG print) should pick the backend
-//! at the host level.
+//! winit needs the event loop on the main thread, so the state lives in a
+//! `thread_local!`. The window opens with the logical size of the scene, and
+//! every present rasterizes at the physical size of the surface, letterboxed,
+//! so HiDPI and a resize keep the aspect ratio. Opening a window succeeds or
+//! fails, so there is no capability query. A host that wants a fallback picks
+//! the backend itself.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -56,9 +34,8 @@ type KeyEventTuple = (i32, String, [bool; 5]);
 
 struct App {
     title: String,
-    /// Size requested for the next window-creation. Set on each
-    /// `show_image` from the draw-list dimensions; the `resumed` callback
-    /// reads it. `None` until the first `show_image`.
+    /// Size of the window to create, from the first `show_image`. `resumed`
+    /// reads it.
     pending_size: Option<(u32, u32)>,
     window: Option<Rc<Window>>,
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
@@ -85,7 +62,7 @@ impl App {
             return;
         }
         let Some((w, h)) = self.pending_size else {
-            // No size requested yet — wait for the first show.
+            // The size comes with the first show.
             return;
         };
         let attrs = WindowAttributes::default()
@@ -128,8 +105,8 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                // Flag closed, not `process::exit` — that would kill a server
-                // hosting other sessions. `wait_event` turns it into `InputEvent::Close`.
+                // process::exit would kill a server that hosts other sessions,
+                // so the frontend reports a close instead.
                 self.closed = true;
                 event_loop.exit();
             }
@@ -144,12 +121,9 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Translate a `winit` key event into one or two Python events.
-///
-/// On the first press (no repeat) we emit **both** `KEYDOWN` and `KEYPRESS`,
-/// so handlers attached only to `on_key_press` still see a tap, while
-/// handlers on `on_key_down` see a clean once-per-press signal. Auto-repeat
-/// emits `KEYPRESS` only; release emits `KEYUP`.
+/// Push the events of a winit key event. A first press gives `KEYDOWN` and
+/// `KEYPRESS`, so a handler on either sees the tap, an auto-repeat gives
+/// `KEYPRESS` only, and a release gives `KEYUP`.
 fn push_key_events(out: &mut VecDeque<KeyEventTuple>, ev: &KeyEvent, mods: ModifiersState) {
     let Some(key) = winit_key_to_string(&ev.logical_key) else {
         return;
@@ -175,8 +149,8 @@ fn push_key_events(out: &mut VecDeque<KeyEventTuple>, ev: &KeyEvent, mods: Modif
     }
 }
 
-/// Map a `winit` logical key to the W3C UI Events string the Python side
-/// expects (matches the table in [`crate::terminal::poll_key_event`]).
+/// Map a winit key to the key name of the W3C UI Events spec, the same table
+/// as [`crate::terminal::poll_key_event`].
 fn winit_key_to_string(key: &Key) -> Option<String> {
     Some(match key {
         Key::Character(s) => s.to_string(),
@@ -223,12 +197,10 @@ thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
 }
 
-/// Initialize the window backend. Idempotent — calling twice without a
-/// matching [`exit_animation`] is a no-op.
-///
-/// The OS window itself is created lazily on the first [`show_image`],
-/// using the draw-list size as the initial logical dimensions. This way
-/// the host doesn't need to predict a size before its first frame.
+/// Set the window state up. A second call without [`exit_animation`] does
+/// nothing. The window itself opens on the first [`show_image`], with the
+/// size of the scene, so the host does not need the size before its first
+/// frame.
 pub fn enter_animation(title: &str) {
     STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
@@ -248,7 +220,7 @@ pub fn enter_animation(title: &str) {
     });
 }
 
-/// Tear down the window. Idempotent.
+/// Destroy the window. A second call does nothing.
 pub fn exit_animation() {
     STATE.with(|cell| {
         cell.borrow_mut().take();
@@ -267,9 +239,8 @@ fn pump_for(timeout: Duration) {
     });
 }
 
-/// Return the next queued keyboard event, or `None` if the queue is empty.
-/// Drives the event loop with a zero-timeout pump first, so freshly-arrived
-/// events are visible.
+/// Return the next queued key event, or `None`. Pumps the event loop first,
+/// so an event that just arrived is in the queue.
 pub fn poll_key_event() -> Option<KeyEventTuple> {
     pump_for(Duration::ZERO);
     STATE.with(|cell| {
@@ -282,14 +253,14 @@ pub fn poll_key_event() -> Option<KeyEventTuple> {
     })
 }
 
-/// Whether the user closed the window since [`enter_animation`].
+/// Returns `true` if the user closed the window since [`enter_animation`],
+/// `false` otherwise.
 pub fn closed() -> bool {
     STATE.with(|cell| cell.borrow().as_ref().map(|s| s.app.closed).unwrap_or(true))
 }
 
-/// Rasterize `scene` and present it in the window. Pumps the event loop first
-/// so window resize / DPI changes take effect on the same frame, and
-/// lazily creates the window using `scene.width` / `scene.height` on the first
+/// Rasterize `scene` and present it. Pumps the event loop first, so a resize
+/// or a DPI change applies to this frame, and opens the window on the first
 /// call.
 pub fn show_image(scene: &crate::scene::Scene) {
     let dl_size = (
@@ -303,8 +274,7 @@ pub fn show_image(scene: &crate::scene::Scene) {
             state.app.pending_size = Some(dl_size);
         }
     });
-    // Pump after setting the size so `resumed` can pick it up on the
-    // first iteration.
+    // `resumed` reads the size on this pump.
     pump_for(Duration::ZERO);
     STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
@@ -330,9 +300,7 @@ pub fn show_image(scene: &crate::scene::Scene) {
         }
 
         let target_px = (w.get(), h.get());
-        // The window fills its surface: unlike the terminal, a draw list
-        // smaller than the window is scaled up rather than pinned to native
-        // size, so there is no cap here.
+        // The scene fills the window, so there is no cap on the scale.
         let scale = crate::pixmap::fit_scale(scene.width, scene.height, target_px);
         let pixmap = match crate::pixmap::rasterize_scene(scene, scale) {
             Some(p) => p,
@@ -348,20 +316,15 @@ pub fn show_image(scene: &crate::scene::Scene) {
     });
 }
 
-/// Copy a [`tiny_skia::Pixmap`] into a softbuffer `0RGB` u32 buffer.
-///
-/// The pixmap is centered + letterboxed when it does not fill the buffer.
-/// The fit preserves aspect ratio, so one axis matches the window and the
-/// other leaves a band; that band is painted black.
+/// Copy `pixmap` into a softbuffer `0RGB` buffer, centered. The fit keeps the
+/// aspect ratio, so one axis may leave a band, and the band is black.
 fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
     let pw = pixmap.width();
     let ph = pixmap.height();
 
-    // Center.
     let off_x = (bw.saturating_sub(pw)) / 2;
     let off_y = (bh.saturating_sub(ph)) / 2;
 
-    // Background.
     buffer.fill(0);
 
     let src = pixmap.pixels();
@@ -370,16 +333,14 @@ fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
         let src_row_start = (y as usize) * (pw as usize);
         let row_w = pw.min(bw - off_x.min(bw)) as usize;
         for x in 0..row_w {
-            // softbuffer wants straight-alpha 0RGB (0x00_RR_GG_BB); alpha is
-            // dropped since the window has no transparency.
+            // softbuffer takes 0RGB, and the window has no transparency.
             let (r, g, b) = crate::pixel::unpremultiply(src[src_row_start + x]);
             buffer[dst_row_start + x] = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
         }
     }
 }
 
-/// Mirrors [`crate::terminal::install_panic_hook`] but currently a no-op:
-/// a window-backed animation has no terminal state to restore, and the OS
-/// will reclaim the window when the process aborts. Provided so hosts can
-/// install hooks symmetrically.
+/// Does nothing. A window has no terminal state to restore after a panic,
+/// and the OS reclaims the window. Exists so a host installs the hook of
+/// either backend the same way.
 pub fn install_panic_hook() {}

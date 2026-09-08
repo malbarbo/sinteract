@@ -1,23 +1,15 @@
-//! Render a [`crate::scene::Scene`] to a PDF byte stream. Native-only;
-//! the WASM build does not link against `pdf-writer`.
+//! Render a [`crate::scene::Scene`] to a PDF byte stream.
 //!
-//! The draw list is replayed via [`Renderer::render`]; this module's
-//! `PdfRenderer` translates each element into PDF content-stream operators
-//! and then assembles a one-page document. The renderer is reusable across
-//! frames — it rebuilds a fresh content stream and output buffer per render.
+//! `PdfRenderer` writes each element as content-stream operators and
+//! assembles a one-page document at the end of the frame. PDF space has y up
+//! and the origin at the bottom left, and the draw list has y down and the
+//! origin at the top left, so the content stream opens with one `cm` that
+//! flips y and scales pixels to points. After it, coordinates go in as they
+//! are.
 //!
-//! Coordinate system: PDF native space is y-up with the origin at the
-//! bottom-left, while the draw list uses y-down with the origin at the
-//! top-left. We apply a global transform `cm 1 0 0 -1 0 H` once at the top of
-//! the content stream so all subsequent coordinates can be emitted verbatim
-//! from the draw list.
-//!
-//! Text: glyphs are emitted as filled paths via [`crate::text::outline`] —
-//! this matches the raster path and avoids embedding a font in the PDF. The
-//! trade-off is that text is not selectable; for v1 of the export this is
-//! acceptable and removes a class of measurement bugs (the rsvg-based pipeline
-//! used the system fontconfig font, not Liberation Sans, and positions did
-//! not line up).
+//! Glyphs go in as filled paths from [`crate::text`], as in the raster
+//! renderer, so the PDF embeds no font and text measures the same in both.
+//! The text is not selectable.
 
 use std::collections::BTreeMap;
 
@@ -30,15 +22,12 @@ use crate::scene::{
     Segment, Segments, Stop, TextNode,
 };
 
-/// Conversion from CSS pixels (the implicit unit of draw-list coordinates,
-/// matching the canvas/SVG renderer) to PDF points: 1 px = 1/96 in,
-/// 1 pt = 1/72 in, so 1 px = 72/96 = 0.75 pt. Without this factor the same
-/// `rectangle(W, H)` would render ~33% larger in the PDF than on screen.
+/// Draw-list coordinates are CSS pixels, 96 per inch, and PDF points are 72
+/// per inch.
 const PX_TO_PT: f32 = 72.0 / 96.0;
 
-/// Quantize an alpha value into a stable integer key (range 0..=1000) so that
-/// the `BTreeMap` of allocated ExtGState resources de-duplicates near-equal
-/// alphas without floating-point key comparisons.
+/// An alpha in thousandths, so `gstates` can key on it and near-equal alphas
+/// share one ExtGState.
 fn alpha_key(a: f32) -> u16 {
     (a.clamp(0.0, 1.0) * 1000.0).round() as u16
 }
@@ -47,19 +36,18 @@ fn alpha_value(key: u16) -> f32 {
     f32::from(key) / 1000.0
 }
 
-/// Reusable PDF renderer: accumulates a content stream + resources, then
-/// assembles a one-page document into `bytes` per render.
+/// Accumulates a content stream and its resources, then assembles a one-page
+/// document into `bytes`.
 struct PdfRenderer {
     width: f32,
     height: f32,
     content: Content,
-    /// (fill_alpha_key, stroke_alpha_key) -> graphics-state index.
+    /// ExtGState index by fill and stroke alpha key.
     gstates: BTreeMap<(u16, u16), u32>,
-    /// Gradients seen so far, kept until [`PdfRenderer::assemble`] writes the
-    /// function/shading/pattern objects. The index in this vec is the `/P{n}`
-    /// name used in the content stream and the Resources/Pattern dictionary.
+    /// The gradients of the frame. The index of a gradient is its `/Pn` name
+    /// in the content stream and in the pattern dictionary.
     gradients: Vec<Gradient>,
-    /// Assembled document bytes from the most recent render.
+    /// The document of the last render.
     bytes: Vec<u8>,
 }
 
@@ -75,22 +63,20 @@ impl PdfRenderer {
         }
     }
 
-    /// Consume the renderer and hand back the assembled document bytes (for
-    /// one-shot callers that want to move the result out rather than borrow).
     fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
 
-    /// Register a gradient and return its content-stream pattern name `Pn`.
+    /// Returns the `/Pn` name of `g`.
     fn push_gradient(&mut self, g: Gradient) -> String {
         let idx = self.gradients.len();
         self.gradients.push(g);
         format!("P{idx}")
     }
 
-    /// Ensure an ExtGState resource exists for `(fa, sa)` and emit `/GSn gs`.
-    /// Skip emission entirely when both alphas are 1.0 (the PDF default), so
-    /// fully-opaque output stays free of gstate noise.
+    /// Emits `/Gsn gs` for the alpha pair, allocating the ExtGState the first
+    /// time. Both alphas at 1.0 is the PDF default, so that pair emits
+    /// nothing.
     fn apply_alpha(&mut self, fa: f32, sa: f32) {
         let fk = alpha_key(fa);
         let sk = alpha_key(sa);
@@ -103,9 +89,8 @@ impl PdfRenderer {
         self.content.set_parameters(Name(name.as_bytes()));
     }
 
-    /// Decide what to emit for a paint. Solid → `set_*_rgb`; gradient →
-    /// `cs /Pattern\n scn /Pn`. `target` picks the fill or stroke operators,
-    /// which is the only thing that differs between the two.
+    /// Sets the fill or the stroke paint. A gradient goes through the Pattern
+    /// color space and its `/Pn` name.
     fn bind_paint(&mut self, paint: &IrPaint, target: PaintTarget) {
         let gradient = match paint {
             IrPaint::Solid(c) => {
@@ -141,9 +126,8 @@ enum PaintTarget {
     Stroke,
 }
 
-/// Emits `restore_state` on scope exit — including on unwind — so a clip's
-/// `save_state` in [`Paint::with_clip`] is always balanced even if the
-/// `inside` body panics.
+/// Emits `restore_state` when dropped, so the `save_state` of a clip in
+/// [`Paint::with_clip`] is balanced even when the body panics.
 struct RestoreGuard<'a> {
     canvas: &'a mut PdfRenderer,
 }
@@ -155,16 +139,13 @@ impl Drop for RestoreGuard<'_> {
 }
 
 impl Paint for PdfRenderer {
-    /// Reset the content stream and resources for a fresh `width × height`
-    /// page and emit the base transform. PDF allocation never fails, so this
-    /// is infallible — the `Result` is the trait's, for backends that do
-    /// allocate here.
+    /// Starts a new page and writes the base transform. Nothing here
+    /// allocates a surface, so it never fails.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
         self.width = width.max(1.0);
         self.height = height.max(1.0);
         self.gstates.clear();
         self.gradients.clear();
-        // y-flip + px→pt scale (see module docs); s=PX_TO_PT gives a=s, d=-s, f=s*h.
         let s = PX_TO_PT;
         let mut content = Content::new();
         content.transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
@@ -173,25 +154,22 @@ impl Paint for PdfRenderer {
     }
 
     fn draw_path(&mut self, path: &Path) {
-        // For solid paints: alpha rides the path. For gradients: PDF
-        // gradients here are RGB-only; per-stop alpha is dropped, and a
-        // uniform alpha is taken from the first stop (best-effort — a soft-
-        // mask would be the next step).
         let style = &path.style;
         let do_fill = style.draws_fill();
         let do_stroke = style.draws_stroke();
         if !do_fill && !do_stroke {
             return;
         }
-        // Asked of the walk rather than of a materialized op list. It is the
-        // elevated walk because that is what gets written, and it can come up
-        // empty on a path a `Move` never opened -- which must not emit the
-        // state setup below.
+        // The content stream receives the elevated walk. It is empty for a
+        // path with no Move, and that path must not leave a `q ... Q` with no
+        // geometry.
         if path.segments().cubics().next().is_none() {
             return;
         }
 
         self.content.save_state();
+        // A shading has no alpha, so a gradient takes the alpha of its first
+        // stop for the whole path.
         let fill_alpha = if do_fill {
             style.fill.primary_color().a
         } else {
@@ -204,8 +182,7 @@ impl Paint for PdfRenderer {
         };
         self.apply_alpha(fill_alpha, stroke_alpha);
 
-        // Allocate any pattern names *before* writing the path ops so the
-        // `cs /Pattern\n /Pn scn` operators land in the right order.
+        // PDF forbids a color operator inside a path object.
         if do_fill {
             self.bind_paint(&style.fill, PaintTarget::Fill);
         }
@@ -230,8 +207,7 @@ impl Paint for PdfRenderer {
             self.content.close_path();
         }
         paint(&mut self.content, do_fill, do_stroke, style.fill_rule);
-        // Pattern color spaces persist on the gstate, so restore_state below
-        // is what cleans them up — no explicit reset needed.
+        // restore_state also resets the pattern color space.
         self.content.restore_state();
     }
 
@@ -256,8 +232,6 @@ impl Paint for PdfRenderer {
             }
         }
         self.content.end_path();
-        // save_state above is unconditional, so the restore is always
-        // balanced; the guard also fires it on unwind.
         let guard = RestoreGuard { canvas: self };
         inside(&mut *guard.canvas)
     }
@@ -294,21 +268,17 @@ pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
     renderer.into_bytes()
 }
 
-/// Layout of one gradient as PDF indirect objects: a list of sub-function
-/// refs (≥ 1; the last one is the entry function — either an exponential or
-/// a stitching), the shading ref, and the pattern ref.
+/// The indirect objects of one gradient.
 struct GradientRefs {
-    /// All function refs in dependency order; the last entry is the function
-    /// referenced by the shading dictionary.
+    /// The functions, with the one the shading references last.
     functions: Vec<Ref>,
     shading: Ref,
     pattern: Ref,
 }
 
 impl PdfRenderer {
-    /// Assemble the accumulated content + resources into a one-page document
-    /// and store it in `self.bytes`. Takes the content and resource maps by
-    /// value (leaving fresh empties), so the next render starts clean.
+    /// Writes the page into `bytes` and empties the content and the resources
+    /// for the next render.
     fn assemble(&mut self) {
         let w = self.width;
         let h = self.height;
@@ -316,7 +286,6 @@ impl PdfRenderer {
         let gradients = std::mem::take(&mut self.gradients);
         let buf = std::mem::replace(&mut self.content, Content::new()).finish();
 
-        // Indirect-reference IDs.
         let catalog_id = Ref::new(1);
         let pages_id = Ref::new(2);
         let page_id = Ref::new(3);
@@ -333,12 +302,12 @@ impl PdfRenderer {
             .map(|(&(fk, sk), &idx)| ((fk, sk), alloc(), idx))
             .collect();
 
-        // Allocate function/shading/pattern refs for each gradient.
         let gradient_refs: Vec<GradientRefs> = gradients
             .iter()
             .map(|g| {
                 let prepared = prepare_stops(&g.stops);
-                // 2 stops → 1 exponential; more → one sub-fn per interval.
+                // Two stops need one exponential function. More need one per
+                // interval and a stitching function.
                 let n_subfns = if prepared.len() <= 2 {
                     1
                 } else {
@@ -356,9 +325,8 @@ impl PdfRenderer {
             .collect();
 
         let mut pdf = Pdf::new();
-        // Match the LaTeX/tectonic default output level so embedded images don't
-        // trip "newer than current output PDF setting" warnings. We don't use
-        // anything that requires 1.6+.
+        // Version 1.5 is what tectonic writes, so a document that embeds this
+        // one gets no version warning.
         pdf.set_version(1, 5);
         pdf.catalog(catalog_id).pages(pages_id);
         pdf.pages(pages_id).kids([page_id]).count(1);
@@ -415,14 +383,10 @@ impl PdfRenderer {
     }
 }
 
-/// Normalize stops so they cover [0, 1] and there is at least 2 entries:
-///   * Empty stops produce a single black stop at 0 (the caller already
-///     filtered out invisible paints, so this should be unreachable; kept
-///     defensive).
-///   * Single stop: duplicate it so we have a [0, 1] constant gradient.
-///   * If the first/last stop is not at 0/1, pad with the boundary color
-///     so colors extend past the gradient axis (CSS/SVG semantics).
-///   * Force monotonic non-decreasing offsets clamped to [0, 1].
+/// The stops sorted, clamped to [0, 1], and padded so there are at least
+/// two, the first at 0 and the last at 1. The pad repeats the boundary
+/// color, as in CSS. No stops give one black stop, a case the visibility
+/// check already excludes.
 fn prepare_stops(stops: &[Stop]) -> Vec<Stop> {
     let mut out: Vec<Stop> = stops
         .iter()
@@ -482,9 +446,7 @@ fn rgb_components(c: Rgba) -> [f32; 3] {
 fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs) {
     let stops = prepare_stops(&gradient.stops);
 
-    // 1. Subfunctions + (optional) stitching function.
     let main_fn_ref = if stops.len() == 2 {
-        // Single exponential c0 → c1 over [0, 1].
         let r = refs.functions[0];
         let mut f = pdf.exponential_function(r);
         f.domain([0.0, 1.0]);
@@ -495,8 +457,6 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs
         f.finish();
         r
     } else {
-        // (N-1) sub-exponentials + 1 stitching function. The last ref in
-        // `functions` is the stitch; the first (N-1) are sub-exps.
         let n_subfns = stops.len() - 1;
         debug_assert_eq!(refs.functions.len(), n_subfns + 1);
         for i in 0..n_subfns {
@@ -514,17 +474,14 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs
         stitch.domain([0.0, 1.0]);
         stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
         stitch.functions(refs.functions[..n_subfns].iter().copied());
-        // Bounds: interior stop offsets (exclude first and last).
         stitch.bounds(stops[1..stops.len() - 1].iter().map(|s| s.offset));
-        // Encode: each sub-function consumes its slice of [0, 1] and maps
-        // it back to its own [0, 1] domain.
+        // Each sub-function maps its interval back to [0, 1].
         let encode: Vec<f32> = (0..n_subfns).flat_map(|_| [0.0, 1.0]).collect();
         stitch.encode(encode);
         stitch.finish();
         stitch_ref
     };
 
-    // 2. Shading dictionary.
     {
         let mut sh = pdf.function_shading(refs.shading);
         sh.color_space().device_rgb();
@@ -535,21 +492,17 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs
             }
             GradientGeom::Radial { cx, cy, radius } => {
                 sh.shading_type(FunctionShadingType::Radial);
-                // (cx0, cy0, r0, cx1, cy1, r1) — SVG-style single center +
-                // radius: r0 = 0, r1 = radius, both centers equal.
+                // One center and a zero inner radius, as in SVG.
                 sh.coords([cx, cy, 0.0, cx, cy, radius]);
             }
         }
-        // PDF Type 2/3 shadings only support pad-or-transparent via /Extend.
-        // Honoring Reflect/Repeat would require a Type 4 PostScript function
-        // that folds/wraps t and inlines color interpolation — punt for now;
-        // wire round-trip preserves the mode but PDF renders it as Pad.
+        // A Type 2 or 3 shading only pads, so Reflect and Repeat render as
+        // Pad. They would need a Type 4 function.
         sh.extend([true, true]);
         sh.function(main_fn_ref);
         sh.finish();
     }
 
-    // 3. Shading pattern dictionary.
     {
         let mut pat = pdf.shading_pattern(refs.pattern);
         pat.shading_ref(refs.shading);
@@ -557,9 +510,8 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs
     }
 }
 
-/// Write `segments` into the content stream as PDF path ops. PDF has no
-/// quadratic operator, so the walk comes through [`Segments::cubics`], which
-/// owns the elevation. Shared by fill/stroke paths and clip geometry.
+/// Writes `segments` as path ops. PDF has no quadratic operator, so the walk
+/// goes through [`Segments::cubics`].
 fn emit_segments(segments: Segments<'_>, content: &mut Content) {
     for seg in segments.cubics() {
         match seg {
@@ -579,7 +531,7 @@ fn emit_segments(segments: Segments<'_>, content: &mut Content) {
             } => {
                 content.cubic_to(c1x, c1y, c2x, c2y, x, y);
             }
-            // `cubics()` yields no quads.
+            // cubics() yields no quadratic, so this arm never runs.
             Segment::Quad { x, y, .. } => {
                 content.line_to(x, y);
             }
@@ -635,17 +587,13 @@ fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
         let [r, g, b] = rgb_components(node.stroke);
         canvas.content.set_stroke_rgb(r, g, b);
         canvas.content.set_line_width(node.stroke_width);
-        // Cap/join intentionally omitted: text outlines are closed contours
-        // on smooth curves, so the PDF defaults (butt cap, miter join) are
-        // visually identical to anything the producer might pick.
+        // A glyph is a closed smooth contour, so the cap and the join do not
+        // show.
     }
-    // `node.transform` is already in the PDF `cm` convention.
     canvas.content.transform(node.transform);
 
     {
-        // PDF has no quadratic operator; ElevateQuads tracks the current point
-        // through the contour, `close` included, so this adapter does not have
-        // to reconstruct it from what it already wrote.
+        // PDF has no quadratic operator.
         let mut adapter = PdfOutline {
             content: &mut canvas.content,
         };
@@ -673,8 +621,8 @@ impl crate::text::OutlineBuilder for PdfOutline<'_> {
         self.content.line_to(x, y);
     }
     fn quad_to(&mut self, _cx: f32, _cy: f32, x: f32, y: f32) {
-        // Unreachable: glyphs reach this adapter through ElevateQuads. Degrade
-        // to a line rather than panic if someone wires it up directly.
+        // Glyphs come through ElevateQuads, so this never runs. A line is the
+        // fallback for a direct caller.
         self.content.line_to(x, y);
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
@@ -719,8 +667,7 @@ mod tests {
         rect(&mut scene, red_fill(1.0), 0.0, 0.0, 100.0, 50.0);
         let out = render_to_pdf(&scene);
         assert!(out.starts_with(b"%PDF-"));
-        // Look for the fill op `f` (non-zero winding). pdf-writer emits
-        // streams uncompressed by default so we can search byte-wise.
+        // pdf-writer does not compress the stream, so the bytes are searchable.
         let needle = b" f\n";
         assert!(
             out.windows(needle.len()).any(|w| w == needle)
@@ -733,9 +680,8 @@ mod tests {
 
     #[test]
     fn a_path_no_move_opened_emits_nothing() {
-        // The elevated walk drops a quadratic with no current point, so this
-        // path has nothing to write -- and must not leave a `q ... f Q` with
-        // no geometry in it either.
+        // The elevated walk drops a quadratic with no current point, so the
+        // path must not leave a `q ... f Q` with no geometry.
         let mut scene = Scene::new(100.0, 50.0);
         scene.path(red_fill(1.0)).quad_to(10.0, 10.0, 20.0, 20.0);
         assert_eq!(
@@ -776,13 +722,9 @@ mod tests {
         assert!(s.contains(" cm"), "expected cm transform in content stream");
     }
 
-    /// The underline contour is emitted through the same `PdfOutline` adapter
-    /// as the glyphs, so it must add path ops beyond the un-underlined run.
     #[test]
     fn output_reborrows_the_last_assembled_document() {
-        // assemble() now stores into self.bytes and output() only borrows, so
-        // the two must agree and a second look must not re-assemble an empty
-        // document.
+        // A second output must not re-assemble an empty document.
         let mut scene = Scene::new(20.0, 20.0);
         rect(&mut scene, red_fill(1.0), 0.0, 0.0, 10.0, 10.0);
         let mut renderer = PdfRenderer::new();
@@ -828,8 +770,6 @@ mod tests {
 
     #[test]
     fn dash_pattern_emits_d_operator() {
-        // A stroked rect with dash_array [3, 2] dash_offset 1 should produce
-        // the PDF `d` operator with the same numbers in the content stream.
         let mut scene = Scene::new(100.0, 50.0);
         let style = PathStyle {
             stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
@@ -847,7 +787,6 @@ mod tests {
 
     #[test]
     fn miter_limit_emits_m_operator() {
-        // Miter joins with non-default miter_limit should emit the `M` op.
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
             stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
@@ -864,11 +803,6 @@ mod tests {
 
     #[test]
     fn linear_gradient_emits_axial_shading() {
-        // 2-stop linear gradient should emit:
-        //  - one ExponentialFunction with the two colors,
-        //  - one FunctionShading (ShadingType 2 = axial) referencing it,
-        //  - one ShadingPattern,
-        //  - the content stream using `cs /Pattern\n /P0 scn` for the fill.
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
             fill: crate::scene::Paint::gradient(crate::scene::Gradient::linear(
@@ -902,19 +836,17 @@ mod tests {
         rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
         let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
-        // ShadingType 2 = axial gradient.
+        // ShadingType 2 is axial.
         assert!(
             s.contains("/ShadingType 2") || s.contains("/ShadingType  2"),
             "axial shading missing: {s}"
         );
-        // FunctionType 2 = exponential interpolation.
+        // FunctionType 2 is exponential.
         assert!(
             s.contains("/FunctionType 2") || s.contains("/FunctionType  2"),
             "exponential function missing"
         );
-        // Pattern resource registered as /P0.
         assert!(s.contains("/P0"), "pattern name missing: {s}");
-        // Content stream switches to Pattern colorspace then names /P0.
         assert!(s.contains("/Pattern cs"), "missing pattern colorspace: {s}");
     }
 
@@ -952,7 +884,7 @@ mod tests {
         rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
         let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
-        // ShadingType 3 = radial gradient.
+        // ShadingType 3 is radial.
         assert!(
             s.contains("/ShadingType 3") || s.contains("/ShadingType  3"),
             "radial shading missing: {s}"
@@ -961,8 +893,6 @@ mod tests {
 
     #[test]
     fn multi_stop_gradient_uses_stitching_function() {
-        // 3 stops should produce a Type 3 (stitching) function wrapping two
-        // Type 2 sub-functions.
         let mut scene = Scene::new(60.0, 10.0);
         let style = PathStyle {
             fill: crate::scene::Paint::gradient(crate::scene::Gradient::linear(
@@ -1005,12 +935,11 @@ mod tests {
         rect(&mut scene, style, 0.0, 0.0, 60.0, 10.0);
         let out = render_to_pdf(&scene);
         let s = String::from_utf8_lossy(&out);
-        // Stitching function present (FunctionType 3).
+        // FunctionType 3 is stitching.
         assert!(
             s.contains("/FunctionType 3") || s.contains("/FunctionType  3"),
             "stitching function missing: {s}"
         );
-        // The interior bound 0.5 should appear in the /Bounds array.
         assert!(s.contains("/Bounds [0.5]"), "bounds missing: {s}");
     }
 }

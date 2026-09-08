@@ -1,5 +1,4 @@
-//! Value types shared by the [`crate::renderer::Renderer`] trait and its
-//! implementations.
+//! The value types of a [`Scene`] and the builders that make them.
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rgba {
@@ -16,20 +15,20 @@ pub struct Stop {
     pub color: Rgba,
 }
 
-/// How a gradient extends past its defined axis (CSS/SVG `spreadMethod`).
+/// How a gradient continues past its axis, as the SVG `spreadMethod`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SpreadMode {
-    /// Hold the boundary stop colors past the axis.
+    /// Repeat the color of the last stop.
     #[default]
     Pad = 0,
-    /// Mirror the gradient around each axis end.
+    /// Mirror the ramp at each end.
     Reflect = 1,
-    /// Tile the gradient periodically.
+    /// Repeat the ramp.
     Repeat = 2,
 }
 
-/// Where a gradient's color ramp is swept, in path-local coordinates.
+/// The axis of a gradient, in path coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GradientGeom {
     /// Along the line from (x0, y0) to (x1, y1).
@@ -38,8 +37,7 @@ pub enum GradientGeom {
     Radial { cx: f32, cy: f32, radius: f32 },
 }
 
-/// A color ramp and the geometry it is swept along. `stops` are pre-sorted by
-/// offset.
+/// A color ramp along an axis. `stops` are sorted by offset.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gradient {
     pub geom: GradientGeom,
@@ -64,16 +62,15 @@ impl Gradient {
         }
     }
 
-    /// Override the [`SpreadMode::Pad`] the constructors default to.
     pub fn with_spread(mut self, spread: SpreadMode) -> Self {
         self.spread = spread;
         self
     }
 }
 
-/// Fill or stroke paint — solid color or gradient. The gradient is boxed:
-/// solid is the overwhelmingly common case, and inlining a `Gradient` here
-/// would widen every `PathStyle`, and so every `Element`, by 40 bytes.
+/// A fill or a stroke. The gradient is boxed because a solid color is the
+/// common case, and a `Gradient` inline would add 40 bytes to every
+/// `PathStyle` and so to every `Element`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(Rgba),
@@ -87,19 +84,16 @@ impl Default for Paint {
 }
 
 impl Paint {
-    /// Convenience: solid paint from raw bytes.
     pub fn rgba(r: u8, g: u8, b: u8, a: f32) -> Self {
         Self::Solid(Rgba { r, g, b, a })
     }
 
-    /// Gradient paint, boxing for the caller.
     pub fn gradient(g: Gradient) -> Self {
         Self::Gradient(Box::new(g))
     }
 
-    /// Whether this paint would draw at least one visible pixel. Used by
-    /// renderers as a fast cull (skip both the fill and stroke when neither
-    /// would mark the canvas).
+    /// Returns `true` if the paint marks at least one pixel, `false`
+    /// otherwise. A renderer skips a fill or a stroke that does not.
     pub fn is_visible(&self) -> bool {
         match self {
             Self::Solid(c) => c.a > 0.0,
@@ -107,9 +101,8 @@ impl Paint {
         }
     }
 
-    /// First stop's color for gradients, or the solid color. Used as the
-    /// fallback when a renderer cannot honor gradients (or as a tint for
-    /// effects keyed on a single color).
+    /// The solid color, or the color of the first stop of a gradient, for a
+    /// renderer that cannot draw a gradient.
     pub fn primary_color(&self) -> Rgba {
         match self {
             Self::Solid(c) => *c,
@@ -118,10 +111,10 @@ impl Paint {
     }
 }
 
-/// A stroke dash pattern: on/off lengths in path units, repeating once
-/// consumed, started `offset` units in. Constructed only through
-/// [`Dash::new`], which rejects an empty pattern — a dash with no lengths is
-/// a solid stroke, and that case belongs in the `Option`, not in this type.
+/// A dash pattern. `array` alternates on and off lengths in path units and
+/// repeats, and the pattern starts `offset` units in. [`Dash::new`] rejects
+/// an empty array, because a dash with no lengths is a solid stroke, and
+/// that case is the `None` of `PathStyle::dash`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dash {
     array: Box<[f32]>,
@@ -143,8 +136,8 @@ impl Dash {
     }
 }
 
-/// SVG `stroke-miterlimit` default. Joins with computed miter length above
-/// this threshold (relative to stroke width) fall back to bevel.
+/// The SVG default of `stroke-miterlimit`. A join whose miter length, in
+/// stroke widths, is above the limit becomes a bevel.
 pub const DEFAULT_MITER_LIMIT: f32 = 4.0;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -157,19 +150,19 @@ pub struct PathStyle {
     pub fill_rule: FillRule,
     pub closed: bool,
     pub miter_limit: f32,
-    /// `None` = solid stroke. Boxed: dashing is rare and a `Dash` inline
-    /// would cost every style 16 bytes it almost never uses.
+    /// `None` is a solid stroke. Boxed because a dash is rare and a `Dash`
+    /// inline would add 16 bytes to every style.
     pub dash: Option<Box<Dash>>,
 }
 
 impl PathStyle {
-    /// Whether the fill would mark the canvas.
+    /// Returns `true` if the fill marks the canvas, `false` otherwise.
     pub fn draws_fill(&self) -> bool {
         self.fill.is_visible()
     }
 
-    /// Whether the stroke would mark the canvas — a zero width draws nothing
-    /// however visible the paint is.
+    /// Returns `true` if the stroke marks the canvas, `false` otherwise. A
+    /// zero width draws nothing, whatever the paint.
     pub fn draws_stroke(&self) -> bool {
         self.stroke.is_visible() && self.stroke_width > 0.0
     }
@@ -217,12 +210,8 @@ pub enum FillRule {
     EvenOdd = 1,
 }
 
-/// Arbitrary clip region described by a verb/coord path (same encoding as
-/// [`Path`]). Sub-paths are treated as implicitly closed — callers do not
-/// have to add a final line back to the starting point. `fill_rule` decides
-/// which sub-regions count as "inside".
-///
-/// Read the geometry back via [`ClipPath::segments`].
+/// A clip region. A sub-path closes implicitly, so the caller does not add a
+/// line back to its start. `fill_rule` decides what is inside.
 #[derive(Clone, Debug, Default)]
 pub struct ClipPath {
     segs: Vec<Segment>,
@@ -230,18 +219,15 @@ pub struct ClipPath {
 }
 
 impl ClipPath {
-    /// Start building a clip with the given fill rule.
     pub fn builder(fill_rule: FillRule) -> ClipPathBuilder {
         ClipPathBuilder::new(fill_rule)
     }
 
-    /// The segment buffer, for the wire decoder to refill in place. See
-    /// [`Path::segments_mut`].
+    /// For the wire decoder, which refills a clip in place.
     pub(crate) fn segments_mut(&mut self) -> &mut Vec<Segment> {
         &mut self.segs
     }
 
-    /// Walk the clip's segments.
     pub fn segments(&self) -> Segments<'_> {
         Segments(self.segs.iter())
     }
@@ -256,25 +242,20 @@ pub enum FontStyle {
     Oblique = 2,
 }
 
-/// Text node fields. Glyphs are drawn in "natural" text space (origin at
-/// the baseline-left, units in `size`-pixel font units) and then mapped to
-/// canvas pixels by [`Self::transform`]. The transform follows the PDF
-/// `cm` / SVG `matrix(...)` convention:
+/// A text run. The glyphs are laid out in text space, with the origin at
+/// the left of the baseline and `size` pixels per em, and `transform` maps
+/// them to the canvas in the convention of the PDF `cm` operator:
 ///
 /// ```text
 /// x' = transform[0] * x + transform[2] * y + transform[4]
 /// y' = transform[1] * x + transform[3] * y + transform[5]
 /// ```
 ///
-/// The producer is expected to bake "fit to bounding box", rotation, and
-/// mirroring into this matrix — see [`text_box_affine`] for the canonical
-/// helper that mirrors the legacy `(cx, cy, bw, bh, angle)` API.
-///
-/// `family` is the resolved font family — the name of the family the
-/// renderer that produced this node actually used to measure the glyphs
-/// (after fallback). Empty means "use the renderer's default Sans". On the
-/// wire (`simage::wire`) clients honor it so layout stays stable across
-/// hosts. `weight` follows CSS conventions (400 = Regular, 700 = Bold).
+/// The producer puts the fit to a box, the rotation and the mirroring in
+/// the matrix, with [`text_box_affine`]. `family` is the family the
+/// producer measured with, after fallback, so a client lays the text out
+/// as the server did. An empty family is the default Sans. `weight` is the
+/// CSS weight, 400 for Regular and 700 for Bold.
 #[derive(Clone, Debug)]
 pub struct TextNode {
     pub fill: Rgba,
@@ -282,8 +263,8 @@ pub struct TextNode {
     pub stroke_width: f32,
     pub transform: [f32; 6],
     pub size: f32,
-    /// Boxed rather than a `String`: it is only ever read as `&str`, and the
-    /// 8 bytes saved keep [`Element`] the size of its `Path` variant.
+    /// A `Box<str>` saves 8 bytes over a `String`, which keeps [`Element`]
+    /// the size of its `Path` variant.
     pub family: Box<str>,
     pub weight: u16,
     pub style: FontStyle,
@@ -297,9 +278,6 @@ impl Default for TextNode {
             fill: Rgba::default(),
             stroke: Rgba::default(),
             stroke_width: 0.0,
-            // Identity affine — renders glyphs in their natural orientation
-            // at the origin. Callers that want a translated/rotated/fitted
-            // text run go through [`text_box_affine`].
             transform: translate(0.0, 0.0),
             size: 0.0,
             family: Box::default(),
@@ -311,32 +289,27 @@ impl Default for TextNode {
     }
 }
 
-/// The `cm` / `matrix(...)` affine that scales by `(sx, sy)`, rotates by
-/// `angle_deg`, then translates to `(e, f)`.
+/// The affine that scales by `(sx, sy)`, rotates by `angle_deg` and then
+/// translates to `(e, f)`.
 fn rotate_scale_at(sx: f32, sy: f32, angle_deg: f32, e: f32, f: f32) -> [f32; 6] {
     let (st, ct) = angle_deg.to_radians().sin_cos();
     [sx * ct, sx * st, -sy * st, sy * ct, e, f]
 }
 
-/// The identity affine translated to `(e, f)` — the degenerate-input fallback
-/// shared by the `*_box_affine` helpers.
 fn translate(e: f32, f: f32) -> [f32; 6] {
     [1.0, 0.0, 0.0, 1.0, e, f]
 }
 
-/// Map `(x, y)` through a `cm` / `matrix(...)` affine.
 fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
-/// Compose the affine for "fit the rendered text into a rotated bounding
-/// box of size `bw × bh` centred on `(cx, cy)`". Measures the text once at
-/// `size` via [`crate::text`] (same code the renderers use, so producer
-/// and backend agree) and returns `[a, b, c, d, e, f]` in the PDF `cm` /
-/// SVG `matrix(...)` convention. Negative `bw` mirrors horizontally;
-/// negative `bh` mirrors vertically. Empty or zero-sized text returns the
-/// identity-translated-to-`(cx, cy)` matrix — the renderer short-circuits
-/// at the same gate, so the choice is cosmetic.
+/// The affine that fits the text into a box of `bw` by `bh` centred on
+/// `(cx, cy)` and rotated by `angle_deg`. The text is measured with
+/// [`crate::text`], the same code as the renderers, so the producer and the
+/// backend agree. A negative `bw` mirrors horizontally and a negative `bh`
+/// vertically. Text that measures zero gets a translation to `(cx, cy)`,
+/// and the renderer draws nothing for it anyway.
 #[allow(clippy::too_many_arguments)]
 pub fn text_box_affine(
     family: &str,
@@ -364,13 +337,10 @@ pub fn text_box_affine(
     rotate_scale_at(bw / orig_w, bh / orig_h, angle_deg, cx, cy)
 }
 
-/// A bitmap blit. The `id` references a previously-uploaded asset
-/// (`Message::Asset` on the wire); the renderer is responsible for
-/// resolving it to actual pixels. The 6-float affine maps the bitmap's
-/// natural image-pixel coordinates `(0..img_w, 0..img_h)` onto the canvas,
-/// same PDF `cm` / SVG `matrix(...)` convention as [`TextNode::transform`].
-/// See [`bitmap_box_affine`] for the canonical "fit in a rotated box"
-/// helper.
+/// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
+/// the wire, and the renderer resolves it to pixels. `transform` maps the
+/// image pixels, `(0..img_w, 0..img_h)`, to the canvas, in the convention
+/// of [`TextNode::transform`]. [`bitmap_box_affine`] computes it for a box.
 #[derive(Clone, Copy, Debug)]
 pub struct Bitmap {
     pub id: u32,
@@ -386,11 +356,10 @@ impl Default for Bitmap {
     }
 }
 
-/// Compose the affine for "fit the bitmap into a rotated bounding box of
-/// size `w × h` centred on `(cx, cy)`". `img_w`/`img_h` are the asset's
-/// natural pixel dimensions. Negative `w` mirrors horizontally; negative
-/// `h` mirrors vertically. Zero-sized inputs return the identity-
-/// translated-to-`(cx, cy)` matrix.
+/// The affine that fits an image of `img_w` by `img_h` pixels into a box of
+/// `w` by `h` centred on `(cx, cy)` and rotated by `angle_deg`. A negative
+/// `w` mirrors horizontally and a negative `h` vertically. An empty image
+/// gets a translation to `(cx, cy)`.
 #[allow(clippy::too_many_arguments)]
 pub fn bitmap_box_affine(
     img_w: u32,
@@ -404,18 +373,15 @@ pub fn bitmap_box_affine(
     if img_w == 0 || img_h == 0 {
         return translate(cx, cy);
     }
-    // Centre on (cx,cy): M = T(cx,cy) · R(theta) · S(sx,sy) · T(-iw/2, -ih/2),
-    // i.e. offset the rotated-scaled image centre back onto (cx, cy).
+    // Move the centre of the rotated and scaled image onto (cx, cy).
     let m = rotate_scale_at(w / img_w as f32, h / img_h as f32, angle_deg, 0.0, 0.0);
     let (ox, oy) = apply_affine(m, img_w as f32 * 0.5, img_h as f32 * 0.5);
     [m[0], m[1], m[2], m[3], cx - ox, cy - oy]
 }
 
-/// A path segment's verb byte on the wire. Scenes hold typed [`Segment`]s; this
-/// is the flat form they are encoded to and decoded from, and the codec is the
-/// only place it appears. The discriminants are stable: they match the byte
-/// values used in the wire format (`verbMove`/`verbLine`/`verbQuad`/`verbCubic`
-/// in `schema/frame.capnp`).
+/// The verb byte of a [`Segment`] on the wire. Only the codec uses it. The
+/// discriminants are the `verbMove`, `verbLine`, `verbQuad` and `verbCubic`
+/// values of `schema/frame.capnp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SegmentKind {
@@ -426,8 +392,7 @@ pub enum SegmentKind {
 }
 
 impl SegmentKind {
-    /// Decode a wire byte. Returns `None` on an unknown verb — callers at
-    /// the wire boundary surface this as `wire::Error::UnknownVerb`.
+    /// Returns `None` for an unknown verb.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0 => Some(Self::Move),
@@ -438,7 +403,7 @@ impl SegmentKind {
         }
     }
 
-    /// Number of floats this verb pulls from the wire's coord stream.
+    /// How many floats the verb takes from the coord stream.
     pub fn coords(self) -> usize {
         match self {
             Self::Move | Self::Line => 2,
@@ -448,10 +413,9 @@ impl SegmentKind {
     }
 }
 
-/// One path segment — a verb and its coordinates in one value. This is how a
-/// [`Path`] and a [`ClipPath`] store their geometry and what
-/// [`Path::segments`] / [`ClipPath::segments`] yield, so there is no parallel
-/// verb/coord pair for anything but the codec to keep in step.
+/// One segment of a [`Path`] or a [`ClipPath`]. A verb and its coordinates
+/// are one value, so only the codec keeps a verb stream and a coord
+/// stream in step.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Segment {
     Move {
@@ -479,7 +443,6 @@ pub enum Segment {
 }
 
 impl Segment {
-    /// This segment's verb byte on the wire.
     pub fn kind(self) -> SegmentKind {
         match self {
             Self::Move { .. } => SegmentKind::Move,
@@ -489,9 +452,9 @@ impl Segment {
         }
     }
 
-    /// This segment's coordinates in wire order. Only the first
-    /// [`SegmentKind::coords`] slots are meaningful — a fixed array so the
-    /// encoder reads them without allocating per segment.
+    /// The coordinates in wire order. Only the first [`SegmentKind::coords`]
+    /// slots mean anything. A fixed array spares the encoder an allocation
+    /// per segment.
     pub(crate) fn wire_coords(self) -> [f32; 6] {
         match self {
             Self::Move { x, y } | Self::Line { x, y } => [x, y, 0.0, 0.0, 0.0, 0.0],
@@ -508,13 +471,12 @@ impl Segment {
     }
 }
 
-/// Walk over a path's segments. The geometry is stored typed, so this is a
-/// slice iterator — nothing is decoded and nothing can run short.
+/// An iterator over the segments of a path.
 #[must_use = "Segments yields nothing unless iterated"]
 pub struct Segments<'a>(std::slice::Iter<'a, Segment>);
 
 impl<'a> Segments<'a> {
-    /// This walk with quadratics elevated to cubics. See [`Cubics`].
+    /// The same walk with every quadratic elevated to a cubic.
     pub fn cubics(self) -> Cubics<'a> {
         Cubics {
             inner: self,
@@ -537,8 +499,8 @@ impl Iterator for Segments<'_> {
 
 impl ExactSizeIterator for Segments<'_> {}
 
-/// Promote a quadratic Bézier — current point `p0`, control `(cx, cy)`,
-/// endpoint `(x, y)` — to a cubic's two control points.
+/// The two control points of the cubic equal to the quadratic from `p0`
+/// through the control `(cx, cy)` to `(x, y)`.
 pub(crate) fn quad_to_cubic(
     p0: (f32, f32),
     cx: f32,
@@ -555,10 +517,9 @@ pub(crate) fn quad_to_cubic(
     )
 }
 
-/// [`Segments`] with every quadratic elevated to a cubic, for backends that
-/// have no quadratic operator. Tracking the current point is the whole job,
-/// and doing it here means doing it once — the scene owns the format, so it
-/// owns this expansion the way it already owns arc→cubic.
+/// [`Segments`] with every quadratic elevated to a cubic, for a backend
+/// that has no quadratic operator. The elevation needs the current point,
+/// and tracking it here keeps it out of every backend.
 #[must_use = "Cubics yields nothing unless iterated"]
 pub struct Cubics<'a> {
     inner: Segments<'a>,
@@ -581,8 +542,7 @@ impl Iterator for Cubics<'_> {
                     return Some(seg);
                 }
                 Segment::Quad { cx, cy, x, y } => {
-                    // Geometry that opens on a quad has no anchor to elevate
-                    // from; skip it and leave the current point unset.
+                    // A quad with no current point has nothing to elevate from.
                     let Some(p0) = self.last else { continue };
                     let (c1x, c1y, c2x, c2y) = quad_to_cubic(p0, cx, cy, x, y);
                     self.last = Some((x, y));
@@ -600,9 +560,8 @@ impl Iterator for Cubics<'_> {
     }
 }
 
-/// Accumulator behind [`PathBuilder`] and [`ClipPathBuilder`]. Owns the only
-/// code that appends geometry, so a new segment is added here once instead of
-/// once per builder, and the kurbo arc expansion lives in a single place.
+/// The geometry half of [`PathBuilder`] and [`ClipPathBuilder`], so the arc
+/// expansion is written once.
 #[derive(Default)]
 struct GeometryBuilder {
     segs: Vec<Segment>,
@@ -637,9 +596,8 @@ impl GeometryBuilder {
         self.last_point = Some((x, y));
     }
 
-    /// Append an SVG endpoint arc, pre-expanding to cubics. With no current
-    /// point it degrades to `move_to(x, y)`; a degenerate arc collapses to a
-    /// line.
+    /// Append an SVG endpoint arc as cubics. With no current point the arc
+    /// becomes a move to `(x, y)`, and a degenerate arc becomes a line.
     #[allow(clippy::too_many_arguments)]
     fn arc_to(
         &mut self,
@@ -681,11 +639,8 @@ impl GeometryBuilder {
     }
 }
 
-/// A materialized 2D path: a style plus its [`Segment`]s.
-///
-/// Build one with a [`PathBuilder`] (via [`Path::builder`] or the
-/// [`Scene::path`] scope); read the geometry back through [`Path::segments`].
-/// The flat verb/coord pair the wire format uses exists only inside the codec.
+/// A style and the [`Segment`]s it applies to. [`Path::builder`] and
+/// [`Scene::path`] build one, and [`Path::segments`] reads it back.
 #[derive(Clone, Debug, Default)]
 pub struct Path {
     pub style: PathStyle,
@@ -693,26 +648,21 @@ pub struct Path {
 }
 
 impl Path {
-    /// Start building a path with the given style.
     pub fn builder(style: PathStyle) -> PathBuilder {
         PathBuilder::new(style)
     }
 
-    /// The segment buffer, for the wire decoder to refill in place. Handed out
-    /// directly because there is no longer an invariant to protect: a
-    /// `Vec<Segment>` is well-formed however it is filled.
+    /// For the wire decoder, which refills a path in place.
     pub(crate) fn segments_mut(&mut self) -> &mut Vec<Segment> {
         &mut self.segs
     }
 
-    /// Walk the path's segments.
     pub fn segments(&self) -> Segments<'_> {
         Segments(self.segs.iter())
     }
 }
 
-/// One node of a [`Scene`]. A path bundles all its segments; clips wrap the
-/// nested elements they apply to; text and bitmap are leaves.
+/// One node of a [`Scene`]. A clip holds the elements it applies to.
 #[derive(Clone, Debug)]
 pub enum Element {
     Path(Path),
@@ -724,24 +674,16 @@ pub enum Element {
     Bitmap(Bitmap),
 }
 
-/// Materialized event log produced by Python (or any other front end) and
-/// consumed by every renderer. Built via [`Self::add_path`] for a ready
-/// [`Path`] plus RAII guards — [`Self::path`] returns a [`PathScope`] that
-/// commits the path on drop, and [`Self::clip`] / [`Self::clip_rect`] return
-/// a [`ClipScope`] that wraps every element drawn during its lifetime into an
-/// [`Element::Clipped`] on drop. The list is replayed by a
-/// [`Renderer`](crate::renderer::Renderer).
+/// The draw list a front end builds and a [`Renderer`](crate::renderer::Renderer)
+/// replays. [`Self::path`] returns a [`PathScope`] that commits its path on
+/// drop, and [`Self::clip`] and [`Self::clip_rect`] return a [`ClipScope`]
+/// that wraps the elements drawn while it lives into an
+/// [`Element::Clipped`] on drop, so a clip cannot be left open. A
+/// `PathScope` with no geometry commits nothing. Only [`Self::add_path`]
+/// can add an empty path.
 ///
-/// Because path geometry only flows through a builder and a clip's subtree is
-/// exactly the run of elements drawn while its `ClipScope` is alive, several
-/// footguns of the older flat API are statically impossible: you cannot append
-/// path verbs without an open path, unbalance the clip stack (there is no
-/// separate pop), or interleave a clip with a half-built path. A `PathScope`
-/// that recorded no geometry also discards itself; only [`Self::add_path`]
-/// (the explicit escape hatch for a ready [`Path`]) can enter an empty one.
-///
-/// Arcs entered via [`PathScope::arc_to`] are pre-expanded to cubics so
-/// renderers only see line / quad / cubic primitives.
+/// An arc is stored as cubics, so a renderer sees only move, line, quad and
+/// cubic.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
     pub width: f32,
@@ -749,7 +691,7 @@ pub struct Scene {
     pub elements: Vec<Element>,
 }
 
-/// Tolerance for SVG arc → cubic conversion.
+/// The tolerance of the arc to cubic conversion.
 const ARC_TOLERANCE: f64 = 0.1;
 
 impl Scene {
@@ -761,10 +703,9 @@ impl Scene {
         }
     }
 
-    /// Whether any element in the tree is a bitmap, clip subtrees included.
-    /// A host asks this to tell the user once that the backend it picked
-    /// renders the frame without them — the backends themselves cannot say
-    /// it, since a diagnostic is a property of the session, not of the draw.
+    /// Returns `true` if any element, inside a clip or not, is a bitmap,
+    /// `false` otherwise. A host uses it to tell the user once that the
+    /// backend draws the frame without them.
     pub fn has_bitmaps(&self) -> bool {
         fn walk(elements: &[Element]) -> bool {
             elements.iter().any(|e| match e {
@@ -776,18 +717,13 @@ impl Scene {
         walk(&self.elements)
     }
 
-    /// Append an already-built [`Path`] as a leaf element. Use this when a
-    /// path is assembled away from the scene — decoded off the wire, shared,
-    /// or produced by [`Path::builder`]; use [`Self::path`] to build one in
-    /// place instead.
+    /// Append a [`Path`] built elsewhere. [`Self::path`] builds one in place.
     pub fn add_path(&mut self, path: Path) {
         self.elements.push(Element::Path(path));
     }
 
-    /// Begin a new path. Returns a [`PathScope`] whose `move_to` / `line_to`
-    /// / `quad_to` / `cubic_to` / `arc_to` methods append verbs; the path is
-    /// committed to [`Self::elements`] on drop, or discarded if no geometry was
-    /// recorded.
+    /// Begin a path. The [`PathScope`] commits it to [`Self::elements`] on
+    /// drop, or discards it if no geometry was added.
     pub fn path(&mut self, style: PathStyle) -> PathScope<'_> {
         PathScope {
             scene: self,
@@ -795,12 +731,9 @@ impl Scene {
         }
     }
 
-    /// Push an arbitrary clip path. Returns a [`ClipScope`] that marks the
-    /// current end of [`Self::elements`]; every element drawn through the
-    /// scope lands in the scene as usual, and on drop the scope wraps exactly
-    /// that trailing run into an [`Element::Clipped`]. The scope `Deref`s to
-    /// this same scene, so nested clips just call [`Self::clip`] through the
-    /// `Deref` and commit inside-out.
+    /// Begin a clip. The [`ClipScope`] derefs to this scene, and on drop it
+    /// wraps the elements added since into an [`Element::Clipped`]. A nested
+    /// clip is a [`Self::clip`] through the deref.
     pub fn clip(&mut self, clip: ClipPath) -> ClipScope<'_> {
         let mark = self.elements.len();
         ClipScope {
@@ -810,9 +743,8 @@ impl Scene {
         }
     }
 
-    /// Push an axis-aligned-or-rotated rectangular clip — the common case.
-    /// Builds the 4-corner `ClipPath` (rotated by `angle_deg` around the
-    /// centre) and returns the builder.
+    /// Begin a clip of `w` by `h` centred on `(cx, cy)` and rotated by
+    /// `angle_deg`.
     pub fn clip_rect(
         &mut self,
         cx: f32,
@@ -849,12 +781,9 @@ impl Scene {
     }
 }
 
-/// Active path scope returned by [`Scene::path`]. Wraps a [`PathBuilder`] and
-/// a borrow of the parent [`Scene`]; its `&mut self` geometry methods let a
-/// path be built imperatively (across statements and loops), and on drop it
-/// commits the finished [`Element::Path`] to the scene (or discards it if no
-/// geometry was recorded). Each method just forwards to the wrapped by-value
-/// [`PathBuilder`], so the atomic verb/coord push lives only there.
+/// The path under construction by [`Scene::path`]. The geometry methods take
+/// `&mut self`, so a loop can build a path, and drop commits it to the
+/// scene, or discards it if it has no geometry.
 #[must_use = "PathScope commits the path on drop; bind it so geometry methods can run"]
 pub struct PathScope<'a> {
     scene: &'a mut Scene,
@@ -917,16 +846,10 @@ impl Drop for PathScope<'_> {
     }
 }
 
-/// Active clip scope returned by [`Scene::clip`] / [`Scene::clip_rect`].
-/// Borrows the scene and remembers where its own elements begin (`mark`);
-/// `Deref`s to that same scene so draw methods append there directly. On
-/// drop, the trailing run `elements[mark..]` is lifted into an
-/// [`Element::Clipped`] pushed back in its place — the structure itself
-/// guarantees balanced clip nesting (no separate pop).
-///
-/// Nested clips work the usual way: calling [`Scene::clip`] through the
-/// `Deref` returns a child `ClipScope` with a later mark; dropping
-/// inside-out leaves a well-formed tree.
+/// The clip under construction by [`Scene::clip`] or [`Scene::clip_rect`].
+/// It derefs to the scene, and `mark` is where its elements begin. On drop
+/// it moves `elements[mark..]` into an [`Element::Clipped`] at `mark`. A
+/// nested scope has a later mark and drops first, so the tree is well formed.
 #[must_use = "ClipScope commits the clip on drop; bind it where the clip should end"]
 pub struct ClipScope<'a> {
     scene: &'a mut Scene,
@@ -957,14 +880,8 @@ impl<'a> Drop for ClipScope<'a> {
     }
 }
 
-/// Owned builder for a [`Path`], returned by [`Path::builder`]. Each geometry
-/// method consumes and returns `self`, appending one [`Segment`];
-/// [`Self::build`] moves the parts into the finished path. Arcs entered via
-/// [`Self::arc_to`]
-/// are pre-expanded to cubics. [`Scene::path`] drives one to commit straight
-/// into a scene.
-/// `Default` is derived only so [`PathScope`]'s `Drop` can `mem::take` the
-/// builder out of the scope; geometry always arrives through [`Path::builder`].
+/// Builds a [`Path`] by value. `Default` exists so that the `Drop` of
+/// [`PathScope`] can take the builder out with `mem::take`.
 #[derive(Default)]
 #[must_use = "PathBuilder yields a Path only when build() is called"]
 pub struct PathBuilder {
@@ -1000,9 +917,8 @@ impl PathBuilder {
         self
     }
 
-    /// Append an SVG endpoint arc, pre-expanding to cubic segments. Mirrors
-    /// the text parser's `A` handling: with no current point, falls back to
-    /// `move_to(x, y)`; degenerate arcs collapse to a line.
+    /// Append an SVG endpoint arc as cubics. With no current point the arc
+    /// becomes a move to `(x, y)`, and a degenerate arc becomes a line.
     #[allow(clippy::too_many_arguments)]
     pub fn arc_to(
         mut self,
@@ -1027,10 +943,8 @@ impl PathBuilder {
     }
 }
 
-/// Owned builder for a [`ClipPath`], returned by [`ClipPath::builder`]. Each
-/// geometry method consumes and returns `self`, appending one [`Segment`];
-/// [`Self::build`] moves the parts into the finished clip. Sub-paths are
-/// implicitly closed by the renderers, so no closing line is required.
+/// Builds a [`ClipPath`] by value. A sub-path closes implicitly, so no
+/// closing line is needed.
 #[must_use = "ClipPathBuilder yields a ClipPath only when build() is called"]
 pub struct ClipPathBuilder {
     geom: GeometryBuilder,
@@ -1065,9 +979,8 @@ impl ClipPathBuilder {
         self
     }
 
-    /// Append an SVG endpoint arc, pre-expanding to cubics — mirrors
-    /// [`PathBuilder::arc_to`]. With no current point, falls back to
-    /// `move_to(x, y)`; degenerate arcs collapse to a line.
+    /// Append an SVG endpoint arc as cubics. With no current point the arc
+    /// becomes a move to `(x, y)`, and a degenerate arc becomes a line.
     #[allow(clippy::too_many_arguments)]
     pub fn arc_to(
         mut self,
@@ -1105,7 +1018,6 @@ mod tests {
         let segs: Vec<_> = path.segments().cubics().collect();
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0], Segment::Move { x: 0.0, y: 0.0 });
-        // Controls sit 2/3 of the way from each endpoint toward the quad's.
         assert_eq!(
             segs[1],
             Segment::Cubic {
@@ -1121,7 +1033,6 @@ mod tests {
 
     #[test]
     fn cubics_drops_a_quad_with_no_anchor() {
-        // A stream opening on a quad has no current point to elevate from.
         let path = Path::builder(PathStyle::default())
             .quad_to(3.0, 3.0, 6.0, 0.0)
             .line_to(9.0, 0.0)
@@ -1207,8 +1118,7 @@ mod tests {
             .move_to(0.0, 0.0)
             .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0)
             .build();
-        // An arc after a current point expands to cubics, however many the
-        // tolerance produced.
+        // The tolerance decides how many cubics the arc becomes.
         let kinds: Vec<_> = clip.segments().map(|s| s.kind()).collect();
         assert_eq!(kinds[0], SegmentKind::Move);
         assert!(kinds.len() > 1);
@@ -1217,7 +1127,6 @@ mod tests {
 
     #[test]
     fn clip_builder_arc_to_without_current_point_moves() {
-        // No prior point: arc_to degrades to a bare move, no cubics.
         let clip = ClipPath::builder(FillRule::NonZero)
             .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 10.0)
             .build();
@@ -1278,8 +1187,6 @@ mod tests {
 
     #[test]
     fn clip_wraps_only_elements_drawn_inside() {
-        // Draw before, inside, and after the clip: only the middle path is
-        // wrapped; the outer two stay as bare siblings.
         let mut scene = Scene::new(20.0, 20.0);
         scene.add_path(
             Path::builder(PathStyle::default())

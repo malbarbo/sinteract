@@ -1,27 +1,25 @@
 @0x9e6ad945a7c8b88a;
 
-# simage wire format — Cap'n Proto schema.
+# simage wire format.
 #
-# Three messages travel between server (engine host) and client (renderer):
-#   * Asset    — uploaded once at session start; referenced by id afterwards
-#   * Frame    — the typed draw list to paint this frame (server → client)
-#   * Event    — input arriving from a client (client → server)
-# plus a Close.
+# Three messages travel between the server, which runs the engine, and the
+# client, which renders. Asset uploads a bitmap once, at the start of the
+# session, and a frame references it by id. Frame is the scene to paint.
+# Event is the input from the client. Close ends the session.
 #
-# The schema is the source of truth for evolution: append fields with
-# defaults, never reorder. Every host (Rust, JS, future) reads the same
-# generated bindings.
+# The schema is the source of truth. Evolve it by appending fields with
+# defaults. Never reorder or renumber. Every host reads the same generated
+# bindings.
 #
 # Regenerate the Rust bindings with:
 #   capnp compile -orust --src-prefix=schema -o src/wire schema/frame.capnp
 #
-# (Equivalent two-step form, useful when the sandbox blocks `capnp` from
-# spawning the `capnpc-rust` plugin directly:
+# When capnp cannot spawn the capnpc-rust plugin, run the two steps by hand:
 #   capnp compile -o- --src-prefix=schema schema/frame.capnp \
-#     | capnpc-rust && mv frame_capnp.rs src/wire/)
+#     | capnpc-rust && mv frame_capnp.rs src/wire/
 #
-# The generated file is committed at src/wire/frame_capnp.rs (no `capnp` CLI
-# dependency at build time).
+# The generated file is committed at src/wire/frame_capnp.rs, so the build
+# does not need the capnp CLI.
 
 # ----- Common scalar types -----
 
@@ -61,11 +59,11 @@ enum KeyKind {
     up    @2;
 }
 
-# ----- Paint — fill/stroke can be solid or a gradient. -----
+# ----- Paint -----
 #
-# `stops` is a list of (offset, color) pairs with offset in [0, 1], sorted
-# ascending. Renderers that do not understand gradients fall back to the
-# first stop's color as a solid.
+# A fill or a stroke is a solid color or a gradient. The stops are sorted by
+# offset, in [0, 1]. A renderer without gradients uses the color of the first
+# stop.
 
 struct Stop {
     offset @0 :Float32;
@@ -118,20 +116,17 @@ struct PathStyle {
     dashOffset  @9 :Float32;
 }
 
-# Arbitrary clip region. `verbs` / `coords` follow the same encoding as
-# `Path` (see below); `fillRule` decides which sub-regions count as inside.
-# Sub-paths are treated as implicitly closed (SVG `<clipPath>` semantics),
-# so callers do not have to add a final line back to the starting point.
+# A clip region, with the encoding of Path. A sub-path closes implicitly, as
+# in an SVG clipPath, so the caller does not add the line back to the start.
 struct ClipPath {
     verbs    @0 :Data;
     coords   @1 :List(Float32);
     fillRule @2 :FillRule;
 }
 
-# The 6-float affine maps the bitmap's natural image-pixel coordinates
-# `(0..img_w, 0..img_h)` onto the canvas — same `cm` / `matrix(...)`
-# convention as TextNode. The producer is expected to bake fit-to-box,
-# rotation, and mirroring into this matrix (see `simage::ir::bitmap_box_affine`).
+# The affine maps the image pixels (0..img_w, 0..img_h) onto the canvas, in
+# the convention of TextNode. The producer puts the fit, the rotation and the
+# mirroring into it (see simage::scene::bitmap_box_affine).
 struct BitmapNode {
     id @0 :UInt32;
     m0 @1 :Float32;
@@ -142,13 +137,13 @@ struct BitmapNode {
     m5 @6 :Float32;
 }
 
-# Glyphs are drawn in "natural" text space (origin at baseline-left, units in
-# `size`-pixel font units) and then mapped to canvas pixels by the affine
-# below. Convention follows PDF's `cm` operator and SVG `matrix(...)`:
+# A glyph is drawn in text space, with the origin at the left of the baseline
+# and `size` pixels per em, and the affine maps it to the canvas, in the
+# convention of the PDF cm operator and of SVG matrix(...):
 #   x' = m0 * x + m2 * y + m4
 #   y' = m1 * x + m3 * y + m5
-# The producer is expected to bake fit-to-box, rotation, and mirroring into
-# this matrix (see `simage::ir::text_box_affine` for the canonical helper).
+# The producer puts the fit, the rotation and the mirroring into it (see
+# simage::scene::text_box_affine).
 struct TextNode {
     fill        @0  :Rgba;
     stroke      @1  :Rgba;
@@ -167,15 +162,15 @@ struct TextNode {
     text        @14 :Text;
 }
 
-# ----- Path — verbs+coords, SVG-style. -----
+# ----- Path -----
 #
-# `verbs` is one byte per segment:
-#   0 = move    (consumes 2 floats: x, y)
-#   1 = line    (consumes 2 floats: x, y)
-#   2 = quad    (consumes 4 floats: cx, cy, x, y)
-#   3 = cubic   (consumes 6 floats: c1x, c1y, c2x, c2y, x, y)
-# `coords` is the flat float stream consumed by the verbs in order. Decoders
-# reject paths whose verbs and coords lengths disagree.
+# `verbs` has one byte per segment, and `coords` holds the floats the verbs
+# consume, in order:
+#   0 = move    (2 floats: x, y)
+#   1 = line    (2 floats: x, y)
+#   2 = quad    (4 floats: cx, cy, x, y)
+#   3 = cubic   (6 floats: c1x, c1y, c2x, c2y, x, y)
+# A decoder rejects a path whose coords do not match its verbs.
 
 struct Path {
     style  @0 :PathStyle;
@@ -183,11 +178,10 @@ struct Path {
     coords @2 :List(Float32);
 }
 
-# ----- Scene element — union is native in Cap'n Proto, no wrapper struct. -----
+# ----- Scene element -----
 #
-# A `clipped` element nests its own list of elements inside the clip region;
-# the structure itself guarantees balanced push/pop, so no separate ClipPop
-# variant is needed.
+# A clipped element nests its own elements, so the clip nesting is balanced
+# by construction.
 
 struct Element {
     union {
@@ -227,19 +221,20 @@ struct InputEvent {
 
 # ----- Top-level message envelope -----
 #
-# Server → client:
-#   * asset        (one per bitmap, before frames)
+# Server to client:
+#   * asset        (one per bitmap, before the frames)
 #   * frame        (one per repaint)
 #   * sessionClose
 #
-# Client → server:
+# Client to server:
 #   * event
 #   * sessionClose
 
 struct AssetMsg {
     id   @0 :UInt32;
     blob @1 :Data;
-    # MIME hint, e.g. "image/png". Optional; renderer can sniff if empty.
+    # MIME hint such as "image/png". A renderer sniffs the blob when it is
+    # empty.
     mime @2 :Text;
 }
 
@@ -252,7 +247,8 @@ struct Message {
     }
 }
 
-# Verb constants (mirrored in simage::scene::Verb on the Rust side).
+# The verb bytes, for a host that is not Rust. Rust uses
+# simage::scene::SegmentKind.
 const verbMove  :UInt8 = 0;
 const verbLine  :UInt8 = 1;
 const verbQuad  :UInt8 = 2;

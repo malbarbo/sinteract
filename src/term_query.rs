@@ -1,37 +1,23 @@
-//! Synchronous terminal-capability probe (Unix + Windows).
+//! Asks the terminal which graphics it supports, on Unix and Windows.
 //!
-//! Used when env-based detection (`KITTY_WINDOW_ID`, `TERM_PROGRAM`, etc.) is
-//! inconclusive — for example when the user is `ssh`-ing from Ghostty into a
-//! remote machine, where the local "I am Ghostty" envs do not propagate.
+//! The environment variables that name a terminal do not survive ssh and
+//! multiplexers, so the probe writes four queries to the controlling tty
+//! and reads the replies:
 //!
-//! Strategy:
-//! 1. Open the controlling tty directly (`/dev/tty` on Unix, `CONIN$`/`CONOUT$`
-//!    on Windows). This works even if stdin/stdout were redirected.
-//! 2. Put the tty in raw mode so byte-level reads see escape responses.
-//! 3. Send four queries back-to-back:
-//!    * Kitty graphics query — `\x1b_Gi=N,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\`
-//!      (transmits a 1×1 transparent image with id=N and asks for the result).
-//!    * DA1 — `\x1b[c` (returns `\x1b[?<list>c`; list contains `4` for Sixel).
-//!    * Cell pixel size — `\x1b[16t` (returns `\x1b[6;H;Wt`, char cell in px).
-//!    * CPR — `\x1b[6n` (returns `\x1b[<row>;<col>R`). This is the sentinel:
-//!      every VT-style terminal answers it, so receiving the CPR response
-//!      tells us the terminal has finished replying to the earlier queries.
-//! 4. Poll the input fd/handle with a 150 ms cap; read until the CPR
-//!    response arrives or the deadline expires.
-//! 5. Restore the original tty mode (best-effort, even on early return).
-//! 6. Parse the accumulated bytes for `\x1b_Gi=N;OK` and a DA1 attribute list
-//!    containing `4`.
+//! - The Kitty graphics query, a 1×1 transparent image with id `N`. A
+//!   terminal that supports the protocol answers `\x1b_Gi=N;OK`.
+//! - DA1, `\x1b[c`. The reply lists the attributes, and `4` means Sixel.
+//! - `\x1b[16t`, the pixel size of a character cell.
+//! - CPR, `\x1b[6n`. Every VT terminal answers it, and it goes last, so its
+//!   reply means the terminal has finished answering the others.
 //!
-//! Caveats:
-//! - Inside a multiplexer (zellij, tmux without passthrough) the queries are
-//!   intercepted by the multiplexer and the outer terminal never sees them
-//!   — the probe correctly fails and we fall back to text-blocks.
-//! - Some terminals are slow; 150 ms is a budget tradeoff. Local terminals
-//!   reply within ~1-5 ms; ssh round-trip on a typical link is well under
-//!   100 ms. If the deadline trips, we treat it as "unsupported" — better
-//!   than blocking the first `show()` call.
-//!
-//! Cached via `OnceLock`: the probe runs at most once per process.
+//! The probe opens the tty itself, so it works with stdin and stdout
+//! redirected, and puts the tty in raw mode so the replies arrive as bytes.
+//! It waits at most 150 ms. A local terminal answers in a few milliseconds
+//! and ssh in well under 100 ms, and a terminal that does not answer in time
+//! counts as unsupported. Under a multiplexer without passthrough the
+//! queries never reach the outer terminal, and the probe reports no support.
+//! The result is cached, so the probe runs once per process.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -39,7 +25,6 @@ use std::time::Duration;
 const QUERY_TIMEOUT: Duration = Duration::from_millis(150);
 const KITTY_QUERY_ID: &str = "31";
 
-/// The escape sequence emitted on every probe — same on Unix and Windows.
 fn build_query() -> String {
     format!("\x1b_Gi={KITTY_QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c\x1b[16t\x1b[6n")
 }
@@ -48,14 +33,14 @@ fn build_query() -> String {
 pub struct GraphicsCaps {
     pub kitty: bool,
     pub sixel: bool,
-    /// Pixel size of one terminal cell, reported by `CSI 16 t`. `None` when
-    /// the terminal didn't reply (multiplexed, ancient xterm, etc.).
+    /// Pixel size of one terminal cell, from `CSI 16 t`. `None` when the
+    /// terminal did not answer.
     pub cell_px: Option<(u32, u32)>,
 }
 
 static CACHED: OnceLock<GraphicsCaps> = OnceLock::new();
 
-/// Probe the terminal once and return the cached result on subsequent calls.
+/// Probe the terminal on the first call and return the cached result after.
 pub fn graphics_caps() -> GraphicsCaps {
     *CACHED.get_or_init(probe)
 }
@@ -76,23 +61,22 @@ fn probe() -> GraphicsCaps {
 }
 
 // -----------------------------------------------------------------------------
-// Pure parsers — same on every platform.
+// Parsers, shared by both platforms.
 // -----------------------------------------------------------------------------
 
-/// Look for the Cursor Position Report response: ESC `[` digits `;` digits `R`.
+/// Returns `true` if `buf` holds a Cursor Position Report, ESC `[` digits
+/// `;` digits `R`, `false` otherwise.
 fn has_cpr_response(buf: &[u8]) -> bool {
     let mut i = 0;
     while i + 1 < buf.len() {
         if buf[i] == 0x1b && buf[i + 1] == b'[' {
-            // Scan forward for the terminating `R`.
             let mut j = i + 2;
             while j < buf.len() {
                 let b = buf[j];
                 if b == b'R' {
                     return true;
                 }
-                // CSI parameter / intermediate bytes are 0x30-0x3F and 0x20-0x2F.
-                // Final bytes are 0x40-0x7E. Anything else means this isn't a CPR.
+                // A final byte (0x40..=0x7E) other than R ends another sequence.
                 if !(b.is_ascii_digit() || b == b';' || b == b':') && (0x40..=0x7E).contains(&b) {
                     break;
                 }
@@ -104,14 +88,14 @@ fn has_cpr_response(buf: &[u8]) -> bool {
     false
 }
 
-/// Look for `\x1b_Gi=<id>;OK` somewhere in the buffer.
+/// Returns `true` if `buf` holds `\x1b_Gi=<id>;OK`, `false` otherwise.
 fn parse_kitty_ok(buf: &[u8]) -> bool {
     let needle = format!("\x1b_Gi={KITTY_QUERY_ID};OK");
     buf.windows(needle.len()).any(|w| w == needle.as_bytes())
 }
 
-/// Parse the `CSI 16 t` response: `\x1b [ 6 ; <height> ; <width> t`.
-/// Height/width are pixels per character cell. Returns `(width, height)`.
+/// Parse the `CSI 16 t` reply, `\x1b[6;<height>;<width>t`, into
+/// `(width, height)` pixels per cell.
 fn parse_cell_pixels(buf: &[u8]) -> Option<(u32, u32)> {
     let mut i = 0;
     while i + 4 < buf.len() {
@@ -141,8 +125,8 @@ fn parse_cell_pixels(buf: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// DA1 response is `\x1b[?<list>c` where `<list>` is `;`-separated integers.
-/// Sixel support is advertised by the value `4`.
+/// Returns `true` if the DA1 reply `\x1b[?<list>c` lists `4`, the Sixel
+/// attribute, `false` otherwise.
 fn parse_da1_has_sixel(buf: &[u8]) -> bool {
     let mut i = 0;
     while i + 2 < buf.len() {
@@ -208,7 +192,7 @@ mod unix_impl {
 
         let result = probe_with_raw(&tty, fd);
 
-        // Best-effort restore.
+        // Nothing to do if the restore fails.
         set_termios(fd, &saved);
 
         result
@@ -295,7 +279,7 @@ mod windows_impl {
     };
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-    /// RAII guard that restores a console-mode bitmask on drop.
+    /// Restores the console mode on drop.
     struct ModeGuard {
         handle: HANDLE,
         saved: u32,
@@ -323,7 +307,7 @@ mod windows_impl {
         }
     }
 
-    /// RAII guard that closes a handle on drop.
+    /// Closes the handle on drop.
     struct HandleGuard(HANDLE);
     impl Drop for HandleGuard {
         fn drop(&mut self) {
@@ -368,7 +352,6 @@ mod windows_impl {
             None => return GraphicsCaps::default(),
         };
 
-        // Save modes via guard so they restore on drop.
         let (_in_guard, in_mode) = match ModeGuard::new(conin.0) {
             Some(g) => g,
             None => return GraphicsCaps::default(),
@@ -378,9 +361,9 @@ mod windows_impl {
             None => return GraphicsCaps::default(),
         };
 
-        // Input: VT input on, line/echo/processed off so we get raw escape
-        // bytes. Output: ensure VT processing is on so escape sequences we
-        // write are forwarded to the terminal as-is.
+        // The replies arrive as raw bytes only with VT input on and line,
+        // echo and processing off. VT processing on the output forwards the
+        // queries as written.
         let new_in = (in_mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
             | ENABLE_VIRTUAL_TERMINAL_INPUT;
         if unsafe { SetConsoleMode(conin.0, new_in) } == 0 {
@@ -391,7 +374,6 @@ mod windows_impl {
             return GraphicsCaps::default();
         }
 
-        // Write the query.
         let query = build_query();
         let bytes = query.as_bytes();
         let mut written: u32 = 0;
@@ -408,7 +390,6 @@ mod windows_impl {
             return GraphicsCaps::default();
         }
 
-        // Drain responses until CPR or timeout.
         let mut buf: Vec<u8> = Vec::with_capacity(256);
         let deadline = Instant::now() + QUERY_TIMEOUT;
         loop {
@@ -450,7 +431,7 @@ mod windows_impl {
 }
 
 // -----------------------------------------------------------------------------
-// Tests — only the pure parsers; the I/O path needs a real tty.
+// Tests cover the parsers. The I/O needs a real tty.
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -489,8 +470,7 @@ mod tests {
 
     #[test]
     fn da1_must_match_token_not_substring() {
-        // "14" must not match "4". Matters because some terminals advertise
-        // attribute 14 (NRCS).
+        // Attribute 14 (NRCS) must not match 4.
         let buf = b"\x1b[?62;14;22c";
         assert!(!parse_da1_has_sixel(buf));
     }
@@ -507,7 +487,7 @@ mod tests {
 
     #[test]
     fn cell_pixels_parses_csi16t_response() {
-        // Ghostty / xterm reply: ESC [ 6 ; height ; width t.
+        // Ghostty and xterm reply ESC [ 6 ; height ; width t.
         let buf = b"junk\x1b[6;28;14tmore";
         assert_eq!(parse_cell_pixels(buf), Some((14, 28)));
     }
@@ -520,7 +500,7 @@ mod tests {
 
     #[test]
     fn cell_pixels_skips_zero_dimensions() {
-        // Some terminals reply with 0 when they don't know the cell size.
+        // A terminal that does not know the cell size replies 0.
         let buf = b"\x1b[6;0;0t";
         assert_eq!(parse_cell_pixels(buf), None);
     }
