@@ -4,7 +4,7 @@
 //! [`crate::scene::Scene`] frames from its stdout.
 //!
 //! Each message is a Cap'n Proto `Message` inside an envelope of the four
-//! bytes `SIMG` and a little-endian `u32` length. Cap'n Proto already frames
+//! bytes `SINT` and a little-endian `u32` length. Cap'n Proto already frames
 //! its own payload. The envelope rejects text from another writer on the
 //! same pipe, such as a stray `print`, before the bytes reach the Cap'n Proto
 //! reader.

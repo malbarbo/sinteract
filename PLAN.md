@@ -275,7 +275,7 @@ Replicar mesma estrutura.
     intermediário. `DrawList` é payload direto da `Message::frame`.
   - `sinteract::wire` com `encode_frame/event/asset/close` + `decode` →
     `Decoded`. Round-trip testes passam. Cap'n Proto self-frames cada
-    mensagem; stdio framing externo `[SIMG][u32 LE len][bytes]` é
+    mensagem; stdio framing externo `[SINT][u32 LE len][bytes]` é
     defesa adicional contra peer não-sinteract no pipe.
   - **Migrações de wire** (2026-05-08): planus → flatbuffers (descobrimos
     que planus 1.3 produz `[file_id][root_offset][body]`, oposto ao spec)
@@ -310,7 +310,7 @@ Replicar mesma estrutura.
     integrar gradualmente.
 - ✅ **Fase 3 completa.**
   - `sinteract::stdio::StdioFrontend` com framing
-    `[SIMG][u32 LE len][bytes]` em ambos os sentidos.
+    `[SINT][u32 LE len][bytes]` em ambos os sentidos.
   - `wait_event` lê e decodifica mensagens de stdin; mensagens
     inesperadas viram log + continua. EOF → `None`. Erro de framing →
     `InputEvent::Close`.
