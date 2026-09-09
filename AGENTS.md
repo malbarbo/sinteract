@@ -2,17 +2,25 @@
 
 A 2D graphics library for spython and sgleam. A front end builds a `Scene`,
 a draw list of paths, text, bitmaps and clipped subtrees, and a renderer
-replays it. `pixmap.rs` rasterizes with tiny-skia, `terminal.rs` shows the
-pixmap through Kitty, Sixel or half-blocks, `window.rs` shows it in a winit
-window, and `pdf.rs` writes vector PDF. `wire/` is the Cap'n Proto codec, in three
-layers: `wire/scene.rs` and `wire/event.rs` convert the values of `scene.rs`
-and `event.rs` to and from the schema structs and know nothing of a session,
-`wire/protocol.rs` owns the `Message` envelope, and `wire/framing.rs` owns
-the envelope that a byte stream needs. `frontend.rs`, `stdio.rs` and
-`event.rs` are the host loop and the transports. `scene.rs` holds the value types and the builders, and
-`renderer.rs` the `Renderer` trait. `text.rs`, `sixel.rs` and
-`term_query.rs` support the native backends. `PLAN.md` is the plan for the
-server and client modes.
+replays it. `scene.rs` and `event.rs` hold the value types and the
+builders, and `text.rs` resolves a font, measures it and outlines a glyph.
+
+`renderer/` holds the `Renderer` trait in `mod.rs` and the two backends,
+`pixmap.rs` for tiny-skia and `pdf.rs` for vector PDF.
+
+`wire/` is the Cap'n Proto codec, in three layers: `wire/scene.rs` and
+`wire/event.rs` convert the values of `scene.rs` and `event.rs` to and from
+the schema structs and know nothing of a session, `wire/protocol.rs` owns
+the `Message` envelope, and `wire/framing.rs` owns the envelope that a byte
+stream needs.
+
+`frontend/` shows a scene and reads the input back. `driver.rs` holds the
+`Frontend` enum, `terminal.rs`, `window.rs` and `stdio.rs` are the three
+frontends, and `sixel.rs`, `term_query.rs` and `pixel.rs` support them.
+Only `sixel.rs` and `stdio.rs` build on wasm32, so the `cfg` sits on each
+submodule in `frontend/mod.rs` and not on the whole directory.
+
+`PLAN.md` is the plan for the server and client modes.
 
 ## Build and test
 
@@ -55,7 +63,7 @@ change is more than one, and it becomes more than one commit.
   `schema/scene.capnp`. Do not edit them by hand.
 - A `#[repr(u8)]` enum that crosses the wire, such as `SegmentKind` or
   `LineCap`, has the discriminants of the schema.
-- A native-only module is gated once, in `lib.rs`, behind
+- A native-only module is gated once, where its parent declares it, behind
   `cfg(not(target_arch = "wasm32"))`. No `cfg(wasm)` inside a module body.
 
 # Writing
