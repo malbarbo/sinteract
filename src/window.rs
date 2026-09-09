@@ -301,8 +301,8 @@ pub fn show_image(scene: &crate::scene::Scene) {
 
         let target_px = (w.get(), h.get());
         // The scene fills the window, so there is no cap on the scale.
-        let scale = crate::pixmap::fit_scale(scene.width, scene.height, target_px);
-        let pixmap = match crate::pixmap::rasterize_scene(scene, scale) {
+        let scale = crate::renderer::pixmap::fit_scale(scene.width, scene.height, target_px);
+        let pixmap = match crate::renderer::pixmap::rasterize_scene(scene, scale) {
             Some(p) => p,
             None => return,
         };

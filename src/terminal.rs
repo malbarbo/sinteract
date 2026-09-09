@@ -16,7 +16,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, event, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
-use crate::pixmap::rasterize_scene;
+use crate::renderer::pixmap::rasterize_scene;
 use crate::sixel;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
@@ -154,7 +154,7 @@ fn max_scale_for_backend(backend: Backend) -> f32 {
 fn scale_for_backend(backend: Backend, width: f32, height: f32) -> f32 {
     let cap = max_scale_for_backend(backend);
     match target_pixels_for_backend(backend) {
-        Some(target) => crate::pixmap::fit_scale(width, height, target).min(cap),
+        Some(target) => crate::renderer::pixmap::fit_scale(width, height, target).min(cap),
         None => cap,
     }
 }
@@ -639,7 +639,7 @@ mod tests {
     /// Fit into `target`, then apply `cap`, as `scale_for_backend` does when
     /// the grid is known.
     fn fit_capped(scene: &Scene, target: (u32, u32), cap: f32) -> f32 {
-        crate::pixmap::fit_scale(scene.width, scene.height, target).min(cap)
+        crate::renderer::pixmap::fit_scale(scene.width, scene.height, target).min(cap)
     }
 
     #[test]

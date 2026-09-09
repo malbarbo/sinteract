@@ -1,11 +1,11 @@
 //! 2D graphics with terminal, window and PDF outputs.
 //!
 //! A front end builds a [`scene::Scene`] and a [`renderer::Renderer`]
-//! replays it. [`pixmap`] rasterizes a scene to a tiny-skia `Pixmap`,
-//! [`pdf`] writes it as PDF with the text as glyph outlines, [`text`] holds
-//! the embedded Liberation families and measures and outlines glyphs, and
-//! [`sixel`] encodes a `Pixmap` as DEC Sixel. These build on wasm32 too,
-//! except the system font lookup of `text`.
+//! replays it. [`renderer::pixmap`] rasterizes a scene to a tiny-skia
+//! `Pixmap`, [`renderer::pdf`] writes it as PDF with the text as glyph
+//! outlines, [`text`] holds the embedded Liberation families and measures
+//! and outlines glyphs, and [`sixel`] encodes a `Pixmap` as DEC Sixel.
+//! These build on wasm32 too, except the system font lookup of `text`.
 //!
 //! [`terminal`] shows a pixmap through Kitty, Sixel or half-blocks and runs
 //! the animation loop with key polling, [`term_query`] probes what the
@@ -33,9 +33,7 @@ mod protocol_capnp;
 #[allow(dead_code)]
 mod scene_capnp;
 
-pub mod pdf;
 mod pixel;
-pub mod pixmap;
 pub mod sixel;
 pub mod stdio;
 pub mod text;

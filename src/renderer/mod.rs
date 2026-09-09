@@ -17,6 +17,9 @@
 //! as on the wire. A backend with another convention applies a transform
 //! when it sizes its surface.
 
+pub mod pdf;
+pub mod pixmap;
+
 use std::io::Read;
 
 use crate::scene::Scene;
