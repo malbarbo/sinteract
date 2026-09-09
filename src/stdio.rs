@@ -3,23 +3,17 @@
 //! subprocess, writes [`crate::event::InputEvent`]s to its stdin and reads
 //! [`crate::scene::Scene`] frames from its stdout.
 //!
-//! Each message is a Cap'n Proto `Message` inside an envelope of the four
-//! bytes `SINT` and a little-endian `u32` length. Cap'n Proto already frames
-//! its own payload. The envelope rejects text from another writer on the
-//! same pipe, such as a stray `print`, before the bytes reach the Cap'n Proto
-//! reader.
+//! Each message is a Cap'n Proto `Message` inside the envelope of
+//! [`crate::wire::framing`].
 
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::event::InputEvent;
 use crate::scene::Scene;
-use crate::wire::{self, Decoded, FILE_IDENTIFIER};
-
-/// Cap on the read side, so a corrupted length prefix cannot make the
-/// frontend allocate gigabytes. A 1080p RGBA pixmap is about 8 MiB.
-const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
+use crate::wire::framing::{read_framed, write_framed};
+use crate::wire::{self, Decoded};
 
 /// Construct with [`StdioFrontend::new`] for the real stdin and stdout, or
 /// with [`StdioFrontend::with_streams`] in a test. The peer emits the Vsync
@@ -112,16 +106,8 @@ impl StdioFrontend {
     }
 
     fn write_framed(&mut self, payload: &[u8]) {
-        let mut g = match self.inner.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        let len = payload.len() as u32;
-        if g.writer.write_all(&FILE_IDENTIFIER).is_err()
-            || g.writer.write_all(&len.to_le_bytes()).is_err()
-            || g.writer.write_all(payload).is_err()
-            || g.writer.flush().is_err()
-        {
+        let mut g = self.lock();
+        if write_framed(&mut g.writer, payload).is_err() {
             // The peer is gone. The host learns it when the next wait_event
             // hits EOF.
             eprintln!("[sinteract::stdio] write to stdout failed; peer may have closed");
@@ -129,37 +115,17 @@ impl StdioFrontend {
     }
 
     fn read_framed(&mut self) -> io::Result<Option<Vec<u8>>> {
-        let mut g = match self.inner.lock() {
+        let mut g = self.lock();
+        read_framed(&mut g.reader)
+    }
+
+    /// The guarded reader and writer have no invariant of their own, so a
+    /// poisoned lock is still usable.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        match self.inner.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
-        };
-
-        let mut magic = [0u8; 4];
-        match g.reader.read_exact(&mut magic) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-            Err(e) => return Err(e),
         }
-        if magic != FILE_IDENTIFIER {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("stdio framing magic mismatch: got {magic:?}"),
-            ));
-        }
-
-        let mut len_buf = [0u8; 4];
-        g.reader.read_exact(&mut len_buf)?;
-        let len = u32::from_le_bytes(len_buf);
-        if len > MAX_FRAME_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("stdio frame length {len} exceeds cap {MAX_FRAME_BYTES}"),
-            ));
-        }
-
-        let mut payload = vec![0u8; len as usize];
-        g.reader.read_exact(&mut payload)?;
-        Ok(Some(payload))
     }
 }
 
@@ -174,6 +140,7 @@ mod tests {
     use super::*;
     use crate::event::{KeyEvent as IrKeyEvent, KeyKind};
     use crate::scene::{Paint, PathStyle};
+    use crate::wire::framing::FILE_IDENTIFIER;
     use std::io::Cursor;
     use std::sync::{Arc, Mutex as StdMutex};
 

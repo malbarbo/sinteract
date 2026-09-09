@@ -12,10 +12,14 @@
 //! and [`decode`]. The bytes are the standard `serialize::write_message`
 //! format, so every Cap'n Proto binding reads them.
 //!
+//! [`framing`] is below all of them. It wraps an encoded message in the
+//! envelope that a byte stream needs to tell one message from the next.
+//!
 //! The schema in `schema/frame.capnp` is the source of truth, and its header
 //! says how to regenerate the bindings.
 
 pub mod event;
+pub mod framing;
 pub mod protocol;
 pub mod scene;
 mod stream;
@@ -24,12 +28,6 @@ pub use protocol::{Decoded, decode, encode_asset, encode_close, encode_event, en
 pub(crate) use stream::stream_frame;
 
 use crate::renderer::AllocError;
-
-/// Magic of the stdio framing. Cap'n Proto already length-prefixes each
-/// message, and `sinteract::stdio` wraps the payload in `[SINT][u32 LE len]` as
-/// well, so that text from another writer on the same pipe is rejected before
-/// it reaches the Cap'n Proto reader.
-pub const FILE_IDENTIFIER: [u8; 4] = *b"SINT";
 
 /// Errors surfaced from [`decode`].
 #[derive(Debug)]
