@@ -16,9 +16,9 @@ use crate::event::InputEvent;
 use crate::protocol_capnp::message;
 use crate::scene::Scene;
 
-use super::Error;
 use super::event::{read_input_event, write_input_event};
 use super::scene::{read_scene, write_scene};
+use super::{Error, finish};
 
 /// One decoded message, one variant per arm of the `Message` union.
 #[derive(Clone, Debug)]
@@ -36,12 +36,6 @@ pub enum Decoded {
 // ---------------------------------------------------------------------------
 // Encode side
 // ---------------------------------------------------------------------------
-
-pub(super) fn finish(builder: MessageBuilder<capnp::message::HeapAllocator>) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(256);
-    serialize::write_message(&mut bytes, &builder).expect("write_message into Vec is infallible");
-    bytes
-}
 
 /// Encode a scene as `Message::Frame`.
 pub fn encode_frame(scene: &Scene) -> Vec<u8> {

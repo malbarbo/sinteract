@@ -16,7 +16,27 @@ use crate::scene_capnp::{
     rgba as wire_rgba, scene as wire_scene, stop as wire_stop, text_node,
 };
 
-use super::Error;
+use super::{Error, finish};
+
+/// Encode a scene as a message whose root is the `Scene` struct of
+/// `schema/scene.capnp`, with no session envelope around it. A host that
+/// paints its own frames, such as the wasm worker that writes into shared
+/// memory, reads these bytes with the scene schema alone.
+pub fn encode(scene: &Scene) -> Vec<u8> {
+    let mut builder = capnp::message::Builder::new_default();
+    write_scene(builder.init_root::<wire_scene::Builder>(), scene);
+    finish(builder)
+}
+
+/// Decode a message that [`encode`] produced. A frame that arrived inside a
+/// session goes through [`super::decode`] instead.
+pub fn decode(bytes: &[u8]) -> Result<Scene, Error> {
+    let reader = capnp::serialize::read_message(
+        std::io::Cursor::new(bytes),
+        capnp::message::ReaderOptions::new(),
+    )?;
+    read_scene(reader.get_root()?)
+}
 
 fn line_cap_to_wire(c: LineCap) -> WLineCap {
     match c {

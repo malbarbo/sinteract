@@ -28,6 +28,14 @@ pub use protocol::{Decoded, decode, encode_asset, encode_close, encode_event, en
 pub use stream::Error as StreamError;
 pub(crate) use stream::stream_frame;
 
+/// Serialize a finished builder. `write_message` into a `Vec` cannot fail.
+pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAllocator>) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(256);
+    capnp::serialize::write_message(&mut bytes, &builder)
+        .expect("write_message into Vec is infallible");
+    bytes
+}
+
 /// A payload is malformed. It says the scene, the event or the message is
 /// unusable, and never that the session is. A server that gets one from
 /// [`decode`] drops the message and keeps the peer.
@@ -90,7 +98,6 @@ impl From<std::str::Utf8Error> for Error {
 
 #[cfg(test)]
 mod tests {
-    use super::protocol::finish;
     use super::*;
     use crate::event::{InputEvent, KeyEvent, KeyKind};
     use crate::protocol_capnp::message;
@@ -173,6 +180,17 @@ mod tests {
             Decoded::Frame(d) => assert_scene_eq(&scene, &d),
             other => panic!("expected Frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_scene_round_trips_without_the_envelope() {
+        let scene = sample_scene();
+        let bytes = scene::encode(&scene);
+        assert_scene_eq(&scene::decode(&bytes).expect("decode"), &scene);
+        assert!(
+            bytes.len() < encode_frame(&scene).len(),
+            "a bare scene should be smaller than the same scene in a Message"
+        );
     }
 
     #[test]
