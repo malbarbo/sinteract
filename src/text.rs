@@ -463,7 +463,7 @@ pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
         .map(|m| m.thickness as f32)
         .unwrap_or(FALLBACK_UNDERLINE_THICKNESS * face_units);
     let underline_pos = -pos_units * scale; // font y is up, box y is down
-    let thickness = (thickness_units * scale).max(1.0);
+    let thickness = thickness_units * scale;
     let y_top = layout.baseline_y + underline_pos - thickness / 2.0;
     UnderlineRect {
         x_l: layout.x_left,
@@ -851,10 +851,16 @@ mod tests {
     }
 
     #[test]
-    fn underline_keeps_a_pixel_of_thickness_at_a_tiny_size() {
-        let layout = layout_text(&node(2.0, "Hi")).expect("node draws");
-        let u = underline_rect(&layout);
-        assert!(u.y_bot - u.y_top >= 1.0);
+    fn underline_thickness_stays_proportional_at_a_tiny_size() {
+        let small = layout_text(&node(2.0, "Hi")).expect("node draws");
+        let big = layout_text(&node(64.0, "Hi")).expect("node draws");
+        let t_small = underline_rect(&small).y_bot - underline_rect(&small).y_top;
+        let t_big = underline_rect(&big).y_bot - underline_rect(&big).y_top;
+        assert!(t_small > 0.0);
+        assert!(
+            (t_big / t_small - 32.0).abs() < 1e-3,
+            "thickness {t_big} over {t_small} is not the ratio of the sizes"
+        );
     }
 
     #[test]
