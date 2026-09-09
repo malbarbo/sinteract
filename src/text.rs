@@ -590,6 +590,7 @@ mod tests {
         assert_eq!(sink.ops, vec!["M 1 1".to_string()]);
     }
 
+    #[derive(Default)]
     struct CountingBuilder {
         moves: u32,
         lines: u32,
@@ -613,16 +614,6 @@ mod tests {
         }
         fn close(&mut self) {
             self.closes += 1;
-        }
-    }
-
-    fn empty_builder() -> CountingBuilder {
-        CountingBuilder {
-            moves: 0,
-            lines: 0,
-            quads: 0,
-            cubics: 0,
-            closes: 0,
         }
     }
 
@@ -668,7 +659,7 @@ mod tests {
 
     #[test]
     fn outline_emits_some_commands_for_letters() {
-        let mut b = empty_builder();
+        let mut b = CountingBuilder::default();
         outline("Ag", 30, &mut b);
         assert!(b.moves > 0, "no moves emitted");
         assert!(b.lines > 0 || b.quads > 0, "no draw segments emitted");
@@ -695,7 +686,7 @@ mod tests {
 
     #[test]
     fn outline_empty_string_emits_nothing() {
-        let mut b = empty_builder();
+        let mut b = CountingBuilder::default();
         outline("", 30, &mut b);
         assert_eq!(b.moves, 0);
         assert_eq!(b.lines, 0);
@@ -704,7 +695,7 @@ mod tests {
 
     #[test]
     fn outline_space_only_advances_pen_no_glyphs() {
-        let mut b = empty_builder();
+        let mut b = CountingBuilder::default();
         outline("   ", 30, &mut b);
         assert_eq!(b.moves, 0);
         assert_eq!(b.lines, 0);
@@ -716,7 +707,7 @@ mod tests {
         let s = "ção";
         let w = measure_width(s, 20);
         assert!(w > 0.0);
-        let mut b = empty_builder();
+        let mut b = CountingBuilder::default();
         outline(s, 30, &mut b);
         assert!(b.moves > 0);
     }
@@ -778,9 +769,9 @@ mod tests {
         // The italic 'a' has a different outline from the regular one.
         let regular = resolve("", 400, FontStyle::Normal);
         let italic = resolve("", 400, FontStyle::Italic);
-        let mut b1 = empty_builder();
+        let mut b1 = CountingBuilder::default();
         outline_with(regular.face(), "a", 30, &mut b1);
-        let mut b2 = empty_builder();
+        let mut b2 = CountingBuilder::default();
         outline_with(italic.face(), "a", 30, &mut b2);
         assert!(
             b1.lines + b1.quads != b2.lines + b2.quads,
