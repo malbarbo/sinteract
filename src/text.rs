@@ -2,15 +2,18 @@
 //!
 //! The crate embeds Liberation Sans, Serif and Mono in Regular, Bold, Italic
 //! and BoldItalic. An alias such as `sans-serif`, `serif`, `monospace` or
-//! `mono` maps to an embedded family. Any other name goes to a [`fontdb`]
-//! system query on native targets and falls back to Liberation Sans, so a
-//! text in an embedded family measures the same on every target.
+//! `mono` maps to an embedded family. Any other name goes to a `fontdb`
+//! query over the fonts installed on the system and falls back to Liberation
+//! Sans, so a text in an embedded family measures the same on every target.
+//!
+//! The `native-fonts` feature carries that query. It is on by default, and
+//! wasm32 leaves it out even so, since a browser has no font directory.
 //!
 //! A measurement is an offset from the center of the text box. The text
 //! spans (-width/2, -height/2) to (width/2, height/2), and the caller places
 //! it with `translate(cx, cy) * rotate(angle) * scale(sx, sy)`.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
@@ -108,8 +111,9 @@ impl ResolvedFont {
 ///
 /// An empty family is Liberation Sans. An alias (`sans-serif`, `serif`,
 /// `monospace`, `mono`, or an embedded family name, in any case) is the
-/// embedded family. Any other name goes to a [`fontdb`] query, and to
-/// Liberation Sans when the query finds nothing.
+/// embedded family. Any other name goes to a `fontdb` query, and to
+/// Liberation Sans when the query finds nothing or when the crate carries no
+/// system lookup.
 pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
     let v = variant_index(weight, style);
 
@@ -134,7 +138,7 @@ pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
         return embedded(&family_arr[v]);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
     if let Some(font) = system_font(family, weight, style) {
         return font;
     }
@@ -151,10 +155,11 @@ fn embedded(f: &'static EmbeddedFont) -> ResolvedFont {
 }
 
 // ---------------------------------------------------------------------------
-// System font lookup. Native only, since wasm has no font directory.
+// System font lookup. The native-fonts feature carries it, and wasm32 drops
+// it in any case, since there is no font directory to read.
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
 fn font_db() -> &'static fontdb::Database {
     static DB: OnceLock<fontdb::Database> = OnceLock::new();
     DB.get_or_init(|| {
@@ -167,13 +172,13 @@ fn font_db() -> &'static fontdb::Database {
 /// The system faces already parsed, by fontdb id. Each one is leaked so it
 /// has the `'static` lifetime of an embedded face. A process touches few
 /// distinct fonts, so the leak is bounded.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
 fn system_cache() -> &'static Mutex<Vec<(fontdb::ID, ResolvedFont)>> {
     static CACHE: OnceLock<Mutex<Vec<(fontdb::ID, ResolvedFont)>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
 fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFont> {
     let db = font_db();
     let style_db = match style {

@@ -6,7 +6,7 @@
 //! outlines. [`text`] holds the embedded Liberation families and measures
 //! and outlines glyphs, and [`wire`] converts a scene and an event to and
 //! from Cap'n Proto. These build on wasm32 too, except the system font
-//! lookup of `text`.
+//! lookup of `text`, which the `native-fonts` feature carries.
 //!
 //! [`frontend`] shows a scene and reads the input back, through the
 //! terminal, a winit window or stdin and stdout. Only the stdio and the
