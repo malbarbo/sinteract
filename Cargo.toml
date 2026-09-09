@@ -10,8 +10,8 @@ readme = "README.md"
 [dependencies]
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 kurbo = { version = "0.13", default-features = false, features = ["std"] }
-# The bindings for schema/frame.capnp are generated offline and committed
-# in src/wire/frame_capnp.rs, so the build does not need the capnp CLI.
+# The bindings for the files in schema/ are generated offline and committed
+# in src/wire/*_capnp.rs, so the build does not need the capnp CLI.
 capnp = "0.25"
 # These make no syscalls, so text and pdf build on wasm too.
 ttf-parser = { version = "0.25", default-features = false, features = [
