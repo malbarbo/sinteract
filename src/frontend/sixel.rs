@@ -17,7 +17,7 @@ use tiny_skia::Pixmap;
 /// per process and needs a tty, so the function is native only.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sixel_supported() -> bool {
-    crate::term_query::graphics_caps().sixel
+    super::term_query::graphics_caps().sixel
 }
 
 /// Encode `pixmap` as Sixel, with the DCS introducer and the string
@@ -170,7 +170,7 @@ fn quantize(pixmap: &Pixmap, bg: (u8, u8, u8)) -> (Vec<(u8, u8, u8)>, Vec<u8>) {
         for x in 0..w {
             let p = pixels[y * w + x];
             // composite covers alpha 0 and 255, so there is no special case.
-            let (sr, sg, sb) = crate::pixel::unpremultiply(p);
+            let (sr, sg, sb) = super::pixel::unpremultiply(p);
             let (r, g, b) = composite(sr, sg, sb, p.alpha(), bg);
 
             let qr = quant6(r);

@@ -2,22 +2,24 @@
 //!
 //! A front end builds a [`scene::Scene`] and a [`renderer::Renderer`]
 //! replays it. [`renderer::pixmap`] rasterizes a scene to a tiny-skia
-//! `Pixmap`, [`renderer::pdf`] writes it as PDF with the text as glyph
-//! outlines, [`text`] holds the embedded Liberation families and measures
-//! and outlines glyphs, and [`sixel`] encodes a `Pixmap` as DEC Sixel.
-//! These build on wasm32 too, except the system font lookup of `text`.
+//! `Pixmap` and [`renderer::pdf`] writes it as PDF with the text as glyph
+//! outlines. [`text`] holds the embedded Liberation families and measures
+//! and outlines glyphs, and [`wire`] converts a scene and an event to and
+//! from Cap'n Proto. These build on wasm32 too, except the system font
+//! lookup of `text`.
 //!
-//! [`terminal`] shows a pixmap through Kitty, Sixel or half-blocks and runs
-//! the animation loop with key polling, [`term_query`] probes what the
-//! terminal supports, [`window`] shows a pixmap in a winit window, and
-//! [`frontend`] drives the terminal, the window or stdio through one loop.
-//! These need a tty, a window or platform FFI, so they are native only.
+//! [`frontend`] shows a scene and reads the input back, through the
+//! terminal, a winit window or stdin and stdout. Only the stdio and the
+//! Sixel halves of it build on wasm32. The rest needs a tty, a window or
+//! platform FFI.
 
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 pub mod event;
+pub mod frontend;
 pub mod renderer;
 pub mod scene;
+pub mod text;
 pub mod wire;
 
 // The generated bindings, one module per schema file. The generated code
@@ -32,17 +34,3 @@ mod protocol_capnp;
 #[path = "wire/scene_capnp.rs"]
 #[allow(dead_code)]
 mod scene_capnp;
-
-mod pixel;
-pub mod sixel;
-pub mod stdio;
-pub mod text;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub mod frontend;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod term_query;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod terminal;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod window;

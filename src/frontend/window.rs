@@ -1,8 +1,8 @@
 //! Window display of a [`crate::scene::Scene`] through winit and softbuffer,
-//! with the lifecycle of [`crate::terminal`]. [`enter_animation`] sets the
+//! with the lifecycle of [`super::terminal`]. [`enter_animation`] sets the
 //! state up, [`show_image`] rasterizes a scene and presents it,
 //! [`poll_key_event`] returns the next key event in the shape of
-//! [`crate::terminal::poll_key_event`], and [`exit_animation`] destroys the
+//! [`super::terminal::poll_key_event`], and [`exit_animation`] destroys the
 //! window.
 //!
 //! winit needs the event loop on the main thread, so the state lives in a
@@ -28,7 +28,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use crate::terminal::{KEYDOWN, KEYPRESS, KEYUP};
+use super::terminal::{KEYDOWN, KEYPRESS, KEYUP};
 
 type KeyEventTuple = (i32, String, [bool; 5]);
 
@@ -150,7 +150,7 @@ fn push_key_events(out: &mut VecDeque<KeyEventTuple>, ev: &KeyEvent, mods: Modif
 }
 
 /// Map a winit key to the key name of the W3C UI Events spec, the same table
-/// as [`crate::terminal::poll_key_event`].
+/// as [`super::terminal::poll_key_event`].
 fn winit_key_to_string(key: &Key) -> Option<String> {
     Some(match key {
         Key::Character(s) => s.to_string(),
@@ -334,7 +334,7 @@ fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
         let row_w = pw.min(bw - off_x.min(bw)) as usize;
         for x in 0..row_w {
             // softbuffer takes 0RGB, and the window has no transparency.
-            let (r, g, b) = crate::pixel::unpremultiply(src[src_row_start + x]);
+            let (r, g, b) = super::pixel::unpremultiply(src[src_row_start + x]);
             buffer[dst_row_start + x] = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
         }
     }

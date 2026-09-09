@@ -16,8 +16,8 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, event, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
+use super::sixel;
 use crate::renderer::pixmap::rasterize_scene;
-use crate::sixel;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
 const KITTY_ONESHOT_ID_BASE: u32 = 2000;
@@ -31,10 +31,10 @@ const CELL_W_DEFAULT: u32 = 8;
 const CELL_H_DEFAULT: u32 = 16;
 
 /// Pixel size of one terminal cell, from the cached probe in
-/// [`crate::term_query`]. A terminal under a multiplexer or without a tty
+/// [`super::term_query`]. A terminal under a multiplexer or without a tty
 /// does not answer, and gets 8 by 16.
 fn cell_pixels() -> (u32, u32) {
-    crate::term_query::graphics_caps()
+    super::term_query::graphics_caps()
         .cell_px
         .unwrap_or((CELL_W_DEFAULT, CELL_H_DEFAULT))
 }
@@ -107,7 +107,7 @@ pub fn text_blocks_supported() -> bool {
 /// the environment variables are wrong over ssh and under a multiplexer.
 /// The probe runs at most once per process.
 pub fn kitty_supported() -> bool {
-    crate::term_query::graphics_caps().kitty
+    super::term_query::graphics_caps().kitty
 }
 
 // -----------------------------------------------------------------------------

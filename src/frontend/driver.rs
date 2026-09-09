@@ -1,23 +1,6 @@
-//! [`Frontend`] is the driver a host (spython, sgleam) talks to. The
-//! terminal, the window and stdio share one method surface. The host
-//! constructs one and drives it:
-//!
-//! ```ignore
-//! let mut fr = Frontend::pick_native("My game");
-//! fr.enter();
-//! while let Some(ev) = fr.wait_event(None) {
-//!     match ev {
-//!         InputEvent::Vsync => { /* simulate + repaint */ },
-//!         InputEvent::Key(k) => { /* dispatch */ },
-//!         InputEvent::Close => break,
-//!     }
-//!     fr.present(&scene);
-//! }
-//! fr.exit();
-//! ```
-//!
-//! `Frontend` is an enum and not a `Box<dyn Frontend>`, so that the call in
-//! the main loop of the host dispatches without a vtable.
+//! [`Frontend`], the enum a host drives, with [`TerminalFrontend`] and
+//! [`WindowFrontend`]. The module is private, and [`super`] re-exports the
+//! three names.
 
 use std::time::{Duration, Instant};
 
@@ -26,14 +9,33 @@ use crate::event::{
 };
 use crate::scene::Scene;
 
-use crate::stdio::StdioFrontend;
+use super::stdio::StdioFrontend;
 
 const fn period_from_hz(hz: u32) -> Duration {
     Duration::from_nanos(1_000_000_000 / hz as u64)
 }
 
-/// Construct one with [`Frontend::terminal`], [`Frontend::window`] or
-/// [`Frontend::stdio`], and drive it for the whole session.
+/// The driver a host (spython, sgleam) talks to. The terminal, the window
+/// and stdio share one method surface. Construct one with
+/// [`Frontend::terminal`], [`Frontend::window`] or [`Frontend::stdio`], and
+/// drive it for the whole session:
+///
+/// ```ignore
+/// let mut fr = Frontend::pick_native("My game");
+/// fr.enter();
+/// while let Some(ev) = fr.wait_event(None) {
+///     match ev {
+///         InputEvent::Vsync => { /* simulate + repaint */ },
+///         InputEvent::Key(k) => { /* dispatch */ },
+///         InputEvent::Close => break,
+///     }
+///     fr.present(&scene);
+/// }
+/// fr.exit();
+/// ```
+///
+/// It is an enum and not a `Box<dyn Frontend>`, so that the call in the main
+/// loop of the host dispatches without a vtable.
 pub enum Frontend {
     Terminal(TerminalFrontend),
     Window(WindowFrontend),
@@ -45,9 +47,9 @@ impl Frontend {
     /// otherwise. `title` only matters for a window. A terminal keeps the
     /// title of the shell.
     pub fn pick_native(title: &str) -> Self {
-        if crate::terminal::kitty_supported()
-            || crate::sixel::sixel_supported()
-            || crate::terminal::text_blocks_supported()
+        if super::terminal::kitty_supported()
+            || super::sixel::sixel_supported()
+            || super::terminal::text_blocks_supported()
         {
             Frontend::terminal()
         } else {
@@ -234,21 +236,21 @@ impl TerminalFrontend {
 
     pub fn enter(&mut self) {
         if !self.entered {
-            crate::terminal::enter_animation();
+            super::terminal::enter_animation();
             self.entered = true;
         }
     }
 
     pub fn exit(&mut self) {
         if self.entered {
-            crate::terminal::exit_animation();
+            super::terminal::exit_animation();
             self.entered = false;
         }
     }
 
     pub fn present(&mut self, scene: &Scene) {
         warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
-        crate::terminal::show_image(scene);
+        super::terminal::show_image(scene);
     }
 
     pub fn wait_event(&mut self, deadline: Option<Instant>) -> Option<InputEvent> {
@@ -268,10 +270,10 @@ impl TerminalFrontend {
             if self.clock.is_due(now) {
                 return Some(self.clock.fire());
             }
-            if crate::terminal::closed() {
+            if super::terminal::closed() {
                 return Some(InputEvent::Close);
             }
-            if let Some(legacy) = crate::terminal::poll_key_event() {
+            if let Some(legacy) = super::terminal::poll_key_event() {
                 let (et, key, flags) = legacy;
                 return Some(key_event_from_legacy(et, key, flags));
             }
@@ -317,21 +319,21 @@ impl WindowFrontend {
 
     pub fn enter(&mut self) {
         if !self.entered {
-            crate::window::enter_animation(&self.title);
+            super::window::enter_animation(&self.title);
             self.entered = true;
         }
     }
 
     pub fn exit(&mut self) {
         if self.entered {
-            crate::window::exit_animation();
+            super::window::exit_animation();
             self.entered = false;
         }
     }
 
     pub fn present(&mut self, scene: &Scene) {
         warn_bitmaps_once(&mut self.warned_bitmaps, scene, "window");
-        crate::window::show_image(scene);
+        super::window::show_image(scene);
     }
 
     pub fn wait_event(&mut self, deadline: Option<Instant>) -> Option<InputEvent> {
@@ -348,10 +350,10 @@ impl WindowFrontend {
             if self.clock.is_due(now) {
                 return Some(self.clock.fire());
             }
-            if crate::window::closed() {
+            if super::window::closed() {
                 return Some(InputEvent::Close);
             }
-            if let Some(legacy) = crate::window::poll_key_event() {
+            if let Some(legacy) = super::window::poll_key_event() {
                 let (et, key, flags) = legacy;
                 return Some(key_event_from_legacy(et, key, flags));
             }
