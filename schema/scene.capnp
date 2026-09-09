@@ -1,27 +1,20 @@
-@0x9e6ad945a7c8b88a;
+@0xe6fe272699b1f2b7;
 
-# sinteract wire format.
+# The drawing vocabulary of sinteract. A `Scene` is the draw list that a
+# renderer replays. Nothing here knows that a session exists, so a host that
+# paints locally reads this file alone.
 #
-# Three messages travel between the server, which runs the engine, and the
-# client, which renders. Asset uploads a bitmap once, at the start of the
-# session, and a frame references it by id. Frame is the scene to paint.
-# Event is the input from the client. Close ends the session.
+# This file is the source of truth for the drawing format. Evolve it by
+# appending fields with defaults. Never reorder or renumber, and let a union
+# only grow.
 #
-# The schema is the source of truth. Evolve it by appending fields with
-# defaults. Never reorder or renumber. Every host reads the same generated
-# bindings.
+# Regenerate the Rust bindings for the three schema files with:
+#   capnp compile -orust:src/wire --src-prefix=schema \
+#     schema/scene.capnp schema/event.capnp schema/protocol.capnp
+#   cargo fmt
 #
-# Regenerate the Rust bindings with:
-#   capnp compile -orust --src-prefix=schema -o src/wire schema/frame.capnp
-#
-# When capnp cannot spawn the capnpc-rust plugin, run the two steps by hand:
-#   capnp compile -o- --src-prefix=schema schema/frame.capnp \
-#     | capnpc-rust && mv frame_capnp.rs src/wire/
-#
-# The generated file is committed at src/wire/frame_capnp.rs, so the build
-# does not need the capnp CLI.
-
-# ----- Common scalar types -----
+# The generated files are committed at src/wire/*_capnp.rs, so the build
+# does not need the capnp CLI. Do not edit them by hand.
 
 struct Rgba {
     r @0 :UInt8;
@@ -51,12 +44,6 @@ enum FontStyle {
     normal  @0;
     italic  @1;
     oblique @2;
-}
-
-enum KeyKind {
-    press @0;
-    down  @1;
-    up    @2;
 }
 
 # ----- Paint -----
@@ -201,50 +188,6 @@ struct Scene {
     width    @0 :Float32;
     height   @1 :Float32;
     elements @2 :List(Element);
-}
-
-# ----- Input events (client → server) -----
-
-struct KeyEvent {
-    kind      @0 :KeyKind;
-    key       @1 :Text;
-    modifiers @2 :UInt8;
-}
-
-struct InputEvent {
-    union {
-        key   @0 :KeyEvent;
-        tick  @1 :Void;
-        close @2 :Void;
-    }
-}
-
-# ----- Top-level message envelope -----
-#
-# Server to client:
-#   * asset        (one per bitmap, before the frames)
-#   * frame        (one per repaint)
-#   * sessionClose
-#
-# Client to server:
-#   * event
-#   * sessionClose
-
-struct AssetMsg {
-    id   @0 :UInt32;
-    blob @1 :Data;
-    # MIME hint such as "image/png". A renderer sniffs the blob when it is
-    # empty.
-    mime @2 :Text;
-}
-
-struct Message {
-    union {
-        asset        @0 :AssetMsg;
-        frame        @1 :Scene;
-        event        @2 :InputEvent;
-        sessionClose @3 :Void;
-    }
 }
 
 # The verb bytes, for a host that is not Rust. Rust uses

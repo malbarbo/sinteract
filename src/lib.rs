@@ -20,10 +20,18 @@ pub mod renderer;
 pub mod scene;
 pub mod wire;
 
-// The VERB_* constants exist for the JS and Python hosts.
-#[path = "wire/frame_capnp.rs"]
+// The generated bindings, one module per schema file. The generated code
+// names them from the crate root, so they are mounted here and not inside
+// `wire`. The VERB_* constants exist for the JS and Python hosts.
+#[path = "wire/event_capnp.rs"]
 #[allow(dead_code)]
-mod frame_capnp;
+mod event_capnp;
+#[path = "wire/protocol_capnp.rs"]
+#[allow(dead_code)]
+mod protocol_capnp;
+#[path = "wire/scene_capnp.rs"]
+#[allow(dead_code)]
+mod scene_capnp;
 
 pub mod pdf;
 mod pixel;

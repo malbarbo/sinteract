@@ -45,11 +45,14 @@ change is more than one, and it becomes more than one commit.
 - The `Renderer` trait stays small. `Scene` owns the format, expands an arc
   to cubics, and elevates a quadratic for a backend that has no quadratic
   operator, so a backend only walks segments.
-- `schema/frame.capnp` is the source of truth for the wire format. Evolve
-  it by appending fields with defaults. Never reorder or renumber.
-- `src/wire/frame_capnp.rs` is generated and committed, so the build does
-  not need the `capnp` CLI. Regenerate it with the command at the top of
-  the schema. Do not edit it by hand.
+- `schema/` is the source of truth for the wire format, one file per
+  layer. `scene.capnp` is the drawing vocabulary, `event.capnp` the input,
+  and `protocol.capnp` the session that carries both. Evolve a file by
+  appending fields with defaults. Never reorder or renumber, and let a
+  union only grow.
+- `src/wire/*_capnp.rs` are generated and committed, so the build does not
+  need the `capnp` CLI. Regenerate them with the command at the top of
+  `schema/scene.capnp`. Do not edit them by hand.
 - A `#[repr(u8)]` enum that crosses the wire, such as `SegmentKind` or
   `LineCap`, has the discriminants of the schema.
 - A native-only module is gated once, in `lib.rs`, behind

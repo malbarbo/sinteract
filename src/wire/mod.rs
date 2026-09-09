@@ -15,8 +15,8 @@
 //! [`framing`] is below all of them. It wraps an encoded message in the
 //! envelope that a byte stream needs to tell one message from the next.
 //!
-//! The schema in `schema/frame.capnp` is the source of truth, and its header
-//! says how to regenerate the bindings.
+//! The schema files in `schema/` are the source of truth, one per layer,
+//! and the header of `scene.capnp` says how to regenerate the bindings.
 
 pub mod event;
 pub mod framing;
@@ -93,7 +93,7 @@ mod tests {
     use super::protocol::finish;
     use super::*;
     use crate::event::{InputEvent, KeyEvent, KeyKind};
-    use crate::frame_capnp::message;
+    use crate::protocol_capnp::message;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, LineCap, LineJoin, Paint,
         PathStyle, Rgba, Scene, Segment, SegmentKind, SpreadMode, Stop, TextNode,

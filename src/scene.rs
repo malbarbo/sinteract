@@ -381,7 +381,7 @@ pub fn bitmap_box_affine(
 
 /// The verb byte of a [`Segment`] on the wire. Only the codec uses it. The
 /// discriminants are the `verbMove`, `verbLine`, `verbQuad` and `verbCubic`
-/// values of `schema/frame.capnp`.
+/// values of `schema/scene.capnp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SegmentKind {

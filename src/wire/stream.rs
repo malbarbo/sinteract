@@ -3,9 +3,10 @@
 use capnp::message::ReaderOptions;
 use capnp::serialize;
 
-use crate::frame_capnp::{element, message};
+use crate::protocol_capnp::message;
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::Path;
+use crate::scene_capnp::element;
 
 use crate::renderer::AllocError;
 

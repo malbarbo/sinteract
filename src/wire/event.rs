@@ -1,7 +1,7 @@
 //! `InputEvent` to and from the Cap'n Proto struct.
 
 use crate::event::{InputEvent, KeyEvent, KeyKind};
-use crate::frame_capnp::{KeyKind as WKeyKind, input_event, key_event as wire_key_event};
+use crate::event_capnp::{KeyKind as WKeyKind, input_event, key_event as wire_key_event};
 
 use super::Error;
 

@@ -34,8 +34,9 @@ sees moves, lines, quadratics and cubics.
 For an animation, a `Frontend` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `InputEvent`. The
 same loop runs over stdio, where the frames go to a peer as Cap'n Proto
-messages and the input comes back. The schema is in `schema/frame.capnp`,
-and `PLAN.md` describes the server and client modes.
+messages and the input comes back. The schema is in `schema/`, one file for
+the drawing, one for the input and one for the session, and `PLAN.md`
+describes the server and client modes.
 
 The scene, the rasterizer, the text measuring and the PDF writer build on
 `wasm32`, so a browser client can paint a scene without a native host.

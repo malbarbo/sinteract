@@ -4,16 +4,16 @@
 //! builder or a reader for the `Scene` struct of the schema, so the same
 //! functions serve a frame inside a session and a scene on its own.
 
-use crate::frame_capnp::{
-    FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
-    SpreadMode as WSpreadMode, bitmap_node, clip_path as wire_clip_path, clipped as wire_clipped,
-    element, paint as wire_paint, path as wire_path, path_style as wire_path_style,
-    rgba as wire_rgba, scene as wire_scene, stop as wire_stop, text_node,
-};
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LineCap,
     LineJoin, Paint, Path, PathStyle, Rgba, Scene, Segment, SegmentKind, Segments, SpreadMode,
     Stop, TextNode,
+};
+use crate::scene_capnp::{
+    FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
+    SpreadMode as WSpreadMode, bitmap_node, clip_path as wire_clip_path, clipped as wire_clipped,
+    element, paint as wire_paint, path as wire_path, path_style as wire_path_style,
+    rgba as wire_rgba, scene as wire_scene, stop as wire_stop, text_node,
 };
 
 use super::Error;

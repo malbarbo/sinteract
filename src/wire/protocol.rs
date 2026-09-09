@@ -13,7 +13,7 @@ use capnp::message::{Builder as MessageBuilder, ReaderOptions};
 use capnp::serialize;
 
 use crate::event::InputEvent;
-use crate::frame_capnp::message;
+use crate::protocol_capnp::message;
 use crate::scene::Scene;
 
 use super::Error;

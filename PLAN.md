@@ -268,9 +268,9 @@ Replicar mesma estrutura.
   - `DrawCmd::Bitmap(BitmapNode { id, cx, cy, w, h, angle, flip_h, flip_v })`.
   - `sinteract::event` módulo: `InputEvent`, `KeyEvent`, `KeyKind`, MOD_*
     bitmask. Compatível com wasm32.
-  - `schema/frame.capnp` (Cap'n Proto). Bindings geradas em
-    `src/wire/frame_capnp.rs` (commit). Para regenerar:
-    `capnp compile -orust --src-prefix=schema -o src/wire schema/frame.capnp`.
+  - `schema/scene.capnp`, `schema/event.capnp` e `schema/protocol.capnp`
+    (Cap'n Proto). Bindings geradas em `src/wire/*_capnp.rs` (commit). O
+    comando para regenerar está no cabeçalho do `scene.capnp`.
     `Message`, `DrawCmd` e `InputEvent` usam unions nativas — sem wrapper
     intermediário. `DrawList` é payload direto da `Message::frame`.
   - `sinteract::wire` com `encode_frame/event/asset/close` + `decode` →
