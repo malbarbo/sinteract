@@ -111,8 +111,11 @@ pub trait Renderer: sealed::Paint {
     /// Decode one `Frame` from `reader` and render it without building the
     /// [`Element`](crate::scene::Element) tree. A message that is not a
     /// `Frame` returns
-    /// [`wire::Error::WrongMessageKind`](crate::wire::Error::WrongMessageKind).
-    fn render_stream(&mut self, reader: impl Read) -> Result<Self::Output<'_>, crate::wire::Error> {
+    /// [`StreamError::WrongMessageKind`](crate::wire::StreamError::WrongMessageKind).
+    fn render_stream(
+        &mut self,
+        reader: impl Read,
+    ) -> Result<Self::Output<'_>, crate::wire::StreamError> {
         crate::wire::stream_frame(self, reader)?;
         self.end_frame();
         Ok(self.output())

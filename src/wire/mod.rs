@@ -25,11 +25,12 @@ pub mod scene;
 mod stream;
 
 pub use protocol::{Decoded, decode, encode_asset, encode_close, encode_event, encode_frame};
+pub use stream::Error as StreamError;
 pub(crate) use stream::stream_frame;
 
-use crate::renderer::AllocError;
-
-/// Errors surfaced from [`decode`].
+/// A payload is malformed. It says the scene, the event or the message is
+/// unusable, and never that the session is. A server that gets one from
+/// [`decode`] drops the message and keeps the peer.
 #[derive(Debug)]
 pub enum Error {
     /// Cap'n Proto rejected the bytes as malformed, truncated, or of the
@@ -44,10 +45,6 @@ pub enum Error {
     PathLengthMismatch { verbs: usize, coords: usize },
     /// A `Path` carries a verb byte this crate does not know.
     UnknownVerb(u8),
-    /// The stream decoder saw a `Message` that is not a `Frame`.
-    WrongMessageKind,
-    /// The renderer of a streamed frame could not size its surface.
-    Surface(AllocError),
 }
 
 impl std::fmt::Display for Error {
@@ -63,10 +60,6 @@ impl std::fmt::Display for Error {
                 )
             }
             Error::UnknownVerb(v) => write!(f, "unknown path verb byte: {v}"),
-            Error::WrongMessageKind => {
-                write!(f, "expected Message::Frame, got a different union arm")
-            }
-            Error::Surface(e) => e.fmt(f),
         }
     }
 }
@@ -82,12 +75,6 @@ impl From<capnp::Error> for Error {
 impl From<capnp::NotInSchema> for Error {
     fn from(e: capnp::NotInSchema) -> Self {
         Error::UnknownVariant("enum", e.0)
-    }
-}
-
-impl From<AllocError> for Error {
-    fn from(e: AllocError) -> Self {
-        Error::Surface(e)
     }
 }
 

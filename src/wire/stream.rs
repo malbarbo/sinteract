@@ -7,8 +7,61 @@ use crate::frame_capnp::{element, message};
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::Path;
 
-use super::Error;
+use crate::renderer::AllocError;
+
+use super::Error as PayloadError;
 use super::scene::{read_bitmap, read_clip_path, read_path_into, read_text_node};
+
+/// Decoding a frame and painting it fail in three ways, and only the first
+/// leaves the session usable.
+#[derive(Debug)]
+pub enum Error {
+    /// The frame itself is malformed.
+    Payload(PayloadError),
+    /// The message decoded, but it is not a `Frame`. Use
+    /// [`decode`](super::decode) for the other arms.
+    WrongMessageKind,
+    /// The renderer could not size its surface for the frame.
+    Surface(AllocError),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Payload(e) => e.fmt(f),
+            Error::WrongMessageKind => {
+                write!(f, "expected Message::Frame, got a different union arm")
+            }
+            Error::Surface(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<PayloadError> for Error {
+    fn from(e: PayloadError) -> Self {
+        Error::Payload(e)
+    }
+}
+
+impl From<capnp::Error> for Error {
+    fn from(e: capnp::Error) -> Self {
+        Error::Payload(e.into())
+    }
+}
+
+impl From<capnp::NotInSchema> for Error {
+    fn from(e: capnp::NotInSchema) -> Self {
+        Error::Payload(e.into())
+    }
+}
+
+impl From<AllocError> for Error {
+    fn from(e: AllocError) -> Self {
+        Error::Surface(e)
+    }
+}
 
 /// Decode one `Message::Frame` from `reader` and paint it onto `paint`. The
 /// reader is walked lazily, so the element list never becomes a

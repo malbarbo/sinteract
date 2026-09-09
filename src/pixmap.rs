@@ -619,6 +619,6 @@ mod tests {
         let bytes = crate::wire::encode_close();
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let err = r.render_stream(&bytes[..]).expect_err("not a frame");
-        assert!(matches!(err, crate::wire::Error::WrongMessageKind));
+        assert!(matches!(err, crate::wire::StreamError::WrongMessageKind));
     }
 }
