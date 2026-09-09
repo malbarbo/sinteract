@@ -22,11 +22,7 @@ kurbo = { version = "0.13", default-features = false, features = ["std"] }
 # in src/wire/*_capnp.rs, so the build does not need the capnp CLI.
 capnp = "0.25"
 # These make no syscalls, so text and pdf build on wasm too.
-ttf-parser = { version = "0.25", default-features = false, features = [
-    "std",
-    "opentype-layout",
-    "glyph-names",
-] }
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 pdf-writer = "0.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
