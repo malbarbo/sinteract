@@ -675,9 +675,9 @@ mod tests {
         };
         let layout = layout_text(&node).expect("node draws");
 
-        let mut measured = Recorder { ops: Vec::new() };
+        let mut measured = Recorder::default();
         outline_with(layout.face, &node.text, layout.size_i, &mut measured);
-        let mut reused = Recorder { ops: Vec::new() };
+        let mut reused = Recorder::default();
         outline_layout(&layout, &node.text, &mut reused);
 
         assert_eq!(measured.ops, reused.ops);
