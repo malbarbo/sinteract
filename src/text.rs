@@ -109,17 +109,14 @@ impl ResolvedFont {
 
 /// Resolve a family, a weight and a style to a face.
 ///
-/// An empty family is Liberation Sans. An alias (`sans-serif`, `serif`,
+/// The name loses its surrounding space first. An empty family is Liberation
+/// Sans. An alias (`sans-serif`, `serif`,
 /// `monospace`, `mono`, or an embedded family name, in any case) is the
 /// embedded family. Any other name goes to a `fontdb` query, and to
 /// Liberation Sans when the query finds nothing or when the crate carries no
 /// system lookup.
 pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
     let v = variant_index(weight, style);
-
-    if family.is_empty() {
-        return embedded(&SANS[v]);
-    }
 
     // This runs once per text node per frame, so the comparison allocates
     // nothing.
@@ -139,7 +136,7 @@ pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
     }
 
     #[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
-    if let Some(font) = system_font(family, weight, style) {
+    if let Some(font) = system_font(key, weight, style) {
         return font;
     }
 
@@ -742,6 +739,19 @@ mod tests {
         for name in ["mono", "monospace", "Liberation Mono"] {
             let f = resolve(name, 400, FontStyle::Normal);
             assert_eq!(f.family, "Liberation Mono", "name={name}");
+        }
+    }
+
+    #[test]
+    fn resolve_ignores_the_space_around_the_family() {
+        for name in ["  serif  ", "\tserif\n", "   "] {
+            let f = resolve(name, 400, FontStyle::Normal);
+            let want = if name.trim().is_empty() {
+                "Liberation Sans"
+            } else {
+                "Liberation Serif"
+            };
+            assert_eq!(f.family, want, "name={name:?}");
         }
     }
 
