@@ -15,9 +15,7 @@ use std::io::Cursor;
 use capnp::message::{Builder as MessageBuilder, ReaderOptions};
 use capnp::serialize;
 
-use crate::event::{
-    InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
-};
+use crate::event::{InputEvent, KeyEvent, KeyKind};
 use crate::renderer::AllocError;
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
@@ -725,30 +723,6 @@ fn read_input_event(r: input_event::Reader<'_>) -> Result<InputEvent, Error> {
 }
 
 // ---------------------------------------------------------------------------
-// Bitmask helpers
-// ---------------------------------------------------------------------------
-
-pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -> u8 {
-    let mut m = 0u8;
-    if alt {
-        m |= MOD_ALT;
-    }
-    if ctrl {
-        m |= MOD_CTRL;
-    }
-    if shift {
-        m |= MOD_SHIFT;
-    }
-    if meta {
-        m |= MOD_META;
-    }
-    if repeat {
-        m |= MOD_REPEAT;
-    }
-    m
-}
-
-// ---------------------------------------------------------------------------
 // Streaming entry point
 // ---------------------------------------------------------------------------
 
@@ -921,7 +895,7 @@ mod tests {
         let ev = InputEvent::Key(KeyEvent {
             kind: KeyKind::Down,
             key: "ArrowLeft".into(),
-            modifiers: modifiers(false, true, true, false, false),
+            modifiers: crate::event::modifiers(false, true, true, false, false),
         });
         let bytes = encode_event(&ev);
         match decode(&bytes).unwrap() {

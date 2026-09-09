@@ -25,6 +25,27 @@ pub const MOD_SHIFT: u8 = 1 << 2;
 pub const MOD_META: u8 = 1 << 3;
 pub const MOD_REPEAT: u8 = 1 << 4;
 
+/// Pack the modifier flags of a key event into the bits above.
+pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -> u8 {
+    let mut m = 0u8;
+    if alt {
+        m |= MOD_ALT;
+    }
+    if ctrl {
+        m |= MOD_CTRL;
+    }
+    if shift {
+        m |= MOD_SHIFT;
+    }
+    if meta {
+        m |= MOD_META;
+    }
+    if repeat {
+        m |= MOD_REPEAT;
+    }
+    m
+}
+
 /// A terminal produces only `Press`, since it does not tell down from up.
 /// The window and the browser produce all three.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
