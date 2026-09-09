@@ -174,7 +174,7 @@ impl Drop for ClipGuard<'_> {
 
 impl Paint for PixmapRenderer {
     /// Clears the surface, and reallocates it when the scaled size changed.
-    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::renderer::AllocError> {
         let (out_w, out_h, base) = fit(width, height, self.scale);
         self.base = base;
         // A frame ends with an empty clip stack, and its masks serve the next
@@ -185,7 +185,7 @@ impl Paint for PixmapRenderer {
         } else {
             // Masks are canvas-sized, so a resize invalidates every pooled one.
             self.mask_pool.clear();
-            self.pixmap = new_pixmap(out_w, out_h).ok_or(crate::wire::Error::Alloc {
+            self.pixmap = new_pixmap(out_w, out_h).ok_or(crate::renderer::AllocError {
                 width: out_w,
                 height: out_h,
             })?;

@@ -141,7 +141,7 @@ impl Drop for RestoreGuard<'_> {
 impl Paint for PdfRenderer {
     /// Starts a new page and writes the base transform. Nothing here
     /// allocates a surface, so it never fails.
-    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error> {
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::renderer::AllocError> {
         self.width = width.max(1.0);
         self.height = height.max(1.0);
         self.gstates.clear();

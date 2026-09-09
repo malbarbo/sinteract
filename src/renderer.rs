@@ -21,6 +21,23 @@ use std::io::Read;
 
 use crate::scene::Scene;
 
+/// Sizing a surface failed. It is the only way a render fails, and only a
+/// backend that allocates a surface returns it. The pdf backend never does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AllocError {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl std::fmt::Display for AllocError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let AllocError { width, height } = self;
+        write!(f, "could not allocate a {width}×{height} surface")
+    }
+}
+
+impl std::error::Error for AllocError {}
+
 pub(crate) mod sealed {
     use crate::scene::{Bitmap, ClipPath, Element, Path, TextNode};
 
@@ -30,7 +47,7 @@ pub(crate) mod sealed {
     pub trait Paint: Sized {
         /// Size the surface for a frame of `width` by `height` and clear it,
         /// reallocating only when the size changed.
-        fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::wire::Error>;
+        fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), super::AllocError>;
 
         fn draw_path(&mut self, path: &Path);
 
@@ -84,7 +101,7 @@ pub trait Renderer: sealed::Paint {
 
     /// Render a [`Scene`] and borrow the result. Fails only if sizing the
     /// surface fails.
-    fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, crate::wire::Error> {
+    fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, AllocError> {
         self.ensure_size(scene.width, scene.height)?;
         self.paint_elements(&scene.elements);
         self.end_frame();

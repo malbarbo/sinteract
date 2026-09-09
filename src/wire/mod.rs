@@ -18,6 +18,7 @@ use capnp::serialize;
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
 };
+use crate::renderer::AllocError;
 use crate::renderer::sealed::Paint as PaintSink;
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LineCap,
@@ -56,8 +57,8 @@ pub enum Error {
     UnknownVerb(u8),
     /// The stream decoder saw a `Message` that is not a `Frame`.
     WrongMessageKind,
-    /// A backend could not allocate a surface of this size.
-    Alloc { width: u32, height: u32 },
+    /// The renderer of a streamed frame could not size its surface.
+    Surface(AllocError),
 }
 
 impl std::fmt::Display for Error {
@@ -76,9 +77,7 @@ impl std::fmt::Display for Error {
             Error::WrongMessageKind => {
                 write!(f, "expected Message::Frame, got a different union arm")
             }
-            Error::Alloc { width, height } => {
-                write!(f, "could not allocate a {width}×{height} surface")
-            }
+            Error::Surface(e) => e.fmt(f),
         }
     }
 }
@@ -94,6 +93,12 @@ impl From<capnp::Error> for Error {
 impl From<capnp::NotInSchema> for Error {
     fn from(e: capnp::NotInSchema) -> Self {
         Error::UnknownVariant("enum", e.0)
+    }
+}
+
+impl From<AllocError> for Error {
+    fn from(e: AllocError) -> Self {
+        Error::Surface(e)
     }
 }
 
