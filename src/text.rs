@@ -296,9 +296,16 @@ impl<B: OutlineBuilder + ?Sized> OutlineBuilder for ElevateQuads<'_, B> {
     }
 }
 
+/// Returns `true` if a text at `size` can draw, `false` otherwise. NaN and
+/// infinity are out, since either one puts non-finite coordinates in the
+/// outline.
+pub(crate) fn drawable_size(size: f32) -> bool {
+    size.is_finite() && size > 0.0
+}
+
 /// Total horizontal advance of `text` rendered at `size_px` in `face`.
-pub fn measure_width_with(face: &Face<'_>, text: &str, size_px: i32) -> f64 {
-    if text.is_empty() || size_px <= 0 {
+pub fn measure_width_with(face: &Face<'_>, text: &str, size_px: f32) -> f64 {
+    if text.is_empty() || !drawable_size(size_px) {
         return 0.0;
     }
     let scale = f64::from(size_px) / f64::from(face.units_per_em());
@@ -310,8 +317,8 @@ pub fn measure_width_with(face: &Face<'_>, text: &str, size_px: i32) -> f64 {
     total * scale
 }
 
-pub fn measure_height_with(face: &Face<'_>, _text: &str, size_px: i32) -> f64 {
-    if size_px <= 0 {
+pub fn measure_height_with(face: &Face<'_>, _text: &str, size_px: f32) -> f64 {
+    if !drawable_size(size_px) {
         return 0.0;
     }
     let scale = f64::from(size_px) / f64::from(face.units_per_em());
@@ -319,12 +326,12 @@ pub fn measure_height_with(face: &Face<'_>, _text: &str, size_px: i32) -> f64 {
     h * scale
 }
 
-pub fn measure_x_offset_with(face: &Face<'_>, text: &str, size_px: i32) -> f64 {
+pub fn measure_x_offset_with(face: &Face<'_>, text: &str, size_px: f32) -> f64 {
     -measure_width_with(face, text, size_px) / 2.0
 }
 
-pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size_px: i32) -> f64 {
-    if size_px <= 0 {
+pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size_px: f32) -> f64 {
+    if !drawable_size(size_px) {
         return 0.0;
     }
     let scale = f64::from(size_px) / f64::from(face.units_per_em());
@@ -333,8 +340,8 @@ pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size_px: i32) -> f64 
 
 /// Glyph outlines for `text`, placed by measuring it. A renderer that has a
 /// [`TextLayout`] calls [`outline_layout`].
-pub fn outline_with(face: &Face<'_>, text: &str, size_px: i32, out: &mut dyn OutlineBuilder) {
-    if text.is_empty() || size_px <= 0 {
+pub fn outline_with(face: &Face<'_>, text: &str, size_px: f32, out: &mut dyn OutlineBuilder) {
+    if text.is_empty() || !drawable_size(size_px) {
         return;
     }
     let start_x = measure_x_offset_with(face, text, size_px) as f32;
@@ -346,12 +353,12 @@ pub fn outline_with(face: &Face<'_>, text: &str, size_px: i32, out: &mut dyn Out
 fn outline_at(
     face: &Face<'_>,
     text: &str,
-    size_px: i32,
+    size_px: f32,
     start_x: f32,
     baseline_y: f32,
     out: &mut dyn OutlineBuilder,
 ) {
-    if text.is_empty() || size_px <= 0 {
+    if text.is_empty() || !drawable_size(size_px) {
         return;
     }
     let scale = f64::from(size_px) / f64::from(face.units_per_em());
@@ -376,9 +383,7 @@ fn outline_at(
 /// The face and the box-local metrics of one [`TextNode`].
 pub struct TextLayout {
     pub face: &'static Face<'static>,
-    /// The size truncated to whole pixels, as the front end measures.
-    pub size_i: i32,
-    /// The size as given, for the underline metrics.
+    /// The em of the text space, from `TextNode::size`.
     pub size: f32,
     /// The horizontal advance.
     pub width: f32,
@@ -389,25 +394,25 @@ pub struct TextLayout {
 }
 
 /// Resolve and measure a text node. Returns `None` when the node draws
-/// nothing, because the size is not positive, the text is empty or the width
-/// measures zero.
+/// nothing, because the size is not a positive finite number, the text is
+/// empty, or the width measures zero or overflows.
 pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
-    let size_i = node.size as i32;
-    if size_i <= 0 || node.text.is_empty() {
+    if !drawable_size(node.size) || node.text.is_empty() {
         return None;
     }
     let face = resolve(&node.family, node.weight, node.style).face();
-    let measured = measure_width_with(face, &node.text, size_i);
+    let measured = measure_width_with(face, &node.text, node.size);
     let width = measured as f32;
-    if width <= 0.0 {
+    // A huge size overflows the sum of the advances, and an infinite width
+    // would reach the renderer as a coordinate.
+    if !width.is_finite() || width <= 0.0 {
         return None;
     }
     Some(TextLayout {
         face,
-        size_i,
         size: node.size,
         width,
-        baseline_y: measure_y_offset_with(face, &node.text, size_i) as f32,
+        baseline_y: measure_y_offset_with(face, &node.text, node.size) as f32,
         // Half of `measured`, so the string is walked once.
         x_left: (-measured / 2.0) as f32,
     })
@@ -419,7 +424,7 @@ pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuil
     outline_at(
         layout.face,
         text,
-        layout.size_i,
+        layout.size,
         layout.x_left,
         layout.baseline_y,
         out,
@@ -476,23 +481,23 @@ pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
 // These measure and outline in Liberation Sans Regular, for a caller that
 // picks no font.
 
-pub fn measure_width(text: &str, size_px: i32) -> f64 {
+pub fn measure_width(text: &str, size_px: f32) -> f64 {
     measure_width_with(default_face(), text, size_px)
 }
 
-pub fn measure_height(text: &str, size_px: i32) -> f64 {
+pub fn measure_height(text: &str, size_px: f32) -> f64 {
     measure_height_with(default_face(), text, size_px)
 }
 
-pub fn measure_x_offset(text: &str, size_px: i32) -> f64 {
+pub fn measure_x_offset(text: &str, size_px: f32) -> f64 {
     measure_x_offset_with(default_face(), text, size_px)
 }
 
-pub fn measure_y_offset(text: &str, size_px: i32) -> f64 {
+pub fn measure_y_offset(text: &str, size_px: f32) -> f64 {
     measure_y_offset_with(default_face(), text, size_px)
 }
 
-pub fn outline(text: &str, size_px: i32, out: &mut dyn OutlineBuilder) {
+pub fn outline(text: &str, size_px: f32, out: &mut dyn OutlineBuilder) {
     outline_with(default_face(), text, size_px, out)
 }
 
@@ -629,48 +634,48 @@ mod tests {
 
     #[test]
     fn measure_width_empty_is_zero() {
-        assert_eq!(measure_width("", 20), 0.0);
+        assert_eq!(measure_width("", 20.0), 0.0);
     }
 
     #[test]
     fn measure_width_grows_with_size() {
-        let small = measure_width("hello", 10);
-        let big = measure_width("hello", 20);
+        let small = measure_width("hello", 10.0);
+        let big = measure_width("hello", 20.0);
         assert!(big > small * 1.5, "{big} should be roughly 2x {small}");
     }
 
     #[test]
     fn measure_width_grows_with_chars() {
-        let one = measure_width("h", 20);
-        let many = measure_width("hhhh", 20);
+        let one = measure_width("h", 20.0);
+        let many = measure_width("hhhh", 20.0);
         assert!(many > one * 3.5, "{many} should be roughly 4x {one}");
     }
 
     #[test]
     fn measure_height_uses_font_metrics() {
-        let h = measure_height("anything", 20);
+        let h = measure_height("anything", 20.0);
         // Liberation Sans at 20px. (1854 + 434) * 20 / 2048 is about 22.34.
         assert!(h > 18.0 && h < 26.0, "unexpected height: {h}");
     }
 
     #[test]
     fn x_offset_centers_text() {
-        let w = measure_width("hi", 20);
-        let x = measure_x_offset("hi", 20);
+        let w = measure_width("hi", 20.0);
+        let x = measure_x_offset("hi", 20.0);
         assert!((x + w / 2.0).abs() < 1e-6);
     }
 
     #[test]
     fn y_offset_is_within_box() {
-        let h = measure_height("hi", 20);
-        let y = measure_y_offset("hi", 20);
+        let h = measure_height("hi", 20.0);
+        let y = measure_y_offset("hi", 20.0);
         assert!(y > -h / 2.0 && y < h / 2.0);
     }
 
     #[test]
     fn outline_emits_some_commands_for_letters() {
         let mut b = CountingBuilder::default();
-        outline("Ag", 30, &mut b);
+        outline("Ag", 30.0, &mut b);
         assert!(b.moves > 0, "no moves emitted");
         assert!(b.lines > 0 || b.quads > 0, "no draw segments emitted");
         assert!(b.closes > 0, "outline did not close");
@@ -686,7 +691,7 @@ mod tests {
         let layout = layout_text(&node).expect("node draws");
 
         let mut measured = Recorder::default();
-        outline_with(layout.face, &node.text, layout.size_i, &mut measured);
+        outline_with(layout.face, &node.text, layout.size, &mut measured);
         let mut reused = Recorder::default();
         outline_layout(&layout, &node.text, &mut reused);
 
@@ -697,7 +702,7 @@ mod tests {
     #[test]
     fn outline_empty_string_emits_nothing() {
         let mut b = CountingBuilder::default();
-        outline("", 30, &mut b);
+        outline("", 30.0, &mut b);
         assert_eq!(b.moves, 0);
         assert_eq!(b.lines, 0);
         assert_eq!(b.closes, 0);
@@ -706,19 +711,19 @@ mod tests {
     #[test]
     fn outline_space_only_advances_pen_no_glyphs() {
         let mut b = CountingBuilder::default();
-        outline("   ", 30, &mut b);
+        outline("   ", 30.0, &mut b);
         assert_eq!(b.moves, 0);
         assert_eq!(b.lines, 0);
-        assert!(measure_width("   ", 30) > 0.0);
+        assert!(measure_width("   ", 30.0) > 0.0);
     }
 
     #[test]
     fn portuguese_chars_have_glyphs() {
         let s = "ção";
-        let w = measure_width(s, 20);
+        let w = measure_width(s, 20.0);
         assert!(w > 0.0);
         let mut b = CountingBuilder::default();
-        outline(s, 30, &mut b);
+        outline(s, 30.0, &mut b);
         assert!(b.moves > 0);
     }
 
@@ -766,8 +771,8 @@ mod tests {
     fn bold_picks_a_different_face_than_regular() {
         let regular = resolve("", 400, FontStyle::Normal);
         let bold = resolve("", 700, FontStyle::Normal);
-        let w_reg = measure_width_with(regular.face(), "Hello", 20);
-        let w_bold = measure_width_with(bold.face(), "Hello", 20);
+        let w_reg = measure_width_with(regular.face(), "Hello", 20.0);
+        let w_bold = measure_width_with(bold.face(), "Hello", 20.0);
         assert!(
             w_bold > w_reg,
             "expected bold wider than regular: {w_bold} vs {w_reg}"
@@ -780,9 +785,9 @@ mod tests {
         let regular = resolve("", 400, FontStyle::Normal);
         let italic = resolve("", 400, FontStyle::Italic);
         let mut b1 = CountingBuilder::default();
-        outline_with(regular.face(), "a", 30, &mut b1);
+        outline_with(regular.face(), "a", 30.0, &mut b1);
         let mut b2 = CountingBuilder::default();
-        outline_with(italic.face(), "a", 30, &mut b2);
+        outline_with(italic.face(), "a", 30.0, &mut b2);
         assert!(
             b1.lines + b1.quads != b2.lines + b2.quads,
             "italic and regular outlined identically — variant probably not picked"
@@ -809,9 +814,19 @@ mod tests {
     fn layout_text_returns_none_when_the_node_draws_nothing() {
         assert!(layout_text(&node(20.0, "")).is_none(), "empty text");
         assert!(layout_text(&node(0.0, "Hi")).is_none(), "zero size");
+        assert!(layout_text(&node(-4.0, "Hi")).is_none(), "negative size");
+        assert!(layout_text(&node(f32::NAN, "Hi")).is_none(), "NaN size");
         assert!(
-            layout_text(&node(0.9, "Hi")).is_none(),
-            "size under a pixel"
+            layout_text(&node(f32::INFINITY, "Hi")).is_none(),
+            "infinite size"
+        );
+        assert!(
+            layout_text(&node(f32::NEG_INFINITY, "Hi")).is_none(),
+            "size of minus infinity"
+        );
+        assert!(
+            layout_text(&node(f32::MAX, "Hello, world")).is_none(),
+            "size that overflows the measured width"
         );
         // U+200B is a zero-width space, so the text has chars and no width.
         assert!(
@@ -821,9 +836,22 @@ mod tests {
     }
 
     #[test]
+    fn layout_text_draws_below_one_unit_of_size() {
+        let small = layout_text(&node(0.9, "Hi")).expect("node draws");
+        let tenth = layout_text(&node(0.09, "Hi")).expect("node draws");
+        assert!(small.width > 0.0);
+        assert!(
+            (small.width / tenth.width - 10.0).abs() < 1e-2,
+            "width {} over {} is not the ratio of the sizes",
+            small.width,
+            tenth.width
+        );
+    }
+
+    #[test]
     fn layout_text_centers_the_node_on_the_origin() {
         let layout = layout_text(&node(24.0, "Hello")).expect("node draws");
-        assert_eq!(layout.size_i, 24);
+        assert_eq!(layout.size, 24.0);
         assert!((layout.x_left + layout.width / 2.0).abs() < 1e-4);
     }
 
@@ -861,6 +889,41 @@ mod tests {
             (t_big / t_small - 32.0).abs() < 1e-3,
             "thickness {t_big} over {t_small} is not the ratio of the sizes"
         );
+    }
+
+    /// The device rectangle of the underline of a node fitted to a box.
+    fn underline_in_box(size: f32) -> [f32; 4] {
+        let text = "Hello";
+        let m = crate::scene::text_box_affine(
+            "",
+            400,
+            FontStyle::Normal,
+            size,
+            text,
+            0.0,
+            0.0,
+            100.0,
+            40.0,
+            0.0,
+        );
+        let layout = layout_text(&node(size, text)).expect("node draws");
+        let u = underline_rect(&layout);
+        let map = |x: f32, y: f32| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+        let (x_l, y_top) = map(u.x_l, u.y_top);
+        let (x_r, y_bot) = map(u.x_r, u.y_bot);
+        [x_l, y_top, x_r, y_bot]
+    }
+
+    #[test]
+    fn the_underline_of_a_fitted_box_does_not_move_with_the_size() {
+        // The fit divides by the measurement, so a node in a box lands in the
+        // same place whatever size it was measured at. The glyphs always did.
+        // The underline only does once it shares that size.
+        let whole = underline_in_box(24.0);
+        let fraction = underline_in_box(24.9);
+        for (a, b) in whole.iter().zip(fraction.iter()) {
+            assert!((a - b).abs() < 1e-3, "{whole:?} against {fraction:?}");
+        }
     }
 
     #[test]

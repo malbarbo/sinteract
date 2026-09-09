@@ -323,15 +323,16 @@ pub fn text_box_affine(
     bh: f32,
     angle_deg: f32,
 ) -> [f32; 6] {
-    let size_i = size as i32;
-    if size_i <= 0 || text.is_empty() {
+    if !crate::text::drawable_size(size) || text.is_empty() {
         return translate(cx, cy);
     }
     let font = crate::text::resolve(family, weight, style);
     let face = font.face();
-    let orig_w = crate::text::measure_width_with(face, text, size_i) as f32;
-    let orig_h = crate::text::measure_height_with(face, text, size_i) as f32;
-    if orig_w <= 0.0 || orig_h <= 0.0 {
+    let orig_w = crate::text::measure_width_with(face, text, size) as f32;
+    let orig_h = crate::text::measure_height_with(face, text, size) as f32;
+    // A huge size overflows the measurement, and the scale below would put
+    // a non-finite number in the matrix.
+    if !orig_w.is_finite() || !orig_h.is_finite() || orig_w <= 0.0 || orig_h <= 0.0 {
         return translate(cx, cy);
     }
     rotate_scale_at(bw / orig_w, bh / orig_h, angle_deg, cx, cy)
