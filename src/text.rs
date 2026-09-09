@@ -191,11 +191,11 @@ fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFo
     };
     let id = db.query(&query)?;
 
-    {
-        let cache = system_cache().lock().ok()?;
-        if let Some((_, f)) = cache.iter().find(|(c, _)| *c == id) {
-            return Some(*f);
-        }
+    // One lock for the miss and for the insert, so two threads that ask for
+    // the same family do not both parse a face and leak it.
+    let mut cache = system_cache().lock().ok()?;
+    if let Some((_, f)) = cache.iter().find(|(c, _)| *c == id) {
+        return Some(*f);
     }
 
     let face_data = db.with_face_data(id, |bytes, _idx| -> Option<ResolvedFont> {
@@ -222,10 +222,7 @@ fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFo
         })
     })??;
 
-    {
-        let mut cache = system_cache().lock().ok()?;
-        cache.push((id, face_data));
-    }
+    cache.push((id, face_data));
     Some(face_data)
 }
 
