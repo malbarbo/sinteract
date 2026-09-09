@@ -243,7 +243,7 @@ pub enum FontStyle {
 }
 
 /// A text run. The glyphs are laid out in text space, with the origin at
-/// the left of the baseline and `size` pixels per em, and `transform` maps
+/// the left of the baseline and `size` units to the em, and `transform` maps
 /// them to the canvas in the convention of the PDF `cm` operator:
 ///
 /// ```text

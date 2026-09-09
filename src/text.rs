@@ -9,6 +9,10 @@
 //! The `native-fonts` feature carries that query. It is on by default, and
 //! wasm32 leaves it out even so, since a browser has no font directory.
 //!
+//! A size counts the units of the caller to the em. It is not a device
+//! pixel. A [`crate::scene::TextNode`] measures in text space, and its
+//! `transform` maps that space to the canvas.
+//!
 //! A measurement is an offset from the center of the text box. The text
 //! spans (-width/2, -height/2) to (width/2, height/2), and the caller places
 //! it with `translate(cx, cy) * rotate(angle) * scale(sx, sy)`.
@@ -303,12 +307,12 @@ pub(crate) fn drawable_size(size: f32) -> bool {
     size.is_finite() && size > 0.0
 }
 
-/// Total horizontal advance of `text` rendered at `size_px` in `face`.
-pub fn measure_width_with(face: &Face<'_>, text: &str, size_px: f32) -> f64 {
-    if text.is_empty() || !drawable_size(size_px) {
+/// Total horizontal advance of `text` rendered at `size` in `face`.
+pub fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
+    if text.is_empty() || !drawable_size(size) {
         return 0.0;
     }
-    let scale = f64::from(size_px) / f64::from(face.units_per_em());
+    let scale = f64::from(size) / f64::from(face.units_per_em());
     let mut total: f64 = 0.0;
     for c in text.chars() {
         let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
@@ -317,51 +321,51 @@ pub fn measure_width_with(face: &Face<'_>, text: &str, size_px: f32) -> f64 {
     total * scale
 }
 
-pub fn measure_height_with(face: &Face<'_>, _text: &str, size_px: f32) -> f64 {
-    if !drawable_size(size_px) {
+pub fn measure_height_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
+    if !drawable_size(size) {
         return 0.0;
     }
-    let scale = f64::from(size_px) / f64::from(face.units_per_em());
+    let scale = f64::from(size) / f64::from(face.units_per_em());
     let h = f64::from(face.ascender()) - f64::from(face.descender());
     h * scale
 }
 
-pub fn measure_x_offset_with(face: &Face<'_>, text: &str, size_px: f32) -> f64 {
-    -measure_width_with(face, text, size_px) / 2.0
+pub fn measure_x_offset_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
+    -measure_width_with(face, text, size) / 2.0
 }
 
-pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size_px: f32) -> f64 {
-    if !drawable_size(size_px) {
+pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
+    if !drawable_size(size) {
         return 0.0;
     }
-    let scale = f64::from(size_px) / f64::from(face.units_per_em());
+    let scale = f64::from(size) / f64::from(face.units_per_em());
     (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * scale
 }
 
 /// Glyph outlines for `text`, placed by measuring it. A renderer that has a
 /// [`TextLayout`] calls [`outline_layout`].
-pub fn outline_with(face: &Face<'_>, text: &str, size_px: f32, out: &mut dyn OutlineBuilder) {
-    if text.is_empty() || !drawable_size(size_px) {
+pub fn outline_with(face: &Face<'_>, text: &str, size: f32, out: &mut dyn OutlineBuilder) {
+    if text.is_empty() || !drawable_size(size) {
         return;
     }
-    let start_x = measure_x_offset_with(face, text, size_px) as f32;
-    let baseline_y = measure_y_offset_with(face, text, size_px) as f32;
-    outline_at(face, text, size_px, start_x, baseline_y, out);
+    let start_x = measure_x_offset_with(face, text, size) as f32;
+    let baseline_y = measure_y_offset_with(face, text, size) as f32;
+    outline_at(face, text, size, start_x, baseline_y, out);
 }
 
 /// Glyph outlines placed at a measured origin.
 fn outline_at(
     face: &Face<'_>,
     text: &str,
-    size_px: f32,
+    size: f32,
     start_x: f32,
     baseline_y: f32,
     out: &mut dyn OutlineBuilder,
 ) {
-    if text.is_empty() || !drawable_size(size_px) {
+    if text.is_empty() || !drawable_size(size) {
         return;
     }
-    let scale = f64::from(size_px) / f64::from(face.units_per_em());
+    let scale = f64::from(size) / f64::from(face.units_per_em());
     let mut pen_x: f64 = 0.0;
     for c in text.chars() {
         let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
@@ -481,24 +485,24 @@ pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
 // These measure and outline in Liberation Sans Regular, for a caller that
 // picks no font.
 
-pub fn measure_width(text: &str, size_px: f32) -> f64 {
-    measure_width_with(default_face(), text, size_px)
+pub fn measure_width(text: &str, size: f32) -> f64 {
+    measure_width_with(default_face(), text, size)
 }
 
-pub fn measure_height(text: &str, size_px: f32) -> f64 {
-    measure_height_with(default_face(), text, size_px)
+pub fn measure_height(text: &str, size: f32) -> f64 {
+    measure_height_with(default_face(), text, size)
 }
 
-pub fn measure_x_offset(text: &str, size_px: f32) -> f64 {
-    measure_x_offset_with(default_face(), text, size_px)
+pub fn measure_x_offset(text: &str, size: f32) -> f64 {
+    measure_x_offset_with(default_face(), text, size)
 }
 
-pub fn measure_y_offset(text: &str, size_px: f32) -> f64 {
-    measure_y_offset_with(default_face(), text, size_px)
+pub fn measure_y_offset(text: &str, size: f32) -> f64 {
+    measure_y_offset_with(default_face(), text, size)
 }
 
-pub fn outline(text: &str, size_px: f32, out: &mut dyn OutlineBuilder) {
-    outline_with(default_face(), text, size_px, out)
+pub fn outline(text: &str, size: f32, out: &mut dyn OutlineBuilder) {
+    outline_with(default_face(), text, size, out)
 }
 
 struct OutlineAdapter<'a> {
