@@ -444,14 +444,24 @@ pub struct UnderlineRect {
     pub y_bot: f32,
 }
 
+// The underline of a face that carries no `post` table, as a fraction of the
+// em. These are the PostScript FontInfo defaults, -100 and 50 in a 1000-unit
+// em.
+const FALLBACK_UNDERLINE_POS: f32 = -0.1;
+const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
+
 /// The underline rectangle of a laid-out node, from the underline metrics of
 /// its face.
 pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     let face_units = layout.face.units_per_em() as f32;
     let scale = layout.size / face_units;
     let metrics = layout.face.underline_metrics();
-    let pos_units = metrics.map(|m| m.position as f32).unwrap_or(-217.0);
-    let thickness_units = metrics.map(|m| m.thickness as f32).unwrap_or(150.0);
+    let pos_units = metrics
+        .map(|m| m.position as f32)
+        .unwrap_or(FALLBACK_UNDERLINE_POS * face_units);
+    let thickness_units = metrics
+        .map(|m| m.thickness as f32)
+        .unwrap_or(FALLBACK_UNDERLINE_THICKNESS * face_units);
     let underline_pos = -pos_units * scale; // font y is up, box y is down
     let thickness = (thickness_units * scale).max(1.0);
     let y_top = layout.baseline_y + underline_pos - thickness / 2.0;
