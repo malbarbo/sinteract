@@ -786,4 +786,82 @@ mod tests {
         let f = resolve("ZZZ_NonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
     }
+
+    fn node(size: f32, text: &str) -> TextNode {
+        TextNode {
+            size,
+            text: text.to_string(),
+            ..TextNode::default()
+        }
+    }
+
+    #[test]
+    fn layout_text_returns_none_when_the_node_draws_nothing() {
+        assert!(layout_text(&node(20.0, "")).is_none(), "empty text");
+        assert!(layout_text(&node(0.0, "Hi")).is_none(), "zero size");
+        assert!(
+            layout_text(&node(0.9, "Hi")).is_none(),
+            "size under a pixel"
+        );
+        // U+200B is a zero-width space, so the text has chars and no width.
+        assert!(
+            layout_text(&node(20.0, "\u{200b}")).is_none(),
+            "zero measured width"
+        );
+    }
+
+    #[test]
+    fn layout_text_centers_the_node_on_the_origin() {
+        let layout = layout_text(&node(24.0, "Hello")).expect("node draws");
+        assert_eq!(layout.size_i, 24);
+        assert!((layout.x_left + layout.width / 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn underline_spans_the_text_and_centers_below_the_baseline() {
+        let layout = layout_text(&node(24.0, "Hello")).expect("node draws");
+        let u = underline_rect(&layout);
+        assert_eq!(u.x_l, layout.x_left);
+        assert!((u.x_r - (layout.x_left + layout.width)).abs() < 1e-4);
+        assert!(u.y_bot > u.y_top, "the underline has no thickness");
+        let center = (u.y_top + u.y_bot) / 2.0;
+        assert!(
+            center > layout.baseline_y,
+            "the underline centre sits above the baseline"
+        );
+    }
+
+    #[test]
+    fn underline_thickness_grows_with_the_size() {
+        let thin = underline_rect(&layout_text(&node(24.0, "Hello")).expect("draws"));
+        let thick = underline_rect(&layout_text(&node(48.0, "Hello")).expect("draws"));
+        let t1 = thin.y_bot - thin.y_top;
+        let t2 = thick.y_bot - thick.y_top;
+        assert!(t2 > t1, "thickness {t2} did not grow over {t1}");
+    }
+
+    #[test]
+    fn underline_keeps_a_pixel_of_thickness_at_a_tiny_size() {
+        let layout = layout_text(&node(2.0, "Hi")).expect("node draws");
+        let u = underline_rect(&layout);
+        assert!(u.y_bot - u.y_top >= 1.0);
+    }
+
+    #[test]
+    fn outline_underline_emits_the_rect_as_a_closed_contour() {
+        let layout = layout_text(&node(24.0, "Hello")).expect("node draws");
+        let u = underline_rect(&layout);
+        let mut r = Recorder::default();
+        outline_underline(&layout, &mut r);
+        assert_eq!(
+            r.ops,
+            [
+                format!("M {} {}", u.x_l, u.y_top),
+                format!("L {} {}", u.x_r, u.y_top),
+                format!("L {} {}", u.x_r, u.y_bot),
+                format!("L {} {}", u.x_l, u.y_bot),
+                "Z".to_string(),
+            ]
+        );
+    }
 }
