@@ -382,7 +382,9 @@ pub struct TextLayout {
     pub size: f32,
     /// The horizontal advance.
     pub width: f32,
+    /// The baseline, box-local with y down, as in the `measure_*` functions.
     pub baseline_y: f32,
+    /// The left edge of the text, box-local. It is `-width / 2`.
     pub x_left: f32,
 }
 
@@ -395,7 +397,6 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
         return None;
     }
     let face = resolve(&node.family, node.weight, node.style).face();
-    // x_left is -width / 2, computed here so the string is walked once.
     let measured = measure_width_with(face, &node.text, size_i);
     let width = measured as f32;
     if width <= 0.0 {
@@ -407,6 +408,7 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
         size: node.size,
         width,
         baseline_y: measure_y_offset_with(face, &node.text, size_i) as f32,
+        // Half of `measured`, so the string is walked once.
         x_left: (-measured / 2.0) as f32,
     })
 }
@@ -461,7 +463,8 @@ pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     }
 }
 
-// The same in Liberation Sans Regular, for a caller that picks no font.
+// These measure and outline in Liberation Sans Regular, for a caller that
+// picks no font.
 
 pub fn measure_width(text: &str, size_px: i32) -> f64 {
     measure_width_with(default_face(), text, size_px)
