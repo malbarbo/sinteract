@@ -599,12 +599,19 @@ fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
         };
         let mut out = crate::text::ElevateQuads::new(&mut adapter);
         crate::text::outline_layout(&layout, &node.text, &mut out);
-        if node.underline {
-            crate::text::outline_underline(&layout, &mut out);
-        }
     }
-
     paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
+
+    if node.underline {
+        // The underline paints on its own. In one path, a glyph that winds
+        // the other way from the rectangle would cancel it where the two
+        // cross.
+        let mut adapter = PdfOutline {
+            content: &mut canvas.content,
+        };
+        crate::text::outline_underline(&layout, &mut adapter);
+        paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
+    }
     canvas.content.restore_state();
 }
 
@@ -735,8 +742,8 @@ mod tests {
     }
 
     #[test]
-    fn underline_adds_path_ops() {
-        let render = |underline: bool| {
+    fn underline_paints_apart_from_the_glyphs() {
+        let fills = |underline: bool| {
             let mut scene = Scene::new(100.0, 30.0);
             scene.text(TextNode {
                 fill: Rgba {
@@ -750,12 +757,14 @@ mod tests {
                 underline,
                 ..TextNode::default()
             });
-            render_to_pdf(&scene).len()
+            let out = render_to_pdf(&scene);
+            String::from_utf8_lossy(&out)
+                .lines()
+                .filter(|l| *l == "f")
+                .count()
         };
-        assert!(
-            render(true) > render(false),
-            "underline should emit extra content-stream ops"
-        );
+        assert_eq!(fills(false), 1, "the glyphs fill once");
+        assert_eq!(fills(true), 2, "the underline fills apart from the glyphs");
     }
 
     #[test]

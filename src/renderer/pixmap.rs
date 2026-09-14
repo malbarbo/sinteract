@@ -359,17 +359,15 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
         return;
     };
 
-    let mut builder = PathBuilder::new();
-    let mut adapter = SkiaOutline { b: &mut builder };
-    crate::text::outline_layout(&layout, &node.text, &mut adapter);
-
-    if node.underline {
-        crate::text::outline_underline(&layout, &mut adapter);
-    }
-
-    let Some(path) = builder.finish() else {
-        return;
-    };
+    let mut glyphs = PathBuilder::new();
+    crate::text::outline_layout(&layout, &node.text, &mut SkiaOutline { b: &mut glyphs });
+    // The underline paints on its own. In one path, a glyph that winds the
+    // other way from the rectangle would cancel it where the two cross.
+    let underline = node.underline.then(|| {
+        let mut b = PathBuilder::new();
+        crate::text::outline_underline(&layout, &mut SkiaOutline { b: &mut b });
+        b
+    });
 
     // The transform is in the `cm` convention, which is the order of
     // Transform::from_row.
@@ -384,26 +382,32 @@ fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: 
     // The text transform applies first, then the scale.
     let transform = local.post_concat(base);
 
-    if node.fill.a > 0.0 {
-        let mut paint = SkPaint::default();
-        paint.set_color(sk_color(node.fill));
-        paint.anti_alias = true;
-        // A TrueType glyph fills with non-zero winding.
-        pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
-    }
-    if node.stroke.a > 0.0 && node.stroke_width > 0.0 {
-        let mut paint = SkPaint::default();
-        paint.set_color(sk_color(node.stroke));
-        paint.anti_alias = true;
-        // A glyph is a closed smooth contour, so the cap and the join do not
-        // show.
-        let stroke = Stroke {
-            width: node.stroke_width,
-            miter_limit: 10.0,
-            dash: None,
-            ..Stroke::default()
-        };
-        pixmap.stroke_path(&path, &paint, &stroke, transform, mask);
+    for path in [Some(glyphs), underline]
+        .into_iter()
+        .flatten()
+        .filter_map(PathBuilder::finish)
+    {
+        if node.fill.a > 0.0 {
+            let mut paint = SkPaint::default();
+            paint.set_color(sk_color(node.fill));
+            paint.anti_alias = true;
+            // A TrueType glyph fills with non-zero winding.
+            pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
+        }
+        if node.stroke.a > 0.0 && node.stroke_width > 0.0 {
+            let mut paint = SkPaint::default();
+            paint.set_color(sk_color(node.stroke));
+            paint.anti_alias = true;
+            // A glyph is a closed smooth contour, so the cap and the join do
+            // not show.
+            let stroke = Stroke {
+                width: node.stroke_width,
+                miter_limit: 10.0,
+                dash: None,
+                ..Stroke::default()
+            };
+            pixmap.stroke_path(&path, &paint, &stroke, transform, mask);
+        }
     }
 }
 
@@ -453,6 +457,42 @@ mod tests {
         p.line_to(x + w, y);
         p.line_to(x + w, y + h);
         p.line_to(x, y + h);
+    }
+
+    #[test]
+    fn underline_stays_whole_across_a_glyph_that_winds_the_other_way() {
+        // URW Gothic is a CFF face, whose contours wind the other way from
+        // the TrueType faces that the crate embeds. A machine without it has
+        // nothing to check.
+        let family = "URW Gothic";
+        if !crate::text::resolve(family, 400, crate::scene::FontStyle::Normal).from_system {
+            return;
+        }
+        let node = TextNode {
+            fill: crate::scene::Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            transform: [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
+            size: 96.0,
+            family: family.into(),
+            underline: true,
+            text: "gyp".into(),
+            ..TextNode::default()
+        };
+        let layout = crate::text::layout_text(&node).expect("node draws");
+        let u = crate::text::underline_rect(&layout);
+        let y = (60.0 + (u.y_top + u.y_bot) / 2.0) as u32;
+        let x_l = (160.0 + u.x_l).ceil() as u32 + 1;
+        let x_r = (160.0 + u.x_r).floor() as u32 - 1;
+        let mut scene = Scene::new(320.0, 120.0);
+        scene.text(node);
+        let pixmap = rasterize_scene(&scene, 1.0).expect("pixmap");
+        for x in x_l..x_r {
+            assert_eq!(pixel_rgba(&pixmap, x, y).3, 255, "a hole at x {x}");
+        }
     }
 
     #[test]
