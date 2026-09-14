@@ -351,32 +351,6 @@ pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
     (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * scale
 }
 
-/// Glyph outlines placed at a measured origin.
-fn outline_at(
-    face: &Face<'_>,
-    text: &str,
-    size: f32,
-    start_x: f32,
-    baseline_y: f32,
-    out: &mut dyn OutlineBuilder,
-) {
-    if text.is_empty() || !drawable_size(size) {
-        return;
-    }
-    let scale = f64::from(size) / f64::from(face.units_per_em());
-    let mut pen_x: f64 = 0.0;
-    for (gid, advance) in glyphs(face, text) {
-        let mut adapter = OutlineAdapter {
-            out,
-            scale: scale as f32,
-            origin_x: start_x + (pen_x * scale) as f32,
-            baseline_y,
-        };
-        let _ = face.outline_glyph(gid, &mut adapter);
-        pen_x += advance;
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Layout of a text node, shared by the renderers
 // ---------------------------------------------------------------------------
@@ -421,14 +395,20 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
 
 /// Glyph outlines for a node measured by [`layout_text`].
 pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
-    outline_at(
-        layout.face,
-        text,
-        layout.size,
-        layout.x_left,
-        layout.baseline_y,
+    let face = layout.face;
+    let scale = f64::from(layout.size) / f64::from(face.units_per_em());
+    let mut adapter = OutlineAdapter {
         out,
-    );
+        scale: scale as f32,
+        origin_x: layout.x_left,
+        baseline_y: layout.baseline_y,
+    };
+    let mut pen_x: f64 = 0.0;
+    for (gid, advance) in glyphs(face, text) {
+        adapter.origin_x = layout.x_left + (pen_x * scale) as f32;
+        let _ = face.outline_glyph(gid, &mut adapter);
+        pen_x += advance;
+    }
 }
 
 /// The underline of a laid-out node as a closed contour.
