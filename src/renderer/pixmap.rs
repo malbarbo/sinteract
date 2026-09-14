@@ -16,7 +16,7 @@ use crate::scene::{
 
 /// A raster surface. It reallocates its pixmap only when the frame size
 /// changes.
-struct PixmapRenderer {
+pub struct PixmapRenderer {
     pixmap: Pixmap,
     /// The scale as a transform, applied to every path.
     base: Transform,
@@ -37,7 +37,7 @@ fn frame_px(width: f32, height: f32) -> (u32, u32) {
 
 /// The uniform scale that fits a `width × height` frame inside `target`
 /// pixels. It can exceed 1.0. The caller caps it.
-pub(crate) fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
+pub fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
     let (tw, th) = target;
     if tw == 0 || th == 0 {
         return 1.0;
@@ -89,8 +89,10 @@ fn append_segments(builder: &mut PathBuilder, segments: Segments<'_>) -> bool {
 }
 
 impl PixmapRenderer {
-    /// `None` when the surface cannot be allocated.
-    fn new(scale: f32, width: f32, height: f32) -> Option<Self> {
+    /// A surface for frames at `scale`, where 1.0 is the frame's own pixels,
+    /// sized first for a `width × height` frame. `None` when the surface
+    /// cannot be allocated.
+    pub fn new(scale: f32, width: f32, height: f32) -> Option<Self> {
         let (out_w, out_h, base) = fit(width, height, scale);
         Some(Self {
             pixmap: new_pixmap(out_w, out_h)?,
@@ -103,7 +105,8 @@ impl PixmapRenderer {
         })
     }
 
-    fn into_pixmap(self) -> Pixmap {
+    /// The pixmap of the last render.
+    pub fn into_pixmap(self) -> Pixmap {
         self.pixmap
     }
 
@@ -344,7 +347,7 @@ fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
 
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
 /// own pixels. See [`fit_scale`].
-pub(crate) fn rasterize_scene(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
+pub fn rasterize_scene(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
     let mut renderer = PixmapRenderer::new(scale, scene.width, scene.height)?;
     renderer.render(scene).ok()?;
     Some(renderer.into_pixmap())
