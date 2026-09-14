@@ -467,9 +467,9 @@ pub struct UnderlineRect {
 }
 
 // The underline of a face that carries no `post` table, as a fraction of the
-// em. These are the PostScript FontInfo defaults, -100 and 50 in a 1000-unit
-// em.
-const FALLBACK_UNDERLINE_POS: f32 = -0.1;
+// em. The PostScript FontInfo defaults center a stroke of 50 at -100 in a
+// 1000-unit em, so its top sits at -75.
+const FALLBACK_UNDERLINE_POS: f32 = -0.075;
 const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
 
 /// The underline rectangle of a laid-out node, from the underline metrics of
@@ -484,9 +484,10 @@ pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
         ),
         |m| (f32::from(m.position), f32::from(m.thickness)),
     );
-    let underline_pos = -pos_units * scale; // font y is up, box y is down
+    // The position in `post` is the top of the underline, with y up, and the
+    // box has y down.
+    let y_top = layout.baseline_y - pos_units * scale;
     let thickness = thickness_units * scale;
-    let y_top = layout.baseline_y + underline_pos - thickness / 2.0;
     UnderlineRect {
         x_l: layout.x_left(),
         x_r: layout.x_left() + layout.width,
@@ -885,6 +886,17 @@ mod tests {
             center > layout.baseline_y,
             "the underline centre sits above the baseline"
         );
+    }
+
+    #[test]
+    fn underline_top_sits_at_the_post_position() {
+        // Liberation Sans puts the underline at -67 with a thickness of 150.
+        // At a size of one em in font units, a unit of the font is one unit
+        // of the box.
+        let layout = layout_text(&node(2048.0, "Hi")).expect("node draws");
+        let u = underline_rect(&layout);
+        assert_eq!(u.y_top - layout.baseline_y, 67.0);
+        assert_eq!(u.y_bot - layout.baseline_y, 217.0);
     }
 
     #[test]
