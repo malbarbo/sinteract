@@ -182,14 +182,14 @@ pub trait OutlineBuilder {
 /// quadratic operator. It tracks the current point itself, and `close`
 /// returns the point to the start of the subpath, so the backend does not
 /// reconstruct it.
-pub struct ElevateQuads<'a, B: ?Sized> {
+pub(crate) struct ElevateQuads<'a, B: ?Sized> {
     inner: &'a mut B,
     start: Option<(f32, f32)>,
     last: Option<(f32, f32)>,
 }
 
 impl<'a, B: OutlineBuilder + ?Sized> ElevateQuads<'a, B> {
-    pub fn new(inner: &'a mut B) -> Self {
+    pub(crate) fn new(inner: &'a mut B) -> Self {
         Self {
             inner,
             start: None,
@@ -377,11 +377,11 @@ pub fn outline_underline(layout: &TextLayout, out: &mut dyn OutlineBuilder) {
 }
 
 /// Axis-aligned underline rectangle in box-local text space.
-pub struct UnderlineRect {
-    pub x_l: f32,
-    pub x_r: f32,
-    pub y_top: f32,
-    pub y_bot: f32,
+pub(crate) struct UnderlineRect {
+    pub(crate) x_l: f32,
+    pub(crate) x_r: f32,
+    pub(crate) y_top: f32,
+    pub(crate) y_bot: f32,
 }
 
 // The underline of a face that carries no `post` table, as a fraction of the
@@ -392,7 +392,7 @@ const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
 
 /// The underline rectangle of a laid-out node, from the underline metrics of
 /// its face.
-pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
+pub(crate) fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     let face_units = layout.face.units_per_em() as f32;
     let scale = em_scale(layout.face, layout.size) as f32;
     let (pos_units, thickness_units) = layout.face.underline_metrics().map_or(
