@@ -8,6 +8,10 @@
 # appending fields with defaults. Never reorder or renumber, and let a union
 # only grow.
 #
+# A reader skips an element whose arm it does not know and draws the rest.
+# Any other value it does not know, such as a paint arm, an enum value or a
+# verb byte, makes the whole scene unusable.
+#
 # Regenerate the Rust bindings for the three schema files with:
 #   capnp compile -orust:src/wire --src-prefix=schema \
 #     schema/scene.capnp schema/event.capnp schema/protocol.capnp

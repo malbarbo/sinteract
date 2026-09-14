@@ -30,6 +30,7 @@ struct KeyEvent {
     repeat @6 :Bool;
 }
 
+# A reader skips an event whose arm it does not know.
 struct InputEvent {
     union {
         key   @0 :KeyEvent;

@@ -20,6 +20,9 @@ using Input = import "event.capnp";
 # Client to server:
 #   * event
 #   * sessionClose
+#
+# A reader skips a message whose arm it does not know. It drops a message
+# that does not decode, and the session goes on.
 
 struct AssetMsg {
     id   @0 :UInt32;
