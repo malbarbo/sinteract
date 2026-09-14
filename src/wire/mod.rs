@@ -153,11 +153,19 @@ mod tests {
                 underline: true,
                 ..text
             });
-            clip.bitmap(Bitmap {
-                id: 7,
-                // 64×64 asset, mirrored horizontally, rotated 90°, centred at (70, 40).
-                transform: crate::scene::bitmap_box_affine(64, 64, 70.0, 40.0, -32.0, 32.0, 90.0),
-            });
+            // 64×64 asset, mirrored horizontally, rotated 90°, centred at (70, 40).
+            clip.bitmap(Bitmap::fit(
+                7,
+                64,
+                64,
+                RotatedRect {
+                    cx: 70.0,
+                    cy: 40.0,
+                    w: -32.0,
+                    h: 32.0,
+                    angle_deg: 90.0,
+                },
+            ));
         }
         scene
     }

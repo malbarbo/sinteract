@@ -405,6 +405,25 @@ impl Default for Bitmap {
     }
 }
 
+impl Bitmap {
+    /// The bitmap of the asset `id`, an image of `img_w` by `img_h` pixels,
+    /// drawn into `rect`, as [`bitmap_box_affine`] fits it.
+    pub fn fit(id: u32, img_w: u32, img_h: u32, rect: RotatedRect) -> Self {
+        Self {
+            id,
+            transform: bitmap_box_affine(
+                img_w,
+                img_h,
+                rect.cx,
+                rect.cy,
+                rect.w,
+                rect.h,
+                rect.angle_deg,
+            ),
+        }
+    }
+}
+
 /// The affine that fits an image of `img_w` by `img_h` pixels into a box of
 /// `w` by `h` centred on `(cx, cy)` and rotated by `angle_deg`. A negative
 /// `w` mirrors horizontally and a negative `h` vertically. An empty image
@@ -1354,8 +1373,17 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_box_affine_puts_the_center_of_the_image_at_the_center_of_the_box() {
-        let m = bitmap_box_affine(64, 32, 70.0, 40.0, -32.0, 16.0, 90.0);
+    fn bitmap_fit_puts_the_center_of_the_image_at_the_center_of_the_rect() {
+        let rect = RotatedRect {
+            cx: 70.0,
+            cy: 40.0,
+            w: -32.0,
+            h: 16.0,
+            angle_deg: 90.0,
+        };
+        let bitmap = Bitmap::fit(7, 64, 32, rect);
+        assert_eq!(bitmap.id, 7);
+        let m = bitmap.transform;
         assert_eq!(apply_affine(m, 0.0, 0.0), (70.0, 40.0));
         let (x, y) = apply_affine(m, 32.0, 16.0);
         assert!(
