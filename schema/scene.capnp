@@ -131,6 +131,10 @@ struct BitmapNode {
 #   y' = m1 * x + m3 * y + m5
 # The producer puts the fit, the rotation and the mirroring into it (see
 # sinteract::scene::text_box_affine).
+#
+# `text` draws on one line. A tab advances by the width of eight spaces of
+# the face. Any other control character draws nothing, so a newline does not
+# break the line.
 struct TextNode {
     fill        @0  :Rgba;
     stroke      @1  :Rgba;

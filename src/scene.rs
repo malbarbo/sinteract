@@ -251,6 +251,10 @@ pub enum FontStyle {
 /// y' = transform[1] * x + transform[3] * y + transform[5]
 /// ```
 ///
+/// `text` draws on one line. A tab advances by the width of eight spaces of
+/// the face. Any other control character draws nothing, so a newline does
+/// not break the line.
+///
 /// The producer puts the fit to a box, the rotation and the mirroring in
 /// the matrix, with [`text_box_affine`]. `family` is the family the
 /// producer measured with, after fallback, so a client lays the text out
