@@ -43,37 +43,29 @@ impl EmbeddedFont {
     }
 }
 
-macro_rules! embed {
-    ($name:literal, $path:literal) => {
+/// The four variants of a family in `fonts/`, in the order of
+/// [`variant_index`].
+macro_rules! embed_family {
+    (@variant $name:literal, $file:literal, $variant:literal) => {
         EmbeddedFont {
             name: $name,
-            bytes: include_bytes!($path),
+            bytes: include_bytes!(concat!("../fonts/", $file, "-", $variant, ".ttf")),
             face: OnceLock::new(),
         }
     };
+    ($name:literal, $file:literal) => {
+        [
+            embed_family!(@variant $name, $file, "Regular"),
+            embed_family!(@variant $name, $file, "Bold"),
+            embed_family!(@variant $name, $file, "Italic"),
+            embed_family!(@variant $name, $file, "BoldItalic"),
+        ]
+    };
 }
 
-static SANS: [EmbeddedFont; 4] = [
-    embed!("Liberation Sans", "../fonts/LiberationSans-Regular.ttf"),
-    embed!("Liberation Sans", "../fonts/LiberationSans-Bold.ttf"),
-    embed!("Liberation Sans", "../fonts/LiberationSans-Italic.ttf"),
-    embed!("Liberation Sans", "../fonts/LiberationSans-BoldItalic.ttf"),
-];
-static SERIF: [EmbeddedFont; 4] = [
-    embed!("Liberation Serif", "../fonts/LiberationSerif-Regular.ttf"),
-    embed!("Liberation Serif", "../fonts/LiberationSerif-Bold.ttf"),
-    embed!("Liberation Serif", "../fonts/LiberationSerif-Italic.ttf"),
-    embed!(
-        "Liberation Serif",
-        "../fonts/LiberationSerif-BoldItalic.ttf"
-    ),
-];
-static MONO: [EmbeddedFont; 4] = [
-    embed!("Liberation Mono", "../fonts/LiberationMono-Regular.ttf"),
-    embed!("Liberation Mono", "../fonts/LiberationMono-Bold.ttf"),
-    embed!("Liberation Mono", "../fonts/LiberationMono-Italic.ttf"),
-    embed!("Liberation Mono", "../fonts/LiberationMono-BoldItalic.ttf"),
-];
+static SANS: [EmbeddedFont; 4] = embed_family!("Liberation Sans", "LiberationSans");
+static SERIF: [EmbeddedFont; 4] = embed_family!("Liberation Serif", "LiberationSerif");
+static MONO: [EmbeddedFont; 4] = embed_family!("Liberation Mono", "LiberationMono");
 
 /// A CSS weight at or above this picks the bold face.
 const BOLD_THRESHOLD: u16 = 600;
