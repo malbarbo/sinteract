@@ -134,12 +134,12 @@ fn push_key_events(
         mods.control_key(),
         mods.shift_key(),
         mods.super_key(),
-        ev.repeat,
     );
     let event = |kind, key| crate::event::KeyEvent {
         kind,
         key,
         modifiers,
+        repeat: ev.repeat,
     };
     match ev.state {
         ElementState::Pressed if ev.repeat => {

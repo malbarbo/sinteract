@@ -206,6 +206,7 @@ mod tests {
             kind: KeyKind::Press,
             key: "ArrowDown".into(),
             modifiers: 0,
+            repeat: false,
         }));
         let stream = frame(&payload);
         let mut fr =

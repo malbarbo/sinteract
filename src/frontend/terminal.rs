@@ -446,8 +446,8 @@ fn key_event(ev: KeyEvent) -> Option<crate::event::KeyEvent> {
             m.contains(KeyModifiers::CONTROL),
             m.contains(KeyModifiers::SHIFT),
             m.contains(KeyModifiers::SUPER),
-            ev.kind == KeyEventKind::Repeat,
         ),
+        repeat: ev.kind == KeyEventKind::Repeat,
     })
 }
 

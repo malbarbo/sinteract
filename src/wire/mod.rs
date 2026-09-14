@@ -225,7 +225,8 @@ mod tests {
         let ev = InputEvent::Key(KeyEvent {
             kind: KeyKind::Down,
             key: "ArrowLeft".into(),
-            modifiers: crate::event::modifiers(false, true, true, false, false),
+            modifiers: crate::event::modifiers(false, true, true, false),
+            repeat: false,
         });
         let bytes = encode_event(&ev);
         match decode(&bytes).unwrap() {

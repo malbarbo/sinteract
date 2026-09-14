@@ -23,10 +23,9 @@ pub const MOD_ALT: u8 = 1 << 0;
 pub const MOD_CTRL: u8 = 1 << 1;
 pub const MOD_SHIFT: u8 = 1 << 2;
 pub const MOD_META: u8 = 1 << 3;
-pub const MOD_REPEAT: u8 = 1 << 4;
 
 /// Pack the modifier flags of a key event into the bits above.
-pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -> u8 {
+pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool) -> u8 {
     let mut m = 0u8;
     if alt {
         m |= MOD_ALT;
@@ -39,9 +38,6 @@ pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool, repeat: bool) -
     }
     if meta {
         m |= MOD_META;
-    }
-    if repeat {
-        m |= MOD_REPEAT;
     }
     m
 }
@@ -73,6 +69,8 @@ pub struct KeyEvent {
     pub kind: KeyKind,
     pub key: String,
     pub modifiers: u8,
+    /// The key is held and the system repeats it.
+    pub repeat: bool,
 }
 
 impl KeyEvent {
@@ -87,9 +85,6 @@ impl KeyEvent {
     }
     pub fn meta(&self) -> bool {
         self.modifiers & MOD_META != 0
-    }
-    pub fn repeat(&self) -> bool {
-        self.modifiers & MOD_REPEAT != 0
     }
 }
 
@@ -127,12 +122,12 @@ mod tests {
             kind: KeyKind::Press,
             key: "a".into(),
             modifiers: MOD_CTRL | MOD_SHIFT,
+            repeat: false,
         };
         assert!(k.ctrl());
         assert!(k.shift());
         assert!(!k.alt());
         assert!(!k.meta());
-        assert!(!k.repeat());
     }
 
     #[test]
