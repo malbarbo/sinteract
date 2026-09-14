@@ -18,6 +18,43 @@
 //! terminal, the swap chain in the window, rAF in the browser and the peer
 //! on stdio. The host derives a simulation tick from the time between two.
 
+#[derive(Clone, Debug)]
+pub enum InputEvent {
+    Key(KeyEvent),
+    /// The surface can be repainted now.
+    Vsync,
+    /// The window or the terminal closed, or the transport shut down.
+    Close,
+}
+
+impl InputEvent {
+    pub fn is_vsync(&self) -> bool {
+        matches!(self, InputEvent::Vsync)
+    }
+    pub fn is_close(&self) -> bool {
+        matches!(self, InputEvent::Close)
+    }
+    pub fn as_key(&self) -> Option<&KeyEvent> {
+        match self {
+            InputEvent::Key(k) => Some(k),
+            _ => None,
+        }
+    }
+}
+
+/// A key that went down, repeats or came up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyEvent {
+    pub kind: KeyKind,
+    /// The W3C `KeyboardEvent.key` value: a name in [`key`] for a key that
+    /// types no text, or the text the key types, such as `"a"`, `"A"` or
+    /// `" "`.
+    pub key: String,
+    pub modifiers: Modifiers,
+    /// The key is held and the system repeats it.
+    pub repeat: bool,
+}
+
 /// What happened to a key. The window and a browser send `Down` and then
 /// `Press` when a key goes down and each time it repeats, and `Up` when it
 /// comes up. A terminal sends `Press` alone, since it does not see a key go
@@ -32,19 +69,6 @@ pub enum KeyKind {
     Down = 1,
     /// The key came up.
     Up = 2,
-}
-
-/// A key that went down, repeats or came up.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KeyEvent {
-    pub kind: KeyKind,
-    /// The W3C `KeyboardEvent.key` value: a name in [`key`] for a key that
-    /// types no text, or the text the key types, such as `"a"`, `"A"` or
-    /// `" "`.
-    pub key: String,
-    pub modifiers: Modifiers,
-    /// The key is held and the system repeats it.
-    pub repeat: bool,
 }
 
 /// The names of the keys that type no text, as [`KeyEvent::key`] carries
@@ -121,30 +145,6 @@ pub struct Modifiers {
     pub shift: bool,
     /// The Windows, Command or Super key.
     pub meta: bool,
-}
-
-#[derive(Clone, Debug)]
-pub enum InputEvent {
-    Key(KeyEvent),
-    /// The surface can be repainted now.
-    Vsync,
-    /// The window or the terminal closed, or the transport shut down.
-    Close,
-}
-
-impl InputEvent {
-    pub fn is_vsync(&self) -> bool {
-        matches!(self, InputEvent::Vsync)
-    }
-    pub fn is_close(&self) -> bool {
-        matches!(self, InputEvent::Close)
-    }
-    pub fn as_key(&self) -> Option<&KeyEvent> {
-        match self {
-            InputEvent::Key(k) => Some(k),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
