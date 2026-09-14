@@ -267,7 +267,9 @@ Replicar mesma estrutura.
     adicionada (weight=400, family="").
   - `DrawCmd::Bitmap(BitmapNode { id, cx, cy, w, h, angle, flip_h, flip_v })`.
   - `sinteract::event` módulo: `InputEvent`, `KeyEvent`, `KeyKind`, MOD_*
-    bitmask. Compatível com wasm32.
+    bitmask. Compatível com wasm32. Depois o bitmask virou a struct
+    `Modifiers`, com quatro `bool`, e o campo `repeat` do `KeyEvent`, e
+    `event::key` passou a nomear as teclas que não digitam texto.
   - `schema/scene.capnp`, `schema/event.capnp` e `schema/protocol.capnp`
     (Cap'n Proto). Bindings geradas em `src/wire/*_capnp.rs` (commit). O
     comando para regenerar está no cabeçalho do `scene.capnp`.
@@ -303,7 +305,8 @@ Replicar mesma estrutura.
     `enter/exit/set_tick_rate/wait_event/present/push_asset`.
   - `TickClock` helper para agendar Ticks com `tick_rate` configurável.
   - `key_event_from_legacy()` adapta a tupla `(i32, String, [bool;5])` que
-    `terminal::poll_key_event` / `window::poll_key_event` retornam.
+    `terminal::poll_key_event` / `window::poll_key_event` retornam. Foi
+    removido depois, quando os dois passaram a devolver `KeyEvent`.
   - Refator interno mínimo: `TerminalFrontend`/`WindowFrontend` delegam
     para as funções livres existentes (estado global preservado por
     enquanto). Funções livres continuam disponíveis para o spython
