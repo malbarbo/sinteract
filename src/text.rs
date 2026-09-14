@@ -343,27 +343,12 @@ pub fn measure_height_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
     h * scale
 }
 
-pub fn measure_x_offset_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
-    -measure_width_with(face, text, size) / 2.0
-}
-
 pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
     if !drawable_size(size) {
         return 0.0;
     }
     let scale = f64::from(size) / f64::from(face.units_per_em());
     (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * scale
-}
-
-/// Glyph outlines for `text`, placed by measuring it. A renderer that has a
-/// [`TextLayout`] calls [`outline_layout`].
-pub fn outline_with(face: &Face<'_>, text: &str, size: f32, out: &mut dyn OutlineBuilder) {
-    if text.is_empty() || !drawable_size(size) {
-        return;
-    }
-    let start_x = measure_x_offset_with(face, text, size) as f32;
-    let baseline_y = measure_y_offset_with(face, text, size) as f32;
-    outline_at(face, text, size, start_x, baseline_y, out);
 }
 
 /// Glyph outlines placed at a measured origin.
@@ -434,8 +419,7 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
     })
 }
 
-/// Glyph outlines for a node measured by [`layout_text`]. Unlike
-/// [`outline_with`], it does not measure the string again.
+/// Glyph outlines for a node measured by [`layout_text`].
 pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
     outline_at(
         layout.face,
@@ -542,6 +526,13 @@ mod tests {
     /// Liberation Sans Regular, the face of a node that names no family.
     fn sans() -> &'static Face<'static> {
         SANS[0].face()
+    }
+
+    /// Outline a node as a renderer does.
+    fn outline_node(node: &TextNode, out: &mut dyn OutlineBuilder) {
+        if let Some(layout) = layout_text(node) {
+            outline_layout(&layout, &node.text, out);
+        }
     }
 
     /// Records the ops, so a test asserts them exactly.
@@ -657,13 +648,6 @@ mod tests {
     }
 
     #[test]
-    fn x_offset_centers_text() {
-        let w = measure_width_with(sans(), "hi", 20.0);
-        let x = measure_x_offset_with(sans(), "hi", 20.0);
-        assert!((x + w / 2.0).abs() < 1e-6);
-    }
-
-    #[test]
     fn y_offset_is_within_box() {
         let h = measure_height_with(sans(), "hi", 20.0);
         let y = measure_y_offset_with(sans(), "hi", 20.0);
@@ -673,34 +657,16 @@ mod tests {
     #[test]
     fn outline_emits_some_commands_for_letters() {
         let mut b = CountingBuilder::default();
-        outline_with(sans(), "Ag", 30.0, &mut b);
+        outline_node(&node(30.0, "Ag"), &mut b);
         assert!(b.moves > 0, "no moves emitted");
         assert!(b.lines > 0 || b.quads > 0, "no draw segments emitted");
         assert!(b.closes > 0, "outline did not close");
     }
 
     #[test]
-    fn outline_layout_places_glyphs_exactly_like_outline_with() {
-        let node = TextNode {
-            size: 24.0,
-            text: "Olá, mundo".to_string(),
-            ..TextNode::default()
-        };
-        let layout = layout_text(&node).expect("node draws");
-
-        let mut measured = Recorder::default();
-        outline_with(layout.face, &node.text, layout.size, &mut measured);
-        let mut reused = Recorder::default();
-        outline_layout(&layout, &node.text, &mut reused);
-
-        assert_eq!(measured.ops, reused.ops);
-        assert!(!reused.ops.is_empty());
-    }
-
-    #[test]
     fn outline_empty_string_emits_nothing() {
         let mut b = CountingBuilder::default();
-        outline_with(sans(), "", 30.0, &mut b);
+        outline_node(&node(30.0, ""), &mut b);
         assert_eq!(b.moves, 0);
         assert_eq!(b.lines, 0);
         assert_eq!(b.closes, 0);
@@ -709,7 +675,7 @@ mod tests {
     #[test]
     fn outline_space_only_advances_pen_no_glyphs() {
         let mut b = CountingBuilder::default();
-        outline_with(sans(), "   ", 30.0, &mut b);
+        outline_node(&node(30.0, "   "), &mut b);
         assert_eq!(b.moves, 0);
         assert_eq!(b.lines, 0);
         assert!(measure_width_with(sans(), "   ", 30.0) > 0.0);
@@ -718,7 +684,7 @@ mod tests {
     #[test]
     fn a_control_character_draws_nothing() {
         let mut plain = Recorder::default();
-        outline_with(sans(), "AB", 30.0, &mut plain);
+        outline_node(&node(30.0, "AB"), &mut plain);
         for s in [
             "A\nB", "A\r\nB", "A\u{0}B", "A\u{1b}B", "A\u{7f}B", "A\u{9f}B",
         ] {
@@ -728,7 +694,7 @@ mod tests {
                 "{s:?}"
             );
             let mut with = Recorder::default();
-            outline_with(sans(), s, 30.0, &mut with);
+            outline_node(&node(30.0, s), &mut with);
             assert_eq!(with.ops, plain.ops, "{s:?}");
         }
     }
@@ -745,9 +711,21 @@ mod tests {
                 "{family}"
             );
             let mut with_tab = Recorder::default();
-            outline_with(face, "A\tB", 30.0, &mut with_tab);
+            outline_node(
+                &TextNode {
+                    family: family.into(),
+                    ..node(30.0, "A\tB")
+                },
+                &mut with_tab,
+            );
             let mut with_spaces = Recorder::default();
-            outline_with(face, "A        B", 30.0, &mut with_spaces);
+            outline_node(
+                &TextNode {
+                    family: family.into(),
+                    ..node(30.0, "A        B")
+                },
+                &mut with_spaces,
+            );
             assert_eq!(with_tab.ops, with_spaces.ops, "{family}");
             widths.push(tab);
         }
@@ -766,7 +744,7 @@ mod tests {
         let expected = notdef * 30.0 / f64::from(face.units_per_em());
         assert_eq!(measure_width_with(sans(), "\u{1f600}", 30.0), expected);
         let mut b = CountingBuilder::default();
-        outline_with(sans(), "\u{1f600}", 30.0, &mut b);
+        outline_node(&node(30.0, "\u{1f600}"), &mut b);
         assert!(b.moves > 0 && b.closes > 0, "the box has no contour");
     }
 
@@ -776,7 +754,7 @@ mod tests {
         let w = measure_width_with(sans(), s, 20.0);
         assert!(w > 0.0);
         let mut b = CountingBuilder::default();
-        outline_with(sans(), s, 30.0, &mut b);
+        outline_node(&node(30.0, s), &mut b);
         assert!(b.moves > 0);
     }
 
@@ -835,12 +813,16 @@ mod tests {
     #[test]
     fn italic_resolves_to_italic_face() {
         // The italic 'a' has a different outline from the regular one.
-        let regular = resolve("", 400, FontStyle::Normal);
-        let italic = resolve("", 400, FontStyle::Italic);
         let mut b1 = CountingBuilder::default();
-        outline_with(regular.face(), "a", 30.0, &mut b1);
+        outline_node(&node(30.0, "a"), &mut b1);
         let mut b2 = CountingBuilder::default();
-        outline_with(italic.face(), "a", 30.0, &mut b2);
+        outline_node(
+            &TextNode {
+                style: FontStyle::Italic,
+                ..node(30.0, "a")
+            },
+            &mut b2,
+        );
         assert!(
             b1.lines + b1.quads != b2.lines + b2.quads,
             "italic and regular outlined identically — variant probably not picked"
