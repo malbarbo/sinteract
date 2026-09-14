@@ -92,6 +92,48 @@ impl From<std::str::Utf8Error> for Error {
     }
 }
 
+/// Rewrite the tag of the union struct that `find` points at, so `bytes`
+/// hold an arm this crate does not know, as a peer with a newer schema
+/// writes it. Every union of the schema keeps its tag at offset 0 of its
+/// data section.
+#[cfg(test)]
+pub(crate) fn with_unknown_arm(
+    bytes: &[u8],
+    find: impl FnOnce(crate::protocol_capnp::message::Reader<'_>) -> *const u8,
+) -> Vec<u8> {
+    let mut words = capnp::Word::allocate_zeroed_vec(bytes.len() / 8);
+    capnp::Word::words_to_bytes_mut(&mut words).copy_from_slice(bytes);
+    let mut out = capnp::Word::words_to_bytes(&words).to_vec();
+    let at = {
+        let buf = capnp::Word::words_to_bytes(&words);
+        let msg = capnp::serialize::read_message_from_flat_slice_no_alloc(
+            &mut &buf[..],
+            capnp::message::ReaderOptions::new(),
+        )
+        .expect("parse");
+        find(msg.get_root().expect("root")) as usize - buf.as_ptr() as usize
+    };
+    out[at..at + 2].copy_from_slice(&0xfff0u16.to_le_bytes());
+    out
+}
+
+/// Where the tag of a union struct starts, for [`with_unknown_arm`].
+#[cfg(test)]
+pub(crate) fn tag_of<'a>(r: impl capnp::traits::IntoInternalStructReader<'a>) -> *const u8 {
+    capnp::raw::get_struct_data_section(r).as_ptr()
+}
+
+/// The scene of a `Message::Frame`, for [`with_unknown_arm`].
+#[cfg(test)]
+pub(crate) fn frame_of(
+    m: crate::protocol_capnp::message::Reader<'_>,
+) -> crate::scene_capnp::scene::Reader<'_> {
+    match m.which() {
+        Ok(crate::protocol_capnp::message::Frame(f)) => f.expect("frame"),
+        _ => panic!("not a frame"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -106,6 +148,7 @@ mod tests {
         PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
         TextSpec,
     };
+    use crate::scene_capnp::element;
     use capnp::message::Builder as MessageBuilder;
 
     fn sample_scene() -> Scene {
@@ -340,6 +383,53 @@ mod tests {
             ),
             "got {err:?}",
         );
+    }
+
+    #[test]
+    fn an_element_of_an_unknown_arm_is_skipped() {
+        // A path, then a clip that holds a path and a bitmap. The first path
+        // and the bitmap become arms of a newer schema.
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.path(PathStyle::default()).move_to(0.0, 0.0);
+        {
+            let mut clip = scene.clip(RotatedRect {
+                cx: 5.0,
+                cy: 5.0,
+                w: 10.0,
+                h: 10.0,
+                angle_deg: 0.0,
+            });
+            clip.path(PathStyle::default()).move_to(1.0, 1.0);
+            clip.bitmap(Bitmap::fit(
+                7,
+                4,
+                4,
+                RotatedRect {
+                    cx: 5.0,
+                    cy: 5.0,
+                    w: 4.0,
+                    h: 4.0,
+                    angle_deg: 0.0,
+                },
+            ));
+        }
+        let bytes = with_unknown_arm(&encode_frame(&scene), |m| {
+            tag_of(frame_of(m).get_elements().unwrap().get(0))
+        });
+        let bytes = with_unknown_arm(&bytes, |m| {
+            let Ok(element::Which::Clipped(c)) = frame_of(m).get_elements().unwrap().get(1).which()
+            else {
+                panic!("expected Clipped");
+            };
+            tag_of(c.unwrap().get_elements().unwrap().get(1))
+        });
+        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Clipped { elements, .. }] = &d.elements[..] else {
+            panic!("expected one Clipped, got {:?}", d.elements);
+        };
+        assert!(matches!(&elements[..], [Element::Path(_)]), "{elements:?}");
     }
 
     #[test]

@@ -472,9 +472,14 @@ pub(super) fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
     );
 }
 
-fn read_element(node: element::Reader<'_>) -> Result<Element, Error> {
+/// `None` for an element of an arm from a newer schema, which the reader
+/// skips.
+fn read_element(node: element::Reader<'_>) -> Result<Option<Element>, Error> {
     use element::Which;
-    Ok(match node.which()? {
+    let Ok(which) = node.which() else {
+        return Ok(None);
+    };
+    Ok(Some(match which {
         Which::Path(p) => Element::Path(read_path(p?)?),
         Which::Clipped(c) => {
             let c = c?;
@@ -484,13 +489,15 @@ fn read_element(node: element::Reader<'_>) -> Result<Element, Error> {
         }
         Which::Text(t) => Element::Text(read_text_node(t?)?),
         Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?)),
-    })
+    }))
 }
 
 fn read_element_list(
     list: capnp::struct_list::Reader<'_, element::Owned>,
 ) -> Result<Vec<Element>, Error> {
-    list.iter().map(read_element).collect()
+    list.iter()
+        .filter_map(|node| read_element(node).transpose())
+        .collect()
 }
 
 pub(super) fn read_scene(r: wire_scene::Reader<'_>) -> Result<Scene, Error> {

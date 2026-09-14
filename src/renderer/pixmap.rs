@@ -664,6 +664,22 @@ mod tests {
     }
 
     #[test]
+    fn render_stream_skips_an_element_of_an_unknown_arm() {
+        // A red path that becomes an arm of a newer schema, under a blue one.
+        let mut scene = Scene::new(10.0, 10.0);
+        rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0);
+        let bytes = crate::wire::with_unknown_arm(&crate::wire::encode_frame(&scene), |m| {
+            crate::wire::tag_of(crate::wire::frame_of(m).get_elements().unwrap().get(0))
+        });
+
+        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
+        let pm = r.render_stream(&bytes[..]).expect("decode + render");
+        assert_eq!(pixel_rgba(pm, 2, 2), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(pm, 7, 7).3, 0);
+    }
+
+    #[test]
     fn render_stream_rejects_non_frame_message() {
         let bytes = crate::wire::encode_close();
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");

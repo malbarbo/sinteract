@@ -105,7 +105,12 @@ fn stream_elements<P: PaintSink>(
 ) -> Result<(), Error> {
     use element::Which;
     for node in list.iter() {
-        match node.which()? {
+        // An element of an arm from a newer schema is skipped, as `decode`
+        // skips it.
+        let Ok(which) = node.which() else {
+            continue;
+        };
+        match which {
             Which::Path(p) => {
                 read_path_into(p?, scratch)?;
                 paint.draw_path(scratch);
