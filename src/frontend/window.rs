@@ -118,9 +118,9 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Push the events of a winit key event. A first press gives `Down` and
-/// `Press`, so a handler on either sees the tap, an auto-repeat gives
-/// `Press` only, and a release gives `Up`.
+/// Push the events of a winit key event. A press gives `Down` and `Press`,
+/// the first one and each repeat alike, as a browser does, and a release
+/// gives `Up`. `repeat` tells a repeat from the first press.
 fn push_key_events(
     out: &mut VecDeque<crate::event::KeyEvent>,
     ev: &KeyEvent,
@@ -142,9 +142,6 @@ fn push_key_events(
         repeat: ev.repeat,
     };
     match ev.state {
-        ElementState::Pressed if ev.repeat => {
-            out.push_back(event(KeyKind::Press, key));
-        }
         ElementState::Pressed => {
             out.push_back(event(KeyKind::Down, key.clone()));
             out.push_back(event(KeyKind::Press, key));
