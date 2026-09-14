@@ -13,9 +13,10 @@
 //! pixel. A [`crate::scene::Text`] measures in text space, and its
 //! `transform` maps that space to the canvas.
 //!
-//! A measurement is an offset from the center of the text box. The text
-//! spans (-width/2, -height/2) to (width/2, height/2), and the caller places
-//! it with `translate(cx, cy) * rotate(angle) * scale(sx, sy)`.
+//! A measurement is taken from the center of the text box. The text spans
+//! (-width/2, -height/2) to (width/2, height/2), and
+//! [`crate::scene::TextSpec::fit`] maps that box onto a
+//! [`crate::scene::RotatedRect`].
 
 use std::sync::OnceLock;
 
@@ -30,16 +31,16 @@ use crate::scene::{FontStyle, TextSpec};
 /// Measure a text in the face that `family`, `weight` and `style` pick.
 ///
 /// The family loses its surrounding space first. An empty family is
-/// Liberation Sans, and an alias (`sans-serif`, `serif`, `monospace`, `mono`,
-/// or an embedded family name, in any case) is the embedded family. Any other
-/// name goes to the fonts installed on the system, and to Liberation Sans
-/// when none matches or when the crate carries no system lookup. In an
-/// embedded family, a weight of 600 or more picks the bold face, and an
-/// italic or oblique style the italic one.
+/// Liberation Sans, and an alias (`sans-serif`, `sans`, `serif`, `monospace`,
+/// `mono`, or an embedded family name, in any case) is the embedded family.
+/// Any other name goes to the fonts installed on the system, and to
+/// Liberation Sans when none matches or when the crate carries no system
+/// lookup. In an embedded family, a weight of 600 or more picks the bold
+/// face, and an italic or oblique style the italic one.
 ///
 /// An empty text measures zero wide, with the height of the face. Returns
-/// `None` when the size is not a positive finite number or the measurement
-/// overflows.
+/// `None` when the size is not a positive finite number, when the
+/// measurement overflows, or when the height does not come out positive.
 pub fn measure(
     family: &str,
     weight: u16,
@@ -67,7 +68,8 @@ impl TextMetrics {
         self.family
     }
 
-    /// The horizontal advance, zero for a text that draws no glyph.
+    /// The horizontal advance. It is zero when no character of the text
+    /// advances, as in an empty text.
     pub fn width(&self) -> f32 {
         self.width
     }
@@ -188,8 +190,8 @@ pub(crate) struct UnderlineRect {
 const FALLBACK_UNDERLINE_POS: f32 = -0.075;
 const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
 
-/// Receives the outline of a glyph. Coordinates are box-local, with the
-/// origin at the center of the box and y down.
+/// Receives the outline of the glyphs and of the underline. Coordinates are
+/// box-local, with the origin at the center of the box and y down.
 pub(crate) trait OutlineBuilder {
     fn move_to(&mut self, x: f32, y: f32);
     fn line_to(&mut self, x: f32, y: f32);
@@ -231,8 +233,9 @@ impl<B: OutlineBuilder + ?Sized> OutlineBuilder for ElevateQuads<'_, B> {
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        // A contour that opens on a quadratic has no start point, so the
-        // quadratic is dropped.
+        // A path that opens on a quadratic has no current point, so the
+        // quadratic is dropped. After a close, the current point is the start
+        // of the closed subpath.
         let Some(p0) = self.last else { return };
         let (c1x, c1y, c2x, c2y) = crate::scene::quad_to_cubic(p0, cx, cy, x, y);
         self.last = Some((x, y));
@@ -344,13 +347,8 @@ pub(crate) struct ResolvedFont {
 }
 
 impl ResolvedFont {
-    /// Resolve a family, a weight and a style to a face.
-    ///
-    /// The name loses its surrounding space first. An empty family is
-    /// Liberation Sans. An alias (`sans-serif`, `serif`, `monospace`, `mono`,
-    /// or an embedded family name, in any case) is the embedded family. Any
-    /// other name goes to a `fontdb` query, and to Liberation Sans when the
-    /// query finds nothing or when the crate carries no system lookup.
+    /// Resolve a family, a weight and a style to a face, by the rules that
+    /// [`measure`] documents.
     pub(crate) fn resolve(family: &str, weight: u16, style: FontStyle) -> Self {
         let v = variant_index(weight, style);
 
@@ -405,8 +403,7 @@ impl ResolvedFont {
 }
 
 // ---------------------------------------------------------------------------
-// System font lookup. The native-fonts feature carries it, and wasm32 drops
-// it in any case, since there is no font directory to read.
+// System font lookup, behind the native-fonts feature (see the module doc)
 // ---------------------------------------------------------------------------
 
 #[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
@@ -719,6 +716,14 @@ mod tests {
     }
 
     #[test]
+    fn resolve_sans_alias_picks_sans() {
+        for name in ["sans", "sans-serif", "Liberation Sans"] {
+            let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
+            assert_eq!(f.family, "Liberation Sans", "name={name}");
+        }
+    }
+
+    #[test]
     fn resolve_mono_alias_picks_mono() {
         for name in ["mono", "monospace", "Liberation Mono"] {
             let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
@@ -985,8 +990,8 @@ mod tests {
     #[test]
     fn the_underline_of_a_fitted_box_does_not_move_with_the_size() {
         // The fit divides by the measurement, so a node in a box lands in the
-        // same place whatever size it was measured at. The glyphs always did.
-        // The underline only does once it shares that size.
+        // same place whatever size it was measured at, the glyphs and the
+        // underline alike.
         let whole = underline_in_box(24.0);
         let fraction = underline_in_box(24.9);
         for (a, b) in whole.iter().zip(fraction.iter()) {
