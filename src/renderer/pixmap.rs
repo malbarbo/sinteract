@@ -11,7 +11,7 @@ use tiny_skia::{
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
     ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Segment,
-    Segments, TextNode,
+    Segments, Text,
 };
 
 /// A raster surface. It reallocates its pixmap only when the frame size
@@ -245,7 +245,7 @@ impl Paint for PixmapRenderer {
         }
     }
 
-    fn draw_text(&mut self, node: &TextNode) {
+    fn draw_text(&mut self, node: &Text) {
         render_text(node, &mut self.pixmap, self.clip_stack.last(), self.base);
     }
 
@@ -354,7 +354,7 @@ pub(crate) fn rasterize_scene(scene: &crate::scene::Scene, scale: f32) -> Option
 // Text
 // -----------------------------------------------------------------------------
 
-fn render_text(node: &TextNode, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Transform) {
+fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Transform) {
     let Some(layout) = crate::text::layout_text(node) else {
         return;
     };
@@ -468,7 +468,7 @@ mod tests {
         if crate::text::resolve(family, 400, crate::scene::FontStyle::Normal).family != family {
             return;
         }
-        let node = TextNode {
+        let node = Text {
             fill: crate::scene::Rgba {
                 r: 0,
                 g: 0,
@@ -480,7 +480,7 @@ mod tests {
             family: family.into(),
             underline: true,
             text: "gyp".into(),
-            ..TextNode::default()
+            ..Text::default()
         };
         let layout = crate::text::layout_text(&node).expect("node draws");
         let u = crate::text::underline_rect(&layout);

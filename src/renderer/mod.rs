@@ -42,7 +42,7 @@ impl std::fmt::Display for AllocError {
 impl std::error::Error for AllocError {}
 
 pub(crate) mod sealed {
-    use crate::scene::{Bitmap, ClipPath, Element, Path, TextNode};
+    use crate::scene::{Bitmap, ClipPath, Element, Path, Text};
 
     /// The primitives a backend provides and the walkers of the crate call.
     /// `pub` in a private module, so nothing outside the crate can name or
@@ -54,7 +54,7 @@ pub(crate) mod sealed {
 
         fn draw_path(&mut self, path: &Path);
 
-        fn draw_text(&mut self, text: &TextNode);
+        fn draw_text(&mut self, text: &Text);
 
         /// Draw the asset with id `bitmap.id`. No backend does, so the default
         /// skips it, and the host reports it once with

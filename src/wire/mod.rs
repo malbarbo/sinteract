@@ -103,7 +103,7 @@ mod tests {
     use crate::protocol_capnp::message;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, LineCap, LineJoin, Paint,
-        PathStyle, Rgba, Scene, Segment, SegmentKind, SpreadMode, Stop, TextNode,
+        PathStyle, Rgba, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
     };
     use capnp::message::Builder as MessageBuilder;
 
@@ -127,7 +127,7 @@ mod tests {
         }
         {
             let mut clip = scene.clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
-            clip.text(TextNode {
+            clip.text(Text {
                 fill: Rgba {
                     r: 0,
                     g: 0,
@@ -149,7 +149,7 @@ mod tests {
                 style: FontStyle::Italic,
                 underline: true,
                 text: "Olá".into(),
-                ..TextNode::default()
+                ..Text::default()
             });
             clip.bitmap(Bitmap {
                 id: 7,

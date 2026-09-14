@@ -262,7 +262,7 @@ pub enum FontStyle {
 /// fallback, so a client lays the text out as the server did. An empty family is the default Sans. `weight` is the
 /// CSS weight, 400 for Regular and 700 for Bold.
 #[derive(Clone, Debug)]
-pub struct TextNode {
+pub struct Text {
     pub fill: Rgba,
     pub stroke: Rgba,
     pub stroke_width: f32,
@@ -277,7 +277,7 @@ pub struct TextNode {
     pub text: String,
 }
 
-impl Default for TextNode {
+impl Default for Text {
     fn default() -> Self {
         Self {
             fill: Rgba::default(),
@@ -338,7 +338,7 @@ pub fn text_box_affine(
 /// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
 /// the wire, and the renderer resolves it to pixels. `transform` maps the
 /// image pixels, `(0..img_w, 0..img_h)`, to the canvas, in the convention
-/// of [`TextNode::transform`]. [`bitmap_box_affine`] computes it for a box.
+/// of [`Text::transform`]. [`bitmap_box_affine`] computes it for a box.
 #[derive(Clone, Copy, Debug)]
 pub struct Bitmap {
     pub id: u32,
@@ -668,7 +668,7 @@ pub enum Element {
         clip: ClipPath,
         elements: Vec<Element>,
     },
-    Text(TextNode),
+    Text(Text),
     Bitmap(Bitmap),
 }
 
@@ -770,7 +770,7 @@ impl Scene {
         )
     }
 
-    pub fn text(&mut self, node: TextNode) {
+    pub fn text(&mut self, node: Text) {
         self.elements.push(Element::Text(node));
     }
 

@@ -10,7 +10,7 @@
 //! wasm32 leaves it out even so, since a browser has no font directory.
 //!
 //! A size counts the units of the caller to the em. It is not a device
-//! pixel. A [`crate::scene::TextNode`] measures in text space, and its
+//! pixel. A [`crate::scene::Text`] measures in text space, and its
 //! `transform` maps that space to the canvas.
 //!
 //! A measurement is an offset from the center of the text box. The text
@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 
 use ttf_parser::{Face, GlyphId};
 
-use crate::scene::{FontStyle, TextNode};
+use crate::scene::{FontStyle, Text};
 
 // ---------------------------------------------------------------------------
 // Embedded fonts
@@ -300,7 +300,7 @@ pub struct TextMetrics {
 }
 
 impl TextMetrics {
-    /// The family after fallback. A [`TextNode`] carries it, so a client
+    /// The family after fallback. A [`Text`] carries it, so a client
     /// measures with the same face.
     pub fn family(&self) -> &'static str {
         self.family
@@ -370,10 +370,10 @@ fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics
 // Layout of a text node, shared by the renderers
 // ---------------------------------------------------------------------------
 
-/// The face and the box-local metrics of one [`TextNode`].
+/// The face and the box-local metrics of one [`Text`].
 pub(crate) struct TextLayout {
     pub(crate) face: &'static Face<'static>,
-    /// The em of the text space, from `TextNode::size`.
+    /// The em of the text space, from `Text::size`.
     pub(crate) size: f32,
     /// The horizontal advance.
     pub(crate) width: f32,
@@ -391,7 +391,7 @@ impl TextLayout {
 /// Resolve and measure a text node. Returns `None` when the node draws
 /// nothing, because the size is not a positive finite number, the text is
 /// empty, or the width or the height measures zero or overflows.
-pub(crate) fn layout_text(node: &TextNode) -> Option<TextLayout> {
+pub(crate) fn layout_text(node: &Text) -> Option<TextLayout> {
     layout(&node.family, node.weight, node.style, node.size, &node.text)
 }
 
@@ -535,7 +535,7 @@ mod tests {
     }
 
     /// Outline a node as a renderer does.
-    fn outline_node(node: &TextNode, out: &mut dyn OutlineBuilder) {
+    fn outline_node(node: &Text, out: &mut dyn OutlineBuilder) {
         if let Some(layout) = layout_text(node) {
             outline_layout(&layout, &node.text, out);
         }
@@ -684,7 +684,7 @@ mod tests {
             );
             let mut with_tab = Recorder::default();
             outline_node(
-                &TextNode {
+                &Text {
                     family: family.into(),
                     ..node(30.0, "A\tB")
                 },
@@ -692,7 +692,7 @@ mod tests {
             );
             let mut with_spaces = Recorder::default();
             outline_node(
-                &TextNode {
+                &Text {
                     family: family.into(),
                     ..node(30.0, "A        B")
                 },
@@ -791,7 +791,7 @@ mod tests {
         outline_node(&node(30.0, "a"), &mut b1);
         let mut b2 = Recorder::default();
         outline_node(
-            &TextNode {
+            &Text {
                 style: FontStyle::Italic,
                 ..node(30.0, "a")
             },
@@ -811,11 +811,11 @@ mod tests {
         assert_eq!(f.family, "Liberation Sans");
     }
 
-    fn node(size: f32, text: &str) -> TextNode {
-        TextNode {
+    fn node(size: f32, text: &str) -> Text {
+        Text {
             size,
             text: text.to_string(),
-            ..TextNode::default()
+            ..Text::default()
         }
     }
 
@@ -882,7 +882,7 @@ mod tests {
     #[test]
     fn measure_agrees_with_layout_text() {
         let m = measure("", 700, FontStyle::Italic, 24.5, "Olá").expect("measures");
-        let l = layout_text(&TextNode {
+        let l = layout_text(&Text {
             weight: 700,
             style: FontStyle::Italic,
             ..node(24.5, "Olá")

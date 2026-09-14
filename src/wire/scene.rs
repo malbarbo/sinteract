@@ -7,7 +7,7 @@
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LineCap,
     LineJoin, Paint, Path, PathStyle, Rgba, Scene, Segment, SegmentKind, Segments, SpreadMode,
-    Stop, TextNode,
+    Stop, Text,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -295,7 +295,7 @@ pub(super) fn read_bitmap(r: bitmap_node::Reader<'_>) -> Bitmap {
     }
 }
 
-fn write_text_node(mut b: text_node::Builder<'_>, n: &TextNode) {
+fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     write_rgba(b.reborrow().init_fill(), n.fill);
     write_rgba(b.reborrow().init_stroke(), n.stroke);
     b.set_stroke_width(n.stroke_width);
@@ -313,8 +313,8 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &TextNode) {
     b.set_text(&*n.text);
 }
 
-pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<TextNode, Error> {
-    Ok(TextNode {
+pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, Error> {
+    Ok(Text {
         fill: read_rgba(r.get_fill()?),
         stroke: read_rgba(r.get_stroke()?),
         stroke_width: r.get_stroke_width(),

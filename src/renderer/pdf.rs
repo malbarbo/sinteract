@@ -19,7 +19,7 @@ use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 use crate::renderer::{Renderer, sealed::Paint};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba,
-    Segment, Segments, Stop, TextNode,
+    Segment, Segments, Stop, Text,
 };
 
 /// Draw-list coordinates are CSS pixels, 96 per inch, and PDF points are 72
@@ -215,7 +215,7 @@ impl Paint for PdfRenderer {
         self.assemble();
     }
 
-    fn draw_text(&mut self, node: &TextNode) {
+    fn draw_text(&mut self, node: &Text) {
         render_text(node, self);
     }
 
@@ -563,7 +563,7 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
 }
 
 #[allow(clippy::similar_names)]
-fn render_text(node: &TextNode, canvas: &mut PdfRenderer) {
+fn render_text(node: &Text, canvas: &mut PdfRenderer) {
     let Some(layout) = crate::text::layout_text(node) else {
         return;
     };
@@ -700,7 +700,7 @@ mod tests {
     #[test]
     fn text_emits_some_path_data() {
         let mut scene = Scene::new(100.0, 30.0);
-        scene.text(TextNode {
+        scene.text(Text {
             fill: Rgba {
                 r: 0,
                 g: 0,
@@ -718,7 +718,7 @@ mod tests {
             ),
             size: 16.0,
             text: "Hi".to_owned(),
-            ..TextNode::default()
+            ..Text::default()
         });
         let out = render_to_pdf(&scene);
         assert!(out.starts_with(b"%PDF-"));
@@ -742,7 +742,7 @@ mod tests {
     fn underline_paints_apart_from_the_glyphs() {
         let fills = |underline: bool| {
             let mut scene = Scene::new(100.0, 30.0);
-            scene.text(TextNode {
+            scene.text(Text {
                 fill: Rgba {
                     r: 0,
                     g: 0,
@@ -752,7 +752,7 @@ mod tests {
                 size: 16.0,
                 text: "Hi".to_owned(),
                 underline,
-                ..TextNode::default()
+                ..Text::default()
             });
             let out = render_to_pdf(&scene);
             String::from_utf8_lossy(&out)

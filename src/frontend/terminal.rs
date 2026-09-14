@@ -471,7 +471,7 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{FillRule, Paint as IrPaint, PathStyle, Rgba, Scene, TextNode};
+    use crate::scene::{FillRule, Paint as IrPaint, PathStyle, Rgba, Scene, Text};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -486,8 +486,8 @@ mod tests {
         }
     }
 
-    fn text_node(cx: f32, cy: f32, bw: f32, bh: f32, size: f32, text: &str) -> TextNode {
-        TextNode {
+    fn text_node(cx: f32, cy: f32, bw: f32, bh: f32, size: f32, text: &str) -> Text {
+        Text {
             fill: Rgba {
                 r: 0,
                 g: 0,
@@ -505,7 +505,7 @@ mod tests {
             ),
             size,
             text: text.to_owned(),
-            ..TextNode::default()
+            ..Text::default()
         }
     }
 
