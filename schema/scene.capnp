@@ -124,8 +124,9 @@ struct BitmapNode {
     m5 @6 :Float32;
 }
 
-# A glyph is drawn in text space, with the origin at the left of the baseline
-# and `size` units to the em, and the affine maps it to the canvas, in the
+# A glyph is drawn in text space, with `size` units to the em and the origin
+# at the center of a box that spans the advance of the text and the ascender
+# to the descender of the face. The affine maps it to the canvas, in the
 # convention of the PDF cm operator and of SVG matrix(...):
 #   x' = m0 * x + m2 * y + m4
 #   y' = m1 * x + m3 * y + m5
