@@ -18,20 +18,29 @@
 //! terminal, the swap chain in the window, rAF in the browser and the peer
 //! on stdio. The host derives a simulation tick from the time between two.
 
-/// A terminal produces only `Press`, since it does not tell down from up.
-/// The window and the browser produce all three.
+/// What happened to a key. The window and a browser send `Down` and then
+/// `Press` when a key goes down and each time it repeats, and `Up` when it
+/// comes up. A terminal sends `Press` alone, since it does not see a key go
+/// down or come up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum KeyKind {
+    /// The key typed, when it goes down and each time it repeats. Every
+    /// frontend sends it.
     Press = 0,
+    /// The key went down or repeats, just before its `Press`.
     Down = 1,
+    /// The key came up.
     Up = 2,
 }
 
-/// `key` is the JS key name, such as `"ArrowLeft"`, `"Enter"` or `"a"`.
+/// A key that went down, repeats or came up.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyEvent {
     pub kind: KeyKind,
+    /// The W3C `KeyboardEvent.key` value: a name in [`key`] for a key that
+    /// types no text, or the text the key types, such as `"a"`, `"A"` or
+    /// `" "`.
     pub key: String,
     pub modifiers: Modifiers,
     /// The key is held and the system repeats it.

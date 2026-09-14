@@ -6,10 +6,13 @@
 # This file is the source of truth for the input format. The same rules as
 # scene.capnp apply. See its header for how to regenerate the bindings.
 
+# What happened to a key. The window and a browser send down and then press
+# when a key goes down and each time it repeats, and up when it comes up. A
+# terminal sends press alone.
 enum KeyKind {
-    press @0;
-    down  @1;
-    up    @2;
+    press @0;  # the key typed, when it goes down and each time it repeats
+    down  @1;  # the key went down or repeats, just before its press
+    up    @2;  # the key came up
 }
 
 # ----- Input events (client → server) -----
