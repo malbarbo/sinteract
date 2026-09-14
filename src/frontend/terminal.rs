@@ -379,30 +379,6 @@ pub fn exit_animation() {
     state.text_blocks_lines = 0;
 }
 
-/// Map a crossterm key code to its name in [`crate::event::key`], or to the
-/// text it types. A function key above F12 has no name, as in the window.
-fn key_code_to_string(code: KeyCode) -> Option<String> {
-    Some(match code {
-        KeyCode::Char(c) => c.to_string(),
-        KeyCode::Backspace => key::BACKSPACE.into(),
-        KeyCode::Enter => key::ENTER.into(),
-        KeyCode::Left => key::ARROW_LEFT.into(),
-        KeyCode::Right => key::ARROW_RIGHT.into(),
-        KeyCode::Up => key::ARROW_UP.into(),
-        KeyCode::Down => key::ARROW_DOWN.into(),
-        KeyCode::Home => key::HOME.into(),
-        KeyCode::End => key::END.into(),
-        KeyCode::PageUp => key::PAGE_UP.into(),
-        KeyCode::PageDown => key::PAGE_DOWN.into(),
-        KeyCode::Tab | KeyCode::BackTab => key::TAB.into(),
-        KeyCode::Delete => key::DELETE.into(),
-        KeyCode::Insert => key::INSERT.into(),
-        KeyCode::Esc => key::ESCAPE.into(),
-        KeyCode::F(n @ 1..=12) => key::FUNCTION_KEYS[usize::from(n - 1)].into(),
-        _ => return None,
-    })
-}
-
 /// Return the next key event without blocking.
 pub fn poll_key_event() -> Option<crate::event::KeyEvent> {
     {
@@ -449,6 +425,30 @@ fn key_event(ev: KeyEvent) -> Option<crate::event::KeyEvent> {
             meta: m.contains(KeyModifiers::SUPER),
         },
         repeat: ev.kind == KeyEventKind::Repeat,
+    })
+}
+
+/// Map a crossterm key code to its name in [`crate::event::key`], or to the
+/// text it types. A function key above F12 has no name, as in the window.
+fn key_code_to_string(code: KeyCode) -> Option<String> {
+    Some(match code {
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Backspace => key::BACKSPACE.into(),
+        KeyCode::Enter => key::ENTER.into(),
+        KeyCode::Left => key::ARROW_LEFT.into(),
+        KeyCode::Right => key::ARROW_RIGHT.into(),
+        KeyCode::Up => key::ARROW_UP.into(),
+        KeyCode::Down => key::ARROW_DOWN.into(),
+        KeyCode::Home => key::HOME.into(),
+        KeyCode::End => key::END.into(),
+        KeyCode::PageUp => key::PAGE_UP.into(),
+        KeyCode::PageDown => key::PAGE_DOWN.into(),
+        KeyCode::Tab | KeyCode::BackTab => key::TAB.into(),
+        KeyCode::Delete => key::DELETE.into(),
+        KeyCode::Insert => key::INSERT.into(),
+        KeyCode::Esc => key::ESCAPE.into(),
+        KeyCode::F(n @ 1..=12) => key::FUNCTION_KEYS[usize::from(n - 1)].into(),
+        _ => return None,
     })
 }
 
