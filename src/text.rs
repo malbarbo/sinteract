@@ -295,43 +295,6 @@ impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Measurement
-// ---------------------------------------------------------------------------
-
-/// Returns `true` if a text at `size` can draw, `false` otherwise. NaN and
-/// infinity are out, since either one puts non-finite coordinates in the
-/// outline.
-pub(crate) fn drawable_size(size: f32) -> bool {
-    size.is_finite() && size > 0.0
-}
-
-/// Each glyph that `text` draws, with its advance in font units. A tab draws
-/// [`TAB_SPACES`] spaces, another control character draws nothing, and a
-/// character that the face lacks draws the `.notdef` box.
-fn glyphs<'a>(face: &'a Face<'_>, text: &'a str) -> impl Iterator<Item = (GlyphId, f64)> + 'a {
-    text.chars()
-        .filter_map(|c| match c {
-            '\t' => Some((' ', TAB_SPACES)),
-            c if c.is_control() => None,
-            c => Some((c, 1)),
-        })
-        .flat_map(move |(c, n)| {
-            let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
-            let advance = f64::from(face.glyph_hor_advance(gid).unwrap_or(0));
-            std::iter::repeat_n((gid, advance), n)
-        })
-}
-
-/// The width of a tab, in spaces of the face. A tab advances by the same
-/// width at any column, as the `text` of Racket's `2htdp/image` does.
-const TAB_SPACES: usize = 8;
-
-/// The text-space length of one font unit of `face` at `size`.
-fn em_scale(face: &Face<'_>, size: f32) -> f64 {
-    f64::from(size) / f64::from(face.units_per_em())
-}
-
-// ---------------------------------------------------------------------------
 // Font resolution
 // ---------------------------------------------------------------------------
 
@@ -400,6 +363,43 @@ impl ResolvedFont {
             baseline_y,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Measurement
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if a text at `size` can draw, `false` otherwise. NaN and
+/// infinity are out, since either one puts non-finite coordinates in the
+/// outline.
+pub(crate) fn drawable_size(size: f32) -> bool {
+    size.is_finite() && size > 0.0
+}
+
+/// Each glyph that `text` draws, with its advance in font units. A tab draws
+/// [`TAB_SPACES`] spaces, another control character draws nothing, and a
+/// character that the face lacks draws the `.notdef` box.
+fn glyphs<'a>(face: &'a Face<'_>, text: &'a str) -> impl Iterator<Item = (GlyphId, f64)> + 'a {
+    text.chars()
+        .filter_map(|c| match c {
+            '\t' => Some((' ', TAB_SPACES)),
+            c if c.is_control() => None,
+            c => Some((c, 1)),
+        })
+        .flat_map(move |(c, n)| {
+            let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
+            let advance = f64::from(face.glyph_hor_advance(gid).unwrap_or(0));
+            std::iter::repeat_n((gid, advance), n)
+        })
+}
+
+/// The width of a tab, in spaces of the face. A tab advances by the same
+/// width at any column, as the `text` of Racket's `2htdp/image` does.
+const TAB_SPACES: usize = 8;
+
+/// The text-space length of one font unit of `face` at `size`.
+fn em_scale(face: &Face<'_>, size: f32) -> f64 {
+    f64::from(size) / f64::from(face.units_per_em())
 }
 
 // ---------------------------------------------------------------------------
