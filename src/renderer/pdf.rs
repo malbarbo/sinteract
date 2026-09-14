@@ -38,7 +38,7 @@ fn alpha_value(key: u16) -> f32 {
 
 /// Accumulates a content stream and its resources, then assembles a one-page
 /// document into `bytes`.
-struct PdfRenderer {
+pub struct PdfRenderer {
     width: f32,
     height: f32,
     content: Content,
@@ -52,7 +52,8 @@ struct PdfRenderer {
 }
 
 impl PdfRenderer {
-    fn new() -> Self {
+    /// An empty renderer. The first render sizes the page.
+    pub fn new() -> Self {
         PdfRenderer {
             width: 1.0,
             height: 1.0,
@@ -63,10 +64,19 @@ impl PdfRenderer {
         }
     }
 
-    fn into_bytes(self) -> Vec<u8> {
+    /// The document of the last render.
+    pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
+}
 
+impl Default for PdfRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PdfRenderer {
     /// Returns the `/Pn` name of `g`.
     fn push_gradient(&mut self, g: Gradient) -> String {
         let idx = self.gradients.len();
