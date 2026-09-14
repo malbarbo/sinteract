@@ -86,10 +86,10 @@ fn variant_index(weight: u16, style: FontStyle) -> usize {
 /// The result of resolving a request. A host sends `family` on the wire, so a
 /// client measures with the same face as the server.
 #[derive(Clone, Copy, Debug)]
-pub struct ResolvedFont {
+pub(crate) struct ResolvedFont {
     /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or
     /// the name fontdb reports.
-    pub family: &'static str,
+    pub(crate) family: &'static str,
     face: &'static Face<'static>,
 }
 
@@ -107,7 +107,7 @@ impl ResolvedFont {
 /// embedded family. Any other name goes to a `fontdb` query, and to
 /// Liberation Sans when the query finds nothing or when the crate carries no
 /// system lookup.
-pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
+pub(crate) fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
     let v = variant_index(weight, style);
 
     // This runs once per text node per frame, so the comparison allocates
@@ -368,10 +368,19 @@ impl TextMetrics {
     }
 }
 
-/// Measure a text in the face that `family`, `weight` and `style` resolve
-/// to, as [`resolve`] picks it. An empty text measures zero wide, with the
-/// height of the face. Returns `None` when the size is not a positive finite
-/// number or the measurement overflows.
+/// Measure a text in the face that `family`, `weight` and `style` pick.
+///
+/// The family loses its surrounding space first. An empty family is
+/// Liberation Sans, and an alias (`sans-serif`, `serif`, `monospace`, `mono`,
+/// or an embedded family name, in any case) is the embedded family. Any other
+/// name goes to the fonts installed on the system, and to Liberation Sans
+/// when none matches or when the crate carries no system lookup. In an
+/// embedded family, a weight of 600 or more picks the bold face, and an
+/// italic or oblique style the italic one.
+///
+/// An empty text measures zero wide, with the height of the face. Returns
+/// `None` when the size is not a positive finite number or the measurement
+/// overflows.
 pub fn measure(
     family: &str,
     weight: u16,
