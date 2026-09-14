@@ -7,34 +7,9 @@ use ttf_parser::Face;
 use super::ResolvedFont;
 use crate::scene::FontStyle;
 
-fn font_db() -> &'static fontdb::Database {
-    static DB: OnceLock<fontdb::Database> = OnceLock::new();
-    DB.get_or_init(|| {
-        let mut db = fontdb::Database::new();
-        db.load_system_fonts();
-        db
-    })
-}
-
-/// The system lookups already done. `requests` keeps the answer to each
-/// family, weight and style, a miss included, so a node that names a system
-/// family does not scan fontdb every frame. `faces` keeps each parsed face by
-/// fontdb id, leaked so it has the `'static` lifetime of an embedded face. A
-/// process touches few distinct fonts, so the leak is bounded.
-#[derive(Default)]
-struct SystemCache {
-    requests: Vec<(FontRequest, Option<ResolvedFont>)>,
-    faces: Vec<(fontdb::ID, ResolvedFont)>,
-}
-
-/// A family, a weight and a style, as `resolve` receives them.
-type FontRequest = (Box<str>, u16, FontStyle);
-
-fn system_cache() -> &'static Mutex<SystemCache> {
-    static CACHE: OnceLock<Mutex<SystemCache>> = OnceLock::new();
-    CACHE.get_or_init(Mutex::default)
-}
-
+/// The installed font that `family`, `weight` and `style` pick, or `None`
+/// when no installed family has that name. A request is answered once and
+/// cached.
 pub(super) fn font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFont> {
     // One lock for the lookup and for the insert, so two threads that ask for
     // the same family do not both parse a face and leak it.
@@ -50,6 +25,25 @@ pub(super) fn font(family: &str, weight: u16, style: FontStyle) -> Option<Resolv
     cache.requests.push(((family.into(), weight, style), font));
     font
 }
+
+fn system_cache() -> &'static Mutex<SystemCache> {
+    static CACHE: OnceLock<Mutex<SystemCache>> = OnceLock::new();
+    CACHE.get_or_init(Mutex::default)
+}
+
+/// The system lookups already done. `requests` keeps the answer to each
+/// family, weight and style, a miss included, so a node that names a system
+/// family does not scan fontdb every frame. `faces` keeps each parsed face by
+/// fontdb id, leaked so it has the `'static` lifetime of an embedded face. A
+/// process touches few distinct fonts, so the leak is bounded.
+#[derive(Default)]
+struct SystemCache {
+    requests: Vec<(FontRequest, Option<ResolvedFont>)>,
+    faces: Vec<(fontdb::ID, ResolvedFont)>,
+}
+
+/// A family, a weight and a style, as `resolve` receives them.
+type FontRequest = (Box<str>, u16, FontStyle);
 
 fn query_system_font(
     faces: &mut Vec<(fontdb::ID, ResolvedFont)>,
@@ -92,4 +86,13 @@ fn query_system_font(
 
     faces.push((id, face_data));
     Some(face_data)
+}
+
+fn font_db() -> &'static fontdb::Database {
+    static DB: OnceLock<fontdb::Database> = OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        db
+    })
 }
