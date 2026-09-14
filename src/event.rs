@@ -20,27 +20,16 @@
 
 /// A terminal produces only `Press`, since it does not tell down from up.
 /// The window and the browser produce all three.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum KeyKind {
-    #[default]
     Press = 0,
     Down = 1,
     Up = 2,
 }
 
-impl KeyKind {
-    pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Down,
-            2 => Self::Up,
-            _ => Self::Press,
-        }
-    }
-}
-
 /// `key` is the JS key name, such as `"ArrowLeft"`, `"Enter"` or `"a"`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct KeyEvent {
     pub kind: KeyKind,
     pub key: String,
@@ -158,16 +147,13 @@ mod tests {
         assert!(InputEvent::Vsync.is_vsync());
         assert!(!InputEvent::Vsync.is_close());
         assert!(InputEvent::Close.is_close());
-        let k = InputEvent::Key(KeyEvent::default());
+        let k = InputEvent::Key(KeyEvent {
+            kind: KeyKind::Press,
+            key: "a".into(),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        });
         assert!(!k.is_vsync());
         assert!(k.as_key().is_some());
-    }
-
-    #[test]
-    fn key_kind_from_u8_clamps() {
-        assert_eq!(KeyKind::from_u8(0), KeyKind::Press);
-        assert_eq!(KeyKind::from_u8(1), KeyKind::Down);
-        assert_eq!(KeyKind::from_u8(2), KeyKind::Up);
-        assert_eq!(KeyKind::from_u8(99), KeyKind::Press);
     }
 }
