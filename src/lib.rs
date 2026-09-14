@@ -13,8 +13,6 @@
 //! Sixel halves of it build on wasm32. The rest needs a tty, a window or
 //! platform FFI.
 
-#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
-
 pub mod event;
 pub mod frontend;
 pub mod renderer;
