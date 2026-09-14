@@ -700,6 +700,13 @@ mod tests {
     #[test]
     fn text_emits_some_path_data() {
         let mut scene = Scene::new(100.0, 30.0);
+        let text = crate::scene::TextSpec {
+            size: 16.0,
+            text: "Hi".to_owned(),
+            ..crate::scene::TextSpec::default()
+        }
+        .fit(50.0, 15.0, 80.0, 20.0, 0.0)
+        .expect("text fits");
         scene.text(Text {
             fill: Rgba {
                 r: 0,
@@ -707,21 +714,7 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            transform: crate::scene::text_box_affine(
-                &crate::text::measure("", 400, crate::scene::FontStyle::Normal, 16.0, "Hi")
-                    .expect("text measures"),
-                50.0,
-                15.0,
-                80.0,
-                20.0,
-                0.0,
-            ),
-            spec: crate::scene::TextSpec {
-                size: 16.0,
-                text: "Hi".to_owned(),
-                ..crate::scene::TextSpec::default()
-            },
-            ..Text::default()
+            ..text
         });
         let out = render_to_pdf(&scene);
         assert!(out.starts_with(b"%PDF-"));

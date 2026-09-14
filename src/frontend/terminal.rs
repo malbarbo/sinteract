@@ -494,21 +494,13 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            transform: crate::scene::text_box_affine(
-                &crate::text::measure("", 400, crate::scene::FontStyle::Normal, size, text)
-                    .expect("text measures"),
-                cx,
-                cy,
-                bw,
-                bh,
-                0.0,
-            ),
-            spec: crate::scene::TextSpec {
+            ..crate::scene::TextSpec {
                 size,
                 text: text.to_owned(),
                 ..crate::scene::TextSpec::default()
-            },
-            ..Text::default()
+            }
+            .fit(cx, cy, bw, bh, 0.0)
+            .expect("text fits")
         }
     }
 

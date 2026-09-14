@@ -127,6 +127,15 @@ mod tests {
         }
         {
             let mut clip = scene.clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
+            let text = TextSpec {
+                size: 12.0,
+                family: "Liberation Sans".into(),
+                weight: 700,
+                style: FontStyle::Italic,
+                text: "Olá".into(),
+            }
+            .fit(60.0, 30.0, 50.0, 14.0, 0.0)
+            .expect("text fits");
             clip.text(Text {
                 fill: Rgba {
                     r: 0,
@@ -134,24 +143,8 @@ mod tests {
                     b: 0,
                     a: 1.0,
                 },
-                transform: crate::scene::text_box_affine(
-                    &crate::text::measure("Liberation Sans", 700, FontStyle::Italic, 12.0, "Olá")
-                        .expect("text measures"),
-                    60.0,
-                    30.0,
-                    50.0,
-                    14.0,
-                    0.0,
-                ),
-                spec: TextSpec {
-                    size: 12.0,
-                    family: "Liberation Sans".into(),
-                    weight: 700,
-                    style: FontStyle::Italic,
-                    text: "Olá".into(),
-                },
                 underline: true,
-                ..Text::default()
+                ..text
             });
             clip.bitmap(Bitmap {
                 id: 7,
