@@ -962,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn fit_scales_exactly_when_layout_text_draws() {
+    fn fit_returns_a_text_exactly_when_layout_text_draws() {
         // Past this size the height overflows while the width of an "i"
         // stays finite.
         let tall = f32::MAX / 1.1;
@@ -984,10 +984,11 @@ mod tests {
         ] {
             let spec = node(size, text).spec;
             let draws = layout_text(&spec).is_some();
-            let scaled = spec
-                .fit(rect)
-                .is_some_and(|t| t.transform != [1.0, 0.0, 0.0, 1.0, 5.0, 7.0]);
-            assert_eq!(scaled, draws, "size {size}, text {text:?}");
+            assert_eq!(
+                spec.fit(rect).is_some(),
+                draws,
+                "size {size}, text {text:?}"
+            );
         }
     }
 

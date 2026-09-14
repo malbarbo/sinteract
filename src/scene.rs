@@ -362,13 +362,16 @@ impl Default for TextSpec {
 impl TextSpec {
     /// A [`Text`] that draws this text into `rect`. The family becomes the
     /// family after fallback, so a client measures with the face of the
-    /// producer. A text that measures zero wide draws nothing and gets a
-    /// translation to the center of `rect`. The text has no fill and no
-    /// stroke until the caller sets them. Returns `None` when
-    /// [`crate::text::measure`] does.
+    /// producer. The text has no fill and no stroke until the caller sets
+    /// them. Returns `None` when the text draws nothing, because
+    /// [`crate::text::measure`] returns `None` or the text measures zero
+    /// wide.
     pub fn fit(self, rect: RotatedRect) -> Option<Text> {
         let metrics =
             crate::text::measure(&self.family, self.weight, self.style, self.size, &self.text)?;
+        if metrics.width() <= 0.0 {
+            return None;
+        }
         Some(Text {
             transform: rect.affine(metrics.width(), metrics.height()),
             spec: Self {

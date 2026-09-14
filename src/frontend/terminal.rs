@@ -634,8 +634,23 @@ mod tests {
 
     #[test]
     fn rasterize_text_empty_renders_nothing() {
+        // TextSpec::fit refuses an empty text, but the wire can still carry
+        // one.
         let mut scene = Scene::new(10.0, 10.0);
-        scene.text(text_node(5.0, 5.0, 10.0, 10.0, 24.0, ""));
+        scene.text(Text {
+            fill: Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            transform: [1.0, 0.0, 0.0, 1.0, 5.0, 5.0],
+            spec: TextSpec {
+                size: 24.0,
+                ..TextSpec::default()
+            },
+            ..Text::default()
+        });
         let pm = rasterize(&scene);
         assert_eq!(count_opaque_pixels(&pm), 0);
     }
