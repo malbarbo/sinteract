@@ -162,17 +162,52 @@ fn font_db() -> &'static fontdb::Database {
     })
 }
 
-/// The system faces already parsed, by fontdb id. Each one is leaked so it
-/// has the `'static` lifetime of an embedded face. A process touches few
-/// distinct fonts, so the leak is bounded.
+/// The system lookups already done. `requests` keeps the answer to each
+/// family, weight and style, a miss included, so a node that names a system
+/// family does not scan fontdb every frame. `faces` keeps each parsed face by
+/// fontdb id, leaked so it has the `'static` lifetime of an embedded face. A
+/// process touches few distinct fonts, so the leak is bounded.
 #[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
-fn system_cache() -> &'static Mutex<Vec<(fontdb::ID, ResolvedFont)>> {
-    static CACHE: OnceLock<Mutex<Vec<(fontdb::ID, ResolvedFont)>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(Vec::new()))
+#[derive(Default)]
+struct SystemCache {
+    requests: Vec<(FontRequest, Option<ResolvedFont>)>,
+    faces: Vec<(fontdb::ID, ResolvedFont)>,
+}
+
+/// A family, a weight and a style, as `resolve` receives them.
+#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
+type FontRequest = (Box<str>, u16, FontStyle);
+
+#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
+fn system_cache() -> &'static Mutex<SystemCache> {
+    static CACHE: OnceLock<Mutex<SystemCache>> = OnceLock::new();
+    CACHE.get_or_init(Mutex::default)
 }
 
 #[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
 fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFont> {
+    // One lock for the lookup and for the insert, so two threads that ask for
+    // the same family do not both parse a face and leak it.
+    let mut cache = system_cache().lock().ok()?;
+    let answered = cache
+        .requests
+        .iter()
+        .find(|((f, w, s), _)| &**f == family && *w == weight && *s == style);
+    if let Some((_, font)) = answered {
+        return *font;
+    }
+    let font = query_system_font(&mut cache.faces, family, weight, style);
+    cache.requests.push(((family.into(), weight, style), font));
+    font
+}
+
+#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
+fn query_system_font(
+    faces: &mut Vec<(fontdb::ID, ResolvedFont)>,
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+) -> Option<ResolvedFont> {
     let db = font_db();
     let style_db = match style {
         FontStyle::Normal => fontdb::Style::Normal,
@@ -186,11 +221,7 @@ fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFo
         style: style_db,
     };
     let id = db.query(&query)?;
-
-    // One lock for the miss and for the insert, so two threads that ask for
-    // the same family do not both parse a face and leak it.
-    let mut cache = system_cache().lock().ok()?;
-    if let Some((_, f)) = cache.iter().find(|(c, _)| *c == id) {
+    if let Some((_, f)) = faces.iter().find(|(c, _)| *c == id) {
         return Some(*f);
     }
 
@@ -211,7 +242,7 @@ fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFo
         })
     })??;
 
-    cache.push((id, face_data));
+    faces.push((id, face_data));
     Some(face_data)
 }
 
