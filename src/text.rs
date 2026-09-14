@@ -493,7 +493,7 @@ fn variant_index(weight: u16, style: FontStyle) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{RotatedRect, Text};
+    use crate::scene::RotatedRect;
 
     /// Liberation Sans Regular, the face of a node that names no family.
     fn sans() -> &'static Face<'static> {
@@ -505,10 +505,19 @@ mod tests {
         measure(family, weight, FontStyle::Normal, size, text).expect("text measures")
     }
 
-    /// Outline a node as a renderer does.
-    fn outline_node(node: &Text, out: &mut dyn OutlineBuilder) {
-        if let Some(layout) = TextLayout::new(&node.spec) {
-            layout.outline(&node.spec.text, out);
+    /// A spec of `text` at `size`, in the default family, weight and style.
+    fn text_spec(size: f32, text: &str) -> TextSpec {
+        TextSpec {
+            size,
+            text: text.to_string(),
+            ..TextSpec::default()
+        }
+    }
+
+    /// Outline a spec as a renderer does.
+    fn outline_spec(spec: &TextSpec, out: &mut dyn OutlineBuilder) {
+        if let Some(layout) = TextLayout::new(spec) {
+            layout.outline(&spec.text, out);
         }
     }
 
@@ -579,26 +588,27 @@ mod tests {
     }
 
     #[test]
-    fn measure_width_empty_is_zero() {
+    fn an_empty_text_measures_zero_wide() {
         assert_eq!(metrics("", 400, 20.0, "").width(), 0.0);
     }
 
     #[test]
-    fn measure_width_grows_with_chars() {
+    fn the_width_grows_with_the_characters() {
         let one = metrics("", 400, 20.0, "h").width();
         let many = metrics("", 400, 20.0, "hhhh").width();
         assert!(many > one * 3.5, "{many} should be roughly 4x {one}");
     }
 
     #[test]
-    fn measure_height_uses_font_metrics() {
+    fn the_height_spans_the_ascender_to_the_descender() {
         let h = metrics("", 400, 20.0, "").height();
-        // Liberation Sans at 20px. (1854 + 434) * 20 / 2048 is about 22.34.
-        assert!(h > 18.0 && h < 26.0, "unexpected height: {h}");
+        // Liberation Sans has an ascender of 1854 and a descender of -434 in
+        // a 2048-unit em, and the division is exact.
+        assert_eq!(h, (1854.0 + 434.0) * 20.0 / 2048.0);
     }
 
     #[test]
-    fn y_offset_is_within_box() {
+    fn the_baseline_is_within_the_box() {
         let m = metrics("", 400, 20.0, "");
         let (h, y) = (m.height(), m.baseline_y());
         assert!(y > -h / 2.0 && y < h / 2.0);
@@ -607,7 +617,7 @@ mod tests {
     #[test]
     fn outline_emits_some_commands_for_letters() {
         let mut b = Recorder::default();
-        outline_node(&node(30.0, "Ag"), &mut b);
+        outline_spec(&text_spec(30.0, "Ag"), &mut b);
         assert!(b.count('M') > 0, "no moves emitted");
         assert!(
             b.count('L') > 0 || b.count('Q') > 0,
@@ -619,7 +629,7 @@ mod tests {
     #[test]
     fn outline_space_only_advances_pen_no_glyphs() {
         let mut b = Recorder::default();
-        outline_node(&node(30.0, "   "), &mut b);
+        outline_spec(&text_spec(30.0, "   "), &mut b);
         assert!(b.ops.is_empty(), "{:?}", b.ops);
         assert!(metrics("", 400, 30.0, "   ").width() > 0.0);
     }
@@ -627,7 +637,7 @@ mod tests {
     #[test]
     fn a_control_character_draws_nothing() {
         let mut plain = Recorder::default();
-        outline_node(&node(30.0, "AB"), &mut plain);
+        outline_spec(&text_spec(30.0, "AB"), &mut plain);
         for s in [
             "A\nB", "A\r\nB", "A\u{0}B", "A\u{1b}B", "A\u{7f}B", "A\u{9f}B",
         ] {
@@ -637,7 +647,7 @@ mod tests {
                 "{s:?}"
             );
             let mut with = Recorder::default();
-            outline_node(&node(30.0, s), &mut with);
+            outline_spec(&text_spec(30.0, s), &mut with);
             assert_eq!(with.ops, plain.ops, "{s:?}");
         }
     }
@@ -653,24 +663,18 @@ mod tests {
                 "{family}"
             );
             let mut with_tab = Recorder::default();
-            outline_node(
-                &Text {
-                    spec: TextSpec {
-                        family: family.into(),
-                        ..node(30.0, "A\tB").spec
-                    },
-                    ..Text::default()
+            outline_spec(
+                &TextSpec {
+                    family: family.into(),
+                    ..text_spec(30.0, "A\tB")
                 },
                 &mut with_tab,
             );
             let mut with_spaces = Recorder::default();
-            outline_node(
-                &Text {
-                    spec: TextSpec {
-                        family: family.into(),
-                        ..node(30.0, "A        B").spec
-                    },
-                    ..Text::default()
+            outline_spec(
+                &TextSpec {
+                    family: family.into(),
+                    ..text_spec(30.0, "A        B")
                 },
                 &mut with_spaces,
             );
@@ -692,7 +696,7 @@ mod tests {
         let expected = (notdef * 30.0 / f64::from(face.units_per_em())) as f32;
         assert_eq!(metrics("", 400, 30.0, "\u{1f600}").width(), expected);
         let mut b = Recorder::default();
-        outline_node(&node(30.0, "\u{1f600}"), &mut b);
+        outline_spec(&text_spec(30.0, "\u{1f600}"), &mut b);
         assert!(
             b.count('M') > 0 && b.count('Z') > 0,
             "the box has no contour"
@@ -705,7 +709,7 @@ mod tests {
         let w = metrics("", 400, 20.0, s).width();
         assert!(w > 0.0);
         let mut b = Recorder::default();
-        outline_node(&node(30.0, s), &mut b);
+        outline_spec(&text_spec(30.0, s), &mut b);
         assert!(b.count('M') > 0);
     }
 
@@ -713,6 +717,7 @@ mod tests {
     fn resolve_empty_family_picks_sans_regular() {
         let f = ResolvedFont::resolve("", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
+        assert!(std::ptr::eq(f.face, sans()), "not the regular face");
     }
 
     #[test]
@@ -770,15 +775,12 @@ mod tests {
     fn italic_resolves_to_italic_face() {
         // The italic 'a' has a different outline from the regular one.
         let mut b1 = Recorder::default();
-        outline_node(&node(30.0, "a"), &mut b1);
+        outline_spec(&text_spec(30.0, "a"), &mut b1);
         let mut b2 = Recorder::default();
-        outline_node(
-            &Text {
-                spec: TextSpec {
-                    style: FontStyle::Italic,
-                    ..node(30.0, "a").spec
-                },
-                ..Text::default()
+        outline_spec(
+            &TextSpec {
+                style: FontStyle::Italic,
+                ..text_spec(30.0, "a")
             },
             &mut b2,
         );
@@ -796,54 +798,43 @@ mod tests {
         assert_eq!(f.family, "Liberation Sans");
     }
 
-    fn node(size: f32, text: &str) -> Text {
-        Text {
-            spec: TextSpec {
-                size,
-                text: text.to_string(),
-                ..TextSpec::default()
-            },
-            ..Text::default()
-        }
-    }
-
     #[test]
     fn text_layout_returns_none_when_the_node_draws_nothing() {
         assert!(
-            TextLayout::new(&node(20.0, "").spec).is_none(),
+            TextLayout::new(&text_spec(20.0, "")).is_none(),
             "empty text"
         );
         assert!(
-            TextLayout::new(&node(0.0, "Hi").spec).is_none(),
+            TextLayout::new(&text_spec(0.0, "Hi")).is_none(),
             "zero size"
         );
         assert!(
-            TextLayout::new(&node(-4.0, "Hi").spec).is_none(),
+            TextLayout::new(&text_spec(-4.0, "Hi")).is_none(),
             "negative size"
         );
         assert!(
-            TextLayout::new(&node(f32::NAN, "Hi").spec).is_none(),
+            TextLayout::new(&text_spec(f32::NAN, "Hi")).is_none(),
             "NaN size"
         );
         assert!(
-            TextLayout::new(&node(f32::INFINITY, "Hi").spec).is_none(),
+            TextLayout::new(&text_spec(f32::INFINITY, "Hi")).is_none(),
             "infinite size"
         );
         assert!(
-            TextLayout::new(&node(f32::NEG_INFINITY, "Hi").spec).is_none(),
+            TextLayout::new(&text_spec(f32::NEG_INFINITY, "Hi")).is_none(),
             "size of minus infinity"
         );
         assert!(
-            TextLayout::new(&node(f32::MAX, "Hello, world").spec).is_none(),
+            TextLayout::new(&text_spec(f32::MAX, "Hello, world")).is_none(),
             "size that overflows the measured width"
         );
         assert!(
-            TextLayout::new(&node(20.0, "\r\n").spec).is_none(),
+            TextLayout::new(&text_spec(20.0, "\r\n")).is_none(),
             "only control characters"
         );
         // U+200B is a zero-width space, so the text has chars and no width.
         assert!(
-            TextLayout::new(&node(20.0, "\u{200b}").spec).is_none(),
+            TextLayout::new(&text_spec(20.0, "\u{200b}")).is_none(),
             "zero measured width"
         );
     }
@@ -851,7 +842,7 @@ mod tests {
     #[test]
     fn measure_gives_the_height_and_the_family_of_an_empty_text() {
         let m = measure("", 400, FontStyle::Normal, 20.0, "").expect("measures");
-        let drawn = TextLayout::new(&node(20.0, "Hi").spec).expect("node draws");
+        let drawn = TextLayout::new(&text_spec(20.0, "Hi")).expect("node draws");
         let hi = measure("", 400, FontStyle::Normal, 20.0, "Hi").expect("measures");
         assert_eq!(m.width(), 0.0);
         assert_eq!(m.height(), hi.height());
@@ -885,7 +876,7 @@ mod tests {
         let l = TextLayout::new(&TextSpec {
             weight: 700,
             style: FontStyle::Italic,
-            ..node(24.5, "Olá").spec
+            ..text_spec(24.5, "Olá")
         })
         .expect("node draws");
         assert_eq!((m.width(), m.baseline_y()), (l.width, l.baseline_y));
@@ -893,8 +884,8 @@ mod tests {
 
     #[test]
     fn text_layout_draws_below_one_unit_of_size() {
-        let small = TextLayout::new(&node(0.9, "Hi").spec).expect("node draws");
-        let tenth = TextLayout::new(&node(0.09, "Hi").spec).expect("node draws");
+        let small = TextLayout::new(&text_spec(0.9, "Hi")).expect("node draws");
+        let tenth = TextLayout::new(&text_spec(0.09, "Hi")).expect("node draws");
         assert!(small.width > 0.0);
         assert!(
             (small.width / tenth.width - 10.0).abs() < 1e-2,
@@ -906,7 +897,7 @@ mod tests {
 
     #[test]
     fn underline_spans_the_text_and_centers_below_the_baseline() {
-        let layout = TextLayout::new(&node(24.0, "Hello").spec).expect("node draws");
+        let layout = TextLayout::new(&text_spec(24.0, "Hello")).expect("node draws");
         let u = layout.underline_rect();
         assert_eq!(u.x_l, -layout.width / 2.0);
         assert!((u.x_r - layout.width / 2.0).abs() < 1e-4);
@@ -923,7 +914,7 @@ mod tests {
         // Liberation Sans puts the underline at -67 with a thickness of 150.
         // At a size of one em in font units, a unit of the font is one unit
         // of the box.
-        let layout = TextLayout::new(&node(2048.0, "Hi").spec).expect("node draws");
+        let layout = TextLayout::new(&text_spec(2048.0, "Hi")).expect("node draws");
         let u = layout.underline_rect();
         assert_eq!(u.y_top - layout.baseline_y, 67.0);
         assert_eq!(u.y_bot - layout.baseline_y, 217.0);
@@ -931,8 +922,8 @@ mod tests {
 
     #[test]
     fn underline_thickness_stays_proportional_at_a_tiny_size() {
-        let small = TextLayout::new(&node(2.0, "Hi").spec).expect("node draws");
-        let big = TextLayout::new(&node(64.0, "Hi").spec).expect("node draws");
+        let small = TextLayout::new(&text_spec(2.0, "Hi")).expect("node draws");
+        let big = TextLayout::new(&text_spec(64.0, "Hi")).expect("node draws");
         let t_small = small.underline_rect().y_bot - small.underline_rect().y_top;
         let t_big = big.underline_rect().y_bot - big.underline_rect().y_top;
         assert!(t_small > 0.0);
@@ -963,7 +954,7 @@ mod tests {
             (f32::MAX, "Hello, world"),
             (tall, "i"),
         ] {
-            let spec = node(size, text).spec;
+            let spec = text_spec(size, text);
             let draws = TextLayout::new(&spec).is_some();
             assert_eq!(
                 spec.fit(rect).is_some(),
@@ -983,7 +974,7 @@ mod tests {
             h: 40.0,
             angle_deg: 0.0,
         };
-        let spec = node(size, text).spec;
+        let spec = text_spec(size, text);
         let layout = TextLayout::new(&spec).expect("node draws");
         let m = spec.fit(rect).expect("text fits").transform;
         let u = layout.underline_rect();
@@ -1007,7 +998,7 @@ mod tests {
 
     #[test]
     fn outline_underline_emits_the_rect_as_a_closed_contour() {
-        let layout = TextLayout::new(&node(24.0, "Hello").spec).expect("node draws");
+        let layout = TextLayout::new(&text_spec(24.0, "Hello")).expect("node draws");
         let u = layout.underline_rect();
         let mut r = Recorder::default();
         layout.outline_underline(&mut r);
