@@ -355,21 +355,17 @@ pub(crate) fn rasterize_scene(scene: &crate::scene::Scene, scale: f32) -> Option
 // -----------------------------------------------------------------------------
 
 fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Transform) {
-    let Some(layout) = crate::text::layout_text(&node.spec) else {
+    let Some(layout) = crate::text::TextLayout::new(&node.spec) else {
         return;
     };
 
     let mut glyphs = PathBuilder::new();
-    crate::text::outline_layout(
-        &layout,
-        &node.spec.text,
-        &mut SkiaOutline { b: &mut glyphs },
-    );
+    layout.outline(&node.spec.text, &mut SkiaOutline { b: &mut glyphs });
     // The underline paints on its own. In one path, a glyph that winds the
     // other way from the rectangle would cancel it where the two cross.
     let underline = node.underline.then(|| {
         let mut b = PathBuilder::new();
-        crate::text::outline_underline(&layout, &mut SkiaOutline { b: &mut b });
+        layout.outline_underline(&mut SkiaOutline { b: &mut b });
         b
     });
 
@@ -492,8 +488,8 @@ mod tests {
             underline: true,
             ..Text::default()
         };
-        let layout = crate::text::layout_text(&node.spec).expect("node draws");
-        let u = crate::text::underline_rect(&layout);
+        let layout = crate::text::TextLayout::new(&node.spec).expect("node draws");
+        let u = layout.underline_rect();
         let y = (60.0 + (u.y_top + u.y_bot) / 2.0) as u32;
         let x_l = (160.0 + u.x_l).ceil() as u32 + 1;
         let x_r = (160.0 + u.x_r).floor() as u32 - 1;

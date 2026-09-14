@@ -87,35 +87,6 @@ impl TextMetrics {
 // Layout of a text node, shared by the renderers
 // ---------------------------------------------------------------------------
 
-/// Resolve and measure a text node. Returns `None` when the node draws
-/// nothing, because the size is not a positive finite number, the text is
-/// empty, or the width or the height measures zero or overflows.
-pub(crate) fn layout_text(spec: &TextSpec) -> Option<TextLayout> {
-    layout(&spec.family, spec.weight, spec.style, spec.size, &spec.text)
-}
-
-/// [`layout_text`] for the fields of a node, so a producer that has no node
-/// yet measures the text as a renderer will.
-pub(crate) fn layout(
-    family: &str,
-    weight: u16,
-    style: FontStyle,
-    size: f32,
-    text: &str,
-) -> Option<TextLayout> {
-    let font = resolve(family, weight, style);
-    let metrics = measure_font(font, size, text)?;
-    if metrics.width <= 0.0 {
-        return None;
-    }
-    Some(TextLayout {
-        face: font.face,
-        size,
-        width: metrics.width,
-        baseline_y: metrics.baseline_y,
-    })
-}
-
 /// The face and the box-local metrics of one [`TextSpec`].
 pub(crate) struct TextLayout {
     pub(crate) face: &'static Face<'static>,
@@ -128,62 +99,78 @@ pub(crate) struct TextLayout {
 }
 
 impl TextLayout {
+    /// Resolve and measure a text node. Returns `None` when the node draws
+    /// nothing, because the size is not a positive finite number, the text is
+    /// empty, or the width or the height measures zero or overflows.
+    pub(crate) fn new(spec: &TextSpec) -> Option<Self> {
+        let font = resolve(&spec.family, spec.weight, spec.style);
+        let metrics = measure_font(font, spec.size, &spec.text)?;
+        if metrics.width <= 0.0 {
+            return None;
+        }
+        Some(Self {
+            face: font.face,
+            size: spec.size,
+            width: metrics.width,
+            baseline_y: metrics.baseline_y,
+        })
+    }
+
+    /// The glyph outlines of `text`, the text this layout measured.
+    pub(crate) fn outline(&self, text: &str, out: &mut dyn OutlineBuilder) {
+        let face = self.face;
+        let scale = em_scale(face, self.size);
+        let x_left = self.x_left();
+        let mut adapter = OutlineAdapter {
+            out,
+            scale: scale as f32,
+            origin_x: x_left,
+            baseline_y: self.baseline_y,
+        };
+        let mut pen_x: f64 = 0.0;
+        for (gid, advance) in glyphs(face, text) {
+            adapter.origin_x = x_left + (pen_x * scale) as f32;
+            let _ = face.outline_glyph(gid, &mut adapter);
+            pen_x += advance;
+        }
+    }
+
+    /// The underline as a closed contour.
+    pub(crate) fn outline_underline(&self, out: &mut dyn OutlineBuilder) {
+        let u = self.underline_rect();
+        out.move_to(u.x_l, u.y_top);
+        out.line_to(u.x_r, u.y_top);
+        out.line_to(u.x_r, u.y_bot);
+        out.line_to(u.x_l, u.y_bot);
+        out.close();
+    }
+
+    /// The underline rectangle, from the underline metrics of the face.
+    pub(crate) fn underline_rect(&self) -> UnderlineRect {
+        let face_units = self.face.units_per_em() as f32;
+        let scale = em_scale(self.face, self.size) as f32;
+        let (pos_units, thickness_units) = self.face.underline_metrics().map_or(
+            (
+                FALLBACK_UNDERLINE_POS * face_units,
+                FALLBACK_UNDERLINE_THICKNESS * face_units,
+            ),
+            |m| (f32::from(m.position), f32::from(m.thickness)),
+        );
+        // The position in `post` is the top of the underline, with y up, and
+        // the box has y down.
+        let y_top = self.baseline_y - pos_units * scale;
+        let thickness = thickness_units * scale;
+        UnderlineRect {
+            x_l: self.x_left(),
+            x_r: self.x_left() + self.width,
+            y_top,
+            y_bot: y_top + thickness,
+        }
+    }
+
     /// The left edge of the text, box-local.
     pub(crate) fn x_left(&self) -> f32 {
         -self.width / 2.0
-    }
-}
-
-/// Glyph outlines for a node measured by [`layout_text`].
-pub(crate) fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
-    let face = layout.face;
-    let scale = em_scale(face, layout.size);
-    let x_left = layout.x_left();
-    let mut adapter = OutlineAdapter {
-        out,
-        scale: scale as f32,
-        origin_x: x_left,
-        baseline_y: layout.baseline_y,
-    };
-    let mut pen_x: f64 = 0.0;
-    for (gid, advance) in glyphs(face, text) {
-        adapter.origin_x = x_left + (pen_x * scale) as f32;
-        let _ = face.outline_glyph(gid, &mut adapter);
-        pen_x += advance;
-    }
-}
-
-/// The underline of a laid-out node as a closed contour.
-pub(crate) fn outline_underline(layout: &TextLayout, out: &mut dyn OutlineBuilder) {
-    let u = underline_rect(layout);
-    out.move_to(u.x_l, u.y_top);
-    out.line_to(u.x_r, u.y_top);
-    out.line_to(u.x_r, u.y_bot);
-    out.line_to(u.x_l, u.y_bot);
-    out.close();
-}
-
-/// The underline rectangle of a laid-out node, from the underline metrics of
-/// its face.
-pub(crate) fn underline_rect(layout: &TextLayout) -> UnderlineRect {
-    let face_units = layout.face.units_per_em() as f32;
-    let scale = em_scale(layout.face, layout.size) as f32;
-    let (pos_units, thickness_units) = layout.face.underline_metrics().map_or(
-        (
-            FALLBACK_UNDERLINE_POS * face_units,
-            FALLBACK_UNDERLINE_THICKNESS * face_units,
-        ),
-        |m| (f32::from(m.position), f32::from(m.thickness)),
-    );
-    // The position in `post` is the top of the underline, with y up, and the
-    // box has y down.
-    let y_top = layout.baseline_y - pos_units * scale;
-    let thickness = thickness_units * scale;
-    UnderlineRect {
-        x_l: layout.x_left(),
-        x_r: layout.x_left() + layout.width,
-        y_top,
-        y_bot: y_top + thickness,
     }
 }
 
@@ -531,8 +518,8 @@ mod tests {
 
     /// Outline a node as a renderer does.
     fn outline_node(node: &Text, out: &mut dyn OutlineBuilder) {
-        if let Some(layout) = layout_text(&node.spec) {
-            outline_layout(&layout, &node.spec.text, out);
+        if let Some(layout) = TextLayout::new(&node.spec) {
+            layout.outline(&node.spec.text, out);
         }
     }
 
@@ -827,36 +814,42 @@ mod tests {
     }
 
     #[test]
-    fn layout_text_returns_none_when_the_node_draws_nothing() {
-        assert!(layout_text(&node(20.0, "").spec).is_none(), "empty text");
-        assert!(layout_text(&node(0.0, "Hi").spec).is_none(), "zero size");
+    fn text_layout_returns_none_when_the_node_draws_nothing() {
         assert!(
-            layout_text(&node(-4.0, "Hi").spec).is_none(),
+            TextLayout::new(&node(20.0, "").spec).is_none(),
+            "empty text"
+        );
+        assert!(
+            TextLayout::new(&node(0.0, "Hi").spec).is_none(),
+            "zero size"
+        );
+        assert!(
+            TextLayout::new(&node(-4.0, "Hi").spec).is_none(),
             "negative size"
         );
         assert!(
-            layout_text(&node(f32::NAN, "Hi").spec).is_none(),
+            TextLayout::new(&node(f32::NAN, "Hi").spec).is_none(),
             "NaN size"
         );
         assert!(
-            layout_text(&node(f32::INFINITY, "Hi").spec).is_none(),
+            TextLayout::new(&node(f32::INFINITY, "Hi").spec).is_none(),
             "infinite size"
         );
         assert!(
-            layout_text(&node(f32::NEG_INFINITY, "Hi").spec).is_none(),
+            TextLayout::new(&node(f32::NEG_INFINITY, "Hi").spec).is_none(),
             "size of minus infinity"
         );
         assert!(
-            layout_text(&node(f32::MAX, "Hello, world").spec).is_none(),
+            TextLayout::new(&node(f32::MAX, "Hello, world").spec).is_none(),
             "size that overflows the measured width"
         );
         assert!(
-            layout_text(&node(20.0, "\r\n").spec).is_none(),
+            TextLayout::new(&node(20.0, "\r\n").spec).is_none(),
             "only control characters"
         );
         // U+200B is a zero-width space, so the text has chars and no width.
         assert!(
-            layout_text(&node(20.0, "\u{200b}").spec).is_none(),
+            TextLayout::new(&node(20.0, "\u{200b}").spec).is_none(),
             "zero measured width"
         );
     }
@@ -864,7 +857,7 @@ mod tests {
     #[test]
     fn measure_gives_the_height_and_the_family_of_an_empty_text() {
         let m = measure("", 400, FontStyle::Normal, 20.0, "").expect("measures");
-        let drawn = layout_text(&node(20.0, "Hi").spec).expect("node draws");
+        let drawn = TextLayout::new(&node(20.0, "Hi").spec).expect("node draws");
         let hi = measure("", 400, FontStyle::Normal, 20.0, "Hi").expect("measures");
         assert_eq!(m.width(), 0.0);
         assert_eq!(m.height(), hi.height());
@@ -893,9 +886,9 @@ mod tests {
     }
 
     #[test]
-    fn measure_agrees_with_layout_text() {
+    fn measure_agrees_with_text_layout() {
         let m = measure("", 700, FontStyle::Italic, 24.5, "Olá").expect("measures");
-        let l = layout_text(&TextSpec {
+        let l = TextLayout::new(&TextSpec {
             weight: 700,
             style: FontStyle::Italic,
             ..node(24.5, "Olá").spec
@@ -905,9 +898,9 @@ mod tests {
     }
 
     #[test]
-    fn layout_text_draws_below_one_unit_of_size() {
-        let small = layout_text(&node(0.9, "Hi").spec).expect("node draws");
-        let tenth = layout_text(&node(0.09, "Hi").spec).expect("node draws");
+    fn text_layout_draws_below_one_unit_of_size() {
+        let small = TextLayout::new(&node(0.9, "Hi").spec).expect("node draws");
+        let tenth = TextLayout::new(&node(0.09, "Hi").spec).expect("node draws");
         assert!(small.width > 0.0);
         assert!(
             (small.width / tenth.width - 10.0).abs() < 1e-2,
@@ -919,8 +912,8 @@ mod tests {
 
     #[test]
     fn underline_spans_the_text_and_centers_below_the_baseline() {
-        let layout = layout_text(&node(24.0, "Hello").spec).expect("node draws");
-        let u = underline_rect(&layout);
+        let layout = TextLayout::new(&node(24.0, "Hello").spec).expect("node draws");
+        let u = layout.underline_rect();
         assert_eq!(u.x_l, -layout.width / 2.0);
         assert!((u.x_r - layout.width / 2.0).abs() < 1e-4);
         assert!(u.y_bot > u.y_top, "the underline has no thickness");
@@ -936,18 +929,18 @@ mod tests {
         // Liberation Sans puts the underline at -67 with a thickness of 150.
         // At a size of one em in font units, a unit of the font is one unit
         // of the box.
-        let layout = layout_text(&node(2048.0, "Hi").spec).expect("node draws");
-        let u = underline_rect(&layout);
+        let layout = TextLayout::new(&node(2048.0, "Hi").spec).expect("node draws");
+        let u = layout.underline_rect();
         assert_eq!(u.y_top - layout.baseline_y, 67.0);
         assert_eq!(u.y_bot - layout.baseline_y, 217.0);
     }
 
     #[test]
     fn underline_thickness_stays_proportional_at_a_tiny_size() {
-        let small = layout_text(&node(2.0, "Hi").spec).expect("node draws");
-        let big = layout_text(&node(64.0, "Hi").spec).expect("node draws");
-        let t_small = underline_rect(&small).y_bot - underline_rect(&small).y_top;
-        let t_big = underline_rect(&big).y_bot - underline_rect(&big).y_top;
+        let small = TextLayout::new(&node(2.0, "Hi").spec).expect("node draws");
+        let big = TextLayout::new(&node(64.0, "Hi").spec).expect("node draws");
+        let t_small = small.underline_rect().y_bot - small.underline_rect().y_top;
+        let t_big = big.underline_rect().y_bot - big.underline_rect().y_top;
         assert!(t_small > 0.0);
         assert!(
             (t_big / t_small - 32.0).abs() < 1e-3,
@@ -956,7 +949,7 @@ mod tests {
     }
 
     #[test]
-    fn fit_returns_a_text_exactly_when_layout_text_draws() {
+    fn fit_returns_a_text_exactly_when_a_text_layout_draws() {
         // Past this size the height overflows while the width of an "i"
         // stays finite.
         let tall = f32::MAX / 1.1;
@@ -977,7 +970,7 @@ mod tests {
             (tall, "i"),
         ] {
             let spec = node(size, text).spec;
-            let draws = layout_text(&spec).is_some();
+            let draws = TextLayout::new(&spec).is_some();
             assert_eq!(
                 spec.fit(rect).is_some(),
                 draws,
@@ -997,9 +990,9 @@ mod tests {
             angle_deg: 0.0,
         };
         let spec = node(size, text).spec;
-        let layout = layout_text(&spec).expect("node draws");
+        let layout = TextLayout::new(&spec).expect("node draws");
         let m = spec.fit(rect).expect("text fits").transform;
-        let u = underline_rect(&layout);
+        let u = layout.underline_rect();
         let map = |x: f32, y: f32| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
         let (x_l, y_top) = map(u.x_l, u.y_top);
         let (x_r, y_bot) = map(u.x_r, u.y_bot);
@@ -1020,10 +1013,10 @@ mod tests {
 
     #[test]
     fn outline_underline_emits_the_rect_as_a_closed_contour() {
-        let layout = layout_text(&node(24.0, "Hello").spec).expect("node draws");
-        let u = underline_rect(&layout);
+        let layout = TextLayout::new(&node(24.0, "Hello").spec).expect("node draws");
+        let u = layout.underline_rect();
         let mut r = Recorder::default();
-        outline_underline(&layout, &mut r);
+        layout.outline_underline(&mut r);
         assert_eq!(
             r.ops,
             [

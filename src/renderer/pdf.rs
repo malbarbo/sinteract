@@ -564,7 +564,7 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
 
 #[allow(clippy::similar_names)]
 fn render_text(node: &Text, canvas: &mut PdfRenderer) {
-    let Some(layout) = crate::text::layout_text(&node.spec) else {
+    let Some(layout) = crate::text::TextLayout::new(&node.spec) else {
         return;
     };
 
@@ -598,7 +598,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
             content: &mut canvas.content,
         };
         let mut out = crate::text::ElevateQuads::new(&mut adapter);
-        crate::text::outline_layout(&layout, &node.spec.text, &mut out);
+        layout.outline(&node.spec.text, &mut out);
     }
     paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
 
@@ -609,7 +609,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
         let mut adapter = PdfOutline {
             content: &mut canvas.content,
         };
-        crate::text::outline_underline(&layout, &mut adapter);
+        layout.outline_underline(&mut adapter);
         paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
     }
     canvas.content.restore_state();
