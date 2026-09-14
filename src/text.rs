@@ -295,8 +295,6 @@ pub struct TextLayout {
     pub size: f32,
     /// The horizontal advance.
     pub width: f32,
-    /// The ascender minus the descender of the face.
-    pub height: f32,
     /// The baseline, box-local with y down.
     pub baseline_y: f32,
 }
@@ -333,7 +331,6 @@ pub(crate) fn layout(
         face: font.face(),
         size,
         width: metrics.width,
-        height: metrics.height,
         baseline_y: metrics.baseline_y,
     })
 }
@@ -841,8 +838,9 @@ mod tests {
     fn measure_gives_the_height_and_the_family_of_an_empty_text() {
         let m = measure("", 400, FontStyle::Normal, 20.0, "").expect("measures");
         let drawn = layout_text(&node(20.0, "Hi")).expect("node draws");
+        let hi = measure("", 400, FontStyle::Normal, 20.0, "Hi").expect("measures");
         assert_eq!(m.width(), 0.0);
-        assert_eq!(m.height(), drawn.height);
+        assert_eq!(m.height(), hi.height());
         assert_eq!(m.baseline_y(), drawn.baseline_y);
         assert_eq!(m.family(), "Liberation Sans");
     }
@@ -876,10 +874,7 @@ mod tests {
             ..node(24.5, "Olá")
         })
         .expect("node draws");
-        assert_eq!(
-            (m.width(), m.height(), m.baseline_y()),
-            (l.width, l.height, l.baseline_y)
-        );
+        assert_eq!((m.width(), m.baseline_y()), (l.width, l.baseline_y));
     }
 
     #[test]
