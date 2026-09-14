@@ -15,9 +15,9 @@ fn key_kind_to_wire(k: KeyKind) -> WKeyKind {
 
 fn key_kind_from_wire(k: WKeyKind) -> KeyKind {
     match k {
+        WKeyKind::Press => KeyKind::Press,
         WKeyKind::Down => KeyKind::Down,
         WKeyKind::Up => KeyKind::Up,
-        _ => KeyKind::Press,
     }
 }
 
