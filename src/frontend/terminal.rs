@@ -3,8 +3,8 @@
 //! of alt screen and raw mode with key polling. An animation frame replaces
 //! the previous one at (0, 0).
 //!
-//! A terminal does not tell a key down from a key up, so every key event is
-//! a press.
+//! A Unix terminal does not tell a key down from a key up, so every key
+//! event is a press.
 
 use std::io::{self, Write};
 use std::sync::Mutex;
@@ -414,41 +414,40 @@ pub fn poll_key_event() -> Option<crate::event::KeyEvent> {
     if !event::poll(Duration::ZERO).ok()? {
         return None;
     }
-    let evt = event::read().ok()?;
-    let Event::Key(KeyEvent {
-        code,
-        modifiers,
-        kind,
-        ..
-    }) = evt
-    else {
+    let Event::Key(key) = event::read().ok()? else {
         return None;
     };
 
     // process::exit would kill a server that hosts other sessions, so the
     // frontend reports a close instead.
-    if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
         STATE.lock().unwrap().closed = true;
         return None;
     }
+    key_event(key)
+}
 
-    // A terminal reports a release only with the kitty keyboard protocol,
-    // which is off, and reports a repeat as a press.
-    let key_kind = match kind {
-        KeyEventKind::Release => KeyKind::Up,
-        _ => KeyKind::Press,
-    };
-
-    let key = key_code_to_string(code)?;
-    let alt = modifiers.contains(KeyModifiers::ALT);
-    let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-    let shift = modifiers.contains(KeyModifiers::SHIFT);
-    let meta = modifiers.contains(KeyModifiers::SUPER);
-    let repeat = matches!(kind, KeyEventKind::Repeat);
+/// The key event of a crossterm key, or `None` for a release or a key with no
+/// name. Windows reports every release, and a Unix terminal reports one only
+/// with the kitty keyboard protocol, which is off. A release is dropped, so a
+/// terminal sends a press alone on every platform. A repeat arrives as a
+/// press.
+fn key_event(ev: KeyEvent) -> Option<crate::event::KeyEvent> {
+    if ev.kind == KeyEventKind::Release {
+        return None;
+    }
+    let key = key_code_to_string(ev.code)?;
+    let m = ev.modifiers;
     Some(crate::event::KeyEvent {
-        kind: key_kind,
+        kind: KeyKind::Press,
         key,
-        modifiers: crate::event::modifiers(alt, ctrl, shift, meta, repeat),
+        modifiers: crate::event::modifiers(
+            m.contains(KeyModifiers::ALT),
+            m.contains(KeyModifiers::CONTROL),
+            m.contains(KeyModifiers::SHIFT),
+            m.contains(KeyModifiers::SUPER),
+            ev.kind == KeyEventKind::Repeat,
+        ),
     })
 }
 
@@ -916,5 +915,16 @@ mod tests {
         let off = pixel_rgba(&pm, 20, 10).3;
         assert!(on > 200, "on-segment expected opaque: {on}");
         assert!(off < 40, "off-segment expected transparent: {off}");
+    }
+
+    #[test]
+    fn a_key_release_sends_nothing() {
+        let press = KeyEvent::new_with_kind(KeyCode::Up, KeyModifiers::NONE, KeyEventKind::Press);
+        let release = KeyEvent {
+            kind: KeyEventKind::Release,
+            ..press
+        };
+        assert_eq!(key_event(press).map(|k| k.kind), Some(KeyKind::Press));
+        assert!(key_event(release).is_none());
     }
 }
