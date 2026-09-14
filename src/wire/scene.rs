@@ -11,7 +11,7 @@ use crate::scene::{
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
-    SpreadMode as WSpreadMode, bitmap_node, clip_path as wire_clip_path, clipped as wire_clipped,
+    SpreadMode as WSpreadMode, bitmap, clip_path as wire_clip_path, clipped as wire_clipped,
     element, paint as wire_paint, path as wire_path, path_style as wire_path_style,
     rgba as wire_rgba, scene as wire_scene, stop as wire_stop, text_node,
 };
@@ -271,7 +271,7 @@ pub(super) fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, 
     Ok(clip)
 }
 
-fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &Bitmap) {
+fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap) {
     b.set_id(n.id);
     b.set_m0(n.transform[0]);
     b.set_m1(n.transform[1]);
@@ -281,7 +281,7 @@ fn write_bitmap(mut b: bitmap_node::Builder<'_>, n: &Bitmap) {
     b.set_m5(n.transform[5]);
 }
 
-pub(super) fn read_bitmap(r: bitmap_node::Reader<'_>) -> Bitmap {
+pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Bitmap {
     Bitmap {
         id: r.get_id(),
         transform: [

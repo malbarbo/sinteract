@@ -114,7 +114,7 @@ struct ClipPath {
 # The affine maps the image pixels (0..img_w, 0..img_h) onto the canvas, in
 # the convention of TextNode. The producer puts the fit, the rotation and the
 # mirroring into it (see sinteract::scene::bitmap_box_affine).
-struct BitmapNode {
+struct Bitmap {
     id @0 :UInt32;
     m0 @1 :Float32;
     m1 @2 :Float32;
@@ -136,6 +136,9 @@ struct BitmapNode {
 # `text` draws on one line. A tab advances by the width of eight spaces of
 # the face. Any other control character draws nothing, so a newline does not
 # break the line.
+#
+# The name keeps the Node suffix. A struct named Text hides the built-in
+# Text type from every field of this file.
 struct TextNode {
     fill        @0  :Rgba;
     stroke      @1  :Rgba;
@@ -180,7 +183,7 @@ struct Element {
         path    @0 :Path;
         clipped @1 :Clipped;
         text    @2 :TextNode;
-        bitmap  @3 :BitmapNode;
+        bitmap  @3 :Bitmap;
     }
 }
 
