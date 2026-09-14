@@ -307,14 +307,25 @@ pub(crate) fn drawable_size(size: f32) -> bool {
     size.is_finite() && size > 0.0
 }
 
-/// Each glyph that `text` draws, with its advance in font units. A control
-/// character draws nothing, and a character that the face lacks draws the
-/// `.notdef` box.
+/// The width of a tab, in spaces of the face. A tab advances by the same
+/// width at any column, as the `text` of Racket's `2htdp/image` does.
+const TAB_SPACES: usize = 8;
+
+/// Each glyph that `text` draws, with its advance in font units. A tab draws
+/// [`TAB_SPACES`] spaces, another control character draws nothing, and a
+/// character that the face lacks draws the `.notdef` box.
 fn glyphs<'a>(face: &'a Face<'_>, text: &'a str) -> impl Iterator<Item = (GlyphId, f64)> + 'a {
-    text.chars().filter(|c| !c.is_control()).map(move |c| {
-        let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
-        (gid, f64::from(face.glyph_hor_advance(gid).unwrap_or(0)))
-    })
+    text.chars()
+        .filter_map(|c| match c {
+            '\t' => Some((' ', TAB_SPACES)),
+            c if c.is_control() => None,
+            c => Some((c, 1)),
+        })
+        .flat_map(move |(c, n)| {
+            let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
+            let advance = f64::from(face.glyph_hor_advance(gid).unwrap_or(0));
+            std::iter::repeat_n((gid, advance), n)
+        })
 }
 
 /// Total horizontal advance of `text` rendered at `size` in `face`.
@@ -738,6 +749,30 @@ mod tests {
             outline(s, 30.0, &mut with);
             assert_eq!(with.ops, plain.ops, "{s:?}");
         }
+    }
+
+    #[test]
+    fn a_tab_draws_eight_spaces_of_the_face() {
+        let mut widths = Vec::new();
+        for family in ["sans-serif", "monospace"] {
+            let face = resolve(family, 400, FontStyle::Normal).face();
+            let tab = measure_width_with(face, "A\tB", 30.0);
+            assert_eq!(
+                tab,
+                measure_width_with(face, "A        B", 30.0),
+                "{family}"
+            );
+            let mut with_tab = Recorder::default();
+            outline_with(face, "A\tB", 30.0, &mut with_tab);
+            let mut with_spaces = Recorder::default();
+            outline_with(face, "A        B", 30.0, &mut with_spaces);
+            assert_eq!(with_tab.ops, with_spaces.ops, "{family}");
+            widths.push(tab);
+        }
+        assert_ne!(
+            widths[0], widths[1],
+            "the width does not come from the face"
+        );
     }
 
     #[test]
