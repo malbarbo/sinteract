@@ -253,6 +253,8 @@ impl<B: OutlineBuilder + ?Sized> OutlineBuilder for ElevateQuads<'_, B> {
     }
 }
 
+/// Maps the outline of one glyph from font units, with y up, to box-local
+/// coordinates, with y down, for an [`OutlineBuilder`].
 struct OutlineAdapter<'a> {
     out: &'a mut dyn OutlineBuilder,
     scale: f32,
@@ -260,7 +262,7 @@ struct OutlineAdapter<'a> {
     baseline_y: f32,
 }
 
-impl<'a> OutlineAdapter<'a> {
+impl OutlineAdapter<'_> {
     fn map(&self, x: f32, y: f32) -> (f32, f32) {
         (
             self.origin_x + x * self.scale,
@@ -269,26 +271,30 @@ impl<'a> OutlineAdapter<'a> {
     }
 }
 
-impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
+impl ttf_parser::OutlineBuilder for OutlineAdapter<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         let (mx, my) = self.map(x, y);
         self.out.move_to(mx, my);
     }
+
     fn line_to(&mut self, x: f32, y: f32) {
         let (mx, my) = self.map(x, y);
         self.out.line_to(mx, my);
     }
+
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
         let (cx, cy) = self.map(x1, y1);
         let (ex, ey) = self.map(x, y);
         self.out.quad_to(cx, cy, ex, ey);
     }
+
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
         let (c1x, c1y) = self.map(x1, y1);
         let (c2x, c2y) = self.map(x2, y2);
         let (ex, ey) = self.map(x, y);
         self.out.cubic_to(c1x, c1y, c2x, c2y, ex, ey);
     }
+
     fn close(&mut self) {
         self.out.close();
     }
