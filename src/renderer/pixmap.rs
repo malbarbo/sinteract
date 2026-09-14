@@ -440,7 +440,7 @@ impl<'a> crate::text::OutlineBuilder for SkiaOutline<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{PathStyle, Scene};
+    use crate::scene::{PathStyle, Scene, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -480,11 +480,11 @@ mod tests {
                 a: 1.0,
             },
             transform: [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
-            spec: crate::scene::TextSpec {
+            spec: TextSpec {
                 size: 96.0,
                 family: family.into(),
                 text: "gyp".into(),
-                ..crate::scene::TextSpec::default()
+                ..TextSpec::default()
             },
             underline: true,
             ..Text::default()
