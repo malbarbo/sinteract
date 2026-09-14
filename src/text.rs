@@ -947,19 +947,10 @@ mod tests {
             (f32::MAX, "Hello, world"),
             (tall, "i"),
         ] {
-            let m = crate::scene::text_box_affine(
-                "",
-                400,
-                FontStyle::Normal,
-                size,
-                text,
-                5.0,
-                7.0,
-                100.0,
-                40.0,
-                0.0,
-            );
-            let scaled = m != [1.0, 0.0, 0.0, 1.0, 5.0, 7.0];
+            let scaled = measure("", 400, FontStyle::Normal, size, text).is_some_and(|m| {
+                crate::scene::text_box_affine(&m, 5.0, 7.0, 100.0, 40.0, 0.0)
+                    != [1.0, 0.0, 0.0, 1.0, 5.0, 7.0]
+            });
             let draws = layout_text(&node(size, text)).is_some();
             assert_eq!(scaled, draws, "size {size}, text {text:?}");
         }
@@ -969,11 +960,7 @@ mod tests {
     fn underline_in_box(size: f32) -> [f32; 4] {
         let text = "Hello";
         let m = crate::scene::text_box_affine(
-            "",
-            400,
-            FontStyle::Normal,
-            size,
-            text,
+            &crate::text::measure("", 400, FontStyle::Normal, size, text).expect("text measures"),
             0.0,
             0.0,
             100.0,

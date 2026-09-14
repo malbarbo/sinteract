@@ -135,11 +135,8 @@ mod tests {
                     a: 1.0,
                 },
                 transform: crate::scene::text_box_affine(
-                    "Liberation Sans",
-                    700,
-                    FontStyle::Italic,
-                    12.0,
-                    "Olá",
+                    &crate::text::measure("Liberation Sans", 700, FontStyle::Italic, 12.0, "Olá")
+                        .expect("text measures"),
                     60.0,
                     30.0,
                     50.0,

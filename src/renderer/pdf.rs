@@ -708,11 +708,8 @@ mod tests {
                 a: 1.0,
             },
             transform: crate::scene::text_box_affine(
-                "",
-                400,
-                crate::scene::FontStyle::Normal,
-                16.0,
-                "Hi",
+                &crate::text::measure("", 400, crate::scene::FontStyle::Normal, 16.0, "Hi")
+                    .expect("text measures"),
                 50.0,
                 15.0,
                 80.0,

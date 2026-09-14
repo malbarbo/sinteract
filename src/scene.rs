@@ -256,9 +256,9 @@ pub enum FontStyle {
 /// not break the line.
 ///
 /// The producer puts the fit to a box, the rotation and the mirroring in
-/// the matrix, with [`text_box_affine`]. `family` is the family the
-/// producer measured with, after fallback, so a client lays the text out
-/// as the server did. An empty family is the default Sans. `weight` is the
+/// the matrix, with [`crate::text::measure`] and [`text_box_affine`].
+/// `family` is [`crate::text::TextMetrics::family`], the family after
+/// fallback, so a client lays the text out as the server did. An empty family is the default Sans. `weight` is the
 /// CSS weight, 400 for Regular and 700 for Bold.
 #[derive(Clone, Debug)]
 pub struct TextNode {
@@ -308,29 +308,30 @@ fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
-/// The affine that fits the text into a box of `bw` by `bh` centred on
-/// `(cx, cy)` and rotated by `angle_deg`. The text is measured as
-/// [`crate::text::layout_text`] measures it for a renderer, so the producer
-/// and the backend agree. A negative `bw` mirrors horizontally and a
-/// negative `bh` vertically. A text that the renderer does not draw gets a
-/// translation to `(cx, cy)`.
-#[allow(clippy::too_many_arguments)]
+/// The affine that fits a text measured as `metrics` into a box of `bw` by
+/// `bh` centred on `(cx, cy)` and rotated by `angle_deg`.
+/// [`crate::text::measure`] measures a text as a renderer lays it out, so
+/// the producer and the backend agree. A negative `bw` mirrors horizontally
+/// and a negative `bh` vertically. A text that measures zero wide draws
+/// nothing and gets a translation to `(cx, cy)`.
 pub fn text_box_affine(
-    family: &str,
-    weight: u16,
-    style: FontStyle,
-    size: f32,
-    text: &str,
+    metrics: &crate::text::TextMetrics,
     cx: f32,
     cy: f32,
     bw: f32,
     bh: f32,
     angle_deg: f32,
 ) -> [f32; 6] {
-    let Some(layout) = crate::text::layout(family, weight, style, size, text) else {
+    if metrics.width() <= 0.0 {
         return translate(cx, cy);
-    };
-    rotate_scale_at(bw / layout.width, bh / layout.height, angle_deg, cx, cy)
+    }
+    rotate_scale_at(
+        bw / metrics.width(),
+        bh / metrics.height(),
+        angle_deg,
+        cx,
+        cy,
+    )
 }
 
 /// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
