@@ -598,7 +598,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
             content: &mut canvas.content,
         };
         let mut out = crate::text::ElevateQuads::new(&mut adapter);
-        layout.outline(&node.spec.text, &mut out);
+        layout.outline(&mut out);
     }
     paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
 

@@ -360,7 +360,7 @@ fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Tran
     };
 
     let mut glyphs = PathBuilder::new();
-    layout.outline(&node.spec.text, &mut SkiaOutline { b: &mut glyphs });
+    layout.outline(&mut SkiaOutline { b: &mut glyphs });
     // The underline paints on its own. In one path, a glyph that winds the
     // other way from the rectangle would cancel it where the two cross.
     let underline = node.underline.then(|| {
