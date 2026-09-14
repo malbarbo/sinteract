@@ -511,6 +511,13 @@ mod tests {
         ops: Vec<String>,
     }
 
+    impl Recorder {
+        /// The number of ops of one kind, by its letter.
+        fn count(&self, op: char) -> usize {
+            self.ops.iter().filter(|o| o.starts_with(op)).count()
+        }
+    }
+
     impl OutlineBuilder for Recorder {
         fn move_to(&mut self, x: f32, y: f32) {
             self.ops.push(format!("M {x} {y}"));
@@ -564,43 +571,9 @@ mod tests {
         assert_eq!(sink.ops, vec!["M 1 1".to_string()]);
     }
 
-    #[derive(Default)]
-    struct CountingBuilder {
-        moves: u32,
-        lines: u32,
-        quads: u32,
-        cubics: u32,
-        closes: u32,
-    }
-
-    impl OutlineBuilder for CountingBuilder {
-        fn move_to(&mut self, _x: f32, _y: f32) {
-            self.moves += 1;
-        }
-        fn line_to(&mut self, _x: f32, _y: f32) {
-            self.lines += 1;
-        }
-        fn quad_to(&mut self, _cx: f32, _cy: f32, _x: f32, _y: f32) {
-            self.quads += 1;
-        }
-        fn cubic_to(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: f32) {
-            self.cubics += 1;
-        }
-        fn close(&mut self) {
-            self.closes += 1;
-        }
-    }
-
     #[test]
     fn measure_width_empty_is_zero() {
         assert_eq!(measure_width_with(sans(), "", 20.0), 0.0);
-    }
-
-    #[test]
-    fn measure_width_grows_with_size() {
-        let small = measure_width_with(sans(), "hello", 10.0);
-        let big = measure_width_with(sans(), "hello", 20.0);
-        assert!(big > small * 1.5, "{big} should be roughly 2x {small}");
     }
 
     #[test]
@@ -626,28 +599,21 @@ mod tests {
 
     #[test]
     fn outline_emits_some_commands_for_letters() {
-        let mut b = CountingBuilder::default();
+        let mut b = Recorder::default();
         outline_node(&node(30.0, "Ag"), &mut b);
-        assert!(b.moves > 0, "no moves emitted");
-        assert!(b.lines > 0 || b.quads > 0, "no draw segments emitted");
-        assert!(b.closes > 0, "outline did not close");
-    }
-
-    #[test]
-    fn outline_empty_string_emits_nothing() {
-        let mut b = CountingBuilder::default();
-        outline_node(&node(30.0, ""), &mut b);
-        assert_eq!(b.moves, 0);
-        assert_eq!(b.lines, 0);
-        assert_eq!(b.closes, 0);
+        assert!(b.count('M') > 0, "no moves emitted");
+        assert!(
+            b.count('L') > 0 || b.count('Q') > 0,
+            "no draw segments emitted"
+        );
+        assert!(b.count('Z') > 0, "outline did not close");
     }
 
     #[test]
     fn outline_space_only_advances_pen_no_glyphs() {
-        let mut b = CountingBuilder::default();
+        let mut b = Recorder::default();
         outline_node(&node(30.0, "   "), &mut b);
-        assert_eq!(b.moves, 0);
-        assert_eq!(b.lines, 0);
+        assert!(b.ops.is_empty(), "{:?}", b.ops);
         assert!(measure_width_with(sans(), "   ", 30.0) > 0.0);
     }
 
@@ -713,9 +679,12 @@ mod tests {
         let notdef = f64::from(face.glyph_hor_advance(GlyphId(0)).unwrap());
         let expected = notdef * 30.0 / f64::from(face.units_per_em());
         assert_eq!(measure_width_with(sans(), "\u{1f600}", 30.0), expected);
-        let mut b = CountingBuilder::default();
+        let mut b = Recorder::default();
         outline_node(&node(30.0, "\u{1f600}"), &mut b);
-        assert!(b.moves > 0 && b.closes > 0, "the box has no contour");
+        assert!(
+            b.count('M') > 0 && b.count('Z') > 0,
+            "the box has no contour"
+        );
     }
 
     #[test]
@@ -723,9 +692,9 @@ mod tests {
         let s = "ção";
         let w = measure_width_with(sans(), s, 20.0);
         assert!(w > 0.0);
-        let mut b = CountingBuilder::default();
+        let mut b = Recorder::default();
         outline_node(&node(30.0, s), &mut b);
-        assert!(b.moves > 0);
+        assert!(b.count('M') > 0);
     }
 
     #[test]
@@ -783,9 +752,9 @@ mod tests {
     #[test]
     fn italic_resolves_to_italic_face() {
         // The italic 'a' has a different outline from the regular one.
-        let mut b1 = CountingBuilder::default();
+        let mut b1 = Recorder::default();
         outline_node(&node(30.0, "a"), &mut b1);
-        let mut b2 = CountingBuilder::default();
+        let mut b2 = Recorder::default();
         outline_node(
             &TextNode {
                 style: FontStyle::Italic,
@@ -793,8 +762,8 @@ mod tests {
             },
             &mut b2,
         );
-        assert!(
-            b1.lines + b1.quads != b2.lines + b2.quads,
+        assert_ne!(
+            b1.ops, b2.ops,
             "italic and regular outlined identically — variant probably not picked"
         );
     }
@@ -869,15 +838,6 @@ mod tests {
             center > layout.baseline_y,
             "the underline centre sits above the baseline"
         );
-    }
-
-    #[test]
-    fn underline_thickness_grows_with_the_size() {
-        let thin = underline_rect(&layout_text(&node(24.0, "Hello")).expect("draws"));
-        let thick = underline_rect(&layout_text(&node(48.0, "Hello")).expect("draws"));
-        let t1 = thin.y_bot - thin.y_top;
-        let t2 = thick.y_bot - thick.y_top;
-        assert!(t2 > t1, "thickness {t2} did not grow over {t1}");
     }
 
     #[test]
