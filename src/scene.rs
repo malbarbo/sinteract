@@ -272,6 +272,27 @@ impl RotatedRect {
     }
 }
 
+impl From<RotatedRect> for ClipPath {
+    /// The outline of `rect`. A rectangle covers the same area under either
+    /// fill rule, so the clip takes the default.
+    fn from(rect: RotatedRect) -> Self {
+        let hw = rect.w / 2.0;
+        let hh = rect.h / 2.0;
+        let m = rotate_scale_at(1.0, 1.0, rect.angle_deg, rect.cx, rect.cy);
+        let corner = |x: f32, y: f32| apply_affine(m, x, y);
+        let p0 = corner(-hw, -hh);
+        let p1 = corner(hw, -hh);
+        let p2 = corner(hw, hh);
+        let p3 = corner(-hw, hh);
+        ClipPath::builder(FillRule::default())
+            .move_to(p0.0, p0.1)
+            .line_to(p1.0, p1.1)
+            .line_to(p2.0, p2.1)
+            .line_to(p3.0, p3.1)
+            .build()
+    }
+}
+
 /// A text run. The glyphs are laid out in text space, as [`TextSpec`] says.
 /// `transform` maps them to the canvas in the convention of the PDF `cm`
 /// operator:
@@ -706,9 +727,9 @@ pub enum Element {
 
 /// The draw list a front end builds and a [`Renderer`](crate::renderer::Renderer)
 /// replays. [`Self::path`] returns a [`PathScope`] that commits its path on
-/// drop, and [`Self::clip`] and [`Self::clip_rect`] return a [`ClipScope`]
-/// that wraps the elements drawn while it lives into an
-/// [`Element::Clipped`] on drop, so a clip cannot be left open. A
+/// drop, and [`Self::clip`] returns a [`ClipScope`] that wraps the elements
+/// drawn while it lives into an [`Element::Clipped`] on drop, so a clip
+/// cannot be left open. A
 /// `PathScope` with no geometry commits nothing. Only [`Self::add_path`]
 /// can add an empty path.
 ///
@@ -761,36 +782,17 @@ impl Scene {
         }
     }
 
-    /// Begin a clip. The [`ClipScope`] derefs to this scene, and on drop it
-    /// wraps the elements added since into an [`Element::Clipped`]. A nested
-    /// clip is a [`Self::clip`] through the deref.
-    pub fn clip(&mut self, clip: ClipPath) -> ClipScope<'_> {
+    /// Begin a clip to a [`ClipPath`] or to a [`RotatedRect`]. The
+    /// [`ClipScope`] derefs to this scene, and on drop it wraps the elements
+    /// added since into an [`Element::Clipped`]. A nested clip is a
+    /// [`Self::clip`] through the deref.
+    pub fn clip(&mut self, clip: impl Into<ClipPath>) -> ClipScope<'_> {
         let mark = self.elements.len();
         ClipScope {
             scene: self,
-            clip,
+            clip: clip.into(),
             mark,
         }
-    }
-
-    /// Begin a clip of `rect`.
-    pub fn clip_rect(&mut self, rect: RotatedRect, fill_rule: FillRule) -> ClipScope<'_> {
-        let hw = rect.w / 2.0;
-        let hh = rect.h / 2.0;
-        let m = rotate_scale_at(1.0, 1.0, rect.angle_deg, rect.cx, rect.cy);
-        let corner = |x: f32, y: f32| apply_affine(m, x, y);
-        let p0 = corner(-hw, -hh);
-        let p1 = corner(hw, -hh);
-        let p2 = corner(hw, hh);
-        let p3 = corner(-hw, hh);
-        self.clip(
-            ClipPath::builder(fill_rule)
-                .move_to(p0.0, p0.1)
-                .line_to(p1.0, p1.1)
-                .line_to(p2.0, p2.1)
-                .line_to(p3.0, p3.1)
-                .build(),
-        )
     }
 
     pub fn text(&mut self, node: Text) {
@@ -867,7 +869,7 @@ impl Drop for PathScope<'_> {
     }
 }
 
-/// The clip under construction by [`Scene::clip`] or [`Scene::clip_rect`].
+/// The clip under construction by [`Scene::clip`].
 /// It derefs to the scene, and `mark` is where its elements begin. On drop
 /// it moves `elements[mark..]` into an [`Element::Clipped`] at `mark`. A
 /// nested scope has a later mark and drops first, so the tree is well formed.
