@@ -167,7 +167,7 @@ mod system {
 
 /// Receives the outline of a glyph. Coordinates are box-local, with the
 /// origin at the center of the box and y down.
-pub trait OutlineBuilder {
+pub(crate) trait OutlineBuilder {
     fn move_to(&mut self, x: f32, y: f32);
     fn line_to(&mut self, x: f32, y: f32);
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32);
@@ -289,19 +289,19 @@ fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// The face and the box-local metrics of one [`TextNode`].
-pub struct TextLayout {
+pub(crate) struct TextLayout {
     pub(crate) face: &'static Face<'static>,
     /// The em of the text space, from `TextNode::size`.
-    pub size: f32,
+    pub(crate) size: f32,
     /// The horizontal advance.
-    pub width: f32,
+    pub(crate) width: f32,
     /// The baseline, box-local with y down.
-    pub baseline_y: f32,
+    pub(crate) baseline_y: f32,
 }
 
 impl TextLayout {
     /// The left edge of the text, box-local.
-    pub fn x_left(&self) -> f32 {
+    pub(crate) fn x_left(&self) -> f32 {
         -self.width / 2.0
     }
 }
@@ -309,7 +309,7 @@ impl TextLayout {
 /// Resolve and measure a text node. Returns `None` when the node draws
 /// nothing, because the size is not a positive finite number, the text is
 /// empty, or the width or the height measures zero or overflows.
-pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
+pub(crate) fn layout_text(node: &TextNode) -> Option<TextLayout> {
     layout(&node.family, node.weight, node.style, node.size, &node.text)
 }
 
@@ -404,7 +404,7 @@ fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics
 }
 
 /// Glyph outlines for a node measured by [`layout_text`].
-pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
+pub(crate) fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
     let face = layout.face;
     let scale = em_scale(face, layout.size);
     let x_left = layout.x_left();
@@ -423,7 +423,7 @@ pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuil
 }
 
 /// The underline of a laid-out node as a closed contour.
-pub fn outline_underline(layout: &TextLayout, out: &mut dyn OutlineBuilder) {
+pub(crate) fn outline_underline(layout: &TextLayout, out: &mut dyn OutlineBuilder) {
     let u = underline_rect(layout);
     out.move_to(u.x_l, u.y_top);
     out.line_to(u.x_r, u.y_top);
