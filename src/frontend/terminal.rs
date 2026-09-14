@@ -379,7 +379,8 @@ pub fn exit_animation() {
     state.text_blocks_lines = 0;
 }
 
-/// Map a crossterm key code to the key name of the W3C UI Events spec.
+/// Map a crossterm key code to the key name of the W3C UI Events spec. A
+/// function key above F12 has no name, as in the window.
 fn key_code_to_string(code: KeyCode) -> Option<String> {
     Some(match code {
         KeyCode::Char(c) => c.to_string(),
@@ -397,7 +398,7 @@ fn key_code_to_string(code: KeyCode) -> Option<String> {
         KeyCode::Delete => "Delete".into(),
         KeyCode::Insert => "Insert".into(),
         KeyCode::Esc => "Escape".into(),
-        KeyCode::F(n) => format!("F{n}"),
+        KeyCode::F(n @ 1..=12) => format!("F{n}"),
         _ => return None,
     })
 }
@@ -926,5 +927,11 @@ mod tests {
         };
         assert_eq!(key_event(press).map(|k| k.kind), Some(KeyKind::Press));
         assert!(key_event(release).is_none());
+    }
+
+    #[test]
+    fn a_function_key_above_f12_sends_nothing() {
+        assert_eq!(key_code_to_string(KeyCode::F(12)).as_deref(), Some("F12"));
+        assert!(key_code_to_string(KeyCode::F(13)).is_none());
     }
 }
