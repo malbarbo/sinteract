@@ -438,13 +438,13 @@ const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
 pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     let face_units = layout.face.units_per_em() as f32;
     let scale = em_scale(layout.face, layout.size) as f32;
-    let metrics = layout.face.underline_metrics();
-    let pos_units = metrics
-        .map(|m| m.position as f32)
-        .unwrap_or(FALLBACK_UNDERLINE_POS * face_units);
-    let thickness_units = metrics
-        .map(|m| m.thickness as f32)
-        .unwrap_or(FALLBACK_UNDERLINE_THICKNESS * face_units);
+    let (pos_units, thickness_units) = layout.face.underline_metrics().map_or(
+        (
+            FALLBACK_UNDERLINE_POS * face_units,
+            FALLBACK_UNDERLINE_THICKNESS * face_units,
+        ),
+        |m| (f32::from(m.position), f32::from(m.thickness)),
+    );
     let underline_pos = -pos_units * scale; // font y is up, box y is down
     let thickness = thickness_units * scale;
     let y_top = layout.baseline_y + underline_pos - thickness / 2.0;
