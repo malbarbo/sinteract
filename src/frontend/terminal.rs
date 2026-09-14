@@ -17,7 +17,7 @@ use crossterm::{cursor, event, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
 use super::sixel;
-use crate::event::KeyKind;
+use crate::event::{KeyKind, key};
 use crate::renderer::pixmap::rasterize_scene;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
@@ -379,26 +379,26 @@ pub fn exit_animation() {
     state.text_blocks_lines = 0;
 }
 
-/// Map a crossterm key code to the key name of the W3C UI Events spec. A
-/// function key above F12 has no name, as in the window.
+/// Map a crossterm key code to its name in [`crate::event::key`], or to the
+/// text it types. A function key above F12 has no name, as in the window.
 fn key_code_to_string(code: KeyCode) -> Option<String> {
     Some(match code {
         KeyCode::Char(c) => c.to_string(),
-        KeyCode::Backspace => "Backspace".into(),
-        KeyCode::Enter => "Enter".into(),
-        KeyCode::Left => "ArrowLeft".into(),
-        KeyCode::Right => "ArrowRight".into(),
-        KeyCode::Up => "ArrowUp".into(),
-        KeyCode::Down => "ArrowDown".into(),
-        KeyCode::Home => "Home".into(),
-        KeyCode::End => "End".into(),
-        KeyCode::PageUp => "PageUp".into(),
-        KeyCode::PageDown => "PageDown".into(),
-        KeyCode::Tab | KeyCode::BackTab => "Tab".into(),
-        KeyCode::Delete => "Delete".into(),
-        KeyCode::Insert => "Insert".into(),
-        KeyCode::Esc => "Escape".into(),
-        KeyCode::F(n @ 1..=12) => format!("F{n}"),
+        KeyCode::Backspace => key::BACKSPACE.into(),
+        KeyCode::Enter => key::ENTER.into(),
+        KeyCode::Left => key::ARROW_LEFT.into(),
+        KeyCode::Right => key::ARROW_RIGHT.into(),
+        KeyCode::Up => key::ARROW_UP.into(),
+        KeyCode::Down => key::ARROW_DOWN.into(),
+        KeyCode::Home => key::HOME.into(),
+        KeyCode::End => key::END.into(),
+        KeyCode::PageUp => key::PAGE_UP.into(),
+        KeyCode::PageDown => key::PAGE_DOWN.into(),
+        KeyCode::Tab | KeyCode::BackTab => key::TAB.into(),
+        KeyCode::Delete => key::DELETE.into(),
+        KeyCode::Insert => key::INSERT.into(),
+        KeyCode::Esc => key::ESCAPE.into(),
+        KeyCode::F(n @ 1..=12) => key::FUNCTION_KEYS[usize::from(n - 1)].into(),
         _ => return None,
     })
 }
@@ -927,6 +927,31 @@ mod tests {
         };
         assert_eq!(key_event(press).map(|k| k.kind), Some(KeyKind::Press));
         assert!(key_event(release).is_none());
+    }
+
+    #[test]
+    fn every_key_name_of_the_terminal_is_in_key_all() {
+        let codes = [
+            KeyCode::Backspace,
+            KeyCode::Enter,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Delete,
+            KeyCode::Insert,
+            KeyCode::Esc,
+        ];
+        for code in codes.into_iter().chain((1..=12).map(KeyCode::F)) {
+            let name = key_code_to_string(code).expect("named");
+            assert!(key::ALL.contains(&name.as_str()), "{name}");
+        }
     }
 
     #[test]

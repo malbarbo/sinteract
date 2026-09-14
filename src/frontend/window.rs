@@ -27,7 +27,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use crate::event::KeyKind;
+use crate::event::{KeyKind, key};
 
 struct App {
     title: String,
@@ -152,39 +152,39 @@ fn push_key_events(
     }
 }
 
-/// Map a winit key to the key name of the W3C UI Events spec, the same table
-/// as [`super::terminal::poll_key_event`].
+/// Map a winit key to its name in [`crate::event::key`], or to the text it
+/// types.
 fn winit_key_to_string(key: &Key) -> Option<String> {
     Some(match key {
         Key::Character(s) => s.to_string(),
         Key::Named(named) => match named {
-            NamedKey::Backspace => "Backspace".into(),
-            NamedKey::Enter => "Enter".into(),
-            NamedKey::Tab => "Tab".into(),
+            NamedKey::Backspace => key::BACKSPACE.into(),
+            NamedKey::Enter => key::ENTER.into(),
+            NamedKey::Tab => key::TAB.into(),
             NamedKey::Space => " ".into(),
-            NamedKey::ArrowLeft => "ArrowLeft".into(),
-            NamedKey::ArrowRight => "ArrowRight".into(),
-            NamedKey::ArrowUp => "ArrowUp".into(),
-            NamedKey::ArrowDown => "ArrowDown".into(),
-            NamedKey::Home => "Home".into(),
-            NamedKey::End => "End".into(),
-            NamedKey::PageUp => "PageUp".into(),
-            NamedKey::PageDown => "PageDown".into(),
-            NamedKey::Delete => "Delete".into(),
-            NamedKey::Insert => "Insert".into(),
-            NamedKey::Escape => "Escape".into(),
-            NamedKey::F1 => "F1".into(),
-            NamedKey::F2 => "F2".into(),
-            NamedKey::F3 => "F3".into(),
-            NamedKey::F4 => "F4".into(),
-            NamedKey::F5 => "F5".into(),
-            NamedKey::F6 => "F6".into(),
-            NamedKey::F7 => "F7".into(),
-            NamedKey::F8 => "F8".into(),
-            NamedKey::F9 => "F9".into(),
-            NamedKey::F10 => "F10".into(),
-            NamedKey::F11 => "F11".into(),
-            NamedKey::F12 => "F12".into(),
+            NamedKey::ArrowLeft => key::ARROW_LEFT.into(),
+            NamedKey::ArrowRight => key::ARROW_RIGHT.into(),
+            NamedKey::ArrowUp => key::ARROW_UP.into(),
+            NamedKey::ArrowDown => key::ARROW_DOWN.into(),
+            NamedKey::Home => key::HOME.into(),
+            NamedKey::End => key::END.into(),
+            NamedKey::PageUp => key::PAGE_UP.into(),
+            NamedKey::PageDown => key::PAGE_DOWN.into(),
+            NamedKey::Delete => key::DELETE.into(),
+            NamedKey::Insert => key::INSERT.into(),
+            NamedKey::Escape => key::ESCAPE.into(),
+            NamedKey::F1 => key::F1.into(),
+            NamedKey::F2 => key::F2.into(),
+            NamedKey::F3 => key::F3.into(),
+            NamedKey::F4 => key::F4.into(),
+            NamedKey::F5 => key::F5.into(),
+            NamedKey::F6 => key::F6.into(),
+            NamedKey::F7 => key::F7.into(),
+            NamedKey::F8 => key::F8.into(),
+            NamedKey::F9 => key::F9.into(),
+            NamedKey::F10 => key::F10.into(),
+            NamedKey::F11 => key::F11.into(),
+            NamedKey::F12 => key::F12.into(),
             _ => return None,
         },
         _ => return None,
@@ -347,3 +347,44 @@ fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
 /// and the OS reclaims the window. Exists so a host installs the hook of
 /// either backend the same way.
 pub fn install_panic_hook() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_key_name_of_the_window_is_in_key_all() {
+        let named = [
+            NamedKey::Backspace,
+            NamedKey::Enter,
+            NamedKey::Tab,
+            NamedKey::ArrowLeft,
+            NamedKey::ArrowRight,
+            NamedKey::ArrowUp,
+            NamedKey::ArrowDown,
+            NamedKey::Home,
+            NamedKey::End,
+            NamedKey::PageUp,
+            NamedKey::PageDown,
+            NamedKey::Delete,
+            NamedKey::Insert,
+            NamedKey::Escape,
+            NamedKey::F1,
+            NamedKey::F2,
+            NamedKey::F3,
+            NamedKey::F4,
+            NamedKey::F5,
+            NamedKey::F6,
+            NamedKey::F7,
+            NamedKey::F8,
+            NamedKey::F9,
+            NamedKey::F10,
+            NamedKey::F11,
+            NamedKey::F12,
+        ];
+        for k in named {
+            let name = winit_key_to_string(&Key::Named(k)).expect("named");
+            assert!(key::ALL.contains(&name.as_str()), "{name}");
+        }
+    }
+}

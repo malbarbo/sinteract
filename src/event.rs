@@ -49,6 +49,72 @@ pub struct KeyEvent {
     pub repeat: bool,
 }
 
+/// The names of the keys that type no text, as [`KeyEvent::key`] carries
+/// them from the terminal and the window. Each is the W3C
+/// `KeyboardEvent.key` value of its key. A browser peer may send any other
+/// W3C name.
+pub mod key {
+    pub const ARROW_LEFT: &str = "ArrowLeft";
+    pub const ARROW_RIGHT: &str = "ArrowRight";
+    pub const ARROW_UP: &str = "ArrowUp";
+    pub const ARROW_DOWN: &str = "ArrowDown";
+    pub const PAGE_UP: &str = "PageUp";
+    pub const PAGE_DOWN: &str = "PageDown";
+    pub const HOME: &str = "Home";
+    pub const END: &str = "End";
+    pub const BACKSPACE: &str = "Backspace";
+    pub const TAB: &str = "Tab";
+    pub const ENTER: &str = "Enter";
+    pub const ESCAPE: &str = "Escape";
+    pub const DELETE: &str = "Delete";
+    pub const INSERT: &str = "Insert";
+    pub const F1: &str = "F1";
+    pub const F2: &str = "F2";
+    pub const F3: &str = "F3";
+    pub const F4: &str = "F4";
+    pub const F5: &str = "F5";
+    pub const F6: &str = "F6";
+    pub const F7: &str = "F7";
+    pub const F8: &str = "F8";
+    pub const F9: &str = "F9";
+    pub const F10: &str = "F10";
+    pub const F11: &str = "F11";
+    pub const F12: &str = "F12";
+
+    /// Every name above.
+    pub const ALL: &[&str] = &[
+        ARROW_LEFT,
+        ARROW_RIGHT,
+        ARROW_UP,
+        ARROW_DOWN,
+        PAGE_UP,
+        PAGE_DOWN,
+        HOME,
+        END,
+        BACKSPACE,
+        TAB,
+        ENTER,
+        ESCAPE,
+        DELETE,
+        INSERT,
+        F1,
+        F2,
+        F3,
+        F4,
+        F5,
+        F6,
+        F7,
+        F8,
+        F9,
+        F10,
+        F11,
+        F12,
+    ];
+
+    /// `F1` to `F12`, in order.
+    pub const FUNCTION_KEYS: [&str; 12] = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
+}
+
 /// The modifier keys held during a key event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Modifiers {
