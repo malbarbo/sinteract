@@ -375,8 +375,9 @@ pub fn text_box_affine(
 
 /// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
 /// the wire, and the renderer resolves it to pixels. `transform` maps the
-/// image pixels, `(0..img_w, 0..img_h)`, to the canvas, in the convention
-/// of [`Text::transform`]. [`bitmap_box_affine`] computes it for a box.
+/// image to the canvas in the convention of [`Text::transform`], with the
+/// origin at the center of the image, as the origin of a [`Text`] is at the
+/// center of its box. [`bitmap_box_affine`] computes it for a box.
 #[derive(Clone, Copy, Debug)]
 pub struct Bitmap {
     pub id: u32,
@@ -409,10 +410,7 @@ pub fn bitmap_box_affine(
     if img_w == 0 || img_h == 0 {
         return translate(cx, cy);
     }
-    // Move the centre of the rotated and scaled image onto (cx, cy).
-    let m = rotate_scale_at(w / img_w as f32, h / img_h as f32, angle_deg, 0.0, 0.0);
-    let (ox, oy) = apply_affine(m, img_w as f32 * 0.5, img_h as f32 * 0.5);
-    [m[0], m[1], m[2], m[3], cx - ox, cy - oy]
+    rotate_scale_at(w / img_w as f32, h / img_h as f32, angle_deg, cx, cy)
 }
 
 /// The verb byte of a [`Segment`] on the wire. Only the codec uses it. The
@@ -1324,5 +1322,16 @@ mod tests {
             ..TextSpec::default()
         };
         assert!(spec.fit(0.0, 0.0, 10.0, 10.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn bitmap_box_affine_puts_the_center_of_the_image_at_the_center_of_the_box() {
+        let m = bitmap_box_affine(64, 32, 70.0, 40.0, -32.0, 16.0, 90.0);
+        assert_eq!(apply_affine(m, 0.0, 0.0), (70.0, 40.0));
+        let (x, y) = apply_affine(m, 32.0, 16.0);
+        assert!(
+            (x - 62.0).abs() < 1e-4 && (y - 24.0).abs() < 1e-4,
+            "{x}, {y}"
+        );
     }
 }

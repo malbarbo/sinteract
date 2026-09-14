@@ -111,8 +111,9 @@ struct ClipPath {
     fillRule @2 :FillRule;
 }
 
-# The affine maps the image pixels (0..img_w, 0..img_h) onto the canvas, in
-# the convention of TextNode. The producer puts the fit, the rotation and the
+# The origin is at the center of the image, so the affine maps the pixels
+# (-img_w/2..img_w/2, -img_h/2..img_h/2) onto the canvas, in the convention
+# of TextNode. The producer puts the fit, the rotation and the
 # mirroring into it (see sinteract::scene::bitmap_box_affine).
 struct Bitmap {
     id @0 :UInt32;
