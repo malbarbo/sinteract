@@ -168,8 +168,8 @@ mod system {
 // Measurement and outlines
 // ---------------------------------------------------------------------------
 
-/// Receives the outline of a glyph. Coordinates are box-local with y down,
-/// as in the `measure_*` functions.
+/// Receives the outline of a glyph. Coordinates are box-local, with the
+/// origin at the center of the box and y down.
 pub trait OutlineBuilder {
     fn move_to(&mut self, x: f32, y: f32);
     fn line_to(&mut self, x: f32, y: f32);
@@ -264,7 +264,7 @@ fn em_scale(face: &Face<'_>, size: f32) -> f64 {
 }
 
 /// Total horizontal advance of `text` rendered at `size` in `face`.
-pub fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
+fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
     if text.is_empty() || !drawable_size(size) {
         return 0.0;
     }
@@ -272,7 +272,7 @@ pub fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
     total * em_scale(face, size)
 }
 
-pub fn measure_height_with(face: &Face<'_>, size: f32) -> f64 {
+fn measure_height_with(face: &Face<'_>, size: f32) -> f64 {
     if !drawable_size(size) {
         return 0.0;
     }
@@ -280,7 +280,7 @@ pub fn measure_height_with(face: &Face<'_>, size: f32) -> f64 {
     h * em_scale(face, size)
 }
 
-pub fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
+fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
     if !drawable_size(size) {
         return 0.0;
     }
@@ -300,7 +300,7 @@ pub struct TextLayout {
     pub width: f32,
     /// The ascender minus the descender of the face.
     pub height: f32,
-    /// The baseline, box-local with y down, as in the `measure_*` functions.
+    /// The baseline, box-local with y down.
     pub baseline_y: f32,
 }
 
