@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn key_event_round_trip() {
-        let ev = InputEvent::Key(KeyEvent {
+        let key = KeyEvent {
             kind: KeyKind::Down,
             key: "ArrowLeft".into(),
             modifiers: Modifiers {
@@ -231,18 +231,9 @@ mod tests {
                 ..Modifiers::default()
             },
             repeat: true,
-        });
-        let bytes = encode_event(&ev);
-        match decode(&bytes).unwrap() {
-            Decoded::Event(InputEvent::Key(k)) => {
-                assert_eq!(k.kind, KeyKind::Down);
-                assert_eq!(k.key, "ArrowLeft");
-                assert!(k.modifiers.ctrl);
-                assert!(k.modifiers.shift);
-                assert!(!k.modifiers.alt);
-                assert!(!k.modifiers.meta);
-                assert!(k.repeat);
-            }
+        };
+        match decode(&encode_event(&InputEvent::Key(key.clone()))).unwrap() {
+            Decoded::Event(InputEvent::Key(k)) => assert_eq!(k, key),
             other => panic!("got {other:?}"),
         }
     }

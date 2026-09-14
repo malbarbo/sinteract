@@ -29,7 +29,7 @@ pub enum KeyKind {
 }
 
 /// `key` is the JS key name, such as `"ArrowLeft"`, `"Enter"` or `"a"`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyEvent {
     pub kind: KeyKind,
     pub key: String,
