@@ -307,17 +307,23 @@ pub(crate) fn drawable_size(size: f32) -> bool {
     size.is_finite() && size > 0.0
 }
 
+/// Each glyph that `text` draws, with its advance in font units. A control
+/// character draws nothing, and a character that the face lacks draws the
+/// `.notdef` box.
+fn glyphs<'a>(face: &'a Face<'_>, text: &'a str) -> impl Iterator<Item = (GlyphId, f64)> + 'a {
+    text.chars().filter(|c| !c.is_control()).map(move |c| {
+        let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
+        (gid, f64::from(face.glyph_hor_advance(gid).unwrap_or(0)))
+    })
+}
+
 /// Total horizontal advance of `text` rendered at `size` in `face`.
 pub fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
     if text.is_empty() || !drawable_size(size) {
         return 0.0;
     }
     let scale = f64::from(size) / f64::from(face.units_per_em());
-    let mut total: f64 = 0.0;
-    for c in text.chars() {
-        let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
-        total += f64::from(face.glyph_hor_advance(gid).unwrap_or(0));
-    }
+    let total: f64 = glyphs(face, text).map(|(_, advance)| advance).sum();
     total * scale
 }
 
@@ -367,8 +373,7 @@ fn outline_at(
     }
     let scale = f64::from(size) / f64::from(face.units_per_em());
     let mut pen_x: f64 = 0.0;
-    for c in text.chars() {
-        let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
+    for (gid, advance) in glyphs(face, text) {
         let mut adapter = OutlineAdapter {
             out,
             scale: scale as f32,
@@ -376,7 +381,7 @@ fn outline_at(
             baseline_y,
         };
         let _ = face.outline_glyph(gid, &mut adapter);
-        pen_x += f64::from(face.glyph_hor_advance(gid).unwrap_or(0));
+        pen_x += advance;
     }
 }
 
@@ -722,6 +727,33 @@ mod tests {
     }
 
     #[test]
+    fn a_control_character_draws_nothing() {
+        let mut plain = Recorder::default();
+        outline("AB", 30.0, &mut plain);
+        for s in [
+            "A\nB", "A\r\nB", "A\u{0}B", "A\u{1b}B", "A\u{7f}B", "A\u{9f}B",
+        ] {
+            assert_eq!(measure_width(s, 30.0), measure_width("AB", 30.0), "{s:?}");
+            let mut with = Recorder::default();
+            outline(s, 30.0, &mut with);
+            assert_eq!(with.ops, plain.ops, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn a_character_the_face_lacks_draws_the_notdef_box() {
+        let face = default_face();
+        let emoji = '\u{1f600}';
+        assert!(face.glyph_index(emoji).is_none(), "the face covers {emoji}");
+        let notdef = f64::from(face.glyph_hor_advance(GlyphId(0)).unwrap());
+        let expected = notdef * 30.0 / f64::from(face.units_per_em());
+        assert_eq!(measure_width("\u{1f600}", 30.0), expected);
+        let mut b = CountingBuilder::default();
+        outline("\u{1f600}", 30.0, &mut b);
+        assert!(b.moves > 0 && b.closes > 0, "the box has no contour");
+    }
+
+    #[test]
     fn portuguese_chars_have_glyphs() {
         let s = "ção";
         let w = measure_width(s, 20.0);
@@ -831,6 +863,10 @@ mod tests {
         assert!(
             layout_text(&node(f32::MAX, "Hello, world")).is_none(),
             "size that overflows the measured width"
+        );
+        assert!(
+            layout_text(&node(20.0, "\r\n")).is_none(),
+            "only control characters"
         );
         // U+200B is a zero-width space, so the text has chars and no width.
         assert!(
