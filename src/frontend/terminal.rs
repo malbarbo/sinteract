@@ -17,14 +17,11 @@ use crossterm::{cursor, event, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
 use super::sixel;
+use crate::event::KeyKind;
 use crate::renderer::pixmap::rasterize_scene;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
 const KITTY_ONESHOT_ID_BASE: u32 = 2000;
-
-pub(crate) const KEYPRESS: i32 = 0;
-pub(crate) const KEYDOWN: i32 = 1;
-pub(crate) const KEYUP: i32 = 2;
 
 // Fallback when the terminal does not answer the `CSI 16 t` probe.
 const CELL_W_DEFAULT: u32 = 8;
@@ -405,9 +402,8 @@ fn key_code_to_string(code: KeyCode) -> Option<String> {
     })
 }
 
-/// Return the next key event without blocking, as
-/// `(kind, key, [alt, ctrl, shift, meta, repeat])`.
-pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
+/// Return the next key event without blocking.
+pub fn poll_key_event() -> Option<crate::event::KeyEvent> {
     {
         let state = STATE.lock().unwrap();
         if !state.raw_enabled {
@@ -438,9 +434,9 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
 
     // A terminal reports a release only with the kitty keyboard protocol,
     // which is off, and reports a repeat as a press.
-    let event_type = match kind {
-        KeyEventKind::Release => KEYUP,
-        _ => KEYPRESS,
+    let key_kind = match kind {
+        KeyEventKind::Release => KeyKind::Up,
+        _ => KeyKind::Press,
     };
 
     let key = key_code_to_string(code)?;
@@ -449,7 +445,11 @@ pub fn poll_key_event() -> Option<(i32, String, [bool; 5])> {
     let shift = modifiers.contains(KeyModifiers::SHIFT);
     let meta = modifiers.contains(KeyModifiers::SUPER);
     let repeat = matches!(kind, KeyEventKind::Repeat);
-    Some((event_type, key, [alt, ctrl, shift, meta, repeat]))
+    Some(crate::event::KeyEvent {
+        kind: key_kind,
+        key,
+        modifiers: crate::event::modifiers(alt, ctrl, shift, meta, repeat),
+    })
 }
 
 /// Returns `true` if the user pressed Ctrl-C since [`enter_animation`],

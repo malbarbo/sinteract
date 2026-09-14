@@ -4,9 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::event::{
-    InputEvent, KeyEvent, KeyKind, MOD_ALT, MOD_CTRL, MOD_META, MOD_REPEAT, MOD_SHIFT,
-};
+use crate::event::InputEvent;
 use crate::scene::Scene;
 
 use super::stdio::StdioFrontend;
@@ -180,37 +178,6 @@ pub(crate) fn poll_timeout(deadline: Option<Instant>, next_vsync: Instant) -> Du
     out
 }
 
-/// Build an [`InputEvent`] from the tuple that `poll_key_event` returns in
-/// `terminal` and `window`. `flags` is `[alt, ctrl, shift, meta, repeat]`.
-pub(crate) fn key_event_from_legacy(event_type: i32, key: String, flags: [bool; 5]) -> InputEvent {
-    let kind = match event_type {
-        1 => KeyKind::Down,
-        2 => KeyKind::Up,
-        _ => KeyKind::Press,
-    };
-    let mut m = 0u8;
-    if flags[0] {
-        m |= MOD_ALT;
-    }
-    if flags[1] {
-        m |= MOD_CTRL;
-    }
-    if flags[2] {
-        m |= MOD_SHIFT;
-    }
-    if flags[3] {
-        m |= MOD_META;
-    }
-    if flags[4] {
-        m |= MOD_REPEAT;
-    }
-    InputEvent::Key(KeyEvent {
-        kind,
-        key,
-        modifiers: m,
-    })
-}
-
 // ---------------------------------------------------------------------------
 // TerminalFrontend
 // ---------------------------------------------------------------------------
@@ -273,9 +240,8 @@ impl TerminalFrontend {
             if super::terminal::closed() {
                 return Some(InputEvent::Close);
             }
-            if let Some(legacy) = super::terminal::poll_key_event() {
-                let (et, key, flags) = legacy;
-                return Some(key_event_from_legacy(et, key, flags));
+            if let Some(key) = super::terminal::poll_key_event() {
+                return Some(InputEvent::Key(key));
             }
             let next_vsync = self.clock.next_vsync_at();
             let timeout = poll_timeout(deadline, next_vsync);
@@ -353,9 +319,8 @@ impl WindowFrontend {
             if super::window::closed() {
                 return Some(InputEvent::Close);
             }
-            if let Some(legacy) = super::window::poll_key_event() {
-                let (et, key, flags) = legacy;
-                return Some(key_event_from_legacy(et, key, flags));
+            if let Some(key) = super::window::poll_key_event() {
+                return Some(InputEvent::Key(key));
             }
             let next_vsync = self.clock.next_vsync_at();
             let timeout = poll_timeout(deadline, next_vsync);

@@ -1,9 +1,8 @@
 //! Window display of a [`crate::scene::Scene`] through winit and softbuffer,
 //! with the lifecycle of [`super::terminal`]. [`enter_animation`] sets the
 //! state up, [`show_image`] rasterizes a scene and presents it,
-//! [`poll_key_event`] returns the next key event in the shape of
-//! [`super::terminal::poll_key_event`], and [`exit_animation`] destroys the
-//! window.
+//! [`poll_key_event`] returns the next key event, and [`exit_animation`]
+//! destroys the window.
 //!
 //! winit needs the event loop on the main thread, so the state lives in a
 //! `thread_local!`. The window opens with the logical size of the scene, and
@@ -28,9 +27,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use super::terminal::{KEYDOWN, KEYPRESS, KEYUP};
-
-type KeyEventTuple = (i32, String, [bool; 5]);
+use crate::event::KeyKind;
 
 struct App {
     title: String,
@@ -39,7 +36,7 @@ struct App {
     pending_size: Option<(u32, u32)>,
     window: Option<Rc<Window>>,
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
-    pending: VecDeque<KeyEventTuple>,
+    pending: VecDeque<crate::event::KeyEvent>,
     modifiers: ModifiersState,
     closed: bool,
 }
@@ -121,30 +118,39 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Push the events of a winit key event. A first press gives `KEYDOWN` and
-/// `KEYPRESS`, so a handler on either sees the tap, an auto-repeat gives
-/// `KEYPRESS` only, and a release gives `KEYUP`.
-fn push_key_events(out: &mut VecDeque<KeyEventTuple>, ev: &KeyEvent, mods: ModifiersState) {
+/// Push the events of a winit key event. A first press gives `Down` and
+/// `Press`, so a handler on either sees the tap, an auto-repeat gives
+/// `Press` only, and a release gives `Up`.
+fn push_key_events(
+    out: &mut VecDeque<crate::event::KeyEvent>,
+    ev: &KeyEvent,
+    mods: ModifiersState,
+) {
     let Some(key) = winit_key_to_string(&ev.logical_key) else {
         return;
     };
-    let m = [
+    let modifiers = crate::event::modifiers(
         mods.alt_key(),
         mods.control_key(),
         mods.shift_key(),
         mods.super_key(),
         ev.repeat,
-    ];
+    );
+    let event = |kind, key| crate::event::KeyEvent {
+        kind,
+        key,
+        modifiers,
+    };
     match ev.state {
         ElementState::Pressed if ev.repeat => {
-            out.push_back((KEYPRESS, key, m));
+            out.push_back(event(KeyKind::Press, key));
         }
         ElementState::Pressed => {
-            out.push_back((KEYDOWN, key.clone(), m));
-            out.push_back((KEYPRESS, key, m));
+            out.push_back(event(KeyKind::Down, key.clone()));
+            out.push_back(event(KeyKind::Press, key));
         }
         ElementState::Released => {
-            out.push_back((KEYUP, key, m));
+            out.push_back(event(KeyKind::Up, key));
         }
     }
 }
@@ -241,7 +247,7 @@ fn pump_for(timeout: Duration) {
 
 /// Return the next queued key event, or `None`. Pumps the event loop first,
 /// so an event that just arrived is in the queue.
-pub fn poll_key_event() -> Option<KeyEventTuple> {
+pub fn poll_key_event() -> Option<crate::event::KeyEvent> {
     pump_for(Duration::ZERO);
     STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
