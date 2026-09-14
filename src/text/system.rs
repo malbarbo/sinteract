@@ -86,7 +86,6 @@ fn query_system_font(
             .map_or(family, |(n, _)| n.as_str());
         Some(ResolvedFont {
             family: canonical.to_owned().leak(),
-            from_system: true,
             face: face_static,
         })
     })??;

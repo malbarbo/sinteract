@@ -465,7 +465,7 @@ mod tests {
         // the TrueType faces that the crate embeds. A machine without it has
         // nothing to check.
         let family = "URW Gothic";
-        if !crate::text::resolve(family, 400, crate::scene::FontStyle::Normal).from_system {
+        if crate::text::resolve(family, 400, crate::scene::FontStyle::Normal).family != family {
             return;
         }
         let node = TextNode {

@@ -90,8 +90,6 @@ pub struct ResolvedFont {
     /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or
     /// the name fontdb reports.
     pub family: &'static str,
-    /// `true` if the face came from a system lookup, `false` otherwise.
-    pub from_system: bool,
     face: &'static Face<'static>,
 }
 
@@ -139,7 +137,6 @@ pub fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
 fn embedded(f: &'static EmbeddedFont) -> ResolvedFont {
     ResolvedFont {
         family: f.name,
-        from_system: false,
         face: f.face(),
     }
 }
@@ -667,7 +664,6 @@ mod tests {
     fn resolve_empty_family_picks_sans_regular() {
         let f = resolve("", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
-        assert!(!f.from_system);
     }
 
     #[test]
