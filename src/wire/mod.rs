@@ -99,7 +99,7 @@ impl From<std::str::Utf8Error> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{InputEvent, KeyEvent, KeyKind};
+    use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
     use crate::protocol_capnp::message;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, LineCap, LineJoin, Paint,
@@ -225,7 +225,11 @@ mod tests {
         let ev = InputEvent::Key(KeyEvent {
             kind: KeyKind::Down,
             key: "ArrowLeft".into(),
-            modifiers: crate::event::modifiers(false, true, true, false),
+            modifiers: Modifiers {
+                ctrl: true,
+                shift: true,
+                ..Modifiers::default()
+            },
             repeat: false,
         });
         let bytes = encode_event(&ev);
@@ -233,9 +237,9 @@ mod tests {
             Decoded::Event(InputEvent::Key(k)) => {
                 assert_eq!(k.kind, KeyKind::Down);
                 assert_eq!(k.key, "ArrowLeft");
-                assert!(k.ctrl());
-                assert!(k.shift());
-                assert!(!k.alt());
+                assert!(k.modifiers.ctrl);
+                assert!(k.modifiers.shift);
+                assert!(!k.modifiers.alt);
             }
             other => panic!("got {other:?}"),
         }

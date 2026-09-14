@@ -138,7 +138,7 @@ impl Default for StdioFrontend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{KeyEvent as IrKeyEvent, KeyKind};
+    use crate::event::{KeyEvent as IrKeyEvent, KeyKind, Modifiers};
     use crate::scene::{Paint, PathStyle};
     use crate::wire::framing::FILE_IDENTIFIER;
     use std::io::Cursor;
@@ -205,7 +205,7 @@ mod tests {
         let payload = wire::encode_event(&InputEvent::Key(IrKeyEvent {
             kind: KeyKind::Press,
             key: "ArrowDown".into(),
-            modifiers: 0,
+            modifiers: Modifiers::default(),
             repeat: false,
         }));
         let stream = frame(&payload);

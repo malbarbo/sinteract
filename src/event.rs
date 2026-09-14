@@ -18,30 +18,6 @@
 //! terminal, the swap chain in the window, rAF in the browser and the peer
 //! on stdio. The host derives a simulation tick from the time between two.
 
-/// The modifier bits, in the order of the spython FFI.
-pub const MOD_ALT: u8 = 1 << 0;
-pub const MOD_CTRL: u8 = 1 << 1;
-pub const MOD_SHIFT: u8 = 1 << 2;
-pub const MOD_META: u8 = 1 << 3;
-
-/// Pack the modifier flags of a key event into the bits above.
-pub fn modifiers(alt: bool, ctrl: bool, shift: bool, meta: bool) -> u8 {
-    let mut m = 0u8;
-    if alt {
-        m |= MOD_ALT;
-    }
-    if ctrl {
-        m |= MOD_CTRL;
-    }
-    if shift {
-        m |= MOD_SHIFT;
-    }
-    if meta {
-        m |= MOD_META;
-    }
-    m
-}
-
 /// A terminal produces only `Press`, since it does not tell down from up.
 /// The window and the browser produce all three.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,24 +44,19 @@ impl KeyKind {
 pub struct KeyEvent {
     pub kind: KeyKind,
     pub key: String,
-    pub modifiers: u8,
+    pub modifiers: Modifiers,
     /// The key is held and the system repeats it.
     pub repeat: bool,
 }
 
-impl KeyEvent {
-    pub fn alt(&self) -> bool {
-        self.modifiers & MOD_ALT != 0
-    }
-    pub fn ctrl(&self) -> bool {
-        self.modifiers & MOD_CTRL != 0
-    }
-    pub fn shift(&self) -> bool {
-        self.modifiers & MOD_SHIFT != 0
-    }
-    pub fn meta(&self) -> bool {
-        self.modifiers & MOD_META != 0
-    }
+/// The modifier keys held during a key event.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Modifiers {
+    pub alt: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+    /// The Windows, Command or Super key.
+    pub meta: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -115,20 +86,6 @@ impl InputEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn modifier_helpers_read_bits() {
-        let k = KeyEvent {
-            kind: KeyKind::Press,
-            key: "a".into(),
-            modifiers: MOD_CTRL | MOD_SHIFT,
-            repeat: false,
-        };
-        assert!(k.ctrl());
-        assert!(k.shift());
-        assert!(!k.alt());
-        assert!(!k.meta());
-    }
 
     #[test]
     fn input_event_classifiers() {

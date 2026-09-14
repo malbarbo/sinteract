@@ -129,12 +129,12 @@ fn push_key_events(
     let Some(key) = winit_key_to_string(&ev.logical_key) else {
         return;
     };
-    let modifiers = crate::event::modifiers(
-        mods.alt_key(),
-        mods.control_key(),
-        mods.shift_key(),
-        mods.super_key(),
-    );
+    let modifiers = crate::event::Modifiers {
+        alt: mods.alt_key(),
+        ctrl: mods.control_key(),
+        shift: mods.shift_key(),
+        meta: mods.super_key(),
+    };
     let event = |kind, key| crate::event::KeyEvent {
         kind,
         key,

@@ -441,12 +441,12 @@ fn key_event(ev: KeyEvent) -> Option<crate::event::KeyEvent> {
     Some(crate::event::KeyEvent {
         kind: KeyKind::Press,
         key,
-        modifiers: crate::event::modifiers(
-            m.contains(KeyModifiers::ALT),
-            m.contains(KeyModifiers::CONTROL),
-            m.contains(KeyModifiers::SHIFT),
-            m.contains(KeyModifiers::SUPER),
-        ),
+        modifiers: crate::event::Modifiers {
+            alt: m.contains(KeyModifiers::ALT),
+            ctrl: m.contains(KeyModifiers::CONTROL),
+            shift: m.contains(KeyModifiers::SHIFT),
+            meta: m.contains(KeyModifiers::SUPER),
+        },
         repeat: ev.kind == KeyEventKind::Repeat,
     })
 }
