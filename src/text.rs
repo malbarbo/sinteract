@@ -47,7 +47,7 @@ pub fn measure(
     size: f32,
     text: &str,
 ) -> Option<TextMetrics> {
-    measure_font(resolve(family, weight, style), size, text)
+    ResolvedFont::resolve(family, weight, style).measure(size, text)
 }
 
 /// The size of a measured text and the family it measured in, for a producer
@@ -103,8 +103,8 @@ impl TextLayout {
     /// nothing, because the size is not a positive finite number, the text is
     /// empty, or the width or the height measures zero or overflows.
     pub(crate) fn new(spec: &TextSpec) -> Option<Self> {
-        let font = resolve(&spec.family, spec.weight, spec.style);
-        let metrics = measure_font(font, spec.size, &spec.text)?;
+        let font = ResolvedFont::resolve(&spec.family, spec.weight, spec.style);
+        let metrics = font.measure(spec.size, &spec.text)?;
         if metrics.width <= 0.0 {
             return None;
         }
@@ -295,27 +295,6 @@ impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
 // Measurement
 // ---------------------------------------------------------------------------
 
-fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics> {
-    if !drawable_size(size) {
-        return None;
-    }
-    let face = font.face;
-    let width = measure_width_with(face, text, size) as f32;
-    let height = measure_height_with(face, size) as f32;
-    let baseline_y = measure_y_offset_with(face, size) as f32;
-    // A huge size overflows the measurement, and a non-finite number would
-    // reach the renderer as a coordinate and the producer as a scale.
-    if !width.is_finite() || !height.is_finite() || !baseline_y.is_finite() || height <= 0.0 {
-        return None;
-    }
-    Some(TextMetrics {
-        family: font.family,
-        width,
-        height,
-        baseline_y,
-    })
-}
-
 /// Returns `true` if a text at `size` can draw, `false` otherwise. NaN and
 /// infinity are out, since either one puts non-finite coordinates in the
 /// outline.
@@ -377,41 +356,6 @@ fn em_scale(face: &Face<'_>, size: f32) -> f64 {
 // Font resolution
 // ---------------------------------------------------------------------------
 
-/// Resolve a family, a weight and a style to a face.
-///
-/// The name loses its surrounding space first. An empty family is Liberation
-/// Sans. An alias (`sans-serif`, `serif`,
-/// `monospace`, `mono`, or an embedded family name, in any case) is the
-/// embedded family. Any other name goes to a `fontdb` query, and to
-/// Liberation Sans when the query finds nothing or when the crate carries no
-/// system lookup.
-pub(crate) fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
-    let v = variant_index(weight, style);
-
-    // This runs once per text node per frame, so the comparison allocates
-    // nothing.
-    let key = family.trim();
-    let is = |names: &[&str]| names.iter().any(|n| key.eq_ignore_ascii_case(n));
-    let alias = if is(&["", "sans-serif", "sans", "liberation sans"]) {
-        Some(&SANS)
-    } else if is(&["serif", "liberation serif"]) {
-        Some(&SERIF)
-    } else if is(&["monospace", "mono", "liberation mono"]) {
-        Some(&MONO)
-    } else {
-        None
-    };
-    if let Some(family_arr) = alias {
-        return embedded(&family_arr[v]);
-    }
-
-    if let Some(font) = system::font(key, weight, style) {
-        return font;
-    }
-
-    embedded(&SANS[v])
-}
-
 /// The result of resolving a request. [`TextMetrics::family`] hands `family`
 /// to a producer, which sends it on the wire, so a client measures with the
 /// same face as the server.
@@ -423,10 +367,60 @@ pub(crate) struct ResolvedFont {
     face: &'static Face<'static>,
 }
 
-fn embedded(f: &'static EmbeddedFont) -> ResolvedFont {
-    ResolvedFont {
-        family: f.name,
-        face: f.face(),
+impl ResolvedFont {
+    /// Resolve a family, a weight and a style to a face.
+    ///
+    /// The name loses its surrounding space first. An empty family is
+    /// Liberation Sans. An alias (`sans-serif`, `serif`, `monospace`, `mono`,
+    /// or an embedded family name, in any case) is the embedded family. Any
+    /// other name goes to a `fontdb` query, and to Liberation Sans when the
+    /// query finds nothing or when the crate carries no system lookup.
+    pub(crate) fn resolve(family: &str, weight: u16, style: FontStyle) -> Self {
+        let v = variant_index(weight, style);
+
+        // This runs once per text node per frame, so the comparison allocates
+        // nothing.
+        let key = family.trim();
+        let is = |names: &[&str]| names.iter().any(|n| key.eq_ignore_ascii_case(n));
+        let alias = if is(&["", "sans-serif", "sans", "liberation sans"]) {
+            Some(&SANS)
+        } else if is(&["serif", "liberation serif"]) {
+            Some(&SERIF)
+        } else if is(&["monospace", "mono", "liberation mono"]) {
+            Some(&MONO)
+        } else {
+            None
+        };
+        if let Some(family_arr) = alias {
+            return family_arr[v].resolved();
+        }
+
+        if let Some(font) = system::font(key, weight, style) {
+            return font;
+        }
+
+        SANS[v].resolved()
+    }
+
+    fn measure(self, size: f32, text: &str) -> Option<TextMetrics> {
+        if !drawable_size(size) {
+            return None;
+        }
+        let face = self.face;
+        let width = measure_width_with(face, text, size) as f32;
+        let height = measure_height_with(face, size) as f32;
+        let baseline_y = measure_y_offset_with(face, size) as f32;
+        // A huge size overflows the measurement, and a non-finite number would
+        // reach the renderer as a coordinate and the producer as a scale.
+        if !width.is_finite() || !height.is_finite() || !baseline_y.is_finite() || height <= 0.0 {
+            return None;
+        }
+        Some(TextMetrics {
+            family: self.family,
+            width,
+            height,
+            baseline_y,
+        })
     }
 }
 
@@ -465,6 +459,13 @@ impl EmbeddedFont {
     fn face(&self) -> &Face<'static> {
         self.face
             .get_or_init(|| Face::parse(self.bytes, 0).expect("embedded font is valid"))
+    }
+
+    fn resolved(&'static self) -> ResolvedFont {
+        ResolvedFont {
+            family: self.name,
+            face: self.face(),
+        }
     }
 }
 
@@ -657,7 +658,7 @@ mod tests {
     fn a_tab_draws_eight_spaces_of_the_face() {
         let mut widths = Vec::new();
         for family in ["sans-serif", "monospace"] {
-            let face = resolve(family, 400, FontStyle::Normal).face;
+            let face = ResolvedFont::resolve(family, 400, FontStyle::Normal).face;
             let tab = measure_width_with(face, "A\tB", 30.0);
             assert_eq!(
                 tab,
@@ -723,20 +724,20 @@ mod tests {
 
     #[test]
     fn resolve_empty_family_picks_sans_regular() {
-        let f = resolve("", 400, FontStyle::Normal);
+        let f = ResolvedFont::resolve("", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
     }
 
     #[test]
     fn resolve_serif_alias_picks_serif() {
-        let f = resolve("serif", 400, FontStyle::Normal);
+        let f = ResolvedFont::resolve("serif", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Serif");
     }
 
     #[test]
     fn resolve_mono_alias_picks_mono() {
         for name in ["mono", "monospace", "Liberation Mono"] {
-            let f = resolve(name, 400, FontStyle::Normal);
+            let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
             assert_eq!(f.family, "Liberation Mono", "name={name}");
         }
     }
@@ -744,7 +745,7 @@ mod tests {
     #[test]
     fn resolve_ignores_the_space_around_the_family() {
         for name in ["  serif  ", "\tserif\n", "   "] {
-            let f = resolve(name, 400, FontStyle::Normal);
+            let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
             let want = if name.trim().is_empty() {
                 "Liberation Sans"
             } else {
@@ -756,14 +757,14 @@ mod tests {
 
     #[test]
     fn resolve_is_case_insensitive() {
-        let f = resolve("SANS-SERIF", 400, FontStyle::Normal);
+        let f = ResolvedFont::resolve("SANS-SERIF", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
     }
 
     #[test]
     fn bold_picks_a_different_face_than_regular() {
-        let regular = resolve("", 400, FontStyle::Normal);
-        let bold = resolve("", 700, FontStyle::Normal);
+        let regular = ResolvedFont::resolve("", 400, FontStyle::Normal);
+        let bold = ResolvedFont::resolve("", 700, FontStyle::Normal);
         let w_reg = measure_width_with(regular.face, "Hello", 20.0);
         let w_bold = measure_width_with(bold.face, "Hello", 20.0);
         assert!(
@@ -798,7 +799,7 @@ mod tests {
     fn unknown_family_falls_back_to_sans_when_not_in_fontdb() {
         // No system has a font with this name, so resolve falls through to
         // Liberation Sans.
-        let f = resolve("ZZZ_NonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
+        let f = ResolvedFont::resolve("ZZZ_NonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
         assert_eq!(f.family, "Liberation Sans");
     }
 
