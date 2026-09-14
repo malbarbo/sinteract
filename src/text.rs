@@ -204,23 +204,16 @@ fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFo
 
     let face_data = db.with_face_data(id, |bytes, _idx| -> Option<ResolvedFont> {
         // The face borrows the bytes, so both are leaked.
-        let owned: Box<[u8]> = bytes.to_vec().into_boxed_slice();
-        let static_bytes: &'static [u8] = Box::leak(owned);
+        let static_bytes: &'static [u8] = bytes.to_vec().leak();
         let face = Face::parse(static_bytes, 0).ok()?;
         let face_static: &'static Face<'static> = Box::leak(Box::new(face));
         // The name fontdb reports, so a client resolves the same face.
         let canonical = db
             .face(id)
-            .map(|info| {
-                info.families
-                    .first()
-                    .map(|(n, _)| n.clone())
-                    .unwrap_or_else(|| family.to_owned())
-            })
-            .unwrap_or_else(|| family.to_owned());
-        let canonical_static: &'static str = Box::leak(canonical.into_boxed_str());
+            .and_then(|info| info.families.first())
+            .map_or(family, |(n, _)| n.as_str());
         Some(ResolvedFont {
-            family: canonical_static,
+            family: canonical.to_owned().leak(),
             from_system: true,
             face: face_static,
         })
