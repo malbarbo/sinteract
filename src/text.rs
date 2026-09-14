@@ -90,14 +90,8 @@ fn variant_index(weight: u16, style: FontStyle) -> usize {
 pub(crate) struct ResolvedFont {
     /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or
     /// the name fontdb reports.
-    pub(crate) family: &'static str,
+    family: &'static str,
     face: &'static Face<'static>,
-}
-
-impl ResolvedFont {
-    pub(crate) fn face(&self) -> &'static Face<'static> {
-        self.face
-    }
 }
 
 /// Resolve a family, a weight and a style to a face.
@@ -349,7 +343,7 @@ fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics
     if !drawable_size(size) {
         return None;
     }
-    let face = font.face();
+    let face = font.face;
     let width = measure_width_with(face, text, size) as f32;
     let height = measure_height_with(face, size) as f32;
     let baseline_y = measure_y_offset_with(face, size) as f32;
@@ -410,7 +404,7 @@ pub(crate) fn layout(
         return None;
     }
     Some(TextLayout {
-        face: font.face(),
+        face: font.face,
         size,
         width: metrics.width,
         baseline_y: metrics.baseline_y,
@@ -676,7 +670,7 @@ mod tests {
     fn a_tab_draws_eight_spaces_of_the_face() {
         let mut widths = Vec::new();
         for family in ["sans-serif", "monospace"] {
-            let face = resolve(family, 400, FontStyle::Normal).face();
+            let face = resolve(family, 400, FontStyle::Normal).face;
             let tab = measure_width_with(face, "A\tB", 30.0);
             assert_eq!(
                 tab,
@@ -783,8 +777,8 @@ mod tests {
     fn bold_picks_a_different_face_than_regular() {
         let regular = resolve("", 400, FontStyle::Normal);
         let bold = resolve("", 700, FontStyle::Normal);
-        let w_reg = measure_width_with(regular.face(), "Hello", 20.0);
-        let w_bold = measure_width_with(bold.face(), "Hello", 20.0);
+        let w_reg = measure_width_with(regular.face, "Hello", 20.0);
+        let w_bold = measure_width_with(bold.face, "Hello", 20.0);
         assert!(
             w_bold > w_reg,
             "expected bold wider than regular: {w_bold} vs {w_reg}"
