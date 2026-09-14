@@ -15,9 +15,16 @@ enum KeyKind {
 # ----- Input events (client → server) -----
 
 struct KeyEvent {
-    kind      @0 :KeyKind;
-    key       @1 :Text;
-    modifiers @2 :UInt8;
+    kind   @0 :KeyKind;
+    # The W3C KeyboardEvent.key value, such as "ArrowLeft", "a" or " ".
+    key    @1 :Text;
+    alt    @2 :Bool;
+    ctrl   @3 :Bool;
+    shift  @4 :Bool;
+    # The Windows, Command or Super key.
+    meta   @5 :Bool;
+    # The key is held and the system repeats it.
+    repeat @6 :Bool;
 }
 
 struct InputEvent {

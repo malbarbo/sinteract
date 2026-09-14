@@ -230,7 +230,7 @@ mod tests {
                 shift: true,
                 ..Modifiers::default()
             },
-            repeat: false,
+            repeat: true,
         });
         let bytes = encode_event(&ev);
         match decode(&bytes).unwrap() {
@@ -240,6 +240,8 @@ mod tests {
                 assert!(k.modifiers.ctrl);
                 assert!(k.modifiers.shift);
                 assert!(!k.modifiers.alt);
+                assert!(!k.modifiers.meta);
+                assert!(k.repeat);
             }
             other => panic!("got {other:?}"),
         }
