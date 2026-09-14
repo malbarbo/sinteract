@@ -254,6 +254,24 @@ pub struct RotatedRect {
     pub angle_deg: f32,
 }
 
+impl RotatedRect {
+    /// The affine that maps a box of `natural_w` by `natural_h`, centred on
+    /// the origin, onto this rectangle. A box with no area gets a
+    /// translation to the center.
+    fn affine(self, natural_w: f32, natural_h: f32) -> [f32; 6] {
+        if natural_w <= 0.0 || natural_h <= 0.0 {
+            return translate(self.cx, self.cy);
+        }
+        rotate_scale_at(
+            self.w / natural_w,
+            self.h / natural_h,
+            self.angle_deg,
+            self.cx,
+            self.cy,
+        )
+    }
+}
+
 /// A text run. The glyphs are laid out in text space, as [`TextSpec`] says.
 /// `transform` maps them to the canvas in the convention of the PDF `cm`
 /// operator:
@@ -263,8 +281,8 @@ pub struct RotatedRect {
 /// y' = transform[1] * x + transform[3] * y + transform[5]
 /// ```
 ///
-/// The producer puts the fit to a box, the rotation and the mirroring in
-/// the matrix, with [`crate::text::measure`] and [`text_box_affine`].
+/// [`TextSpec::fit`] puts the fit to a box, the rotation and the mirroring
+/// in the matrix.
 #[derive(Clone, Debug)]
 pub struct Text {
     pub fill: Rgba,
@@ -324,17 +342,17 @@ impl Default for TextSpec {
 }
 
 impl TextSpec {
-    /// A [`Text`] that draws this text into `rect`, as [`text_box_affine`]
-    /// fits it.
-    /// The family becomes the family after fallback, so a client measures
-    /// with the face of the producer. The text has no fill and no stroke
-    /// until the caller sets them. Returns `None` when
+    /// A [`Text`] that draws this text into `rect`. The family becomes the
+    /// family after fallback, so a client measures with the face of the
+    /// producer. A text that measures zero wide draws nothing and gets a
+    /// translation to the center of `rect`. The text has no fill and no
+    /// stroke until the caller sets them. Returns `None` when
     /// [`crate::text::measure`] does.
     pub fn fit(self, rect: RotatedRect) -> Option<Text> {
         let metrics =
             crate::text::measure(&self.family, self.weight, self.style, self.size, &self.text)?;
         Some(Text {
-            transform: text_box_affine(&metrics, rect.cx, rect.cy, rect.w, rect.h, rect.angle_deg),
+            transform: rect.affine(metrics.width(), metrics.height()),
             spec: Self {
                 family: metrics.family().into(),
                 ..self
@@ -359,37 +377,11 @@ fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
-/// The affine that fits a text measured as `metrics` into a box of `bw` by
-/// `bh` centred on `(cx, cy)` and rotated by `angle_deg`.
-/// [`crate::text::measure`] measures a text as a renderer lays it out, so
-/// the producer and the backend agree. A negative `bw` mirrors horizontally
-/// and a negative `bh` vertically. A text that measures zero wide draws
-/// nothing and gets a translation to `(cx, cy)`.
-pub fn text_box_affine(
-    metrics: &crate::text::TextMetrics,
-    cx: f32,
-    cy: f32,
-    bw: f32,
-    bh: f32,
-    angle_deg: f32,
-) -> [f32; 6] {
-    if metrics.width() <= 0.0 {
-        return translate(cx, cy);
-    }
-    rotate_scale_at(
-        bw / metrics.width(),
-        bh / metrics.height(),
-        angle_deg,
-        cx,
-        cy,
-    )
-}
-
 /// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
 /// the wire, and the renderer resolves it to pixels. `transform` maps the
 /// image to the canvas in the convention of [`Text::transform`], with the
 /// origin at the center of the image, as the origin of a [`Text`] is at the
-/// center of its box. [`bitmap_box_affine`] computes it for a box.
+/// center of its box. [`Bitmap::fit`] computes it for a [`RotatedRect`].
 #[derive(Clone, Copy, Debug)]
 pub struct Bitmap {
     pub id: u32,
@@ -407,41 +399,14 @@ impl Default for Bitmap {
 
 impl Bitmap {
     /// The bitmap of the asset `id`, an image of `img_w` by `img_h` pixels,
-    /// drawn into `rect`, as [`bitmap_box_affine`] fits it.
+    /// drawn into `rect`. An empty image gets a translation to the center of
+    /// `rect`.
     pub fn fit(id: u32, img_w: u32, img_h: u32, rect: RotatedRect) -> Self {
         Self {
             id,
-            transform: bitmap_box_affine(
-                img_w,
-                img_h,
-                rect.cx,
-                rect.cy,
-                rect.w,
-                rect.h,
-                rect.angle_deg,
-            ),
+            transform: rect.affine(img_w as f32, img_h as f32),
         }
     }
-}
-
-/// The affine that fits an image of `img_w` by `img_h` pixels into a box of
-/// `w` by `h` centred on `(cx, cy)` and rotated by `angle_deg`. A negative
-/// `w` mirrors horizontally and a negative `h` vertically. An empty image
-/// gets a translation to `(cx, cy)`.
-#[allow(clippy::too_many_arguments)]
-pub fn bitmap_box_affine(
-    img_w: u32,
-    img_h: u32,
-    cx: f32,
-    cy: f32,
-    w: f32,
-    h: f32,
-    angle_deg: f32,
-) -> [f32; 6] {
-    if img_w == 0 || img_h == 0 {
-        return translate(cx, cy);
-    }
-    rotate_scale_at(w / img_w as f32, h / img_h as f32, angle_deg, cx, cy)
 }
 
 /// The verb byte of a [`Segment`] on the wire. Only the codec uses it. The
@@ -1318,7 +1283,7 @@ mod tests {
     }
 
     #[test]
-    fn fit_puts_the_family_after_fallback_and_the_box_affine_in_the_text() {
+    fn fit_puts_the_family_after_fallback_and_the_affine_of_the_rect_in_the_text() {
         let spec = TextSpec {
             size: 20.0,
             family: "ZZZ_nope".into(),
@@ -1340,7 +1305,14 @@ mod tests {
         assert_eq!(&*text.spec.family, metrics.family());
         assert_eq!(
             text.transform,
-            text_box_affine(&metrics, 5.0, 7.0, 100.0, 40.0, 30.0)
+            RotatedRect {
+                cx: 5.0,
+                cy: 7.0,
+                w: 100.0,
+                h: 40.0,
+                angle_deg: 30.0,
+            }
+            .affine(metrics.width(), metrics.height())
         );
         assert_eq!((text.spec.size, &*text.spec.text), (20.0, "Hi"));
     }

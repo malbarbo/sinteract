@@ -962,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn text_box_affine_scales_exactly_when_layout_text_draws() {
+    fn fit_scales_exactly_when_layout_text_draws() {
         // Past this size the height overflows while the width of an "i"
         // stays finite.
         let tall = f32::MAX / 1.1;
@@ -975,10 +975,17 @@ mod tests {
             (f32::MAX, "Hello, world"),
             (tall, "i"),
         ] {
-            let scaled = measure("", 400, FontStyle::Normal, size, text).is_some_and(|m| {
-                crate::scene::text_box_affine(&m, 5.0, 7.0, 100.0, 40.0, 0.0)
-                    != [1.0, 0.0, 0.0, 1.0, 5.0, 7.0]
-            });
+            let rect = crate::scene::RotatedRect {
+                cx: 5.0,
+                cy: 7.0,
+                w: 100.0,
+                h: 40.0,
+                angle_deg: 0.0,
+            };
+            let scaled = node(size, text)
+                .spec
+                .fit(rect)
+                .is_some_and(|t| t.transform != [1.0, 0.0, 0.0, 1.0, 5.0, 7.0]);
             let draws = layout_text(&node(size, text).spec).is_some();
             assert_eq!(scaled, draws, "size {size}, text {text:?}");
         }
@@ -987,14 +994,18 @@ mod tests {
     /// The device rectangle of the underline of a node fitted to a box.
     fn underline_in_box(size: f32) -> [f32; 4] {
         let text = "Hello";
-        let m = crate::scene::text_box_affine(
-            &crate::text::measure("", 400, FontStyle::Normal, size, text).expect("text measures"),
-            0.0,
-            0.0,
-            100.0,
-            40.0,
-            0.0,
-        );
+        let rect = crate::scene::RotatedRect {
+            cx: 0.0,
+            cy: 0.0,
+            w: 100.0,
+            h: 40.0,
+            angle_deg: 0.0,
+        };
+        let m = node(size, text)
+            .spec
+            .fit(rect)
+            .expect("text fits")
+            .transform;
         let layout = layout_text(&node(size, text).spec).expect("node draws");
         let u = underline_rect(&layout);
         let map = |x: f32, y: f32| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
