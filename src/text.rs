@@ -324,31 +324,33 @@ fn glyphs<'a>(face: &'a Face<'_>, text: &'a str) -> impl Iterator<Item = (GlyphI
         })
 }
 
+/// The text-space length of one font unit of `face` at `size`.
+fn em_scale(face: &Face<'_>, size: f32) -> f64 {
+    f64::from(size) / f64::from(face.units_per_em())
+}
+
 /// Total horizontal advance of `text` rendered at `size` in `face`.
 pub fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
     if text.is_empty() || !drawable_size(size) {
         return 0.0;
     }
-    let scale = f64::from(size) / f64::from(face.units_per_em());
     let total: f64 = glyphs(face, text).map(|(_, advance)| advance).sum();
-    total * scale
+    total * em_scale(face, size)
 }
 
 pub fn measure_height_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
     if !drawable_size(size) {
         return 0.0;
     }
-    let scale = f64::from(size) / f64::from(face.units_per_em());
     let h = f64::from(face.ascender()) - f64::from(face.descender());
-    h * scale
+    h * em_scale(face, size)
 }
 
 pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
     if !drawable_size(size) {
         return 0.0;
     }
-    let scale = f64::from(size) / f64::from(face.units_per_em());
-    (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * scale
+    (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * em_scale(face, size)
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +398,7 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
 /// Glyph outlines for a node measured by [`layout_text`].
 pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
     let face = layout.face;
-    let scale = f64::from(layout.size) / f64::from(face.units_per_em());
+    let scale = em_scale(face, layout.size);
     let mut adapter = OutlineAdapter {
         out,
         scale: scale as f32,
@@ -439,7 +441,7 @@ const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
 /// its face.
 pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     let face_units = layout.face.units_per_em() as f32;
-    let scale = layout.size / face_units;
+    let scale = em_scale(layout.face, layout.size) as f32;
     let metrics = layout.face.underline_metrics();
     let pos_units = metrics
         .map(|m| m.position as f32)
