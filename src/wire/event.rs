@@ -38,12 +38,17 @@ pub(super) fn write_input_event(mut b: input_event::Builder<'_>, ev: &InputEvent
     }
 }
 
-pub(super) fn read_input_event(r: input_event::Reader<'_>) -> Result<InputEvent, Error> {
+/// `None` for an event of an arm from a newer schema, which the reader
+/// skips.
+pub(super) fn read_input_event(r: input_event::Reader<'_>) -> Result<Option<InputEvent>, Error> {
     use input_event::Which;
-    match r.which()? {
+    let Ok(which) = r.which() else {
+        return Ok(None);
+    };
+    Ok(Some(match which {
         Which::Key(k) => {
             let k = k?;
-            Ok(InputEvent::Key(KeyEvent {
+            InputEvent::Key(KeyEvent {
                 kind: key_kind_from_wire(k.get_kind()?),
                 key: k.get_key()?.to_str()?.to_owned(),
                 modifiers: Modifiers {
@@ -53,9 +58,9 @@ pub(super) fn read_input_event(r: input_event::Reader<'_>) -> Result<InputEvent,
                     meta: k.get_meta(),
                 },
                 repeat: k.get_repeat(),
-            }))
+            })
         }
-        Which::Tick(()) => Ok(InputEvent::Vsync),
-        Which::Close(()) => Ok(InputEvent::Close),
-    }
+        Which::Tick(()) => InputEvent::Vsync,
+        Which::Close(()) => InputEvent::Close,
+    }))
 }

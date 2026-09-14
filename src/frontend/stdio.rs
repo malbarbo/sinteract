@@ -73,7 +73,9 @@ impl StdioFrontend {
     }
 
     /// Block on stdin for the next [`InputEvent`]. An `Asset` or a `Frame`
-    /// is a protocol error from the server, logged to stderr and skipped.
+    /// is a protocol error from the server, logged to stderr and skipped. A
+    /// message or an event of an arm from a newer schema is skipped without
+    /// a log.
     /// `Close` arrives as [`InputEvent::Close`], and so does a read or a
     /// decode error. EOF returns `None`.
     ///
@@ -87,6 +89,7 @@ impl StdioFrontend {
                 Ok(Some(bytes)) => match wire::decode(&bytes) {
                     Ok(Decoded::Event(ev)) => return Some(ev),
                     Ok(Decoded::Close) => return Some(InputEvent::Close),
+                    Ok(Decoded::Unknown) => {}
                     Ok(other) => {
                         eprintln!(
                             "[sinteract::stdio] ignoring unexpected message from server: {other:?}"
@@ -234,6 +237,24 @@ mod tests {
     fn wait_event_skips_unexpected_messages() {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&wire::encode_asset(1, b"png", Some("image/png"))));
+        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
+        let mut fr =
+            StdioFrontend::with_streams(BufReader::new(Cursor::new(stream)), Vec::<u8>::new());
+        assert!(fr.wait_event(None).unwrap().is_vsync());
+    }
+
+    #[test]
+    fn wait_event_skips_a_message_and_an_event_of_an_unknown_arm() {
+        let unknown_message = wire::with_unknown_arm(&wire::encode_close(), |m| wire::tag_of(m));
+        let unknown_event = wire::with_unknown_arm(&wire::encode_event(&InputEvent::Close), |m| {
+            match m.which() {
+                Ok(crate::protocol_capnp::message::Event(e)) => wire::tag_of(e.unwrap()),
+                _ => panic!("not an event"),
+            }
+        });
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&frame(&unknown_message));
+        stream.extend_from_slice(&frame(&unknown_event));
         stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
         let mut fr =
             StdioFrontend::with_streams(BufReader::new(Cursor::new(stream)), Vec::<u8>::new());

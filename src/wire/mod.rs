@@ -44,7 +44,10 @@ pub enum Error {
     /// Cap'n Proto rejected the bytes as malformed, truncated, or of the
     /// wrong root.
     Parse(capnp::Error),
-    /// A union discriminant matches no known variant.
+    /// A union inside an element or an event, such as `Paint`, holds an arm
+    /// this crate does not know, or an enum holds a value it does not know.
+    /// An element, an event or a message of an unknown arm is skipped
+    /// instead, and is not an error.
     UnknownVariant(&'static str, u16),
     /// A required nested struct or list is unset.
     MissingField(&'static str),
@@ -430,6 +433,36 @@ mod tests {
             panic!("expected one Clipped, got {:?}", d.elements);
         };
         assert!(matches!(&elements[..], [Element::Path(_)]), "{elements:?}");
+    }
+
+    #[test]
+    fn a_message_of_an_unknown_arm_decodes_as_unknown() {
+        let bytes = with_unknown_arm(&encode_close(), |m| tag_of(m));
+        assert!(matches!(decode(&bytes).unwrap(), Decoded::Unknown));
+    }
+
+    #[test]
+    fn an_event_of_an_unknown_arm_decodes_as_unknown() {
+        let bytes = with_unknown_arm(&encode_event(&InputEvent::Vsync), |m| match m.which() {
+            Ok(message::Event(e)) => tag_of(e.unwrap()),
+            _ => panic!("not an event"),
+        });
+        assert!(matches!(decode(&bytes).unwrap(), Decoded::Unknown));
+    }
+
+    #[test]
+    fn a_paint_of_an_unknown_arm_is_an_error() {
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.path(PathStyle::default()).move_to(0.0, 0.0);
+        let bytes = with_unknown_arm(&encode_frame(&scene), |m| {
+            let Ok(element::Which::Path(p)) = frame_of(m).get_elements().unwrap().get(0).which()
+            else {
+                panic!("expected Path");
+            };
+            tag_of(p.unwrap().get_style().unwrap().get_fill().unwrap())
+        });
+        let err = decode(&bytes).unwrap_err();
+        assert!(matches!(err, Error::UnknownVariant(..)), "got {err:?}");
     }
 
     #[test]

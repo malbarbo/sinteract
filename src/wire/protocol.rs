@@ -31,6 +31,9 @@ pub enum Decoded {
     Frame(Scene),
     Event(InputEvent),
     Close,
+    /// A message, or the event of a message, of an arm from a newer schema.
+    /// The reader skips it.
+    Unknown,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +95,10 @@ pub fn encode_close() -> Vec<u8> {
 pub fn decode(bytes: &[u8]) -> Result<Decoded, Error> {
     let reader = serialize::read_message(Cursor::new(bytes), ReaderOptions::new())?;
     let msg: message::Reader = reader.get_root()?;
-    match msg.which()? {
+    let Ok(which) = msg.which() else {
+        return Ok(Decoded::Unknown);
+    };
+    match which {
         message::Asset(a) => {
             let a = a?;
             let blob = a.get_blob()?.to_vec();
@@ -111,7 +117,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, Error> {
             })
         }
         message::Frame(f) => Ok(Decoded::Frame(read_scene(f?)?)),
-        message::Event(e) => Ok(Decoded::Event(read_input_event(e?)?)),
+        message::Event(e) => Ok(read_input_event(e?)?.map_or(Decoded::Unknown, Decoded::Event)),
         message::SessionClose(()) => Ok(Decoded::Close),
     }
 }

@@ -19,8 +19,8 @@ use super::scene::{read_bitmap, read_clip_path, read_path_into, read_text_node};
 pub enum Error {
     /// The frame itself is malformed.
     Payload(PayloadError),
-    /// The message decoded, but it is not a `Frame`. Use
-    /// [`decode`](super::decode) for the other arms.
+    /// The message decoded, but it is not a `Frame`, or it is an arm from a
+    /// newer schema. Use [`decode`](super::decode) for the other arms.
     WrongMessageKind,
     /// The renderer could not size its surface for the frame.
     Surface(AllocError),
@@ -80,7 +80,10 @@ pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
 ) -> Result<(), Error> {
     let msg = serialize::read_message(reader, ReaderOptions::new())?;
     let m: message::Reader = msg.get_root()?;
-    match m.which()? {
+    let Ok(which) = m.which() else {
+        return Err(Error::WrongMessageKind);
+    };
+    match which {
         message::Frame(f) => {
             let frame = f?;
             paint.ensure_size(frame.get_width(), frame.get_height())?;
