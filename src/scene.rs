@@ -333,7 +333,7 @@ pub fn text_box_affine(
     let font = crate::text::resolve(family, weight, style);
     let face = font.face();
     let orig_w = crate::text::measure_width_with(face, text, size) as f32;
-    let orig_h = crate::text::measure_height_with(face, text, size) as f32;
+    let orig_h = crate::text::measure_height_with(face, size) as f32;
     // A huge size overflows the measurement, and the scale below would put
     // a non-finite number in the matrix.
     if !orig_w.is_finite() || !orig_h.is_finite() || orig_w <= 0.0 || orig_h <= 0.0 {

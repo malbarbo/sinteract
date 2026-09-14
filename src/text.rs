@@ -338,7 +338,7 @@ pub fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
     total * em_scale(face, size)
 }
 
-pub fn measure_height_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
+pub fn measure_height_with(face: &Face<'_>, size: f32) -> f64 {
     if !drawable_size(size) {
         return 0.0;
     }
@@ -346,7 +346,7 @@ pub fn measure_height_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
     h * em_scale(face, size)
 }
 
-pub fn measure_y_offset_with(face: &Face<'_>, _text: &str, size: f32) -> f64 {
+pub fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
     if !drawable_size(size) {
         return 0.0;
     }
@@ -389,7 +389,7 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
         face,
         size: node.size,
         width,
-        baseline_y: measure_y_offset_with(face, &node.text, node.size) as f32,
+        baseline_y: measure_y_offset_with(face, node.size) as f32,
         // Half of `measured`, so the string is walked once.
         x_left: (-measured / 2.0) as f32,
     })
@@ -624,15 +624,15 @@ mod tests {
 
     #[test]
     fn measure_height_uses_font_metrics() {
-        let h = measure_height_with(sans(), "anything", 20.0);
+        let h = measure_height_with(sans(), 20.0);
         // Liberation Sans at 20px. (1854 + 434) * 20 / 2048 is about 22.34.
         assert!(h > 18.0 && h < 26.0, "unexpected height: {h}");
     }
 
     #[test]
     fn y_offset_is_within_box() {
-        let h = measure_height_with(sans(), "hi", 20.0);
-        let y = measure_y_offset_with(sans(), "hi", 20.0);
+        let h = measure_height_with(sans(), 20.0);
+        let y = measure_y_offset_with(sans(), 20.0);
         assert!(y > -h / 2.0 && y < h / 2.0);
     }
 
