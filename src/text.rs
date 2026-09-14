@@ -24,141 +24,182 @@ use ttf_parser::{Face, GlyphId};
 use crate::scene::{FontStyle, TextSpec};
 
 // ---------------------------------------------------------------------------
-// Embedded fonts
+// Text metrics, the public API
 // ---------------------------------------------------------------------------
 
-/// An embedded TTF, parsed once per process.
-struct EmbeddedFont {
-    name: &'static str,
-    bytes: &'static [u8],
-    face: OnceLock<Face<'static>>,
-}
-
-impl EmbeddedFont {
-    fn face(&self) -> &Face<'static> {
-        self.face
-            .get_or_init(|| Face::parse(self.bytes, 0).expect("embedded font is valid"))
-    }
-}
-
-/// The four variants of a family in `fonts/`, in the order of
-/// [`variant_index`].
-macro_rules! embed_family {
-    (@variant $name:literal, $file:literal, $variant:literal) => {
-        EmbeddedFont {
-            name: $name,
-            bytes: include_bytes!(concat!("../fonts/", $file, "-", $variant, ".ttf")),
-            face: OnceLock::new(),
-        }
-    };
-    ($name:literal, $file:literal) => {
-        [
-            embed_family!(@variant $name, $file, "Regular"),
-            embed_family!(@variant $name, $file, "Bold"),
-            embed_family!(@variant $name, $file, "Italic"),
-            embed_family!(@variant $name, $file, "BoldItalic"),
-        ]
-    };
-}
-
-static SANS: [EmbeddedFont; 4] = embed_family!("Liberation Sans", "LiberationSans");
-static SERIF: [EmbeddedFont; 4] = embed_family!("Liberation Serif", "LiberationSerif");
-static MONO: [EmbeddedFont; 4] = embed_family!("Liberation Mono", "LiberationMono");
-
-/// A CSS weight at or above this picks the bold face.
-const BOLD_THRESHOLD: u16 = 600;
-
-fn variant_index(weight: u16, style: FontStyle) -> usize {
-    let bold = weight >= BOLD_THRESHOLD;
-    let italic = !matches!(style, FontStyle::Normal);
-    match (bold, italic) {
-        (false, false) => 0,
-        (true, false) => 1,
-        (false, true) => 2,
-        (true, true) => 3,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Font resolution
-// ---------------------------------------------------------------------------
-
-/// The result of resolving a request. [`TextMetrics::family`] hands `family`
-/// to a producer, which sends it on the wire, so a client measures with the
-/// same face as the server.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ResolvedFont {
-    /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or
-    /// the name fontdb reports.
-    family: &'static str,
-    face: &'static Face<'static>,
-}
-
-/// Resolve a family, a weight and a style to a face.
+/// Measure a text in the face that `family`, `weight` and `style` pick.
 ///
-/// The name loses its surrounding space first. An empty family is Liberation
-/// Sans. An alias (`sans-serif`, `serif`,
-/// `monospace`, `mono`, or an embedded family name, in any case) is the
-/// embedded family. Any other name goes to a `fontdb` query, and to
-/// Liberation Sans when the query finds nothing or when the crate carries no
-/// system lookup.
-pub(crate) fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
-    let v = variant_index(weight, style);
+/// The family loses its surrounding space first. An empty family is
+/// Liberation Sans, and an alias (`sans-serif`, `serif`, `monospace`, `mono`,
+/// or an embedded family name, in any case) is the embedded family. Any other
+/// name goes to the fonts installed on the system, and to Liberation Sans
+/// when none matches or when the crate carries no system lookup. In an
+/// embedded family, a weight of 600 or more picks the bold face, and an
+/// italic or oblique style the italic one.
+///
+/// An empty text measures zero wide, with the height of the face. Returns
+/// `None` when the size is not a positive finite number or the measurement
+/// overflows.
+pub fn measure(
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+    size: f32,
+    text: &str,
+) -> Option<TextMetrics> {
+    measure_font(resolve(family, weight, style), size, text)
+}
 
-    // This runs once per text node per frame, so the comparison allocates
-    // nothing.
-    let key = family.trim();
-    let is = |names: &[&str]| names.iter().any(|n| key.eq_ignore_ascii_case(n));
-    let alias = if is(&["", "sans-serif", "sans", "liberation sans"]) {
-        Some(&SANS)
-    } else if is(&["serif", "liberation serif"]) {
-        Some(&SERIF)
-    } else if is(&["monospace", "mono", "liberation mono"]) {
-        Some(&MONO)
-    } else {
-        None
+/// The size of a measured text and the family it measured in, for a producer
+/// that fits the text to a box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextMetrics {
+    family: &'static str,
+    width: f32,
+    height: f32,
+    baseline_y: f32,
+}
+
+impl TextMetrics {
+    /// The family after fallback. A [`TextSpec`] carries it, so a client
+    /// measures with the same face.
+    pub fn family(&self) -> &'static str {
+        self.family
+    }
+
+    /// The horizontal advance, zero for a text that draws no glyph.
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+
+    /// The ascender minus the descender of the face.
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
+    /// The baseline, from the center of the box with y down.
+    pub fn baseline_y(&self) -> f32 {
+        self.baseline_y
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Layout of a text node, shared by the renderers
+// ---------------------------------------------------------------------------
+
+/// Resolve and measure a text node. Returns `None` when the node draws
+/// nothing, because the size is not a positive finite number, the text is
+/// empty, or the width or the height measures zero or overflows.
+pub(crate) fn layout_text(spec: &TextSpec) -> Option<TextLayout> {
+    layout(&spec.family, spec.weight, spec.style, spec.size, &spec.text)
+}
+
+/// [`layout_text`] for the fields of a node, so a producer that has no node
+/// yet measures the text as a renderer will.
+pub(crate) fn layout(
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+    size: f32,
+    text: &str,
+) -> Option<TextLayout> {
+    let font = resolve(family, weight, style);
+    let metrics = measure_font(font, size, text)?;
+    if metrics.width <= 0.0 {
+        return None;
+    }
+    Some(TextLayout {
+        face: font.face,
+        size,
+        width: metrics.width,
+        baseline_y: metrics.baseline_y,
+    })
+}
+
+/// The face and the box-local metrics of one [`TextSpec`].
+pub(crate) struct TextLayout {
+    pub(crate) face: &'static Face<'static>,
+    /// The em of the text space, from `TextSpec::size`.
+    pub(crate) size: f32,
+    /// The horizontal advance.
+    pub(crate) width: f32,
+    /// The baseline, box-local with y down.
+    pub(crate) baseline_y: f32,
+}
+
+impl TextLayout {
+    /// The left edge of the text, box-local.
+    pub(crate) fn x_left(&self) -> f32 {
+        -self.width / 2.0
+    }
+}
+
+/// Glyph outlines for a node measured by [`layout_text`].
+pub(crate) fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
+    let face = layout.face;
+    let scale = em_scale(face, layout.size);
+    let x_left = layout.x_left();
+    let mut adapter = OutlineAdapter {
+        out,
+        scale: scale as f32,
+        origin_x: x_left,
+        baseline_y: layout.baseline_y,
     };
-    if let Some(family_arr) = alias {
-        return embedded(&family_arr[v]);
-    }
-
-    if let Some(font) = system::font(key, weight, style) {
-        return font;
-    }
-
-    embedded(&SANS[v])
-}
-
-fn embedded(f: &'static EmbeddedFont) -> ResolvedFont {
-    ResolvedFont {
-        family: f.name,
-        face: f.face(),
+    let mut pen_x: f64 = 0.0;
+    for (gid, advance) in glyphs(face, text) {
+        adapter.origin_x = x_left + (pen_x * scale) as f32;
+        let _ = face.outline_glyph(gid, &mut adapter);
+        pen_x += advance;
     }
 }
 
-// ---------------------------------------------------------------------------
-// System font lookup. The native-fonts feature carries it, and wasm32 drops
-// it in any case, since there is no font directory to read.
-// ---------------------------------------------------------------------------
+/// The underline of a laid-out node as a closed contour.
+pub(crate) fn outline_underline(layout: &TextLayout, out: &mut dyn OutlineBuilder) {
+    let u = underline_rect(layout);
+    out.move_to(u.x_l, u.y_top);
+    out.line_to(u.x_r, u.y_top);
+    out.line_to(u.x_r, u.y_bot);
+    out.line_to(u.x_l, u.y_bot);
+    out.close();
+}
 
-#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
-mod system;
-
-#[cfg(not(all(feature = "native-fonts", not(target_arch = "wasm32"))))]
-mod system {
-    /// Without the lookup, no family resolves to a system font.
-    pub(super) fn font(
-        _family: &str,
-        _weight: u16,
-        _style: crate::scene::FontStyle,
-    ) -> Option<super::ResolvedFont> {
-        None
+/// The underline rectangle of a laid-out node, from the underline metrics of
+/// its face.
+pub(crate) fn underline_rect(layout: &TextLayout) -> UnderlineRect {
+    let face_units = layout.face.units_per_em() as f32;
+    let scale = em_scale(layout.face, layout.size) as f32;
+    let (pos_units, thickness_units) = layout.face.underline_metrics().map_or(
+        (
+            FALLBACK_UNDERLINE_POS * face_units,
+            FALLBACK_UNDERLINE_THICKNESS * face_units,
+        ),
+        |m| (f32::from(m.position), f32::from(m.thickness)),
+    );
+    // The position in `post` is the top of the underline, with y up, and the
+    // box has y down.
+    let y_top = layout.baseline_y - pos_units * scale;
+    let thickness = thickness_units * scale;
+    UnderlineRect {
+        x_l: layout.x_left(),
+        x_r: layout.x_left() + layout.width,
+        y_top,
+        y_bot: y_top + thickness,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Measurement and outlines
-// ---------------------------------------------------------------------------
+/// Axis-aligned underline rectangle in box-local text space.
+pub(crate) struct UnderlineRect {
+    pub(crate) x_l: f32,
+    pub(crate) x_r: f32,
+    pub(crate) y_top: f32,
+    pub(crate) y_bot: f32,
+}
+
+// The underline of a face that carries no `post` table, as a fraction of the
+// em. The PostScript FontInfo defaults center a stroke of 50 at -100 in a
+// 1000-unit em, so its top sits at -75.
+const FALLBACK_UNDERLINE_POS: f32 = -0.075;
+const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
 
 /// Receives the outline of a glyph. Coordinates are box-local, with the
 /// origin at the center of the box and y down.
@@ -222,262 +263,6 @@ impl<B: OutlineBuilder + ?Sized> OutlineBuilder for ElevateQuads<'_, B> {
     }
 }
 
-/// Returns `true` if a text at `size` can draw, `false` otherwise. NaN and
-/// infinity are out, since either one puts non-finite coordinates in the
-/// outline.
-pub(crate) fn drawable_size(size: f32) -> bool {
-    size.is_finite() && size > 0.0
-}
-
-/// The width of a tab, in spaces of the face. A tab advances by the same
-/// width at any column, as the `text` of Racket's `2htdp/image` does.
-const TAB_SPACES: usize = 8;
-
-/// Each glyph that `text` draws, with its advance in font units. A tab draws
-/// [`TAB_SPACES`] spaces, another control character draws nothing, and a
-/// character that the face lacks draws the `.notdef` box.
-fn glyphs<'a>(face: &'a Face<'_>, text: &'a str) -> impl Iterator<Item = (GlyphId, f64)> + 'a {
-    text.chars()
-        .filter_map(|c| match c {
-            '\t' => Some((' ', TAB_SPACES)),
-            c if c.is_control() => None,
-            c => Some((c, 1)),
-        })
-        .flat_map(move |(c, n)| {
-            let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
-            let advance = f64::from(face.glyph_hor_advance(gid).unwrap_or(0));
-            std::iter::repeat_n((gid, advance), n)
-        })
-}
-
-/// The text-space length of one font unit of `face` at `size`.
-fn em_scale(face: &Face<'_>, size: f32) -> f64 {
-    f64::from(size) / f64::from(face.units_per_em())
-}
-
-/// Total horizontal advance of `text` rendered at `size` in `face`.
-fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
-    if text.is_empty() || !drawable_size(size) {
-        return 0.0;
-    }
-    let total: f64 = glyphs(face, text).map(|(_, advance)| advance).sum();
-    total * em_scale(face, size)
-}
-
-fn measure_height_with(face: &Face<'_>, size: f32) -> f64 {
-    if !drawable_size(size) {
-        return 0.0;
-    }
-    let h = f64::from(face.ascender()) - f64::from(face.descender());
-    h * em_scale(face, size)
-}
-
-fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
-    if !drawable_size(size) {
-        return 0.0;
-    }
-    (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * em_scale(face, size)
-}
-
-// ---------------------------------------------------------------------------
-// Text metrics, the public API
-// ---------------------------------------------------------------------------
-
-/// The size of a measured text and the family it measured in, for a producer
-/// that fits the text to a box.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TextMetrics {
-    family: &'static str,
-    width: f32,
-    height: f32,
-    baseline_y: f32,
-}
-
-impl TextMetrics {
-    /// The family after fallback. A [`TextSpec`] carries it, so a client
-    /// measures with the same face.
-    pub fn family(&self) -> &'static str {
-        self.family
-    }
-
-    /// The horizontal advance, zero for a text that draws no glyph.
-    pub fn width(&self) -> f32 {
-        self.width
-    }
-
-    /// The ascender minus the descender of the face.
-    pub fn height(&self) -> f32 {
-        self.height
-    }
-
-    /// The baseline, from the center of the box with y down.
-    pub fn baseline_y(&self) -> f32 {
-        self.baseline_y
-    }
-}
-
-/// Measure a text in the face that `family`, `weight` and `style` pick.
-///
-/// The family loses its surrounding space first. An empty family is
-/// Liberation Sans, and an alias (`sans-serif`, `serif`, `monospace`, `mono`,
-/// or an embedded family name, in any case) is the embedded family. Any other
-/// name goes to the fonts installed on the system, and to Liberation Sans
-/// when none matches or when the crate carries no system lookup. In an
-/// embedded family, a weight of 600 or more picks the bold face, and an
-/// italic or oblique style the italic one.
-///
-/// An empty text measures zero wide, with the height of the face. Returns
-/// `None` when the size is not a positive finite number or the measurement
-/// overflows.
-pub fn measure(
-    family: &str,
-    weight: u16,
-    style: FontStyle,
-    size: f32,
-    text: &str,
-) -> Option<TextMetrics> {
-    measure_font(resolve(family, weight, style), size, text)
-}
-
-fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics> {
-    if !drawable_size(size) {
-        return None;
-    }
-    let face = font.face;
-    let width = measure_width_with(face, text, size) as f32;
-    let height = measure_height_with(face, size) as f32;
-    let baseline_y = measure_y_offset_with(face, size) as f32;
-    // A huge size overflows the measurement, and a non-finite number would
-    // reach the renderer as a coordinate and the producer as a scale.
-    if !width.is_finite() || !height.is_finite() || !baseline_y.is_finite() || height <= 0.0 {
-        return None;
-    }
-    Some(TextMetrics {
-        family: font.family,
-        width,
-        height,
-        baseline_y,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Layout of a text node, shared by the renderers
-// ---------------------------------------------------------------------------
-
-/// The face and the box-local metrics of one [`TextSpec`].
-pub(crate) struct TextLayout {
-    pub(crate) face: &'static Face<'static>,
-    /// The em of the text space, from `TextSpec::size`.
-    pub(crate) size: f32,
-    /// The horizontal advance.
-    pub(crate) width: f32,
-    /// The baseline, box-local with y down.
-    pub(crate) baseline_y: f32,
-}
-
-impl TextLayout {
-    /// The left edge of the text, box-local.
-    pub(crate) fn x_left(&self) -> f32 {
-        -self.width / 2.0
-    }
-}
-
-/// Resolve and measure a text node. Returns `None` when the node draws
-/// nothing, because the size is not a positive finite number, the text is
-/// empty, or the width or the height measures zero or overflows.
-pub(crate) fn layout_text(spec: &TextSpec) -> Option<TextLayout> {
-    layout(&spec.family, spec.weight, spec.style, spec.size, &spec.text)
-}
-
-/// [`layout_text`] for the fields of a node, so a producer that has no node
-/// yet measures the text as a renderer will.
-pub(crate) fn layout(
-    family: &str,
-    weight: u16,
-    style: FontStyle,
-    size: f32,
-    text: &str,
-) -> Option<TextLayout> {
-    let font = resolve(family, weight, style);
-    let metrics = measure_font(font, size, text)?;
-    if metrics.width <= 0.0 {
-        return None;
-    }
-    Some(TextLayout {
-        face: font.face,
-        size,
-        width: metrics.width,
-        baseline_y: metrics.baseline_y,
-    })
-}
-
-/// Glyph outlines for a node measured by [`layout_text`].
-pub(crate) fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
-    let face = layout.face;
-    let scale = em_scale(face, layout.size);
-    let x_left = layout.x_left();
-    let mut adapter = OutlineAdapter {
-        out,
-        scale: scale as f32,
-        origin_x: x_left,
-        baseline_y: layout.baseline_y,
-    };
-    let mut pen_x: f64 = 0.0;
-    for (gid, advance) in glyphs(face, text) {
-        adapter.origin_x = x_left + (pen_x * scale) as f32;
-        let _ = face.outline_glyph(gid, &mut adapter);
-        pen_x += advance;
-    }
-}
-
-/// The underline of a laid-out node as a closed contour.
-pub(crate) fn outline_underline(layout: &TextLayout, out: &mut dyn OutlineBuilder) {
-    let u = underline_rect(layout);
-    out.move_to(u.x_l, u.y_top);
-    out.line_to(u.x_r, u.y_top);
-    out.line_to(u.x_r, u.y_bot);
-    out.line_to(u.x_l, u.y_bot);
-    out.close();
-}
-
-/// Axis-aligned underline rectangle in box-local text space.
-pub(crate) struct UnderlineRect {
-    pub(crate) x_l: f32,
-    pub(crate) x_r: f32,
-    pub(crate) y_top: f32,
-    pub(crate) y_bot: f32,
-}
-
-// The underline of a face that carries no `post` table, as a fraction of the
-// em. The PostScript FontInfo defaults center a stroke of 50 at -100 in a
-// 1000-unit em, so its top sits at -75.
-const FALLBACK_UNDERLINE_POS: f32 = -0.075;
-const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
-
-/// The underline rectangle of a laid-out node, from the underline metrics of
-/// its face.
-pub(crate) fn underline_rect(layout: &TextLayout) -> UnderlineRect {
-    let face_units = layout.face.units_per_em() as f32;
-    let scale = em_scale(layout.face, layout.size) as f32;
-    let (pos_units, thickness_units) = layout.face.underline_metrics().map_or(
-        (
-            FALLBACK_UNDERLINE_POS * face_units,
-            FALLBACK_UNDERLINE_THICKNESS * face_units,
-        ),
-        |m| (f32::from(m.position), f32::from(m.thickness)),
-    );
-    // The position in `post` is the top of the underline, with y up, and the
-    // box has y down.
-    let y_top = layout.baseline_y - pos_units * scale;
-    let thickness = thickness_units * scale;
-    UnderlineRect {
-        x_l: layout.x_left(),
-        x_r: layout.x_left() + layout.width,
-        y_top,
-        y_bot: y_top + thickness,
-    }
-}
-
 struct OutlineAdapter<'a> {
     out: &'a mut dyn OutlineBuilder,
     scale: f32,
@@ -516,6 +301,221 @@ impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
     }
     fn close(&mut self) {
         self.out.close();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Measurement
+// ---------------------------------------------------------------------------
+
+fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics> {
+    if !drawable_size(size) {
+        return None;
+    }
+    let face = font.face;
+    let width = measure_width_with(face, text, size) as f32;
+    let height = measure_height_with(face, size) as f32;
+    let baseline_y = measure_y_offset_with(face, size) as f32;
+    // A huge size overflows the measurement, and a non-finite number would
+    // reach the renderer as a coordinate and the producer as a scale.
+    if !width.is_finite() || !height.is_finite() || !baseline_y.is_finite() || height <= 0.0 {
+        return None;
+    }
+    Some(TextMetrics {
+        family: font.family,
+        width,
+        height,
+        baseline_y,
+    })
+}
+
+/// Returns `true` if a text at `size` can draw, `false` otherwise. NaN and
+/// infinity are out, since either one puts non-finite coordinates in the
+/// outline.
+pub(crate) fn drawable_size(size: f32) -> bool {
+    size.is_finite() && size > 0.0
+}
+
+/// Total horizontal advance of `text` rendered at `size` in `face`.
+fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
+    if text.is_empty() || !drawable_size(size) {
+        return 0.0;
+    }
+    let total: f64 = glyphs(face, text).map(|(_, advance)| advance).sum();
+    total * em_scale(face, size)
+}
+
+fn measure_height_with(face: &Face<'_>, size: f32) -> f64 {
+    if !drawable_size(size) {
+        return 0.0;
+    }
+    let h = f64::from(face.ascender()) - f64::from(face.descender());
+    h * em_scale(face, size)
+}
+
+fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
+    if !drawable_size(size) {
+        return 0.0;
+    }
+    (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * em_scale(face, size)
+}
+
+/// Each glyph that `text` draws, with its advance in font units. A tab draws
+/// [`TAB_SPACES`] spaces, another control character draws nothing, and a
+/// character that the face lacks draws the `.notdef` box.
+fn glyphs<'a>(face: &'a Face<'_>, text: &'a str) -> impl Iterator<Item = (GlyphId, f64)> + 'a {
+    text.chars()
+        .filter_map(|c| match c {
+            '\t' => Some((' ', TAB_SPACES)),
+            c if c.is_control() => None,
+            c => Some((c, 1)),
+        })
+        .flat_map(move |(c, n)| {
+            let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
+            let advance = f64::from(face.glyph_hor_advance(gid).unwrap_or(0));
+            std::iter::repeat_n((gid, advance), n)
+        })
+}
+
+/// The width of a tab, in spaces of the face. A tab advances by the same
+/// width at any column, as the `text` of Racket's `2htdp/image` does.
+const TAB_SPACES: usize = 8;
+
+/// The text-space length of one font unit of `face` at `size`.
+fn em_scale(face: &Face<'_>, size: f32) -> f64 {
+    f64::from(size) / f64::from(face.units_per_em())
+}
+
+// ---------------------------------------------------------------------------
+// Font resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve a family, a weight and a style to a face.
+///
+/// The name loses its surrounding space first. An empty family is Liberation
+/// Sans. An alias (`sans-serif`, `serif`,
+/// `monospace`, `mono`, or an embedded family name, in any case) is the
+/// embedded family. Any other name goes to a `fontdb` query, and to
+/// Liberation Sans when the query finds nothing or when the crate carries no
+/// system lookup.
+pub(crate) fn resolve(family: &str, weight: u16, style: FontStyle) -> ResolvedFont {
+    let v = variant_index(weight, style);
+
+    // This runs once per text node per frame, so the comparison allocates
+    // nothing.
+    let key = family.trim();
+    let is = |names: &[&str]| names.iter().any(|n| key.eq_ignore_ascii_case(n));
+    let alias = if is(&["", "sans-serif", "sans", "liberation sans"]) {
+        Some(&SANS)
+    } else if is(&["serif", "liberation serif"]) {
+        Some(&SERIF)
+    } else if is(&["monospace", "mono", "liberation mono"]) {
+        Some(&MONO)
+    } else {
+        None
+    };
+    if let Some(family_arr) = alias {
+        return embedded(&family_arr[v]);
+    }
+
+    if let Some(font) = system::font(key, weight, style) {
+        return font;
+    }
+
+    embedded(&SANS[v])
+}
+
+/// The result of resolving a request. [`TextMetrics::family`] hands `family`
+/// to a producer, which sends it on the wire, so a client measures with the
+/// same face as the server.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResolvedFont {
+    /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or
+    /// the name fontdb reports.
+    family: &'static str,
+    face: &'static Face<'static>,
+}
+
+fn embedded(f: &'static EmbeddedFont) -> ResolvedFont {
+    ResolvedFont {
+        family: f.name,
+        face: f.face(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// System font lookup. The native-fonts feature carries it, and wasm32 drops
+// it in any case, since there is no font directory to read.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "native-fonts", not(target_arch = "wasm32")))]
+mod system;
+
+#[cfg(not(all(feature = "native-fonts", not(target_arch = "wasm32"))))]
+mod system {
+    /// Without the lookup, no family resolves to a system font.
+    pub(super) fn font(
+        _family: &str,
+        _weight: u16,
+        _style: crate::scene::FontStyle,
+    ) -> Option<super::ResolvedFont> {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Embedded fonts
+// ---------------------------------------------------------------------------
+
+/// An embedded TTF, parsed once per process.
+struct EmbeddedFont {
+    name: &'static str,
+    bytes: &'static [u8],
+    face: OnceLock<Face<'static>>,
+}
+
+impl EmbeddedFont {
+    fn face(&self) -> &Face<'static> {
+        self.face
+            .get_or_init(|| Face::parse(self.bytes, 0).expect("embedded font is valid"))
+    }
+}
+
+/// The four variants of a family in `fonts/`, in the order of
+/// [`variant_index`].
+macro_rules! embed_family {
+    (@variant $name:literal, $file:literal, $variant:literal) => {
+        EmbeddedFont {
+            name: $name,
+            bytes: include_bytes!(concat!("../fonts/", $file, "-", $variant, ".ttf")),
+            face: OnceLock::new(),
+        }
+    };
+    ($name:literal, $file:literal) => {
+        [
+            embed_family!(@variant $name, $file, "Regular"),
+            embed_family!(@variant $name, $file, "Bold"),
+            embed_family!(@variant $name, $file, "Italic"),
+            embed_family!(@variant $name, $file, "BoldItalic"),
+        ]
+    };
+}
+
+static SANS: [EmbeddedFont; 4] = embed_family!("Liberation Sans", "LiberationSans");
+static SERIF: [EmbeddedFont; 4] = embed_family!("Liberation Serif", "LiberationSerif");
+static MONO: [EmbeddedFont; 4] = embed_family!("Liberation Mono", "LiberationMono");
+
+/// A CSS weight at or above this picks the bold face.
+const BOLD_THRESHOLD: u16 = 600;
+
+fn variant_index(weight: u16, style: FontStyle) -> usize {
+    let bold = weight >= BOLD_THRESHOLD;
+    let italic = !matches!(style, FontStyle::Normal);
+    match (bold, italic) {
+        (false, false) => 0,
+        (true, false) => 1,
+        (false, true) => 2,
+        (true, true) => 3,
     }
 }
 
