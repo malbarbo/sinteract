@@ -103,7 +103,8 @@ mod tests {
     use crate::protocol_capnp::message;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, LineCap, LineJoin, Paint,
-        PathStyle, Rgba, Scene, Segment, SegmentKind, SpreadMode, Stop, Text, TextSpec,
+        PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
+        TextSpec,
     };
     use capnp::message::Builder as MessageBuilder;
 
@@ -134,7 +135,13 @@ mod tests {
                 style: FontStyle::Italic,
                 text: "Olá".into(),
             }
-            .fit(60.0, 30.0, 50.0, 14.0, 0.0)
+            .fit(RotatedRect {
+                cx: 60.0,
+                cy: 30.0,
+                w: 50.0,
+                h: 14.0,
+                angle_deg: 0.0,
+            })
             .expect("text fits");
             clip.text(Text {
                 fill: Rgba {

@@ -499,7 +499,13 @@ mod tests {
                 text: text.to_owned(),
                 ..crate::scene::TextSpec::default()
             }
-            .fit(cx, cy, bw, bh, 0.0)
+            .fit(crate::scene::RotatedRect {
+                cx,
+                cy,
+                w: bw,
+                h: bh,
+                angle_deg: 0.0,
+            })
             .expect("text fits")
         }
     }

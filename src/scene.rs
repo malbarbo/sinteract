@@ -242,6 +242,18 @@ pub enum FontStyle {
     Oblique = 2,
 }
 
+/// A rectangle of `w` by `h` centred on `(cx, cy)` and rotated by
+/// `angle_deg`. A negative `w` mirrors horizontally and a negative `h`
+/// vertically.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RotatedRect {
+    pub cx: f32,
+    pub cy: f32,
+    pub w: f32,
+    pub h: f32,
+    pub angle_deg: f32,
+}
+
 /// A text run. The glyphs are laid out in text space, as [`TextSpec`] says.
 /// `transform` maps them to the canvas in the convention of the PDF `cm`
 /// operator:
@@ -312,17 +324,17 @@ impl Default for TextSpec {
 }
 
 impl TextSpec {
-    /// A [`Text`] that draws this text into a box of `bw` by `bh` centred on
-    /// `(cx, cy)` and rotated by `angle_deg`, as [`text_box_affine`] fits it.
+    /// A [`Text`] that draws this text into `rect`, as [`text_box_affine`]
+    /// fits it.
     /// The family becomes the family after fallback, so a client measures
     /// with the face of the producer. The text has no fill and no stroke
     /// until the caller sets them. Returns `None` when
     /// [`crate::text::measure`] does.
-    pub fn fit(self, cx: f32, cy: f32, bw: f32, bh: f32, angle_deg: f32) -> Option<Text> {
+    pub fn fit(self, rect: RotatedRect) -> Option<Text> {
         let metrics =
             crate::text::measure(&self.family, self.weight, self.style, self.size, &self.text)?;
         Some(Text {
-            transform: text_box_affine(&metrics, cx, cy, bw, bh, angle_deg),
+            transform: text_box_affine(&metrics, rect.cx, rect.cy, rect.w, rect.h, rect.angle_deg),
             spec: Self {
                 family: metrics.family().into(),
                 ..self
@@ -1305,7 +1317,15 @@ mod tests {
         };
         let metrics = crate::text::measure("ZZZ_nope", 400, FontStyle::Normal, 20.0, "Hi")
             .expect("text measures");
-        let text = spec.fit(5.0, 7.0, 100.0, 40.0, 30.0).expect("text fits");
+        let text = spec
+            .fit(RotatedRect {
+                cx: 5.0,
+                cy: 7.0,
+                w: 100.0,
+                h: 40.0,
+                angle_deg: 30.0,
+            })
+            .expect("text fits");
         assert_ne!(&*text.spec.family, "ZZZ_nope");
         assert_eq!(&*text.spec.family, metrics.family());
         assert_eq!(
@@ -1321,7 +1341,16 @@ mod tests {
             text: "Hi".into(),
             ..TextSpec::default()
         };
-        assert!(spec.fit(0.0, 0.0, 10.0, 10.0, 0.0).is_none());
+        assert!(
+            spec.fit(RotatedRect {
+                cx: 0.0,
+                cy: 0.0,
+                w: 10.0,
+                h: 10.0,
+                angle_deg: 0.0
+            })
+            .is_none()
+        );
     }
 
     #[test]

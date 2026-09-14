@@ -705,7 +705,13 @@ mod tests {
             text: "Hi".to_owned(),
             ..crate::scene::TextSpec::default()
         }
-        .fit(50.0, 15.0, 80.0, 20.0, 0.0)
+        .fit(crate::scene::RotatedRect {
+            cx: 50.0,
+            cy: 15.0,
+            w: 80.0,
+            h: 20.0,
+            angle_deg: 0.0,
+        })
         .expect("text fits");
         scene.text(Text {
             fill: Rgba {
