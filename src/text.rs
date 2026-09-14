@@ -234,10 +234,6 @@ fn system_font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFo
 // Measurement and outlines
 // ---------------------------------------------------------------------------
 
-fn default_face() -> &'static Face<'static> {
-    SANS[0].face()
-}
-
 /// Receives the outline of a glyph. Coordinates are box-local with y down,
 /// as in the `measure_*` functions.
 pub trait OutlineBuilder {
@@ -498,29 +494,6 @@ pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     }
 }
 
-// These measure and outline in Liberation Sans Regular, for a caller that
-// picks no font.
-
-pub fn measure_width(text: &str, size: f32) -> f64 {
-    measure_width_with(default_face(), text, size)
-}
-
-pub fn measure_height(text: &str, size: f32) -> f64 {
-    measure_height_with(default_face(), text, size)
-}
-
-pub fn measure_x_offset(text: &str, size: f32) -> f64 {
-    measure_x_offset_with(default_face(), text, size)
-}
-
-pub fn measure_y_offset(text: &str, size: f32) -> f64 {
-    measure_y_offset_with(default_face(), text, size)
-}
-
-pub fn outline(text: &str, size: f32, out: &mut dyn OutlineBuilder) {
-    outline_with(default_face(), text, size, out)
-}
-
 struct OutlineAdapter<'a> {
     out: &'a mut dyn OutlineBuilder,
     scale: f32,
@@ -565,6 +538,11 @@ impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Liberation Sans Regular, the face of a node that names no family.
+    fn sans() -> &'static Face<'static> {
+        SANS[0].face()
+    }
 
     /// Records the ops, so a test asserts them exactly.
     #[derive(Default)]
@@ -654,48 +632,48 @@ mod tests {
 
     #[test]
     fn measure_width_empty_is_zero() {
-        assert_eq!(measure_width("", 20.0), 0.0);
+        assert_eq!(measure_width_with(sans(), "", 20.0), 0.0);
     }
 
     #[test]
     fn measure_width_grows_with_size() {
-        let small = measure_width("hello", 10.0);
-        let big = measure_width("hello", 20.0);
+        let small = measure_width_with(sans(), "hello", 10.0);
+        let big = measure_width_with(sans(), "hello", 20.0);
         assert!(big > small * 1.5, "{big} should be roughly 2x {small}");
     }
 
     #[test]
     fn measure_width_grows_with_chars() {
-        let one = measure_width("h", 20.0);
-        let many = measure_width("hhhh", 20.0);
+        let one = measure_width_with(sans(), "h", 20.0);
+        let many = measure_width_with(sans(), "hhhh", 20.0);
         assert!(many > one * 3.5, "{many} should be roughly 4x {one}");
     }
 
     #[test]
     fn measure_height_uses_font_metrics() {
-        let h = measure_height("anything", 20.0);
+        let h = measure_height_with(sans(), "anything", 20.0);
         // Liberation Sans at 20px. (1854 + 434) * 20 / 2048 is about 22.34.
         assert!(h > 18.0 && h < 26.0, "unexpected height: {h}");
     }
 
     #[test]
     fn x_offset_centers_text() {
-        let w = measure_width("hi", 20.0);
-        let x = measure_x_offset("hi", 20.0);
+        let w = measure_width_with(sans(), "hi", 20.0);
+        let x = measure_x_offset_with(sans(), "hi", 20.0);
         assert!((x + w / 2.0).abs() < 1e-6);
     }
 
     #[test]
     fn y_offset_is_within_box() {
-        let h = measure_height("hi", 20.0);
-        let y = measure_y_offset("hi", 20.0);
+        let h = measure_height_with(sans(), "hi", 20.0);
+        let y = measure_y_offset_with(sans(), "hi", 20.0);
         assert!(y > -h / 2.0 && y < h / 2.0);
     }
 
     #[test]
     fn outline_emits_some_commands_for_letters() {
         let mut b = CountingBuilder::default();
-        outline("Ag", 30.0, &mut b);
+        outline_with(sans(), "Ag", 30.0, &mut b);
         assert!(b.moves > 0, "no moves emitted");
         assert!(b.lines > 0 || b.quads > 0, "no draw segments emitted");
         assert!(b.closes > 0, "outline did not close");
@@ -722,7 +700,7 @@ mod tests {
     #[test]
     fn outline_empty_string_emits_nothing() {
         let mut b = CountingBuilder::default();
-        outline("", 30.0, &mut b);
+        outline_with(sans(), "", 30.0, &mut b);
         assert_eq!(b.moves, 0);
         assert_eq!(b.lines, 0);
         assert_eq!(b.closes, 0);
@@ -731,22 +709,26 @@ mod tests {
     #[test]
     fn outline_space_only_advances_pen_no_glyphs() {
         let mut b = CountingBuilder::default();
-        outline("   ", 30.0, &mut b);
+        outline_with(sans(), "   ", 30.0, &mut b);
         assert_eq!(b.moves, 0);
         assert_eq!(b.lines, 0);
-        assert!(measure_width("   ", 30.0) > 0.0);
+        assert!(measure_width_with(sans(), "   ", 30.0) > 0.0);
     }
 
     #[test]
     fn a_control_character_draws_nothing() {
         let mut plain = Recorder::default();
-        outline("AB", 30.0, &mut plain);
+        outline_with(sans(), "AB", 30.0, &mut plain);
         for s in [
             "A\nB", "A\r\nB", "A\u{0}B", "A\u{1b}B", "A\u{7f}B", "A\u{9f}B",
         ] {
-            assert_eq!(measure_width(s, 30.0), measure_width("AB", 30.0), "{s:?}");
+            assert_eq!(
+                measure_width_with(sans(), s, 30.0),
+                measure_width_with(sans(), "AB", 30.0),
+                "{s:?}"
+            );
             let mut with = Recorder::default();
-            outline(s, 30.0, &mut with);
+            outline_with(sans(), s, 30.0, &mut with);
             assert_eq!(with.ops, plain.ops, "{s:?}");
         }
     }
@@ -777,24 +759,24 @@ mod tests {
 
     #[test]
     fn a_character_the_face_lacks_draws_the_notdef_box() {
-        let face = default_face();
+        let face = sans();
         let emoji = '\u{1f600}';
         assert!(face.glyph_index(emoji).is_none(), "the face covers {emoji}");
         let notdef = f64::from(face.glyph_hor_advance(GlyphId(0)).unwrap());
         let expected = notdef * 30.0 / f64::from(face.units_per_em());
-        assert_eq!(measure_width("\u{1f600}", 30.0), expected);
+        assert_eq!(measure_width_with(sans(), "\u{1f600}", 30.0), expected);
         let mut b = CountingBuilder::default();
-        outline("\u{1f600}", 30.0, &mut b);
+        outline_with(sans(), "\u{1f600}", 30.0, &mut b);
         assert!(b.moves > 0 && b.closes > 0, "the box has no contour");
     }
 
     #[test]
     fn portuguese_chars_have_glyphs() {
         let s = "ção";
-        let w = measure_width(s, 20.0);
+        let w = measure_width_with(sans(), s, 20.0);
         assert!(w > 0.0);
         let mut b = CountingBuilder::default();
-        outline(s, 30.0, &mut b);
+        outline_with(sans(), s, 30.0, &mut b);
         assert!(b.moves > 0);
     }
 
