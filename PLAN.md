@@ -323,7 +323,9 @@ Replicar mesma estrutura.
     Aliases (sans-serif/serif/monospace/mono/Liberation X, case-insensitive),
     fallback por `fontdb` com leak controlado de `Face<'static>`,
     fallback final para Liberation Sans.
-  - `terminal.rs` e `pdf.rs` agora consultam `resolve(...)` e usam
+    Hoje `resolve` e `ResolvedFont` são privados de `text`. A API pública
+    é `text::measure`, e os renderers usam `TextLayout`.
+  - `terminal.rs` e `pdf.rs` passaram a consultar `resolve(...)` e usar
     métricas reais (`face.units_per_em()`, `face.underline_metrics()`).
     Synth de italic-shear + bold-as-regular foram removidos.
 - 🟡 **Próximo passo: Fase 5** — integração spython (CLI `--server`/
