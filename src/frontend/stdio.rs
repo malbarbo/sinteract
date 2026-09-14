@@ -76,8 +76,9 @@ impl StdioFrontend {
     /// is a protocol error from the server, logged to stderr and skipped. A
     /// message or an event of an arm from a newer schema is skipped without
     /// a log.
-    /// `Close` arrives as [`InputEvent::Close`], and so does a read or a
-    /// decode error. EOF returns `None`.
+    /// `Close` arrives as [`InputEvent::Close`], and so does a read error. A
+    /// payload that does not decode is logged and skipped, since the framing
+    /// already found where the next message starts. EOF returns `None`.
     ///
     /// `_deadline` is ignored. A stdio read blocks, and there is no portable
     /// read with a timeout. The server sends the Vsync events on its own
@@ -96,8 +97,9 @@ impl StdioFrontend {
                         );
                     }
                     Err(e) => {
-                        eprintln!("[sinteract::stdio] decode error: {e}");
-                        return Some(InputEvent::Close);
+                        eprintln!(
+                            "[sinteract::stdio] skipping a message that does not decode: {e}"
+                        );
                     }
                 },
                 Err(e) => {
@@ -255,6 +257,16 @@ mod tests {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&unknown_message));
         stream.extend_from_slice(&frame(&unknown_event));
+        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
+        let mut fr =
+            StdioFrontend::with_streams(BufReader::new(Cursor::new(stream)), Vec::<u8>::new());
+        assert!(fr.wait_event(None).unwrap().is_vsync());
+    }
+
+    #[test]
+    fn wait_event_skips_a_payload_that_does_not_decode() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&frame(&[0u8; 4]));
         stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
         let mut fr =
             StdioFrontend::with_streams(BufReader::new(Cursor::new(stream)), Vec::<u8>::new());
