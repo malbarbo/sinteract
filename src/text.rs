@@ -324,23 +324,85 @@ pub(crate) fn layout(
     size: f32,
     text: &str,
 ) -> Option<TextLayout> {
-    if !drawable_size(size) || text.is_empty() {
-        return None;
-    }
-    let face = resolve(family, weight, style).face();
-    let width = measure_width_with(face, text, size) as f32;
-    let height = measure_height_with(face, size) as f32;
-    // A huge size overflows the measurement, and a non-finite width or height
-    // would reach the renderer as a coordinate and the producer as a scale.
-    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+    let font = resolve(family, weight, style);
+    let metrics = measure_font(font, size, text)?;
+    if metrics.width <= 0.0 {
         return None;
     }
     Some(TextLayout {
-        face,
+        face: font.face(),
         size,
+        width: metrics.width,
+        height: metrics.height,
+        baseline_y: metrics.baseline_y,
+    })
+}
+
+/// The size of a measured text and the family it measured in, for a producer
+/// that fits the text to a box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextMetrics {
+    family: &'static str,
+    width: f32,
+    height: f32,
+    baseline_y: f32,
+}
+
+impl TextMetrics {
+    /// The family after fallback. A [`TextNode`] carries it, so a client
+    /// measures with the same face.
+    pub fn family(&self) -> &'static str {
+        self.family
+    }
+
+    /// The horizontal advance, zero for a text that draws no glyph.
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+
+    /// The ascender minus the descender of the face.
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
+    /// The baseline, from the center of the box with y down.
+    pub fn baseline_y(&self) -> f32 {
+        self.baseline_y
+    }
+}
+
+/// Measure a text in the face that `family`, `weight` and `style` resolve
+/// to, as [`resolve`] picks it. An empty text measures zero wide, with the
+/// height of the face. Returns `None` when the size is not a positive finite
+/// number or the measurement overflows.
+pub fn measure(
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+    size: f32,
+    text: &str,
+) -> Option<TextMetrics> {
+    measure_font(resolve(family, weight, style), size, text)
+}
+
+fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics> {
+    if !drawable_size(size) {
+        return None;
+    }
+    let face = font.face();
+    let width = measure_width_with(face, text, size) as f32;
+    let height = measure_height_with(face, size) as f32;
+    let baseline_y = measure_y_offset_with(face, size) as f32;
+    // A huge size overflows the measurement, and a non-finite number would
+    // reach the renderer as a coordinate and the producer as a scale.
+    if !width.is_finite() || !height.is_finite() || !baseline_y.is_finite() || height <= 0.0 {
+        return None;
+    }
+    Some(TextMetrics {
+        family: font.family,
         width,
         height,
-        baseline_y: measure_y_offset_with(face, size) as f32,
+        baseline_y,
     })
 }
 
@@ -772,6 +834,51 @@ mod tests {
         assert!(
             layout_text(&node(20.0, "\u{200b}")).is_none(),
             "zero measured width"
+        );
+    }
+
+    #[test]
+    fn measure_gives_the_height_and_the_family_of_an_empty_text() {
+        let m = measure("", 400, FontStyle::Normal, 20.0, "").expect("measures");
+        let drawn = layout_text(&node(20.0, "Hi")).expect("node draws");
+        assert_eq!(m.width(), 0.0);
+        assert_eq!(m.height(), drawn.height);
+        assert_eq!(m.baseline_y(), drawn.baseline_y);
+        assert_eq!(m.family(), "Liberation Sans");
+    }
+
+    #[test]
+    fn measure_gives_the_family_after_fallback() {
+        let family = |name| measure(name, 400, FontStyle::Normal, 20.0, "Hi").map(|m| m.family());
+        assert_eq!(family("serif"), Some("Liberation Serif"));
+        assert_eq!(
+            family("ZZZ_NonexistentFontXyzzy_ZZZ"),
+            Some("Liberation Sans")
+        );
+    }
+
+    #[test]
+    fn measure_returns_none_for_a_size_that_cannot_draw() {
+        for size in [0.0, -4.0, f32::NAN, f32::INFINITY, f32::MAX] {
+            assert!(
+                measure("", 400, FontStyle::Normal, size, "").is_none(),
+                "size {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn measure_agrees_with_layout_text() {
+        let m = measure("", 700, FontStyle::Italic, 24.5, "Olá").expect("measures");
+        let l = layout_text(&TextNode {
+            weight: 700,
+            style: FontStyle::Italic,
+            ..node(24.5, "Olá")
+        })
+        .expect("node draws");
+        assert_eq!(
+            (m.width(), m.height(), m.baseline_y()),
+            (l.width, l.height, l.baseline_y)
         );
     }
 
