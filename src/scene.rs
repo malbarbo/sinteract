@@ -311,6 +311,27 @@ impl Default for TextSpec {
     }
 }
 
+impl TextSpec {
+    /// A [`Text`] that draws this text into a box of `bw` by `bh` centred on
+    /// `(cx, cy)` and rotated by `angle_deg`, as [`text_box_affine`] fits it.
+    /// The family becomes the family after fallback, so a client measures
+    /// with the face of the producer. The text has no fill and no stroke
+    /// until the caller sets them. Returns `None` when
+    /// [`crate::text::measure`] does.
+    pub fn fit(self, cx: f32, cy: f32, bw: f32, bh: f32, angle_deg: f32) -> Option<Text> {
+        let metrics =
+            crate::text::measure(&self.family, self.weight, self.style, self.size, &self.text)?;
+        Some(Text {
+            transform: text_box_affine(&metrics, cx, cy, bw, bh, angle_deg),
+            spec: Self {
+                family: metrics.family().into(),
+                ..self
+            },
+            ..Text::default()
+        })
+    }
+}
+
 /// The affine that scales by `(sx, sy)`, rotates by `angle_deg` and then
 /// translates to `(e, f)`.
 fn rotate_scale_at(sx: f32, sy: f32, angle_deg: f32, e: f32, f: f32) -> [f32; 6] {
@@ -1274,5 +1295,34 @@ mod tests {
         assert_eq!(elements.len(), 2);
         assert!(matches!(elements[0], Element::Path(_)));
         assert!(matches!(elements[1], Element::Clipped { .. }));
+    }
+
+    #[test]
+    fn fit_puts_the_family_after_fallback_and_the_box_affine_in_the_text() {
+        let spec = TextSpec {
+            size: 20.0,
+            family: "ZZZ_nope".into(),
+            text: "Hi".into(),
+            ..TextSpec::default()
+        };
+        let metrics = crate::text::measure("ZZZ_nope", 400, FontStyle::Normal, 20.0, "Hi")
+            .expect("text measures");
+        let text = spec.fit(5.0, 7.0, 100.0, 40.0, 30.0).expect("text fits");
+        assert_ne!(&*text.spec.family, "ZZZ_nope");
+        assert_eq!(&*text.spec.family, metrics.family());
+        assert_eq!(
+            text.transform,
+            text_box_affine(&metrics, 5.0, 7.0, 100.0, 40.0, 30.0)
+        );
+        assert_eq!((text.spec.size, &*text.spec.text), (20.0, "Hi"));
+    }
+
+    #[test]
+    fn fit_returns_none_for_a_size_that_cannot_draw() {
+        let spec = TextSpec {
+            text: "Hi".into(),
+            ..TextSpec::default()
+        };
+        assert!(spec.fit(0.0, 0.0, 10.0, 10.0, 0.0).is_none());
     }
 }
