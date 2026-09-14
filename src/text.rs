@@ -83,8 +83,9 @@ fn variant_index(weight: u16, style: FontStyle) -> usize {
 // Font resolution
 // ---------------------------------------------------------------------------
 
-/// The result of resolving a request. A host sends `family` on the wire, so a
-/// client measures with the same face as the server.
+/// The result of resolving a request. [`TextMetrics::family`] hands `family`
+/// to a producer, which sends it on the wire, so a client measures with the
+/// same face as the server.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResolvedFont {
     /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or
