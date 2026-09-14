@@ -302,30 +302,6 @@ pub(crate) fn drawable_size(size: f32) -> bool {
     size.is_finite() && size > 0.0
 }
 
-/// Total horizontal advance of `text` rendered at `size` in `face`.
-fn measure_width_with(face: &Face<'_>, text: &str, size: f32) -> f64 {
-    if text.is_empty() || !drawable_size(size) {
-        return 0.0;
-    }
-    let total: f64 = glyphs(face, text).map(|(_, advance)| advance).sum();
-    total * em_scale(face, size)
-}
-
-fn measure_height_with(face: &Face<'_>, size: f32) -> f64 {
-    if !drawable_size(size) {
-        return 0.0;
-    }
-    let h = f64::from(face.ascender()) - f64::from(face.descender());
-    h * em_scale(face, size)
-}
-
-fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
-    if !drawable_size(size) {
-        return 0.0;
-    }
-    (f64::from(face.ascender()) + f64::from(face.descender())) / 2.0 * em_scale(face, size)
-}
-
 /// Each glyph that `text` draws, with its advance in font units. A tab draws
 /// [`TAB_SPACES`] spaces, another control character draws nothing, and a
 /// character that the face lacks draws the `.notdef` box.
@@ -407,9 +383,13 @@ impl ResolvedFont {
             return None;
         }
         let face = self.face;
-        let width = measure_width_with(face, text, size) as f32;
-        let height = measure_height_with(face, size) as f32;
-        let baseline_y = measure_y_offset_with(face, size) as f32;
+        let scale = em_scale(face, size);
+        let advance: f64 = glyphs(face, text).map(|(_, advance)| advance).sum();
+        let ascender = f64::from(face.ascender());
+        let descender = f64::from(face.descender());
+        let width = (advance * scale) as f32;
+        let height = ((ascender - descender) * scale) as f32;
+        let baseline_y = ((ascender + descender) / 2.0 * scale) as f32;
         // A huge size overflows the measurement, and a non-finite number would
         // reach the renderer as a coordinate and the producer as a scale.
         if !width.is_finite() || !height.is_finite() || !baseline_y.is_finite() || height <= 0.0 {
@@ -517,6 +497,11 @@ mod tests {
         SANS[0].face()
     }
 
+    /// The metrics of `text` in `family` at `weight`, in the normal style.
+    fn metrics(family: &str, weight: u16, size: f32, text: &str) -> TextMetrics {
+        measure(family, weight, FontStyle::Normal, size, text).expect("text measures")
+    }
+
     /// Outline a node as a renderer does.
     fn outline_node(node: &Text, out: &mut dyn OutlineBuilder) {
         if let Some(layout) = TextLayout::new(&node.spec) {
@@ -592,27 +577,27 @@ mod tests {
 
     #[test]
     fn measure_width_empty_is_zero() {
-        assert_eq!(measure_width_with(sans(), "", 20.0), 0.0);
+        assert_eq!(metrics("", 400, 20.0, "").width(), 0.0);
     }
 
     #[test]
     fn measure_width_grows_with_chars() {
-        let one = measure_width_with(sans(), "h", 20.0);
-        let many = measure_width_with(sans(), "hhhh", 20.0);
+        let one = metrics("", 400, 20.0, "h").width();
+        let many = metrics("", 400, 20.0, "hhhh").width();
         assert!(many > one * 3.5, "{many} should be roughly 4x {one}");
     }
 
     #[test]
     fn measure_height_uses_font_metrics() {
-        let h = measure_height_with(sans(), 20.0);
+        let h = metrics("", 400, 20.0, "").height();
         // Liberation Sans at 20px. (1854 + 434) * 20 / 2048 is about 22.34.
         assert!(h > 18.0 && h < 26.0, "unexpected height: {h}");
     }
 
     #[test]
     fn y_offset_is_within_box() {
-        let h = measure_height_with(sans(), 20.0);
-        let y = measure_y_offset_with(sans(), 20.0);
+        let m = metrics("", 400, 20.0, "");
+        let (h, y) = (m.height(), m.baseline_y());
         assert!(y > -h / 2.0 && y < h / 2.0);
     }
 
@@ -633,7 +618,7 @@ mod tests {
         let mut b = Recorder::default();
         outline_node(&node(30.0, "   "), &mut b);
         assert!(b.ops.is_empty(), "{:?}", b.ops);
-        assert!(measure_width_with(sans(), "   ", 30.0) > 0.0);
+        assert!(metrics("", 400, 30.0, "   ").width() > 0.0);
     }
 
     #[test]
@@ -644,8 +629,8 @@ mod tests {
             "A\nB", "A\r\nB", "A\u{0}B", "A\u{1b}B", "A\u{7f}B", "A\u{9f}B",
         ] {
             assert_eq!(
-                measure_width_with(sans(), s, 30.0),
-                measure_width_with(sans(), "AB", 30.0),
+                metrics("", 400, 30.0, s).width(),
+                metrics("", 400, 30.0, "AB").width(),
                 "{s:?}"
             );
             let mut with = Recorder::default();
@@ -658,11 +643,10 @@ mod tests {
     fn a_tab_draws_eight_spaces_of_the_face() {
         let mut widths = Vec::new();
         for family in ["sans-serif", "monospace"] {
-            let face = ResolvedFont::resolve(family, 400, FontStyle::Normal).face;
-            let tab = measure_width_with(face, "A\tB", 30.0);
+            let tab = metrics(family, 400, 30.0, "A\tB").width();
             assert_eq!(
                 tab,
-                measure_width_with(face, "A        B", 30.0),
+                metrics(family, 400, 30.0, "A        B").width(),
                 "{family}"
             );
             let mut with_tab = Recorder::default();
@@ -702,8 +686,8 @@ mod tests {
         let emoji = '\u{1f600}';
         assert!(face.glyph_index(emoji).is_none(), "the face covers {emoji}");
         let notdef = f64::from(face.glyph_hor_advance(GlyphId(0)).unwrap());
-        let expected = notdef * 30.0 / f64::from(face.units_per_em());
-        assert_eq!(measure_width_with(sans(), "\u{1f600}", 30.0), expected);
+        let expected = (notdef * 30.0 / f64::from(face.units_per_em())) as f32;
+        assert_eq!(metrics("", 400, 30.0, "\u{1f600}").width(), expected);
         let mut b = Recorder::default();
         outline_node(&node(30.0, "\u{1f600}"), &mut b);
         assert!(
@@ -715,7 +699,7 @@ mod tests {
     #[test]
     fn portuguese_chars_have_glyphs() {
         let s = "ção";
-        let w = measure_width_with(sans(), s, 20.0);
+        let w = metrics("", 400, 20.0, s).width();
         assert!(w > 0.0);
         let mut b = Recorder::default();
         outline_node(&node(30.0, s), &mut b);
@@ -763,10 +747,8 @@ mod tests {
 
     #[test]
     fn bold_picks_a_different_face_than_regular() {
-        let regular = ResolvedFont::resolve("", 400, FontStyle::Normal);
-        let bold = ResolvedFont::resolve("", 700, FontStyle::Normal);
-        let w_reg = measure_width_with(regular.face, "Hello", 20.0);
-        let w_bold = measure_width_with(bold.face, "Hello", 20.0);
+        let w_reg = metrics("", 400, 20.0, "Hello").width();
+        let w_bold = metrics("", 700, 20.0, "Hello").width();
         assert!(
             w_bold > w_reg,
             "expected bold wider than regular: {w_bold} vs {w_reg}"
