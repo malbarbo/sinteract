@@ -91,13 +91,13 @@ impl TextMetrics {
 
 /// The face and the box-local metrics of one [`TextSpec`].
 pub(crate) struct TextLayout {
-    pub(crate) face: &'static Face<'static>,
+    face: &'static Face<'static>,
     /// The em of the text space, from `TextSpec::size`.
-    pub(crate) size: f32,
+    size: f32,
     /// The horizontal advance.
-    pub(crate) width: f32,
+    width: f32,
     /// The baseline, box-local with y down.
-    pub(crate) baseline_y: f32,
+    baseline_y: f32,
 }
 
 impl TextLayout {
@@ -171,7 +171,7 @@ impl TextLayout {
     }
 
     /// The left edge of the text, box-local.
-    pub(crate) fn x_left(&self) -> f32 {
+    fn x_left(&self) -> f32 {
         -self.width / 2.0
     }
 }
@@ -372,7 +372,7 @@ impl ResolvedFont {
 /// Returns `true` if a text at `size` can draw, `false` otherwise. NaN and
 /// infinity are out, since either one puts non-finite coordinates in the
 /// outline.
-pub(crate) fn drawable_size(size: f32) -> bool {
+fn drawable_size(size: f32) -> bool {
     size.is_finite() && size > 0.0
 }
 
