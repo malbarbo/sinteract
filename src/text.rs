@@ -366,8 +366,13 @@ pub struct TextLayout {
     pub width: f32,
     /// The baseline, box-local with y down, as in the `measure_*` functions.
     pub baseline_y: f32,
-    /// The left edge of the text, box-local. It is `-width / 2`.
-    pub x_left: f32,
+}
+
+impl TextLayout {
+    /// The left edge of the text, box-local.
+    pub fn x_left(&self) -> f32 {
+        -self.width / 2.0
+    }
 }
 
 /// Resolve and measure a text node. Returns `None` when the node draws
@@ -378,8 +383,7 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
         return None;
     }
     let face = resolve(&node.family, node.weight, node.style).face();
-    let measured = measure_width_with(face, &node.text, node.size);
-    let width = measured as f32;
+    let width = measure_width_with(face, &node.text, node.size) as f32;
     // A huge size overflows the sum of the advances, and an infinite width
     // would reach the renderer as a coordinate.
     if !width.is_finite() || width <= 0.0 {
@@ -390,8 +394,6 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
         size: node.size,
         width,
         baseline_y: measure_y_offset_with(face, node.size) as f32,
-        // Half of `measured`, so the string is walked once.
-        x_left: (-measured / 2.0) as f32,
     })
 }
 
@@ -399,15 +401,16 @@ pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
 pub fn outline_layout(layout: &TextLayout, text: &str, out: &mut dyn OutlineBuilder) {
     let face = layout.face;
     let scale = em_scale(face, layout.size);
+    let x_left = layout.x_left();
     let mut adapter = OutlineAdapter {
         out,
         scale: scale as f32,
-        origin_x: layout.x_left,
+        origin_x: x_left,
         baseline_y: layout.baseline_y,
     };
     let mut pen_x: f64 = 0.0;
     for (gid, advance) in glyphs(face, text) {
-        adapter.origin_x = layout.x_left + (pen_x * scale) as f32;
+        adapter.origin_x = x_left + (pen_x * scale) as f32;
         let _ = face.outline_glyph(gid, &mut adapter);
         pen_x += advance;
     }
@@ -453,8 +456,8 @@ pub fn underline_rect(layout: &TextLayout) -> UnderlineRect {
     let thickness = thickness_units * scale;
     let y_top = layout.baseline_y + underline_pos - thickness / 2.0;
     UnderlineRect {
-        x_l: layout.x_left,
-        x_r: layout.x_left + layout.width,
+        x_l: layout.x_left(),
+        x_r: layout.x_left() + layout.width,
         y_top,
         y_bot: y_top + thickness,
     }
@@ -870,18 +873,11 @@ mod tests {
     }
 
     #[test]
-    fn layout_text_centers_the_node_on_the_origin() {
-        let layout = layout_text(&node(24.0, "Hello")).expect("node draws");
-        assert_eq!(layout.size, 24.0);
-        assert!((layout.x_left + layout.width / 2.0).abs() < 1e-4);
-    }
-
-    #[test]
     fn underline_spans_the_text_and_centers_below_the_baseline() {
         let layout = layout_text(&node(24.0, "Hello")).expect("node draws");
         let u = underline_rect(&layout);
-        assert_eq!(u.x_l, layout.x_left);
-        assert!((u.x_r - (layout.x_left + layout.width)).abs() < 1e-4);
+        assert_eq!(u.x_l, -layout.width / 2.0);
+        assert!((u.x_r - layout.width / 2.0).abs() < 1e-4);
         assert!(u.y_bot > u.y_top, "the underline has no thickness");
         let center = (u.y_top + u.y_bot) / 2.0;
         assert!(
