@@ -80,7 +80,7 @@ fn variant_index(weight: u16, style: FontStyle) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Font resolution
 // ---------------------------------------------------------------------------
 
 /// The result of resolving a request. A host sends `family` on the wire, so a
@@ -285,55 +285,8 @@ fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// Layout of a text node, shared by the renderers
+// Text metrics, the public API
 // ---------------------------------------------------------------------------
-
-/// The face and the box-local metrics of one [`TextNode`].
-pub(crate) struct TextLayout {
-    pub(crate) face: &'static Face<'static>,
-    /// The em of the text space, from `TextNode::size`.
-    pub(crate) size: f32,
-    /// The horizontal advance.
-    pub(crate) width: f32,
-    /// The baseline, box-local with y down.
-    pub(crate) baseline_y: f32,
-}
-
-impl TextLayout {
-    /// The left edge of the text, box-local.
-    pub(crate) fn x_left(&self) -> f32 {
-        -self.width / 2.0
-    }
-}
-
-/// Resolve and measure a text node. Returns `None` when the node draws
-/// nothing, because the size is not a positive finite number, the text is
-/// empty, or the width or the height measures zero or overflows.
-pub(crate) fn layout_text(node: &TextNode) -> Option<TextLayout> {
-    layout(&node.family, node.weight, node.style, node.size, &node.text)
-}
-
-/// [`layout_text`] for the fields of a node, so a producer that has no node
-/// yet measures the text as a renderer will.
-pub(crate) fn layout(
-    family: &str,
-    weight: u16,
-    style: FontStyle,
-    size: f32,
-    text: &str,
-) -> Option<TextLayout> {
-    let font = resolve(family, weight, style);
-    let metrics = measure_font(font, size, text)?;
-    if metrics.width <= 0.0 {
-        return None;
-    }
-    Some(TextLayout {
-        face: font.face(),
-        size,
-        width: metrics.width,
-        baseline_y: metrics.baseline_y,
-    })
-}
 
 /// The size of a measured text and the family it measured in, for a producer
 /// that fits the text to a box.
@@ -409,6 +362,57 @@ fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics
         width,
         height,
         baseline_y,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Layout of a text node, shared by the renderers
+// ---------------------------------------------------------------------------
+
+/// The face and the box-local metrics of one [`TextNode`].
+pub(crate) struct TextLayout {
+    pub(crate) face: &'static Face<'static>,
+    /// The em of the text space, from `TextNode::size`.
+    pub(crate) size: f32,
+    /// The horizontal advance.
+    pub(crate) width: f32,
+    /// The baseline, box-local with y down.
+    pub(crate) baseline_y: f32,
+}
+
+impl TextLayout {
+    /// The left edge of the text, box-local.
+    pub(crate) fn x_left(&self) -> f32 {
+        -self.width / 2.0
+    }
+}
+
+/// Resolve and measure a text node. Returns `None` when the node draws
+/// nothing, because the size is not a positive finite number, the text is
+/// empty, or the width or the height measures zero or overflows.
+pub(crate) fn layout_text(node: &TextNode) -> Option<TextLayout> {
+    layout(&node.family, node.weight, node.style, node.size, &node.text)
+}
+
+/// [`layout_text`] for the fields of a node, so a producer that has no node
+/// yet measures the text as a renderer will.
+pub(crate) fn layout(
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+    size: f32,
+    text: &str,
+) -> Option<TextLayout> {
+    let font = resolve(family, weight, style);
+    let metrics = measure_font(font, size, text)?;
+    if metrics.width <= 0.0 {
+        return None;
+    }
+    Some(TextLayout {
+        face: font.face(),
+        size,
+        width: metrics.width,
+        baseline_y: metrics.baseline_y,
     })
 }
 
