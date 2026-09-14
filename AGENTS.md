@@ -142,7 +142,7 @@ The subject says what the change does to the code, in one line:
   function, a field, a message. The reader should know what to look for in
   the diff.
   - No: `Measure text once per node, not three times`
-  - Yes: `text: add outline_layout to reuse the measured origin`
+  - Yes: `text: fold the measure helpers into ResolvedFont::measure`
   - No: `Recycle clip masks instead of allocating two per node`
   - Yes: `pixmap: keep a pool of clip masks`
 - No rhetorical contrast, no metaphor, no joke. `not just`, `instead of`,
