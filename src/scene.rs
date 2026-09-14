@@ -276,14 +276,11 @@ impl From<RotatedRect> for ClipPath {
     /// The outline of `rect`. A rectangle covers the same area under either
     /// fill rule, so the clip takes the default.
     fn from(rect: RotatedRect) -> Self {
-        let hw = rect.w / 2.0;
-        let hh = rect.h / 2.0;
-        let m = rotate_scale_at(1.0, 1.0, rect.angle_deg, rect.cx, rect.cy);
-        let corner = |x: f32, y: f32| apply_affine(m, x, y);
-        let p0 = corner(-hw, -hh);
-        let p1 = corner(hw, -hh);
-        let p2 = corner(hw, hh);
-        let p3 = corner(-hw, hh);
+        let m = rect.affine(1.0, 1.0);
+        let p0 = apply_affine(m, -0.5, -0.5);
+        let p1 = apply_affine(m, 0.5, -0.5);
+        let p2 = apply_affine(m, 0.5, 0.5);
+        let p3 = apply_affine(m, -0.5, 0.5);
         ClipPath::builder(FillRule::default())
             .move_to(p0.0, p0.1)
             .line_to(p1.0, p1.1)
