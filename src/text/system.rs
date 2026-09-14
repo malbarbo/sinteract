@@ -69,7 +69,9 @@ fn query_system_font(
     }
 
     let face_data = db.with_face_data(id, |bytes, index| -> Option<ResolvedFont> {
-        // The face borrows the bytes, so both are leaked.
+        // The face borrows the bytes, so both are leaked. A font that does
+        // not parse leaks nothing, since the check comes before the copy.
+        Face::parse(bytes, index).ok()?;
         let static_bytes: &'static [u8] = bytes.to_vec().leak();
         let face = Face::parse(static_bytes, index).ok()?;
         let face_static: &'static Face<'static> = Box::leak(Box::new(face));
