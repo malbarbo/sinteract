@@ -528,7 +528,7 @@ impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Text;
+    use crate::scene::{RotatedRect, Text};
 
     /// Liberation Sans Regular, the face of a node that names no family.
     fn sans() -> &'static Face<'static> {
@@ -966,6 +966,13 @@ mod tests {
         // Past this size the height overflows while the width of an "i"
         // stays finite.
         let tall = f32::MAX / 1.1;
+        let rect = RotatedRect {
+            cx: 5.0,
+            cy: 7.0,
+            w: 100.0,
+            h: 40.0,
+            angle_deg: 0.0,
+        };
         for (size, text) in [
             (20.0, "Hi"),
             (20.0, ""),
@@ -975,18 +982,11 @@ mod tests {
             (f32::MAX, "Hello, world"),
             (tall, "i"),
         ] {
-            let rect = crate::scene::RotatedRect {
-                cx: 5.0,
-                cy: 7.0,
-                w: 100.0,
-                h: 40.0,
-                angle_deg: 0.0,
-            };
-            let scaled = node(size, text)
-                .spec
+            let spec = node(size, text).spec;
+            let draws = layout_text(&spec).is_some();
+            let scaled = spec
                 .fit(rect)
                 .is_some_and(|t| t.transform != [1.0, 0.0, 0.0, 1.0, 5.0, 7.0]);
-            let draws = layout_text(&node(size, text).spec).is_some();
             assert_eq!(scaled, draws, "size {size}, text {text:?}");
         }
     }
@@ -994,19 +994,16 @@ mod tests {
     /// The device rectangle of the underline of a node fitted to a box.
     fn underline_in_box(size: f32) -> [f32; 4] {
         let text = "Hello";
-        let rect = crate::scene::RotatedRect {
+        let rect = RotatedRect {
             cx: 0.0,
             cy: 0.0,
             w: 100.0,
             h: 40.0,
             angle_deg: 0.0,
         };
-        let m = node(size, text)
-            .spec
-            .fit(rect)
-            .expect("text fits")
-            .transform;
-        let layout = layout_text(&node(size, text).spec).expect("node draws");
+        let spec = node(size, text).spec;
+        let layout = layout_text(&spec).expect("node draws");
+        let m = spec.fit(rect).expect("text fits").transform;
         let u = underline_rect(&layout);
         let map = |x: f32, y: f32| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
         let (x_l, y_top) = map(u.x_l, u.y_top);

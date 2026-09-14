@@ -643,7 +643,7 @@ impl crate::text::OutlineBuilder for PdfOutline<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{PathStyle, Scene};
+    use crate::scene::{PathStyle, RotatedRect, Scene, TextSpec};
 
     fn red_fill(a: f32) -> PathStyle {
         PathStyle {
@@ -700,12 +700,12 @@ mod tests {
     #[test]
     fn text_emits_some_path_data() {
         let mut scene = Scene::new(100.0, 30.0);
-        let text = crate::scene::TextSpec {
+        let text = TextSpec {
             size: 16.0,
             text: "Hi".to_owned(),
-            ..crate::scene::TextSpec::default()
+            ..TextSpec::default()
         }
-        .fit(crate::scene::RotatedRect {
+        .fit(RotatedRect {
             cx: 50.0,
             cy: 15.0,
             w: 80.0,
@@ -751,10 +751,10 @@ mod tests {
                     b: 0,
                     a: 1.0,
                 },
-                spec: crate::scene::TextSpec {
+                spec: TextSpec {
                     size: 16.0,
                     text: "Hi".to_owned(),
-                    ..crate::scene::TextSpec::default()
+                    ..TextSpec::default()
                 },
                 underline,
                 ..Text::default()

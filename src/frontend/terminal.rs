@@ -471,7 +471,7 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Paint as IrPaint, PathStyle, Rgba, Scene, Text};
+    use crate::scene::{Paint as IrPaint, PathStyle, Rgba, RotatedRect, Scene, Text, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -494,12 +494,12 @@ mod tests {
                 b: 0,
                 a: 1.0,
             },
-            ..crate::scene::TextSpec {
+            ..TextSpec {
                 size,
                 text: text.to_owned(),
-                ..crate::scene::TextSpec::default()
+                ..TextSpec::default()
             }
-            .fit(crate::scene::RotatedRect {
+            .fit(RotatedRect {
                 cx,
                 cy,
                 w: bw,
@@ -551,7 +551,7 @@ mod tests {
         // The rectangle is larger than the clip box.
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let mut clip = scene.clip(crate::scene::RotatedRect {
+            let mut clip = scene.clip(RotatedRect {
                 cx: 10.0,
                 cy: 10.0,
                 w: 20.0,

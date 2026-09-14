@@ -1289,29 +1289,22 @@ mod tests {
             text: "Hi".into(),
             ..TextSpec::default()
         };
-        let metrics = crate::text::measure("ZZZ_nope", 400, FontStyle::Normal, 20.0, "Hi")
-            .expect("text measures");
-        let text = spec
-            .fit(RotatedRect {
-                cx: 5.0,
-                cy: 7.0,
-                w: 100.0,
-                h: 40.0,
-                angle_deg: 30.0,
-            })
-            .expect("text fits");
+        let rect = RotatedRect {
+            cx: 5.0,
+            cy: 7.0,
+            w: 100.0,
+            h: 40.0,
+            angle_deg: 30.0,
+        };
+        let metrics =
+            crate::text::measure(&spec.family, spec.weight, spec.style, spec.size, &spec.text)
+                .expect("text measures");
+        let text = spec.fit(rect).expect("text fits");
         assert_ne!(&*text.spec.family, "ZZZ_nope");
         assert_eq!(&*text.spec.family, metrics.family());
         assert_eq!(
             text.transform,
-            RotatedRect {
-                cx: 5.0,
-                cy: 7.0,
-                w: 100.0,
-                h: 40.0,
-                angle_deg: 30.0,
-            }
-            .affine(metrics.width(), metrics.height())
+            rect.affine(metrics.width(), metrics.height())
         );
         assert_eq!((text.spec.size, &*text.spec.text), (20.0, "Hi"));
     }
