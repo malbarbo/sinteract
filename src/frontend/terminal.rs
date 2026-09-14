@@ -503,8 +503,11 @@ mod tests {
                 bh,
                 0.0,
             ),
-            size,
-            text: text.to_owned(),
+            spec: crate::scene::TextSpec {
+                size,
+                text: text.to_owned(),
+                ..crate::scene::TextSpec::default()
+            },
             ..Text::default()
         }
     }

@@ -242,39 +242,25 @@ pub enum FontStyle {
     Oblique = 2,
 }
 
-/// A text run. The glyphs are laid out in text space, with `size` units to
-/// the em and the origin at the center of a box that spans the advance of
-/// the text and the ascender to the descender of the face. `transform` maps
-/// them to the canvas in the convention of the PDF `cm` operator:
+/// A text run. The glyphs are laid out in text space, as [`TextSpec`] says.
+/// `transform` maps them to the canvas in the convention of the PDF `cm`
+/// operator:
 ///
 /// ```text
 /// x' = transform[0] * x + transform[2] * y + transform[4]
 /// y' = transform[1] * x + transform[3] * y + transform[5]
 /// ```
 ///
-/// `text` draws on one line. A tab advances by the width of eight spaces of
-/// the face. Any other control character draws nothing, so a newline does
-/// not break the line.
-///
 /// The producer puts the fit to a box, the rotation and the mirroring in
 /// the matrix, with [`crate::text::measure`] and [`text_box_affine`].
-/// `family` is [`crate::text::TextMetrics::family`], the family after
-/// fallback, so a client lays the text out as the server did. An empty family is the default Sans. `weight` is the
-/// CSS weight, 400 for Regular and 700 for Bold.
 #[derive(Clone, Debug)]
 pub struct Text {
     pub fill: Rgba,
     pub stroke: Rgba,
     pub stroke_width: f32,
     pub transform: [f32; 6],
-    pub size: f32,
-    /// A `Box<str>` saves 8 bytes over a `String`, which keeps [`Element`]
-    /// the size of its `Path` variant.
-    pub family: Box<str>,
-    pub weight: u16,
-    pub style: FontStyle,
+    pub spec: TextSpec,
     pub underline: bool,
-    pub text: String,
 }
 
 impl Default for Text {
@@ -284,11 +270,42 @@ impl Default for Text {
             stroke: Rgba::default(),
             stroke_width: 0.0,
             transform: translate(0.0, 0.0),
+            spec: TextSpec::default(),
+            underline: false,
+        }
+    }
+}
+
+/// The fields that set the measure of a [`Text`]. The text space has `size`
+/// units to the em and the origin at the center of a box that spans the
+/// advance of the text and the ascender to the descender of the face.
+///
+/// `text` draws on one line. A tab advances by the width of eight spaces of
+/// the face. Any other control character draws nothing, so a newline does
+/// not break the line.
+///
+/// `family` is [`crate::text::TextMetrics::family`], the family after
+/// fallback, so a client lays the text out as the server did. An empty
+/// family is the default Sans. `weight` is the CSS weight, 400 for Regular
+/// and 700 for Bold.
+#[derive(Clone, Debug)]
+pub struct TextSpec {
+    pub size: f32,
+    /// A `Box<str>` saves 8 bytes over a `String`, which keeps [`Element`]
+    /// the size of its `Path` variant.
+    pub family: Box<str>,
+    pub weight: u16,
+    pub style: FontStyle,
+    pub text: String,
+}
+
+impl Default for TextSpec {
+    fn default() -> Self {
+        Self {
             size: 0.0,
             family: Box::default(),
             weight: 400,
             style: FontStyle::Normal,
-            underline: false,
             text: String::new(),
         }
     }

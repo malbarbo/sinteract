@@ -103,7 +103,7 @@ mod tests {
     use crate::protocol_capnp::message;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, LineCap, LineJoin, Paint,
-        PathStyle, Rgba, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
+        PathStyle, Rgba, Scene, Segment, SegmentKind, SpreadMode, Stop, Text, TextSpec,
     };
     use capnp::message::Builder as MessageBuilder;
 
@@ -143,12 +143,14 @@ mod tests {
                     14.0,
                     0.0,
                 ),
-                size: 12.0,
-                family: "Liberation Sans".into(),
-                weight: 700,
-                style: FontStyle::Italic,
+                spec: TextSpec {
+                    size: 12.0,
+                    family: "Liberation Sans".into(),
+                    weight: 700,
+                    style: FontStyle::Italic,
+                    text: "Olá".into(),
+                },
                 underline: true,
-                text: "Olá".into(),
                 ..Text::default()
             });
             clip.bitmap(Bitmap {

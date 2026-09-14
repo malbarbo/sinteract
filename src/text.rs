@@ -373,7 +373,7 @@ fn measure_font(font: ResolvedFont, size: f32, text: &str) -> Option<TextMetrics
 /// The face and the box-local metrics of one [`Text`].
 pub(crate) struct TextLayout {
     pub(crate) face: &'static Face<'static>,
-    /// The em of the text space, from `Text::size`.
+    /// The em of the text space, from `TextSpec::size`.
     pub(crate) size: f32,
     /// The horizontal advance.
     pub(crate) width: f32,
@@ -392,7 +392,8 @@ impl TextLayout {
 /// nothing, because the size is not a positive finite number, the text is
 /// empty, or the width or the height measures zero or overflows.
 pub(crate) fn layout_text(node: &Text) -> Option<TextLayout> {
-    layout(&node.family, node.weight, node.style, node.size, &node.text)
+    let spec = &node.spec;
+    layout(&spec.family, spec.weight, spec.style, spec.size, &spec.text)
 }
 
 /// [`layout_text`] for the fields of a node, so a producer that has no node
@@ -528,6 +529,7 @@ impl<'a> ttf_parser::OutlineBuilder for OutlineAdapter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::TextSpec;
 
     /// Liberation Sans Regular, the face of a node that names no family.
     fn sans() -> &'static Face<'static> {
@@ -537,7 +539,7 @@ mod tests {
     /// Outline a node as a renderer does.
     fn outline_node(node: &Text, out: &mut dyn OutlineBuilder) {
         if let Some(layout) = layout_text(node) {
-            outline_layout(&layout, &node.text, out);
+            outline_layout(&layout, &node.spec.text, out);
         }
     }
 
@@ -685,16 +687,22 @@ mod tests {
             let mut with_tab = Recorder::default();
             outline_node(
                 &Text {
-                    family: family.into(),
-                    ..node(30.0, "A\tB")
+                    spec: TextSpec {
+                        family: family.into(),
+                        ..node(30.0, "A\tB").spec
+                    },
+                    ..Text::default()
                 },
                 &mut with_tab,
             );
             let mut with_spaces = Recorder::default();
             outline_node(
                 &Text {
-                    family: family.into(),
-                    ..node(30.0, "A        B")
+                    spec: TextSpec {
+                        family: family.into(),
+                        ..node(30.0, "A        B").spec
+                    },
+                    ..Text::default()
                 },
                 &mut with_spaces,
             );
@@ -792,8 +800,11 @@ mod tests {
         let mut b2 = Recorder::default();
         outline_node(
             &Text {
-                style: FontStyle::Italic,
-                ..node(30.0, "a")
+                spec: TextSpec {
+                    style: FontStyle::Italic,
+                    ..node(30.0, "a").spec
+                },
+                ..Text::default()
             },
             &mut b2,
         );
@@ -813,8 +824,11 @@ mod tests {
 
     fn node(size: f32, text: &str) -> Text {
         Text {
-            size,
-            text: text.to_string(),
+            spec: TextSpec {
+                size,
+                text: text.to_string(),
+                ..TextSpec::default()
+            },
             ..Text::default()
         }
     }
@@ -883,9 +897,12 @@ mod tests {
     fn measure_agrees_with_layout_text() {
         let m = measure("", 700, FontStyle::Italic, 24.5, "Olá").expect("measures");
         let l = layout_text(&Text {
-            weight: 700,
-            style: FontStyle::Italic,
-            ..node(24.5, "Olá")
+            spec: TextSpec {
+                weight: 700,
+                style: FontStyle::Italic,
+                ..node(24.5, "Olá").spec
+            },
+            ..Text::default()
         })
         .expect("node draws");
         assert_eq!((m.width(), m.baseline_y()), (l.width, l.baseline_y));

@@ -360,7 +360,11 @@ fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Tran
     };
 
     let mut glyphs = PathBuilder::new();
-    crate::text::outline_layout(&layout, &node.text, &mut SkiaOutline { b: &mut glyphs });
+    crate::text::outline_layout(
+        &layout,
+        &node.spec.text,
+        &mut SkiaOutline { b: &mut glyphs },
+    );
     // The underline paints on its own. In one path, a glyph that winds the
     // other way from the rectangle would cancel it where the two cross.
     let underline = node.underline.then(|| {
@@ -476,10 +480,13 @@ mod tests {
                 a: 1.0,
             },
             transform: [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
-            size: 96.0,
-            family: family.into(),
+            spec: crate::scene::TextSpec {
+                size: 96.0,
+                family: family.into(),
+                text: "gyp".into(),
+                ..crate::scene::TextSpec::default()
+            },
             underline: true,
-            text: "gyp".into(),
             ..Text::default()
         };
         let layout = crate::text::layout_text(&node).expect("node draws");

@@ -598,7 +598,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
             content: &mut canvas.content,
         };
         let mut out = crate::text::ElevateQuads::new(&mut adapter);
-        crate::text::outline_layout(&layout, &node.text, &mut out);
+        crate::text::outline_layout(&layout, &node.spec.text, &mut out);
     }
     paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
 
@@ -716,8 +716,11 @@ mod tests {
                 20.0,
                 0.0,
             ),
-            size: 16.0,
-            text: "Hi".to_owned(),
+            spec: crate::scene::TextSpec {
+                size: 16.0,
+                text: "Hi".to_owned(),
+                ..crate::scene::TextSpec::default()
+            },
             ..Text::default()
         });
         let out = render_to_pdf(&scene);
@@ -749,8 +752,11 @@ mod tests {
                     b: 0,
                     a: 1.0,
                 },
-                size: 16.0,
-                text: "Hi".to_owned(),
+                spec: crate::scene::TextSpec {
+                    size: 16.0,
+                    text: "Hi".to_owned(),
+                    ..crate::scene::TextSpec::default()
+                },
                 underline,
                 ..Text::default()
             });
