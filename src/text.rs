@@ -94,7 +94,7 @@ pub struct ResolvedFont {
 }
 
 impl ResolvedFont {
-    pub fn face(&self) -> &'static Face<'static> {
+    pub(crate) fn face(&self) -> &'static Face<'static> {
         self.face
     }
 }
@@ -290,7 +290,7 @@ fn measure_y_offset_with(face: &Face<'_>, size: f32) -> f64 {
 
 /// The face and the box-local metrics of one [`TextNode`].
 pub struct TextLayout {
-    pub face: &'static Face<'static>,
+    pub(crate) face: &'static Face<'static>,
     /// The em of the text space, from `TextNode::size`.
     pub size: f32,
     /// The horizontal advance.
