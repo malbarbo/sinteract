@@ -309,11 +309,11 @@ fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
 }
 
 /// The affine that fits the text into a box of `bw` by `bh` centred on
-/// `(cx, cy)` and rotated by `angle_deg`. The text is measured with
-/// [`crate::text`], the same code as the renderers, so the producer and the
-/// backend agree. A negative `bw` mirrors horizontally and a negative `bh`
-/// vertically. Text that measures zero gets a translation to `(cx, cy)`,
-/// and the renderer draws nothing for it anyway.
+/// `(cx, cy)` and rotated by `angle_deg`. The text is measured as
+/// [`crate::text::layout_text`] measures it for a renderer, so the producer
+/// and the backend agree. A negative `bw` mirrors horizontally and a
+/// negative `bh` vertically. A text that the renderer does not draw gets a
+/// translation to `(cx, cy)`.
 #[allow(clippy::too_many_arguments)]
 pub fn text_box_affine(
     family: &str,
@@ -327,19 +327,10 @@ pub fn text_box_affine(
     bh: f32,
     angle_deg: f32,
 ) -> [f32; 6] {
-    if !crate::text::drawable_size(size) || text.is_empty() {
+    let Some(layout) = crate::text::layout(family, weight, style, size, text) else {
         return translate(cx, cy);
-    }
-    let font = crate::text::resolve(family, weight, style);
-    let face = font.face();
-    let orig_w = crate::text::measure_width_with(face, text, size) as f32;
-    let orig_h = crate::text::measure_height_with(face, size) as f32;
-    // A huge size overflows the measurement, and the scale below would put
-    // a non-finite number in the matrix.
-    if !orig_w.is_finite() || !orig_h.is_finite() || orig_w <= 0.0 || orig_h <= 0.0 {
-        return translate(cx, cy);
-    }
-    rotate_scale_at(bw / orig_w, bh / orig_h, angle_deg, cx, cy)
+    };
+    rotate_scale_at(bw / layout.width, bh / layout.height, angle_deg, cx, cy)
 }
 
 /// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on

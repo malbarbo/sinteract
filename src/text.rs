@@ -380,6 +380,8 @@ pub struct TextLayout {
     pub size: f32,
     /// The horizontal advance.
     pub width: f32,
+    /// The ascender minus the descender of the face.
+    pub height: f32,
     /// The baseline, box-local with y down, as in the `measure_*` functions.
     pub baseline_y: f32,
 }
@@ -393,23 +395,37 @@ impl TextLayout {
 
 /// Resolve and measure a text node. Returns `None` when the node draws
 /// nothing, because the size is not a positive finite number, the text is
-/// empty, or the width measures zero or overflows.
+/// empty, or the width or the height measures zero or overflows.
 pub fn layout_text(node: &TextNode) -> Option<TextLayout> {
-    if !drawable_size(node.size) || node.text.is_empty() {
+    layout(&node.family, node.weight, node.style, node.size, &node.text)
+}
+
+/// [`layout_text`] for the fields of a node, so a producer that has no node
+/// yet measures the text as a renderer will.
+pub(crate) fn layout(
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+    size: f32,
+    text: &str,
+) -> Option<TextLayout> {
+    if !drawable_size(size) || text.is_empty() {
         return None;
     }
-    let face = resolve(&node.family, node.weight, node.style).face();
-    let width = measure_width_with(face, &node.text, node.size) as f32;
-    // A huge size overflows the sum of the advances, and an infinite width
-    // would reach the renderer as a coordinate.
-    if !width.is_finite() || width <= 0.0 {
+    let face = resolve(family, weight, style).face();
+    let width = measure_width_with(face, text, size) as f32;
+    let height = measure_height_with(face, size) as f32;
+    // A huge size overflows the measurement, and a non-finite width or height
+    // would reach the renderer as a coordinate and the producer as a scale.
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
         return None;
     }
     Some(TextLayout {
         face,
-        size: node.size,
+        size,
         width,
-        baseline_y: measure_y_offset_with(face, node.size) as f32,
+        height,
+        baseline_y: measure_y_offset_with(face, size) as f32,
     })
 }
 
@@ -882,6 +898,38 @@ mod tests {
             (t_big / t_small - 32.0).abs() < 1e-3,
             "thickness {t_big} over {t_small} is not the ratio of the sizes"
         );
+    }
+
+    #[test]
+    fn text_box_affine_scales_exactly_when_layout_text_draws() {
+        // Past this size the height overflows while the width of an "i"
+        // stays finite.
+        let tall = f32::MAX / 1.1;
+        for (size, text) in [
+            (20.0, "Hi"),
+            (20.0, ""),
+            (0.0, "Hi"),
+            (f32::NAN, "Hi"),
+            (20.0, "\u{200b}"),
+            (f32::MAX, "Hello, world"),
+            (tall, "i"),
+        ] {
+            let m = crate::scene::text_box_affine(
+                "",
+                400,
+                FontStyle::Normal,
+                size,
+                text,
+                5.0,
+                7.0,
+                100.0,
+                40.0,
+                0.0,
+            );
+            let scaled = m != [1.0, 0.0, 0.0, 1.0, 5.0, 7.0];
+            let draws = layout_text(&node(size, text)).is_some();
+            assert_eq!(scaled, draws, "size {size}, text {text:?}");
+        }
     }
 
     /// The device rectangle of the underline of a node fitted to a box.
