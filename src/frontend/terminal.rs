@@ -551,7 +551,16 @@ mod tests {
         // The rectangle is larger than the clip box.
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let mut clip = scene.clip_rect(10.0, 10.0, 20.0, 20.0, 0.0, FillRule::NonZero);
+            let mut clip = scene.clip_rect(
+                crate::scene::RotatedRect {
+                    cx: 10.0,
+                    cy: 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                    angle_deg: 0.0,
+                },
+                FillRule::NonZero,
+            );
             rect_path(&mut clip, solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0);
         }
         let pm = rasterize(&scene);

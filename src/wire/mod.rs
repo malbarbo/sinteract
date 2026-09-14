@@ -127,7 +127,16 @@ mod tests {
             p.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
         }
         {
-            let mut clip = scene.clip_rect(50.0, 50.0, 30.0, 20.0, 15.0, FillRule::EvenOdd);
+            let mut clip = scene.clip_rect(
+                RotatedRect {
+                    cx: 50.0,
+                    cy: 50.0,
+                    w: 30.0,
+                    h: 20.0,
+                    angle_deg: 15.0,
+                },
+                FillRule::EvenOdd,
+            );
             let text = TextSpec {
                 size: 12.0,
                 family: "Liberation Sans".into(),
@@ -639,12 +648,30 @@ mod tests {
     fn nested_clips_round_trip() {
         let mut scene = Scene::new(100.0, 100.0);
         {
-            let mut outer = scene.clip_rect(50.0, 50.0, 80.0, 80.0, 0.0, FillRule::NonZero);
+            let mut outer = scene.clip_rect(
+                RotatedRect {
+                    cx: 50.0,
+                    cy: 50.0,
+                    w: 80.0,
+                    h: 80.0,
+                    angle_deg: 0.0,
+                },
+                FillRule::NonZero,
+            );
             let mut p = outer.path(PathStyle::default());
             p.move_to(0.0, 0.0);
             p.line_to(100.0, 100.0);
             drop(p);
-            let mut inner = outer.clip_rect(50.0, 50.0, 40.0, 40.0, 0.0, FillRule::EvenOdd);
+            let mut inner = outer.clip_rect(
+                RotatedRect {
+                    cx: 50.0,
+                    cy: 50.0,
+                    w: 40.0,
+                    h: 40.0,
+                    angle_deg: 0.0,
+                },
+                FillRule::EvenOdd,
+            );
             let mut p = inner.path(PathStyle::default());
             p.move_to(10.0, 10.0);
             p.line_to(20.0, 20.0);

@@ -808,20 +808,11 @@ impl Scene {
         }
     }
 
-    /// Begin a clip of `w` by `h` centred on `(cx, cy)` and rotated by
-    /// `angle_deg`.
-    pub fn clip_rect(
-        &mut self,
-        cx: f32,
-        cy: f32,
-        w: f32,
-        h: f32,
-        angle_deg: f32,
-        fill_rule: FillRule,
-    ) -> ClipScope<'_> {
-        let hw = w / 2.0;
-        let hh = h / 2.0;
-        let m = rotate_scale_at(1.0, 1.0, angle_deg, cx, cy);
+    /// Begin a clip of `rect`.
+    pub fn clip_rect(&mut self, rect: RotatedRect, fill_rule: FillRule) -> ClipScope<'_> {
+        let hw = rect.w / 2.0;
+        let hh = rect.h / 2.0;
+        let m = rotate_scale_at(1.0, 1.0, rect.angle_deg, rect.cx, rect.cy);
         let corner = |x: f32, y: f32| apply_affine(m, x, y);
         let p0 = corner(-hw, -hh);
         let p1 = corner(hw, -hh);
