@@ -564,7 +564,7 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
 
 #[allow(clippy::similar_names)]
 fn render_text(node: &Text, canvas: &mut PdfRenderer) {
-    let Some(layout) = crate::text::layout_text(node) else {
+    let Some(layout) = crate::text::layout_text(&node.spec) else {
         return;
     };
 
