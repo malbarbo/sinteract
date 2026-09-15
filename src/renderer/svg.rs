@@ -40,6 +40,8 @@ pub struct SvgRenderer {
     glyph_defs: usize,
     gradients: usize,
     clips: usize,
+    /// The start of every id in the document.
+    prefix: String,
     /// The document of the last render.
     svg: String,
 }
@@ -56,8 +58,24 @@ impl SvgRenderer {
             glyph_defs: 0,
             gradients: 0,
             clips: 0,
+            prefix: String::new(),
             svg: String::new(),
         }
+    }
+
+    /// An empty renderer whose ids start with `prefix`, so documents with
+    /// different prefixes can share one HTML page. Returns `None` when the
+    /// prefix holds a character other than an ASCII letter, a digit, `-` or
+    /// `_`, or starts with a digit or `-`, which cannot start an XML id.
+    pub fn with_id_prefix(prefix: &str) -> Option<Self> {
+        let chars = prefix
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        let start = !prefix.starts_with(|c: char| c.is_ascii_digit() || c == '-');
+        (chars && start).then(|| Self {
+            prefix: prefix.to_owned(),
+            ..Self::new()
+        })
     }
 
     /// The document of the last render.
@@ -172,14 +190,15 @@ impl Canvas for SvgRenderer {
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         let id = self.clips;
         self.clips += 1;
-        _ = write!(self.defs, "<clipPath id=\"c{id}\"><path d=\"");
+        let prefix = &self.prefix;
+        _ = write!(self.defs, "<clipPath id=\"{prefix}c{id}\"><path d=\"");
         write_segments(clip.segments(), &mut self.defs);
         self.defs.push('"');
         if clip.fill_rule == FillRule::EvenOdd {
             self.defs.push_str(" clip-rule=\"evenodd\"");
         }
         self.defs.push_str("/></clipPath>\n");
-        _ = writeln!(self.body, "<g clip-path=\"url(#c{id})\">");
+        _ = writeln!(self.body, "<g clip-path=\"url(#{prefix}c{id})\">");
         let guard = CloseGroup { canvas: self };
         inside(&mut *guard.canvas)
     }
@@ -202,7 +221,7 @@ impl SvgRenderer {
             Paint::Solid(c) => write_color(*c, attr, opacity_attr, &mut self.body),
             Paint::Gradient(g) => {
                 let id = self.push_gradient(g);
-                _ = write!(self.body, " {attr}=\"url(#p{id})\"");
+                _ = write!(self.body, " {attr}=\"url(#{}p{id})\"", self.prefix);
             }
         }
     }
@@ -212,19 +231,20 @@ impl SvgRenderer {
     fn push_gradient(&mut self, g: &Gradient) -> usize {
         let id = self.gradients;
         self.gradients += 1;
+        let prefix = &self.prefix;
         let defs = &mut self.defs;
         match g.geom {
             GradientGeom::Linear { x0, y0, x1, y1 } => {
                 _ = write!(
                     defs,
-                    "<linearGradient id=\"p{id}\" gradientUnits=\"userSpaceOnUse\" \
+                    "<linearGradient id=\"{prefix}p{id}\" gradientUnits=\"userSpaceOnUse\" \
                      x1=\"{x0}\" y1=\"{y0}\" x2=\"{x1}\" y2=\"{y1}\""
                 );
             }
             GradientGeom::Radial { cx, cy, radius } => {
                 _ = write!(
                     defs,
-                    "<radialGradient id=\"p{id}\" gradientUnits=\"userSpaceOnUse\" \
+                    "<radialGradient id=\"{prefix}p{id}\" gradientUnits=\"userSpaceOnUse\" \
                      cx=\"{cx}\" cy=\"{cy}\" r=\"{radius}\""
                 );
             }
@@ -258,7 +278,7 @@ impl SvgRenderer {
         let id = (!d.is_empty()).then(|| {
             let id = self.glyph_defs;
             self.glyph_defs += 1;
-            _ = writeln!(self.defs, "<path id=\"g{id}\" d=\"{d}\"/>");
+            _ = writeln!(self.defs, "<path id=\"{}g{id}\" d=\"{d}\"/>", self.prefix);
             id
         });
         self.glyphs.insert(glyph, id);
@@ -355,14 +375,14 @@ fn render_text(node: &Text, canvas: &mut SvgRenderer) {
         body.push_str("<g");
         write_color(node.fill, "fill", "fill-opacity", body);
         body.push_str(">\n");
-        write_uses(&uses, y, body);
+        write_uses(&uses, &canvas.prefix, y, body);
         body.push_str("</g>\n");
     }
     if do_stroke {
         body.push_str("<g fill=\"none\"");
         write_text_stroke(node, body);
         body.push_str(">\n");
-        write_uses(&uses, y, body);
+        write_uses(&uses, &canvas.prefix, y, body);
         body.push_str("</g>\n");
     }
     if node.underline {
@@ -394,9 +414,12 @@ fn write_text_stroke(node: &Text, out: &mut String) {
     );
 }
 
-fn write_uses(uses: &[(usize, f32)], y: f32, out: &mut String) {
+fn write_uses(uses: &[(usize, f32)], prefix: &str, y: f32, out: &mut String) {
     for (id, x) in uses {
-        _ = writeln!(out, "<use xlink:href=\"#g{id}\" x=\"{x}\" y=\"{y}\"/>");
+        _ = writeln!(
+            out,
+            "<use xlink:href=\"#{prefix}g{id}\" x=\"{x}\" y=\"{y}\"/>"
+        );
     }
 }
 
@@ -711,5 +734,48 @@ mod tests {
         let second = r.render(&scene).expect("render");
         assert_eq!(first, second);
         assert_eq!(second.matches("<path id=\"g0\"").count(), 1);
+    }
+
+    #[test]
+    fn an_id_prefix_starts_every_id_and_every_reference() {
+        let mut scene = Scene::new(40.0, 40.0);
+        let stops = vec![Stop {
+            offset: 0.0,
+            color: black(),
+        }];
+        {
+            let clip = ClipPath::builder(FillRule::NonZero)
+                .move_to(0.0, 0.0)
+                .line_to(20.0, 0.0)
+                .line_to(20.0, 20.0)
+                .build();
+            let mut clipped = scene.clip(clip);
+            let style = PathStyle {
+                fill: Paint::gradient(Gradient::radial(20.0, 20.0, 10.0, stops)),
+                ..PathStyle::default()
+            };
+            rect(&mut clipped, style, 0.0, 0.0, 40.0, 40.0);
+            clipped.text(text("a"));
+        }
+        let mut r = SvgRenderer::with_id_prefix("fig1-").expect("a valid prefix");
+        let svg = r.render(&scene).expect("render");
+        for part in [
+            "id=\"fig1-p0\"",
+            "id=\"fig1-c0\"",
+            "id=\"fig1-g0\"",
+            "url(#fig1-p0)",
+            "url(#fig1-c0)",
+            "href=\"#fig1-g0\"",
+        ] {
+            assert!(svg.contains(part), "{part} in {svg}");
+        }
+    }
+
+    #[test]
+    fn an_id_prefix_that_cannot_start_an_xml_id_is_rejected() {
+        for prefix in ["1a", "-a", "a b", "a\"", "a#"] {
+            assert!(SvgRenderer::with_id_prefix(prefix).is_none(), "{prefix}");
+        }
+        assert!(SvgRenderer::with_id_prefix("_a-1").is_some());
     }
 }
