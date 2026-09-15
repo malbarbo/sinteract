@@ -50,7 +50,7 @@ fn line_cap_from_wire(c: WLineCap) -> LineCap {
     match c {
         WLineCap::Round => LineCap::Round,
         WLineCap::Square => LineCap::Square,
-        _ => LineCap::Butt,
+        WLineCap::Butt => LineCap::Butt,
     }
 }
 
@@ -66,7 +66,7 @@ fn line_join_from_wire(j: WLineJoin) -> LineJoin {
     match j {
         WLineJoin::Round => LineJoin::Round,
         WLineJoin::Bevel => LineJoin::Bevel,
-        _ => LineJoin::Miter,
+        WLineJoin::Miter => LineJoin::Miter,
     }
 }
 
@@ -80,7 +80,7 @@ fn fill_rule_to_wire(r: FillRule) -> WFillRule {
 fn fill_rule_from_wire(r: WFillRule) -> FillRule {
     match r {
         WFillRule::EvenOdd => FillRule::EvenOdd,
-        _ => FillRule::NonZero,
+        WFillRule::NonZero => FillRule::NonZero,
     }
 }
 
@@ -96,7 +96,7 @@ fn font_style_from_wire(s: WFontStyle) -> FontStyle {
     match s {
         WFontStyle::Italic => FontStyle::Italic,
         WFontStyle::Oblique => FontStyle::Oblique,
-        _ => FontStyle::Normal,
+        WFontStyle::Normal => FontStyle::Normal,
     }
 }
 
@@ -112,7 +112,7 @@ fn spread_from_wire(s: WSpreadMode) -> SpreadMode {
     match s {
         WSpreadMode::Reflect => SpreadMode::Reflect,
         WSpreadMode::Repeat => SpreadMode::Repeat,
-        _ => SpreadMode::Pad,
+        WSpreadMode::Pad => SpreadMode::Pad,
     }
 }
 
