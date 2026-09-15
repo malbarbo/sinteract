@@ -775,6 +775,21 @@ pub enum Element {
     Bitmap(Bitmap),
 }
 
+impl Element {
+    /// Returns `true` if every float of the element, and of what a clip
+    /// holds, is finite, `false` otherwise.
+    fn is_finite(&self) -> bool {
+        match self {
+            Self::Path(p) => p.is_finite(),
+            Self::Clipped { clip, elements } => {
+                clip.is_finite() && elements.iter().all(Self::is_finite)
+            }
+            Self::Text(t) => t.is_finite(),
+            Self::Bitmap(b) => b.is_finite(),
+        }
+    }
+}
+
 /// The draw list a front end builds and a [`Renderer`](crate::renderer::Renderer)
 /// replays. [`Self::path`] returns a [`PathScope`] that commits its path on
 /// drop, and [`Self::clip`] returns a [`ClipScope`] that wraps the elements
@@ -792,7 +807,7 @@ pub enum Element {
 pub struct Scene {
     pub width: f32,
     pub height: f32,
-    pub elements: Vec<Element>,
+    elements: Vec<Element>,
 }
 
 /// The tolerance of the arc to cubic conversion.
@@ -805,6 +820,22 @@ impl Scene {
             height,
             elements: Vec::new(),
         }
+    }
+
+    /// For the wire decoder, which skips an element that is not finite as it
+    /// reads it, so it does not walk the tree again.
+    pub(crate) fn decoded(width: f32, height: f32, elements: Vec<Element>) -> Self {
+        debug_assert!(elements.iter().all(Element::is_finite));
+        Self {
+            width,
+            height,
+            elements,
+        }
+    }
+
+    /// The elements in drawing order. None holds a float that is not finite.
+    pub fn elements(&self) -> &[Element] {
+        &self.elements
     }
 
     /// Returns `true` if any element, inside a clip or not, is a bitmap,

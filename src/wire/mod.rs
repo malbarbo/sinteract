@@ -279,8 +279,8 @@ mod tests {
     fn assert_scene_eq(a: &Scene, b: &Scene) {
         assert_eq!(a.width, b.width);
         assert_eq!(a.height, b.height);
-        assert_eq!(a.elements.len(), b.elements.len(), "node count");
-        for (i, (x, y)) in a.elements.iter().zip(b.elements.iter()).enumerate() {
+        assert_eq!(a.elements().len(), b.elements().len(), "node count");
+        for (i, (x, y)) in a.elements().iter().zip(b.elements().iter()).enumerate() {
             assert_eq!(format!("{x:?}"), format!("{y:?}"), "node {i}");
         }
     }
@@ -314,7 +314,7 @@ mod tests {
             Decoded::Frame(d) => {
                 assert_eq!(d.width, 640.0);
                 assert_eq!(d.height, 480.0);
-                assert!(d.elements.is_empty());
+                assert!(d.elements().is_empty());
             }
             _ => panic!(),
         }
@@ -430,8 +430,8 @@ mod tests {
         let Decoded::Frame(d) = decode(&finish(builder)).unwrap() else {
             panic!("expected Frame");
         };
-        let [Element::Path(p)] = &d.elements[..] else {
-            panic!("expected one Path, got {:?}", d.elements);
+        let [Element::Path(p)] = d.elements() else {
+            panic!("expected one Path, got {:?}", d.elements());
         };
         let expected = Path::builder(PathStyle::default(), 0.0, 0.0)
             .line_to(5.0, 10.0)
@@ -475,8 +475,8 @@ mod tests {
         let Decoded::Frame(d) = decode(&finish(builder)).unwrap() else {
             panic!("expected Frame");
         };
-        let [Element::Path(p), Element::Path(lone)] = &d.elements[..] else {
-            panic!("expected two Paths, got {:?}", d.elements);
+        let [Element::Path(p), Element::Path(lone)] = d.elements() else {
+            panic!("expected two Paths, got {:?}", d.elements());
         };
         let expected = Path::builder(PathStyle::default(), 2.0, 2.0)
             .line_to(3.0, 3.0)
@@ -557,8 +557,8 @@ mod tests {
         let Decoded::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
-        let [Element::Clipped { elements, .. }] = &d.elements[..] else {
-            panic!("expected one Clipped, got {:?}", d.elements);
+        let [Element::Clipped { elements, .. }] = d.elements() else {
+            panic!("expected one Clipped, got {:?}", d.elements());
         };
         assert!(matches!(&elements[..], [Element::Path(_)]), "{elements:?}");
     }
@@ -635,8 +635,8 @@ mod tests {
         let Decoded::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
-        let [Element::Path(p)] = &d.elements[..] else {
-            panic!("expected one Path, got {:?}", d.elements);
+        let [Element::Path(p)] = d.elements() else {
+            panic!("expected one Path, got {:?}", d.elements());
         };
         assert_eq!(
             p.segments().collect::<Vec<_>>(),
@@ -695,8 +695,8 @@ mod tests {
         let Decoded::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
-        let [Element::Path(p)] = &d.elements[..] else {
-            panic!("expected one Path, got {:?}", d.elements);
+        let [Element::Path(p)] = d.elements() else {
+            panic!("expected one Path, got {:?}", d.elements());
         };
         let color = Rgba {
             r: 0x33,
@@ -727,7 +727,7 @@ mod tests {
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let node = d.elements.first().expect("one node");
+                let node = d.elements().first().expect("one node");
                 let Element::Path(p) = node else {
                     panic!("expected path");
                 };
@@ -793,7 +793,7 @@ mod tests {
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let Element::Path(p) = d.elements.first().unwrap() else {
+                let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
                 assert_eq!(p.style.fill, Paint::gradient(gradient));
@@ -844,7 +844,7 @@ mod tests {
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let Element::Path(p) = d.elements.first().unwrap() else {
+                let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
                 assert_eq!(p.style.fill, Paint::gradient(gradient));
@@ -929,11 +929,11 @@ mod tests {
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let Element::Path(p0) = &d.elements[0] else {
+                let Element::Path(p0) = &d.elements()[0] else {
                     panic!();
                 };
                 assert_eq!(p0.style.fill, Paint::gradient(linear));
-                let Element::Path(p1) = &d.elements[1] else {
+                let Element::Path(p1) = &d.elements()[1] else {
                     panic!();
                 };
                 assert_eq!(p1.style.fill, Paint::gradient(radial));
@@ -961,8 +961,8 @@ mod tests {
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let Element::Clipped { clip, elements } = &d.elements[0] else {
-                    panic!("expected Clipped, got {:?}", d.elements[0]);
+                let Element::Clipped { clip, elements } = &d.elements()[0] else {
+                    panic!("expected Clipped, got {:?}", d.elements()[0]);
                 };
                 let segs: Vec<_> = clip.segments().collect();
                 assert_eq!(
@@ -1044,11 +1044,11 @@ mod tests {
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                assert_eq!(d.elements.len(), 1);
+                assert_eq!(d.elements().len(), 1);
                 let Element::Clipped {
                     clip: _,
                     elements: outer_els,
-                } = &d.elements[0]
+                } = &d.elements()[0]
                 else {
                     panic!("expected outer Clipped");
                 };
@@ -1075,7 +1075,7 @@ mod tests {
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                let Element::Path(p) = d.elements.first().unwrap() else {
+                let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
                 assert_eq!(p.style.fill, Paint::Solid(Rgba::default()));
@@ -1141,8 +1141,8 @@ mod tests {
         let Decoded::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
-        let [Element::Clipped { elements, .. }, Element::Path(p)] = &d.elements[..] else {
-            panic!("expected a Clipped and a Path, got {:?}", d.elements);
+        let [Element::Clipped { elements, .. }, Element::Path(p)] = d.elements() else {
+            panic!("expected a Clipped and a Path, got {:?}", d.elements());
         };
         assert_eq!(elements.len(), 1, "{elements:?}");
         assert_eq!(p.segments().next(), Some(Segment::Move { x: 9.0, y: 9.0 }));

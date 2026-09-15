@@ -513,8 +513,8 @@ pub(super) fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
     b.set_width(scene.width);
     b.set_height(scene.height);
     write_element_list(
-        b.init_elements(scene.elements.len() as u32),
-        &scene.elements,
+        b.init_elements(scene.elements().len() as u32),
+        scene.elements(),
     );
 }
 
@@ -552,9 +552,10 @@ fn read_element_list(
 }
 
 pub(super) fn read_scene(r: wire_scene::Reader<'_>) -> Result<Scene, Error> {
-    let mut out = Scene::new(r.get_width(), r.get_height());
-    if r.has_elements() {
-        out.elements = read_element_list(r.get_elements()?)?;
-    }
-    Ok(out)
+    let elements = if r.has_elements() {
+        read_element_list(r.get_elements()?)?
+    } else {
+        Vec::new()
+    };
+    Ok(Scene::decoded(r.get_width(), r.get_height(), elements))
 }
