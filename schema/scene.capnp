@@ -122,6 +122,7 @@ struct PathStyle {
 
 # A clip region, with the encoding of Path. A sub-path closes implicitly, as
 # in an SVG clipPath, so the caller does not add the line back to the start.
+# A clip with no area, such as one with no verbs, hides everything it holds.
 struct ClipPath {
     verbs    @0 :Data;
     coords   @1 :List(Float32);

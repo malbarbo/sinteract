@@ -223,7 +223,8 @@ pub enum FillRule {
 }
 
 /// A clip region. A sub-path closes implicitly, so the caller does not add a
-/// line back to its start. `fill_rule` decides what is inside.
+/// line back to its start. `fill_rule` decides what is inside. A clip with
+/// no area, such as one with no segments, hides everything it holds.
 #[derive(Clone, Debug, Default)]
 pub struct ClipPath {
     segs: Vec<Segment>,
