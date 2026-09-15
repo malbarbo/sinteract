@@ -304,29 +304,24 @@ impl PdfRenderer {
             page.parent(pages_id);
             page.media_box(Rect::new(0.0, 0.0, w * PX_TO_PT, h * PX_TO_PT));
             page.contents(content_id);
-            let need_resources = !gstate_refs.is_empty() || !gradient_refs.is_empty();
-            if need_resources {
-                let mut resources = page.resources();
-                if !gstate_refs.is_empty() {
-                    let mut gs_dict = resources.ext_g_states();
-                    for ((_fk, _sk), r, idx) in &gstate_refs {
-                        let name = format!("Gs{idx}");
-                        gs_dict.pair(Name(name.as_bytes()), *r);
-                    }
-                    gs_dict.finish();
+            let mut resources = page.resources();
+            if !gstate_refs.is_empty() {
+                let mut gs_dict = resources.ext_g_states();
+                for ((_fk, _sk), r, idx) in &gstate_refs {
+                    let name = format!("Gs{idx}");
+                    gs_dict.pair(Name(name.as_bytes()), *r);
                 }
-                if !gradient_refs.is_empty() {
-                    let mut pat_dict = resources.patterns();
-                    for (i, gr) in gradient_refs.iter().enumerate() {
-                        let name = format!("P{i}");
-                        pat_dict.pair(Name(name.as_bytes()), gr.pattern);
-                    }
-                    pat_dict.finish();
-                }
-                resources.finish();
-            } else {
-                page.resources();
+                gs_dict.finish();
             }
+            if !gradient_refs.is_empty() {
+                let mut pat_dict = resources.patterns();
+                for (i, gr) in gradient_refs.iter().enumerate() {
+                    let name = format!("P{i}");
+                    pat_dict.pair(Name(name.as_bytes()), gr.pattern);
+                }
+                pat_dict.finish();
+            }
+            resources.finish();
             page.finish();
         }
 
