@@ -281,7 +281,11 @@ Replicar mesma estrutura.
     defesa adicional contra peer não-sinteract no pipe. Depois o decoder
     passou a pular elemento, evento e mensagem de braço desconhecido
     (`Decoded::Unknown`), e o stdio passou a descartar a mensagem que não
-    decodifica em vez de fechar a sessão.
+    decodifica em vez de fechar a sessão. Em seguida passou a pular também
+    o elemento ou evento que contém um valor desconhecido (braço de
+    `Paint`, valor de enum, byte de verbo), e `Paint` ganhou `fallback` e
+    `hasFallback`, a cor que um leitor antigo desenha no lugar de um braço
+    novo.
   - **Migrações de wire** (2026-05-08): planus → flatbuffers (descobrimos
     que planus 1.3 produz `[file_id][root_offset][body]`, oposto ao spec)
     → Cap'n Proto. flatbuffers oficial seguia o spec mas o gerador Rust

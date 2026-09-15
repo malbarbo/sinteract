@@ -8,9 +8,12 @@
 # appending fields with defaults. Never reorder or renumber, and let a union
 # only grow.
 #
-# A reader skips an element whose arm it does not know and draws the rest.
-# Any other value it does not know, such as a paint arm, an enum value or a
-# verb byte, makes the whole scene unusable.
+# A reader skips an element whose arm it does not know, and an element that
+# holds a value it does not know, such as a paint arm, an enum value or a
+# verb byte, and draws the rest. A clip that holds one is skipped with all it
+# holds. A paint of an arm it does not know draws its fallback color, when
+# the writer set one, instead. Damage, such as a bad pointer or verbs that
+# disagree with their coords, makes the whole scene unusable.
 #
 # Regenerate the Rust bindings for the three schema files with:
 #   capnp compile -orust:src/wire --src-prefix=schema \

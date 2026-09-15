@@ -58,7 +58,10 @@ change is more than one, and it becomes more than one commit.
   and `protocol.capnp` the session that carries both. Evolve a file by
   appending fields with defaults. Never reorder or renumber, and let a
   union only grow. A reader skips an element, an event or a message of an
-  arm it does not know, and any other value it does not know is an error.
+  arm it does not know, and an element or an event that holds a value it
+  does not know, such as an enum value or a verb byte. A paint of an arm it
+  does not know draws its fallback color, so a writer of a new paint arm
+  sets `fallback` and `hasFallback`. Damage is still an error.
 - `src/wire/*_capnp.rs` are generated and committed, so the build does not
   need the `capnp` CLI. Regenerate them with the command at the top of
   `schema/scene.capnp`. Do not edit them by hand.
