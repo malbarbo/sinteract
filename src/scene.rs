@@ -536,8 +536,9 @@ impl Segment {
 }
 
 /// An iterator over the segments of a path. They are empty or begin with a
-/// [`Segment::Move`], since the builders take the start point and the
-/// decoder begins a path of the wire that lacks one at `(0, 0)`.
+/// [`Segment::Move`], and a segment that is not a move follows every move.
+/// The builders take the start point, the decoder begins a path of the wire
+/// that lacks one at `(0, 0)`, and both drop a move that no segment follows.
 #[must_use = "Segments yields nothing unless iterated"]
 pub struct Segments<'a>(std::slice::Iter<'a, Segment>);
 
@@ -648,7 +649,7 @@ impl GeometryBuilder {
 }
 
 /// Append `seg` to `segs`. A move replaces a move that ends `segs`.
-fn push_segment(segs: &mut Vec<Segment>, seg: Segment) {
+pub(crate) fn push_segment(segs: &mut Vec<Segment>, seg: Segment) {
     match (seg, segs.last_mut()) {
         (Segment::Move { .. }, Some(last @ Segment::Move { .. })) => *last = seg,
         _ => segs.push(seg),
@@ -656,7 +657,7 @@ fn push_segment(segs: &mut Vec<Segment>, seg: Segment) {
 }
 
 /// Drop the move that ends `segs`, since no segment follows it.
-fn end_segments(segs: &mut Vec<Segment>) {
+pub(crate) fn end_segments(segs: &mut Vec<Segment>) {
     if matches!(segs.last(), Some(Segment::Move { .. })) {
         segs.pop();
     }

@@ -419,6 +419,51 @@ mod tests {
     }
 
     #[test]
+    fn a_move_of_the_wire_that_no_segment_follows_is_dropped() {
+        // move move line move, then a path of one move.
+        let paths: [(&[SegmentKind], &[f32]); 2] = [
+            (
+                &[
+                    SegmentKind::Move,
+                    SegmentKind::Move,
+                    SegmentKind::Line,
+                    SegmentKind::Move,
+                ],
+                &[1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0],
+            ),
+            (&[SegmentKind::Move], &[5.0, 5.0]),
+        ];
+        let mut builder = MessageBuilder::new_default();
+        {
+            let msg = builder.init_root::<message::Builder>();
+            let frame = msg.init_frame();
+            let mut nodes = frame.init_elements(paths.len() as u32);
+            for (i, (verbs, xs)) in paths.iter().enumerate() {
+                let node = nodes.reborrow().get(i as u32);
+                let mut p = node.init_path();
+                let _ = p.reborrow().init_style();
+                let verbs: Vec<u8> = verbs.iter().map(|&k| k as u8).collect();
+                p.set_verbs(&verbs);
+                let mut coords = p.init_coords(xs.len() as u32);
+                for (j, &v) in xs.iter().enumerate() {
+                    coords.set(j as u32, v);
+                }
+            }
+        }
+        let Decoded::Frame(d) = decode(&finish(builder)).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Path(p), Element::Path(lone)] = &d.elements[..] else {
+            panic!("expected two Paths, got {:?}", d.elements);
+        };
+        let expected = Path::builder(PathStyle::default(), 2.0, 2.0)
+            .line_to(3.0, 3.0)
+            .build();
+        assert!(p.segments().eq(expected.segments()), "{p:?}");
+        assert_eq!(lone.segments().len(), 0, "{lone:?}");
+    }
+
+    #[test]
     fn malformed_path_is_rejected() {
         // One Cubic claims 6 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
