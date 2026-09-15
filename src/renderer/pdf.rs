@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
+use crate::outline::{ElevateQuads, PathSink};
 use crate::renderer::{Renderer, RestoreOnDrop, outline_segments, sealed::Canvas};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment,
@@ -90,10 +91,8 @@ impl Canvas for PdfRenderer {
         if !do_fill && !do_stroke {
             return;
         }
-        // The content stream receives the elevated walk. It is empty for a
-        // path with no Move, and that path must not leave a `q ... Q` with no
-        // geometry.
-        if path.segments().cubics().next().is_none() {
+        // A path with no segments must not leave a `q ... Q` with no geometry.
+        if path.segments().next().is_none() {
             return;
         }
 
@@ -131,8 +130,8 @@ impl Canvas for PdfRenderer {
         }
         // PDF has no quadratic operator.
         outline_segments(
-            path.segments().cubics(),
-            &mut PdfOutline::new(&mut self.content),
+            path.segments(),
+            &mut ElevateQuads::new(&mut PdfOutline::new(&mut self.content)),
         );
         if style.closed {
             self.content.close_path();
@@ -154,8 +153,8 @@ impl Canvas for PdfRenderer {
         self.content.save_state();
         if clip.segments().any(|s| matches!(s, Segment::Move { .. })) {
             outline_segments(
-                clip.segments().cubics(),
-                &mut PdfOutline::new(&mut self.content),
+                clip.segments(),
+                &mut ElevateQuads::new(&mut PdfOutline::new(&mut self.content)),
             );
             self.content.close_path();
         } else {
@@ -438,7 +437,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
 
     // PDF has no quadratic operator.
     let mut adapter = PdfOutline::new(&mut canvas.content);
-    layout.outline(&mut crate::outline::ElevateQuads::new(&mut adapter));
+    layout.outline(&mut ElevateQuads::new(&mut adapter));
     // A text of spaces has no outline, and a paint with no path is an error.
     if !adapter.empty {
         paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
@@ -470,7 +469,7 @@ impl<'a> PdfOutline<'a> {
     }
 }
 
-impl crate::outline::PathSink for PdfOutline<'_> {
+impl PathSink for PdfOutline<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.content.move_to(x, y);
         self.empty = false;
@@ -479,8 +478,8 @@ impl crate::outline::PathSink for PdfOutline<'_> {
         self.content.line_to(x, y);
     }
     fn quad_to(&mut self, _cx: f32, _cy: f32, x: f32, y: f32) {
-        // Paths come through Segments::cubics and glyphs through ElevateQuads,
-        // so this never runs. A line is the fallback for a direct caller.
+        // Paths, clips and glyphs come through ElevateQuads, so this never
+        // runs. A line is the fallback for a direct caller.
         self.content.line_to(x, y);
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
