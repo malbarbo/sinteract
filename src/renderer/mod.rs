@@ -127,6 +127,11 @@ pub trait Renderer: sealed::Canvas {
     }
 }
 
+/// The miter limit of a text stroke. A glyph is a closed smooth contour, so
+/// the cap and the join do not show, and the limit is the PDF default, which
+/// the pdf backend leaves unset.
+pub(crate) const TEXT_MITER_LIMIT: f32 = 10.0;
+
 /// Feeds `segments` to `out`, so a backend draws paths, clips and glyph
 /// outlines through one sink.
 pub(crate) fn outline_segments(

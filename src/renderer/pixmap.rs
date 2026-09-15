@@ -390,11 +390,9 @@ fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Tran
             let mut paint = SkPaint::default();
             paint.set_color(sk_color(node.stroke));
             paint.anti_alias = true;
-            // A glyph is a closed smooth contour, so the cap and the join do
-            // not show.
             let stroke = Stroke {
                 width: node.stroke_width,
-                miter_limit: 10.0,
+                miter_limit: crate::renderer::TEXT_MITER_LIMIT,
                 dash: None,
                 ..Stroke::default()
             };

@@ -451,9 +451,8 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
     if do_stroke {
         let [r, g, b] = rgb_components(node.stroke);
         canvas.content.set_stroke_rgb(r, g, b);
+        // The default miter limit is TEXT_MITER_LIMIT.
         canvas.content.set_line_width(node.stroke_width);
-        // A glyph is a closed smooth contour, so the cap and the join do not
-        // show.
     }
     canvas.content.transform(node.transform);
 

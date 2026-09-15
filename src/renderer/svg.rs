@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
-use crate::renderer::{Renderer, outline_segments, sealed::Canvas};
+use crate::renderer::{Renderer, TEXT_MITER_LIMIT, outline_segments, sealed::Canvas};
 use crate::scene::{
     ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint,
     Path, Rgba, Segment, Segments, SpreadMode, Text,
@@ -389,13 +389,11 @@ fn render_text(node: &Text, canvas: &mut SvgRenderer) {
     body.push_str("</g>\n");
 }
 
-/// A glyph is a closed smooth contour, so the cap and the join do not show.
-/// The miter limit is the one of the other renderers.
 fn write_text_stroke(node: &Text, out: &mut String) {
     write_color(node.stroke, "stroke", "stroke-opacity", out);
     _ = write!(
         out,
-        " stroke-width=\"{}\" stroke-miterlimit=\"10\"",
+        " stroke-width=\"{}\" stroke-miterlimit=\"{TEXT_MITER_LIMIT}\"",
         node.stroke_width
     );
 }
