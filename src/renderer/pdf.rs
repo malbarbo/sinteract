@@ -22,24 +22,11 @@ use crate::scene::{
     Segments, Stop, Text,
 };
 
-/// Draw-list coordinates are CSS pixels, 96 per inch, and PDF points are 72
-/// per inch.
-const PX_TO_PT: f32 = 72.0 / 96.0;
-
-/// An alpha in thousandths, so `gstates` can key on it and near-equal alphas
-/// share one ExtGState.
-fn alpha_key(a: f32) -> u16 {
-    (a.clamp(0.0, 1.0) * 1000.0).round() as u16
-}
-
-fn alpha_value(key: u16) -> f32 {
-    f32::from(key) / 1000.0
-}
-
-/// Maps draw-list pixels, with y down, to PDF points, with y up, on a page
-/// `height` pixels tall.
-fn page_transform(height: f32) -> [f32; 6] {
-    [PX_TO_PT, 0.0, 0.0, -PX_TO_PT, 0.0, PX_TO_PT * height]
+/// Render a [`crate::scene::Scene`] to PDF bytes.
+pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
+    let mut renderer = PdfRenderer::new();
+    renderer.render(scene).expect("PDF rendering never fails");
+    renderer.into_bytes()
 }
 
 /// Accumulates a content stream and its resources, then assembles a one-page
@@ -79,81 +66,6 @@ impl PdfRenderer {
 impl Default for PdfRenderer {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl PdfRenderer {
-    /// Returns the `/Pn` name of `g`.
-    fn push_gradient(&mut self, g: &Gradient) -> String {
-        let idx = self.gradients.len();
-        self.gradients.push(Shading {
-            geom: g.geom,
-            stops: prepare_stops(&g.stops),
-        });
-        format!("P{idx}")
-    }
-
-    /// Emits `/Gsn gs` for the alpha pair, allocating the ExtGState the first
-    /// time. Both alphas at 1.0 is the PDF default, so that pair emits
-    /// nothing.
-    fn apply_alpha(&mut self, fa: f32, sa: f32) {
-        let fk = alpha_key(fa);
-        let sk = alpha_key(sa);
-        if fk == 1000 && sk == 1000 {
-            return;
-        }
-        let next = self.gstates.len() as u32;
-        let idx = *self.gstates.entry((fk, sk)).or_insert(next);
-        let name = format!("Gs{idx}");
-        self.content.set_parameters(Name(name.as_bytes()));
-    }
-
-    /// Sets the fill or the stroke paint. A gradient goes through the Pattern
-    /// color space and its `/Pn` name.
-    fn bind_paint(&mut self, paint: &Paint, target: PaintTarget) {
-        let gradient = match paint {
-            Paint::Solid(c) => {
-                let [r, g, b] = rgb_components(*c);
-                match target {
-                    PaintTarget::Fill => self.content.set_fill_rgb(r, g, b),
-                    PaintTarget::Stroke => self.content.set_stroke_rgb(r, g, b),
-                };
-                return;
-            }
-            Paint::Gradient(g) => g,
-        };
-        let name = self.push_gradient(gradient);
-        let name = Name(name.as_bytes());
-        let pattern = pdf_writer::types::ColorSpaceOperand::Pattern;
-        match target {
-            PaintTarget::Fill => {
-                self.content.set_fill_color_space(pattern);
-                self.content.set_fill_pattern(None, name)
-            }
-            PaintTarget::Stroke => {
-                self.content.set_stroke_color_space(pattern);
-                self.content.set_stroke_pattern(None, name)
-            }
-        };
-    }
-}
-
-/// Which half of the PDF graphics state a paint binds to.
-#[derive(Clone, Copy)]
-enum PaintTarget {
-    Fill,
-    Stroke,
-}
-
-/// Emits `restore_state` when dropped, so the `save_state` of a clip in
-/// [`Canvas::with_clip`] is balanced even when the body panics.
-struct RestoreGuard<'a> {
-    canvas: &'a mut PdfRenderer,
-}
-
-impl Drop for RestoreGuard<'_> {
-    fn drop(&mut self) {
-        self.canvas.content.restore_state();
     }
 }
 
@@ -269,45 +181,61 @@ impl Renderer for PdfRenderer {
     }
 }
 
-fn pdf_line_cap(c: LineCap) -> LineCapStyle {
-    match c {
-        LineCap::Round => LineCapStyle::RoundCap,
-        LineCap::Square => LineCapStyle::ProjectingSquareCap,
-        LineCap::Butt => LineCapStyle::ButtCap,
-    }
-}
-
-fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
-    match j {
-        LineJoin::Round => LineJoinStyle::RoundJoin,
-        LineJoin::Bevel => LineJoinStyle::BevelJoin,
-        LineJoin::Miter => LineJoinStyle::MiterJoin,
-    }
-}
-
-/// Render a [`crate::scene::Scene`] to PDF bytes.
-pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
-    let mut renderer = PdfRenderer::new();
-    renderer.render(scene).expect("PDF rendering never fails");
-    renderer.into_bytes()
-}
-
-/// A gradient of the frame, with the stops that its functions take.
-struct Shading {
-    geom: GradientGeom,
-    /// From [`prepare_stops`].
-    stops: Vec<Stop>,
-}
-
-/// The indirect objects of one gradient.
-struct GradientRefs {
-    /// The functions, with the one the shading references last.
-    functions: Vec<Ref>,
-    shading: Ref,
-    pattern: Ref,
-}
-
 impl PdfRenderer {
+    /// Returns the `/Pn` name of `g`.
+    fn push_gradient(&mut self, g: &Gradient) -> String {
+        let idx = self.gradients.len();
+        self.gradients.push(Shading {
+            geom: g.geom,
+            stops: prepare_stops(&g.stops),
+        });
+        format!("P{idx}")
+    }
+
+    /// Emits `/Gsn gs` for the alpha pair, allocating the ExtGState the first
+    /// time. Both alphas at 1.0 is the PDF default, so that pair emits
+    /// nothing.
+    fn apply_alpha(&mut self, fa: f32, sa: f32) {
+        let fk = alpha_key(fa);
+        let sk = alpha_key(sa);
+        if fk == 1000 && sk == 1000 {
+            return;
+        }
+        let next = self.gstates.len() as u32;
+        let idx = *self.gstates.entry((fk, sk)).or_insert(next);
+        let name = format!("Gs{idx}");
+        self.content.set_parameters(Name(name.as_bytes()));
+    }
+
+    /// Sets the fill or the stroke paint. A gradient goes through the Pattern
+    /// color space and its `/Pn` name.
+    fn bind_paint(&mut self, paint: &Paint, target: PaintTarget) {
+        let gradient = match paint {
+            Paint::Solid(c) => {
+                let [r, g, b] = rgb_components(*c);
+                match target {
+                    PaintTarget::Fill => self.content.set_fill_rgb(r, g, b),
+                    PaintTarget::Stroke => self.content.set_stroke_rgb(r, g, b),
+                };
+                return;
+            }
+            Paint::Gradient(g) => g,
+        };
+        let name = self.push_gradient(gradient);
+        let name = Name(name.as_bytes());
+        let pattern = pdf_writer::types::ColorSpaceOperand::Pattern;
+        match target {
+            PaintTarget::Fill => {
+                self.content.set_fill_color_space(pattern);
+                self.content.set_fill_pattern(None, name)
+            }
+            PaintTarget::Stroke => {
+                self.content.set_stroke_color_space(pattern);
+                self.content.set_stroke_pattern(None, name)
+            }
+        };
+    }
+
     /// Writes the page into `bytes` and empties the content and the resources
     /// for the next render.
     fn assemble(&mut self) {
@@ -414,133 +342,58 @@ impl PdfRenderer {
     }
 }
 
-/// The stops sorted, clamped to [0, 1], and padded so there are at least
-/// two, the first at 0 and the last at 1. The pad repeats the boundary
-/// color, as in CSS. No stops give one black stop, a case the visibility
-/// check already excludes.
-fn prepare_stops(stops: &[Stop]) -> Vec<Stop> {
-    let mut out: Vec<Stop> = stops
-        .iter()
-        .map(|s| Stop {
-            offset: s.offset.clamp(0.0, 1.0),
-            color: s.color,
-        })
-        .collect();
-    out.sort_by(|a, b| {
-        a.offset
-            .partial_cmp(&b.offset)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    if out.is_empty() {
-        out.push(Stop {
-            offset: 0.0,
-            color: Rgba::default(),
-        });
-    }
-    if out.len() == 1 {
-        let only = out[0];
-        out = vec![
-            Stop {
-                offset: 0.0,
-                ..only
-            },
-            Stop {
-                offset: 1.0,
-                ..only
-            },
-        ];
-    }
-    let first = out[0];
-    if first.offset > 0.0 {
-        out.insert(
-            0,
-            Stop {
-                offset: 0.0,
-                color: first.color,
-            },
-        );
-    }
-    let last = *out.last().unwrap();
-    if last.offset < 1.0 {
-        out.push(Stop {
-            offset: 1.0,
-            color: last.color,
-        });
-    }
-    out
+/// Which half of the PDF graphics state a paint binds to.
+#[derive(Clone, Copy)]
+enum PaintTarget {
+    Fill,
+    Stroke,
 }
 
-fn rgb_components(c: Rgba) -> [f32; 3] {
-    [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
+/// Emits `restore_state` when dropped, so the `save_state` of a clip in
+/// [`Canvas::with_clip`] is balanced even when the body panics.
+struct RestoreGuard<'a> {
+    canvas: &'a mut PdfRenderer,
 }
 
-fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Shading, refs: &GradientRefs, matrix: [f32; 6]) {
-    let stops = &gradient.stops;
-
-    let main_fn_ref = if stops.len() == 2 {
-        let r = refs.functions[0];
-        let mut f = pdf.exponential_function(r);
-        f.domain([0.0, 1.0]);
-        f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-        f.c0(rgb_components(stops[0].color));
-        f.c1(rgb_components(stops[1].color));
-        f.n(1.0);
-        f.finish();
-        r
-    } else {
-        let n_subfns = stops.len() - 1;
-        debug_assert_eq!(refs.functions.len(), n_subfns + 1);
-        for i in 0..n_subfns {
-            let r = refs.functions[i];
-            let mut f = pdf.exponential_function(r);
-            f.domain([0.0, 1.0]);
-            f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-            f.c0(rgb_components(stops[i].color));
-            f.c1(rgb_components(stops[i + 1].color));
-            f.n(1.0);
-            f.finish();
-        }
-        let stitch_ref = *refs.functions.last().unwrap();
-        let mut stitch = pdf.stitching_function(stitch_ref);
-        stitch.domain([0.0, 1.0]);
-        stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-        stitch.functions(refs.functions[..n_subfns].iter().copied());
-        stitch.bounds(stops[1..stops.len() - 1].iter().map(|s| s.offset));
-        // Each sub-function maps its interval back to [0, 1].
-        let encode: Vec<f32> = (0..n_subfns).flat_map(|_| [0.0, 1.0]).collect();
-        stitch.encode(encode);
-        stitch.finish();
-        stitch_ref
-    };
-
-    {
-        let mut sh = pdf.function_shading(refs.shading);
-        sh.color_space().device_rgb();
-        match gradient.geom {
-            GradientGeom::Linear { x0, y0, x1, y1 } => {
-                sh.shading_type(FunctionShadingType::Axial);
-                sh.coords([x0, y0, x1, y1]);
-            }
-            GradientGeom::Radial { cx, cy, radius } => {
-                sh.shading_type(FunctionShadingType::Radial);
-                // One center and a zero inner radius, as in SVG.
-                sh.coords([cx, cy, 0.0, cx, cy, radius]);
-            }
-        }
-        // A Type 2 or 3 shading only pads, so Reflect and Repeat render as
-        // Pad. They would need a Type 4 function.
-        sh.extend([true, true]);
-        sh.function(main_fn_ref);
-        sh.finish();
+impl Drop for RestoreGuard<'_> {
+    fn drop(&mut self) {
+        self.canvas.content.restore_state();
     }
+}
 
-    {
-        let mut pat = pdf.shading_pattern(refs.pattern);
-        // A pattern draws in the space of the page, so the `cm` at the top of
-        // the content stream does not apply to it.
-        pat.matrix(matrix);
-        pat.shading_ref(refs.shading);
-        pat.finish();
+/// Draw-list coordinates are CSS pixels, 96 per inch, and PDF points are 72
+/// per inch.
+const PX_TO_PT: f32 = 72.0 / 96.0;
+
+/// Maps draw-list pixels, with y down, to PDF points, with y up, on a page
+/// `height` pixels tall.
+fn page_transform(height: f32) -> [f32; 6] {
+    [PX_TO_PT, 0.0, 0.0, -PX_TO_PT, 0.0, PX_TO_PT * height]
+}
+
+/// An alpha in thousandths, so `gstates` can key on it and near-equal alphas
+/// share one ExtGState.
+fn alpha_key(a: f32) -> u16 {
+    (a.clamp(0.0, 1.0) * 1000.0).round() as u16
+}
+
+fn alpha_value(key: u16) -> f32 {
+    f32::from(key) / 1000.0
+}
+
+fn pdf_line_cap(c: LineCap) -> LineCapStyle {
+    match c {
+        LineCap::Round => LineCapStyle::RoundCap,
+        LineCap::Square => LineCapStyle::ProjectingSquareCap,
+        LineCap::Butt => LineCapStyle::ButtCap,
+    }
+}
+
+fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
+    match j {
+        LineJoin::Round => LineJoinStyle::RoundJoin,
+        LineJoin::Bevel => LineJoinStyle::BevelJoin,
+        LineJoin::Miter => LineJoinStyle::MiterJoin,
     }
 }
 
@@ -676,6 +529,151 @@ impl crate::text::OutlineBuilder for PdfOutline<'_> {
     }
     fn close(&mut self) {
         self.content.close_path();
+    }
+}
+
+/// A gradient of the frame, with the stops that its functions take.
+struct Shading {
+    geom: GradientGeom,
+    /// From [`prepare_stops`].
+    stops: Vec<Stop>,
+}
+
+/// The indirect objects of one gradient.
+struct GradientRefs {
+    /// The functions, with the one the shading references last.
+    functions: Vec<Ref>,
+    shading: Ref,
+    pattern: Ref,
+}
+
+/// The stops sorted, clamped to [0, 1], and padded so there are at least
+/// two, the first at 0 and the last at 1. The pad repeats the boundary
+/// color, as in CSS. No stops give one black stop, a case the visibility
+/// check already excludes.
+fn prepare_stops(stops: &[Stop]) -> Vec<Stop> {
+    let mut out: Vec<Stop> = stops
+        .iter()
+        .map(|s| Stop {
+            offset: s.offset.clamp(0.0, 1.0),
+            color: s.color,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.offset
+            .partial_cmp(&b.offset)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if out.is_empty() {
+        out.push(Stop {
+            offset: 0.0,
+            color: Rgba::default(),
+        });
+    }
+    if out.len() == 1 {
+        let only = out[0];
+        out = vec![
+            Stop {
+                offset: 0.0,
+                ..only
+            },
+            Stop {
+                offset: 1.0,
+                ..only
+            },
+        ];
+    }
+    let first = out[0];
+    if first.offset > 0.0 {
+        out.insert(
+            0,
+            Stop {
+                offset: 0.0,
+                color: first.color,
+            },
+        );
+    }
+    let last = *out.last().unwrap();
+    if last.offset < 1.0 {
+        out.push(Stop {
+            offset: 1.0,
+            color: last.color,
+        });
+    }
+    out
+}
+
+fn rgb_components(c: Rgba) -> [f32; 3] {
+    [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
+}
+
+fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Shading, refs: &GradientRefs, matrix: [f32; 6]) {
+    let stops = &gradient.stops;
+
+    let main_fn_ref = if stops.len() == 2 {
+        let r = refs.functions[0];
+        let mut f = pdf.exponential_function(r);
+        f.domain([0.0, 1.0]);
+        f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+        f.c0(rgb_components(stops[0].color));
+        f.c1(rgb_components(stops[1].color));
+        f.n(1.0);
+        f.finish();
+        r
+    } else {
+        let n_subfns = stops.len() - 1;
+        debug_assert_eq!(refs.functions.len(), n_subfns + 1);
+        for i in 0..n_subfns {
+            let r = refs.functions[i];
+            let mut f = pdf.exponential_function(r);
+            f.domain([0.0, 1.0]);
+            f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+            f.c0(rgb_components(stops[i].color));
+            f.c1(rgb_components(stops[i + 1].color));
+            f.n(1.0);
+            f.finish();
+        }
+        let stitch_ref = *refs.functions.last().unwrap();
+        let mut stitch = pdf.stitching_function(stitch_ref);
+        stitch.domain([0.0, 1.0]);
+        stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+        stitch.functions(refs.functions[..n_subfns].iter().copied());
+        stitch.bounds(stops[1..stops.len() - 1].iter().map(|s| s.offset));
+        // Each sub-function maps its interval back to [0, 1].
+        let encode: Vec<f32> = (0..n_subfns).flat_map(|_| [0.0, 1.0]).collect();
+        stitch.encode(encode);
+        stitch.finish();
+        stitch_ref
+    };
+
+    {
+        let mut sh = pdf.function_shading(refs.shading);
+        sh.color_space().device_rgb();
+        match gradient.geom {
+            GradientGeom::Linear { x0, y0, x1, y1 } => {
+                sh.shading_type(FunctionShadingType::Axial);
+                sh.coords([x0, y0, x1, y1]);
+            }
+            GradientGeom::Radial { cx, cy, radius } => {
+                sh.shading_type(FunctionShadingType::Radial);
+                // One center and a zero inner radius, as in SVG.
+                sh.coords([cx, cy, 0.0, cx, cy, radius]);
+            }
+        }
+        // A Type 2 or 3 shading only pads, so Reflect and Repeat render as
+        // Pad. They would need a Type 4 function.
+        sh.extend([true, true]);
+        sh.function(main_fn_ref);
+        sh.finish();
+    }
+
+    {
+        let mut pat = pdf.shading_pattern(refs.pattern);
+        // A pattern draws in the space of the page, so the `cm` at the top of
+        // the content stream does not apply to it.
+        pat.matrix(matrix);
+        pat.shading_ref(refs.shading);
+        pat.finish();
     }
 }
 

@@ -13,6 +13,25 @@ use crate::scene::{
     ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment, Segments, Text,
 };
 
+/// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
+/// own pixels. See [`fit_scale`].
+pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
+    let mut renderer = PixmapRenderer::new(scale, scene.width, scene.height)?;
+    renderer.render(scene).ok()?;
+    Some(renderer.into_pixmap())
+}
+
+/// The uniform scale that fits a `width × height` frame inside `target`
+/// pixels. It can exceed 1.0. The caller caps it.
+pub fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
+    let (tw, th) = target;
+    if tw == 0 || th == 0 {
+        return 1.0;
+    }
+    let (w, h) = frame_px(width, height);
+    (tw as f32 / w as f32).min(th as f32 / h as f32)
+}
+
 /// A raster surface. It reallocates its pixmap only when the frame size
 /// changes.
 pub struct PixmapRenderer {
@@ -30,64 +49,6 @@ pub struct PixmapRenderer {
     out_h: u32,
     /// The scale from the caller, who decides whether a frame may grow.
     scale: f32,
-}
-
-/// A frame's size in whole output pixels.
-fn frame_px(width: f32, height: f32) -> (u32, u32) {
-    (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32)
-}
-
-/// The uniform scale that fits a `width × height` frame inside `target`
-/// pixels. It can exceed 1.0. The caller caps it.
-pub fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
-    let (tw, th) = target;
-    if tw == 0 || th == 0 {
-        return 1.0;
-    }
-    let (w, h) = frame_px(width, height);
-    (tw as f32 / w as f32).min(th as f32 / h as f32)
-}
-
-/// The output size and the transform of a frame at `scale`.
-fn fit(width: f32, height: f32, scale: f32) -> (u32, u32, Transform) {
-    let (w, h) = frame_px(width, height);
-    // A zero or negative scale would allocate nothing to draw into.
-    let s = scale.max(1e-3);
-    let out_w = ((w as f32) * s).ceil().max(1.0) as u32;
-    let out_h = ((h as f32) * s).ceil().max(1.0) as u32;
-    (out_w, out_h, Transform::from_scale(s, s))
-}
-
-/// A transparent pixmap, so the background of the backend shows through.
-/// `None` when the allocation fails.
-fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
-    Pixmap::new(out_w, out_h).map(|mut pm| {
-        pm.fill(tiny_skia::Color::TRANSPARENT);
-        pm
-    })
-}
-
-/// Returns `true` if any segment was appended, a lone move included, `false`
-/// otherwise.
-fn append_segments(builder: &mut PathBuilder, segments: Segments<'_>) -> bool {
-    let mut any = false;
-    for seg in segments {
-        match seg {
-            Segment::Move { x, y } => builder.move_to(x, y),
-            Segment::Line { x, y } => builder.line_to(x, y),
-            Segment::Quad { cx, cy, x, y } => builder.quad_to(cx, cy, x, y),
-            Segment::Cubic {
-                c1x,
-                c1y,
-                c2x,
-                c2y,
-                x,
-                y,
-            } => builder.cubic_to(c1x, c1y, c2x, c2y, x, y),
-        }
-        any = true;
-    }
-    any
 }
 
 impl PixmapRenderer {
@@ -110,81 +71,6 @@ impl PixmapRenderer {
     /// The pixmap of the last render.
     pub fn into_pixmap(self) -> Pixmap {
         self.pixmap
-    }
-
-    /// Pushes the mask of `clip`, intersected with the clip in effect.
-    fn push_clip(&mut self, clip: &ClipPath) {
-        let mask = self.clip_mask(clip);
-        self.clip_stack.push(mask);
-    }
-
-    /// The coverage of `clip` inside the clip in effect, or `None` when the
-    /// clip hides what it holds. A clip that gets no mask hides what it
-    /// holds, so nothing paints outside it.
-    fn clip_mask(&mut self, clip: &ClipPath) -> Option<Mask> {
-        if matches!(self.clip_stack.last(), Some(None)) {
-            return None;
-        }
-        let mut builder = PathBuilder::new();
-        append_segments(&mut builder, clip.segments());
-        // A sub-path of a clip is closed, as in an SVG clipPath. tiny_skia
-        // accepts a close on a closed contour.
-        builder.close();
-        // An empty path covers nothing.
-        let path = builder.finish()?;
-        let mut mask = self.take_mask()?;
-        mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
-        if let Some(Some(parent)) = self.clip_stack.last() {
-            // Mask::intersect_path would rasterize into a second canvas-sized
-            // mask.
-            for (a, b) in mask.data_mut().iter_mut().zip(parent.data()) {
-                *a = mask_mul(*a, *b);
-            }
-        }
-        Some(mask)
-    }
-
-    /// A cleared canvas-sized mask, from the pool when one is there.
-    /// `fill_path` adds to the coverage a mask holds, so a reused one has to
-    /// be cleared.
-    fn take_mask(&mut self) -> Option<Mask> {
-        match self.mask_pool.pop() {
-            Some(mut m) => {
-                m.clear();
-                Some(m)
-            }
-            None => Mask::new(self.out_w, self.out_h),
-        }
-    }
-}
-
-/// `a * b / 255`, rounded as tiny-skia does, so the result matches
-/// `Mask::intersect_path`.
-fn mask_mul(a: u8, b: u8) -> u8 {
-    let prod = u32::from(a) * u32::from(b) + 128;
-    ((prod + (prod >> 8)) >> 8) as u8
-}
-
-/// Pops the clip of [`Canvas::with_clip`] when dropped, so the stack stays
-/// balanced when the body panics.
-struct ClipGuard<'a> {
-    canvas: &'a mut PixmapRenderer,
-}
-
-impl Drop for ClipGuard<'_> {
-    fn drop(&mut self) {
-        if let Some(Some(mask)) = self.canvas.clip_stack.pop() {
-            self.canvas.mask_pool.push(mask);
-        }
-    }
-}
-
-/// The mask to paint through, `Some(None)` outside any clip, or `None`
-/// inside a clip that hides what it holds.
-fn mask_in_effect(clip_stack: &[Option<Mask>]) -> Option<Option<&Mask>> {
-    match clip_stack.last() {
-        None => Some(None),
-        Some(mask) => mask.as_ref().map(Some),
     }
 }
 
@@ -283,6 +169,130 @@ impl Renderer for PixmapRenderer {
     }
 }
 
+impl PixmapRenderer {
+    /// Pushes the mask of `clip`, intersected with the clip in effect.
+    fn push_clip(&mut self, clip: &ClipPath) {
+        let mask = self.clip_mask(clip);
+        self.clip_stack.push(mask);
+    }
+
+    /// The coverage of `clip` inside the clip in effect, or `None` when the
+    /// clip hides what it holds. A clip that gets no mask hides what it
+    /// holds, so nothing paints outside it.
+    fn clip_mask(&mut self, clip: &ClipPath) -> Option<Mask> {
+        if matches!(self.clip_stack.last(), Some(None)) {
+            return None;
+        }
+        let mut builder = PathBuilder::new();
+        append_segments(&mut builder, clip.segments());
+        // A sub-path of a clip is closed, as in an SVG clipPath. tiny_skia
+        // accepts a close on a closed contour.
+        builder.close();
+        // An empty path covers nothing.
+        let path = builder.finish()?;
+        let mut mask = self.take_mask()?;
+        mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
+        if let Some(Some(parent)) = self.clip_stack.last() {
+            // Mask::intersect_path would rasterize into a second canvas-sized
+            // mask.
+            for (a, b) in mask.data_mut().iter_mut().zip(parent.data()) {
+                *a = mask_mul(*a, *b);
+            }
+        }
+        Some(mask)
+    }
+
+    /// A cleared canvas-sized mask, from the pool when one is there.
+    /// `fill_path` adds to the coverage a mask holds, so a reused one has to
+    /// be cleared.
+    fn take_mask(&mut self) -> Option<Mask> {
+        match self.mask_pool.pop() {
+            Some(mut m) => {
+                m.clear();
+                Some(m)
+            }
+            None => Mask::new(self.out_w, self.out_h),
+        }
+    }
+}
+
+/// Pops the clip of [`Canvas::with_clip`] when dropped, so the stack stays
+/// balanced when the body panics.
+struct ClipGuard<'a> {
+    canvas: &'a mut PixmapRenderer,
+}
+
+impl Drop for ClipGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(Some(mask)) = self.canvas.clip_stack.pop() {
+            self.canvas.mask_pool.push(mask);
+        }
+    }
+}
+
+/// The mask to paint through, `Some(None)` outside any clip, or `None`
+/// inside a clip that hides what it holds.
+fn mask_in_effect(clip_stack: &[Option<Mask>]) -> Option<Option<&Mask>> {
+    match clip_stack.last() {
+        None => Some(None),
+        Some(mask) => mask.as_ref().map(Some),
+    }
+}
+
+/// `a * b / 255`, rounded as tiny-skia does, so the result matches
+/// `Mask::intersect_path`.
+fn mask_mul(a: u8, b: u8) -> u8 {
+    let prod = u32::from(a) * u32::from(b) + 128;
+    ((prod + (prod >> 8)) >> 8) as u8
+}
+
+/// A frame's size in whole output pixels.
+fn frame_px(width: f32, height: f32) -> (u32, u32) {
+    (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32)
+}
+
+/// The output size and the transform of a frame at `scale`.
+fn fit(width: f32, height: f32, scale: f32) -> (u32, u32, Transform) {
+    let (w, h) = frame_px(width, height);
+    // A zero or negative scale would allocate nothing to draw into.
+    let s = scale.max(1e-3);
+    let out_w = ((w as f32) * s).ceil().max(1.0) as u32;
+    let out_h = ((h as f32) * s).ceil().max(1.0) as u32;
+    (out_w, out_h, Transform::from_scale(s, s))
+}
+
+/// A transparent pixmap, so the background of the backend shows through.
+/// `None` when the allocation fails.
+fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
+    Pixmap::new(out_w, out_h).map(|mut pm| {
+        pm.fill(tiny_skia::Color::TRANSPARENT);
+        pm
+    })
+}
+
+/// Returns `true` if any segment was appended, a lone move included, `false`
+/// otherwise.
+fn append_segments(builder: &mut PathBuilder, segments: Segments<'_>) -> bool {
+    let mut any = false;
+    for seg in segments {
+        match seg {
+            Segment::Move { x, y } => builder.move_to(x, y),
+            Segment::Line { x, y } => builder.line_to(x, y),
+            Segment::Quad { cx, cy, x, y } => builder.quad_to(cx, cy, x, y),
+            Segment::Cubic {
+                c1x,
+                c1y,
+                c2x,
+                c2y,
+                x,
+                y,
+            } => builder.cubic_to(c1x, c1y, c2x, c2y, x, y),
+        }
+        any = true;
+    }
+    any
+}
+
 fn sk_fill_rule(r: FillRule) -> SkFillRule {
     match r {
         FillRule::EvenOdd => SkFillRule::EvenOdd,
@@ -303,25 +313,6 @@ fn sk_line_join(j: LineJoin) -> SkLineJoin {
         LineJoin::Round => SkLineJoin::Round,
         LineJoin::Bevel => SkLineJoin::Bevel,
         LineJoin::Miter => SkLineJoin::Miter,
-    }
-}
-
-fn sk_color(c: Rgba) -> SkColor {
-    SkColor::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8)
-}
-
-fn sk_stops(stops: &[crate::scene::Stop]) -> Vec<SkStop> {
-    stops
-        .iter()
-        .map(|s| SkStop::new(s.offset, sk_color(s.color)))
-        .collect()
-}
-
-fn sk_spread(s: crate::scene::SpreadMode) -> SkSpread {
-    match s {
-        crate::scene::SpreadMode::Pad => SkSpread::Pad,
-        crate::scene::SpreadMode::Reflect => SkSpread::Reflect,
-        crate::scene::SpreadMode::Repeat => SkSpread::Repeat,
     }
 }
 
@@ -358,12 +349,23 @@ fn paint_to_shader(p: &Paint) -> SkShader<'static> {
     .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
 }
 
-/// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
-/// own pixels. See [`fit_scale`].
-pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
-    let mut renderer = PixmapRenderer::new(scale, scene.width, scene.height)?;
-    renderer.render(scene).ok()?;
-    Some(renderer.into_pixmap())
+fn sk_color(c: Rgba) -> SkColor {
+    SkColor::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8)
+}
+
+fn sk_stops(stops: &[crate::scene::Stop]) -> Vec<SkStop> {
+    stops
+        .iter()
+        .map(|s| SkStop::new(s.offset, sk_color(s.color)))
+        .collect()
+}
+
+fn sk_spread(s: crate::scene::SpreadMode) -> SkSpread {
+    match s {
+        crate::scene::SpreadMode::Pad => SkSpread::Pad,
+        crate::scene::SpreadMode::Reflect => SkSpread::Reflect,
+        crate::scene::SpreadMode::Repeat => SkSpread::Repeat,
+    }
 }
 
 // -----------------------------------------------------------------------------
