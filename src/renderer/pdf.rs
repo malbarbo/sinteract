@@ -52,7 +52,7 @@ pub struct PdfRenderer {
     gstates: BTreeMap<(u16, u16), u32>,
     /// The gradients of the frame. The index of a gradient is its `/Pn` name
     /// in the content stream and in the pattern dictionary.
-    gradients: Vec<Gradient>,
+    gradients: Vec<Shading>,
     /// The document of the last render.
     bytes: Vec<u8>,
 }
@@ -84,9 +84,12 @@ impl Default for PdfRenderer {
 
 impl PdfRenderer {
     /// Returns the `/Pn` name of `g`.
-    fn push_gradient(&mut self, g: Gradient) -> String {
+    fn push_gradient(&mut self, g: &Gradient) -> String {
         let idx = self.gradients.len();
-        self.gradients.push(g);
+        self.gradients.push(Shading {
+            geom: g.geom,
+            stops: prepare_stops(&g.stops),
+        });
         format!("P{idx}")
     }
 
@@ -117,7 +120,7 @@ impl PdfRenderer {
                 };
                 return;
             }
-            IrPaint::Gradient(g) => g.as_ref().clone(),
+            IrPaint::Gradient(g) => g,
         };
         let name = self.push_gradient(gradient);
         let name = Name(name.as_bytes());
@@ -289,6 +292,13 @@ pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
     renderer.into_bytes()
 }
 
+/// A gradient of the frame, with the stops that its functions take.
+struct Shading {
+    geom: GradientGeom,
+    /// From [`prepare_stops`].
+    stops: Vec<Stop>,
+}
+
 /// The indirect objects of one gradient.
 struct GradientRefs {
     /// The functions, with the one the shading references last.
@@ -326,7 +336,7 @@ impl PdfRenderer {
         let gradient_refs: Vec<GradientRefs> = gradients
             .iter()
             .map(|g| {
-                let prepared = prepare_stops(&g.stops);
+                let prepared = &g.stops;
                 // Two stops need one exponential function. More need one per
                 // interval and a stitching function.
                 let n_subfns = if prepared.len() <= 2 {
@@ -464,13 +474,8 @@ fn rgb_components(c: Rgba) -> [f32; 3] {
     [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
 }
 
-fn emit_gradient_objects(
-    pdf: &mut Pdf,
-    gradient: &Gradient,
-    refs: &GradientRefs,
-    matrix: [f32; 6],
-) {
-    let stops = prepare_stops(&gradient.stops);
+fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Shading, refs: &GradientRefs, matrix: [f32; 6]) {
+    let stops = &gradient.stops;
 
     let main_fn_ref = if stops.len() == 2 {
         let r = refs.functions[0];
