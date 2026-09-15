@@ -4,8 +4,9 @@
 
 use tiny_skia::{
     Color as SkColor, FillRule as SkFillRule, GradientStop as SkStop, LineCap as SkLineCap,
-    LineJoin as SkLineJoin, Mask, Paint as SkPaint, PathBuilder, Pixmap, Point as SkPoint,
-    Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
+    LineJoin as SkLineJoin, Mask, Paint as SkPaint, Path as SkPath, PathBuilder, PathStroker,
+    Pixmap, Point as SkPoint, Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash,
+    Transform,
 };
 
 use crate::outline::PathSink;
@@ -116,7 +117,7 @@ impl Canvas for PixmapRenderer {
         let Some(sk_path) = builder.finish() else {
             return;
         };
-        if do_fill {
+        if do_fill && within_reach(&sk_path, self.base, 0.0) {
             let paint = sk_paint(paint_to_shader(&style.fill));
             self.pixmap.fill_path(
                 &sk_path,
@@ -139,8 +140,10 @@ impl Canvas for PixmapRenderer {
                 miter_limit: style.miter_limit,
                 dash,
             };
-            self.pixmap
-                .stroke_path(&sk_path, &paint, &stroke, self.base, mask);
+            if stroke_within_reach(&sk_path, &stroke, self.base) {
+                self.pixmap
+                    .stroke_path(&sk_path, &paint, &stroke, self.base, mask);
+            }
         }
         self.builder = sk_path.clear();
     }
@@ -192,7 +195,9 @@ impl PixmapRenderer {
         builder.close();
         // An empty path covers nothing.
         let path = builder.finish()?;
-        let mask = self.take_mask().map(|mut mask| {
+        // A clip that reaches too far hides what it holds.
+        let reach = within_reach(&path, self.base, 0.0);
+        let mask = reach.then(|| self.take_mask()).flatten().map(|mut mask| {
             mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
             if let Some(Some(parent)) = self.clip_stack.last() {
                 // Mask::intersect_path would rasterize into a second
@@ -379,7 +384,7 @@ fn paint_text_path(
     let Some(path) = b.finish() else {
         return;
     };
-    if node.draws_fill() {
+    if node.draws_fill() && within_reach(&path, transform, 0.0) {
         let paint = sk_paint(SkShader::SolidColor(sk_color(node.fill)));
         // A TrueType glyph fills with non-zero winding.
         pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
@@ -392,9 +397,42 @@ fn paint_text_path(
             dash: None,
             ..Stroke::default()
         };
-        pixmap.stroke_path(&path, &paint, &stroke, transform, mask);
+        if stroke_within_reach(&path, &stroke, transform) {
+            pixmap.stroke_path(&path, &paint, &stroke, transform, mask);
+        }
     }
     *builder = path.clear();
+}
+
+/// The farthest a path may reach from the origin, in output pixels.
+/// tiny-skia overflows an `i32` on a path that reaches 2^29 pixels above the
+/// canvas and aborts (linebender/tiny-skia#180), so a path that reaches
+/// farther than this draws nothing.
+const MAX_REACH: f32 = (1u32 << 28) as f32;
+
+/// Returns `true` if `path` under `transform`, grown by `pad` on each side,
+/// stays within [`MAX_REACH`], `false` otherwise.
+fn within_reach(path: &SkPath, transform: Transform, pad: f32) -> bool {
+    path.bounds()
+        .outset(pad, pad)
+        .and_then(|b| b.transform(transform))
+        .is_some_and(|b| {
+            b.left() >= -MAX_REACH
+                && b.top() >= -MAX_REACH
+                && b.right() <= MAX_REACH
+                && b.bottom() <= MAX_REACH
+        })
+}
+
+/// Returns `true` if `stroke` of `path` under `transform` stays within
+/// [`MAX_REACH`], `false` otherwise. A join or a cap reaches at most
+/// `miter_limit.max(1.0)` widths past the path, so that bound settles most
+/// strokes, and only a stroke past it is outlined to find where it reaches.
+fn stroke_within_reach(path: &SkPath, stroke: &Stroke, transform: Transform) -> bool {
+    within_reach(path, transform, stroke.width * stroke.miter_limit.max(1.0))
+        || path
+            .stroke(stroke, PathStroker::compute_resolution_scale(&transform))
+            .is_some_and(|outline| within_reach(&outline, transform, 0.0))
 }
 
 /// The inherent methods of [`PathBuilder`], so paths, clips and glyphs build
@@ -705,5 +743,76 @@ mod tests {
         let odd = line(vec![5.0]);
         assert_eq!(pixel_rgba(&odd, 7, 5).3, 0, "no gap");
         assert_same_pixels(&line(vec![5.0, 5.0]), &odd);
+    }
+
+    /// A scene with a triangle whose apex is `apex` pixels above the canvas,
+    /// drawn as a path, or as a clip around a filled canvas.
+    fn triangle_above(apex: f32, as_clip: bool) -> Pixmap {
+        let mut scene = Scene::new(100.0, 100.0);
+        if as_clip {
+            let clip = ClipPath::builder(FillRule::NonZero, 10.0, 10.0)
+                .line_to(50.0, -apex)
+                .line_to(90.0, 90.0)
+                .build();
+            let mut inner = scene.clip(clip);
+            rect(&mut inner, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
+        } else {
+            scene
+                .path(solid(0, 0, 255), 10.0, 10.0)
+                .line_to(50.0, -apex)
+                .line_to(90.0, 90.0);
+        }
+        render_to_pixmap(&scene, 1.0).expect("pixmap")
+    }
+
+    #[test]
+    fn a_path_that_reaches_too_far_draws_nothing() {
+        assert_eq!(pixel_rgba(&triangle_above(1e8, false), 50, 20).3, 255);
+        assert_eq!(pixel_rgba(&triangle_above(1e9, false), 50, 20).3, 0);
+    }
+
+    #[test]
+    fn a_clip_that_reaches_too_far_hides_what_it_holds() {
+        assert_eq!(pixel_rgba(&triangle_above(1e8, true), 50, 20).3, 255);
+        assert_eq!(pixel_rgba(&triangle_above(1e9, true), 50, 20).3, 0);
+    }
+
+    #[test]
+    fn a_stroke_that_reaches_too_far_draws_nothing() {
+        let line = |width: f32| {
+            let mut scene = Scene::new(100.0, 100.0);
+            let style = PathStyle {
+                stroke: Paint::rgba(0, 0, 255, 1.0),
+                stroke_width: width,
+                ..PathStyle::default()
+            };
+            scene.path(style, 10.0, 50.0).line_to(90.0, 50.0);
+            render_to_pixmap(&scene, 1.0).expect("pixmap")
+        };
+        assert_eq!(pixel_rgba(&line(1e8), 50, 20).3, 255);
+        assert_eq!(pixel_rgba(&line(1e10), 50, 20).3, 0);
+    }
+
+    #[test]
+    fn a_text_that_reaches_too_far_draws_nothing() {
+        // A glyph 20 units tall at a scale of 1e9 reaches past the canvas.
+        let mut scene = Scene::new(100.0, 100.0);
+        scene.text(Text {
+            fill: Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            transform: [1e9, 0.0, 0.0, 1e9, 0.0, 50.0],
+            spec: TextSpec {
+                size: 20.0,
+                text: "H".into(),
+                ..TextSpec::default()
+            },
+            ..Text::default()
+        });
+        let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
+        assert_eq!(pixel_rgba(&pm, 50, 20).3, 0);
     }
 }

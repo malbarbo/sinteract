@@ -700,7 +700,9 @@ impl Path {
     }
 }
 
-/// One node of a [`Scene`]. A clip holds the elements it applies to.
+/// One node of a [`Scene`]. A clip holds the elements it applies to. A
+/// renderer may draw nothing for an element that reaches more than 2^28
+/// output pixels from the origin.
 #[derive(Clone, Debug)]
 pub enum Element {
     Path(Path),

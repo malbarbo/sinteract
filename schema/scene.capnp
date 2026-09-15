@@ -198,7 +198,8 @@ struct Path {
 # ----- Scene element -----
 #
 # A clipped element nests its own elements, so the clip nesting is balanced
-# by construction.
+# by construction. A renderer may draw nothing for an element that reaches
+# more than 2^28 output pixels from the origin.
 
 struct Element {
     union {
