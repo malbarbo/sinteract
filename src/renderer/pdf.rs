@@ -95,27 +95,11 @@ impl Canvas for PdfRenderer {
             return;
         }
 
-        self.content.save_state();
-        // A shading has no alpha, so a gradient takes the alpha of its first
-        // stop for the whole path.
-        let fill_alpha = if do_fill {
-            style.fill.primary_color().a
-        } else {
-            1.0
-        };
-        let stroke_alpha = if do_stroke {
-            style.stroke.primary_color().a
-        } else {
-            1.0
-        };
-        self.apply_alpha(fill_alpha, stroke_alpha);
-
-        // PDF forbids a color operator inside a path object.
-        if do_fill {
-            self.bind_paint(&style.fill, PaintTarget::Fill);
-        }
+        self.begin_paint(
+            do_fill.then_some(&style.fill),
+            do_stroke.then_some(&style.stroke),
+        );
         if do_stroke {
-            self.bind_paint(&style.stroke, PaintTarget::Stroke);
             self.content.set_line_width(style.stroke_width);
             self.content.set_line_cap(pdf_line_cap(style.line_cap));
             self.content.set_line_join(pdf_line_join(style.line_join));
@@ -185,6 +169,23 @@ impl Renderer for PdfRenderer {
 }
 
 impl PdfRenderer {
+    /// Saves the graphics state, then sets the alpha and binds the paint of
+    /// each side that draws, `None` for a side that does not. PDF forbids a
+    /// color operator inside a path object, so this goes before the path.
+    fn begin_paint(&mut self, fill: Option<&Paint>, stroke: Option<&Paint>) {
+        self.content.save_state();
+        // A shading has no alpha, so a gradient takes the alpha of its first
+        // stop for the whole path.
+        let alpha = |paint: Option<&Paint>| paint.map_or(1.0, |p| p.primary_color().a);
+        self.apply_alpha(alpha(fill), alpha(stroke));
+        if let Some(paint) = fill {
+            self.bind_paint(paint, PaintTarget::Fill);
+        }
+        if let Some(paint) = stroke {
+            self.bind_paint(paint, PaintTarget::Stroke);
+        }
+    }
+
     /// Returns the index of `g`, the `n` of its `/Pn` name.
     fn push_gradient(&mut self, g: &Gradient) -> usize {
         let idx = self.gradients.len();
@@ -414,16 +415,9 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
         return;
     };
 
-    canvas.content.save_state();
-    canvas.apply_alpha(
-        if do_fill { node.fill.a } else { 1.0 },
-        if do_stroke { node.stroke.a } else { 1.0 },
-    );
-    if do_fill {
-        canvas.bind_paint(&Paint::Solid(node.fill), PaintTarget::Fill);
-    }
+    let (fill, stroke) = (Paint::Solid(node.fill), Paint::Solid(node.stroke));
+    canvas.begin_paint(do_fill.then_some(&fill), do_stroke.then_some(&stroke));
     if do_stroke {
-        canvas.bind_paint(&Paint::Solid(node.stroke), PaintTarget::Stroke);
         // The default miter limit is TEXT_MITER_LIMIT.
         canvas.content.set_line_width(node.stroke_width);
     }
