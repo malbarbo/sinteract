@@ -53,12 +53,6 @@ impl From<capnp::Error> for Error {
     }
 }
 
-impl From<capnp::NotInSchema> for Error {
-    fn from(e: capnp::NotInSchema) -> Self {
-        Error::Payload(e.into())
-    }
-}
-
 impl From<AllocError> for Error {
     fn from(e: AllocError) -> Self {
         Error::Surface(e)

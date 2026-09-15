@@ -38,32 +38,24 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
 
 /// A payload is malformed. It says the scene, the event or the message is
 /// unusable, and never that the session is. A server that gets one from
-/// [`decode`] drops the message and keeps the peer.
+/// [`decode`] drops the message and keeps the peer. A value from a newer
+/// schema is not an error, since the decoders skip what holds it.
 #[derive(Debug)]
 pub enum Error {
     /// Cap'n Proto rejected the bytes as malformed, truncated, or of the
     /// wrong root.
     Parse(capnp::Error),
-    /// A union inside an element or an event, such as `Paint`, holds an arm
-    /// this crate does not know, or an enum holds a value it does not know.
-    /// The decoders skip the element or the event that holds it, so they do
-    /// not return this.
-    UnknownVariant(&'static str, u16),
     /// A required nested struct or list is unset.
     MissingField(&'static str),
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
-    /// A `Path` or a clip carries a verb byte this crate does not know. The
-    /// decoders skip the element that holds it, so they do not return this.
-    UnknownVerb(u8),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Parse(e) => write!(f, "parse error: {e}"),
-            Error::UnknownVariant(name, tag) => write!(f, "unknown {name} discriminant: {tag}"),
             Error::MissingField(name) => write!(f, "missing required field: {name}"),
             Error::PathLengthMismatch { verbs, coords } => {
                 write!(
@@ -71,7 +63,6 @@ impl std::fmt::Display for Error {
                     "path verbs ({verbs} bytes) and coords ({coords} floats) disagree"
                 )
             }
-            Error::UnknownVerb(v) => write!(f, "unknown path verb byte: {v}"),
         }
     }
 }
@@ -84,25 +75,53 @@ impl From<capnp::Error> for Error {
     }
 }
 
-impl From<capnp::NotInSchema> for Error {
-    fn from(e: capnp::NotInSchema) -> Self {
-        Error::UnknownVariant("enum", e.0)
-    }
-}
-
 impl From<std::str::Utf8Error> for Error {
     fn from(e: std::str::Utf8Error) -> Self {
         Error::Parse(capnp::Error::failed(e.to_string()))
     }
 }
 
+/// How reading the values inside an element or an event fails. Only
+/// `skip_unknown` looks inside, so no decoder returns it.
+enum ReadError {
+    /// The bytes are damaged, and the whole payload is unusable.
+    Malformed(Error),
+    /// A paint arm, an enum value or a verb byte from a newer schema. The
+    /// reader skips the element or the event that holds it.
+    Newer,
+}
+
+impl From<Error> for ReadError {
+    fn from(e: Error) -> Self {
+        ReadError::Malformed(e)
+    }
+}
+
+impl From<capnp::Error> for ReadError {
+    fn from(e: capnp::Error) -> Self {
+        ReadError::Malformed(e.into())
+    }
+}
+
+impl From<capnp::NotInSchema> for ReadError {
+    fn from(_: capnp::NotInSchema) -> Self {
+        ReadError::Newer
+    }
+}
+
+impl From<std::str::Utf8Error> for ReadError {
+    fn from(e: std::str::Utf8Error) -> Self {
+        ReadError::Malformed(e.into())
+    }
+}
+
 /// `None` when reading an element or an event met a value from a newer
 /// schema, so the reader skips what holds it. Damage stays an error.
-fn skip_unknown<T>(read: Result<T, Error>) -> Result<Option<T>, Error> {
+fn skip_unknown<T>(read: Result<T, ReadError>) -> Result<Option<T>, Error> {
     match read {
         Ok(v) => Ok(Some(v)),
-        Err(Error::UnknownVariant(..) | Error::UnknownVerb(_)) => Ok(None),
-        Err(e) => Err(e),
+        Err(ReadError::Newer) => Ok(None),
+        Err(ReadError::Malformed(e)) => Err(e),
     }
 }
 
