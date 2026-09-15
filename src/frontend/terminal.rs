@@ -515,8 +515,7 @@ mod tests {
     }
 
     fn rect_path(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        let mut p = scene.path(style);
-        p.move_to(x, y);
+        let mut p = scene.path(style, x, y);
         p.line_to(x + w, y);
         p.line_to(x + w, y + h);
         p.line_to(x, y + h);
@@ -536,8 +535,7 @@ mod tests {
     fn rasterize_filled_circle_center_is_red() {
         let mut scene = Scene::new(40.0, 40.0);
         {
-            let mut p = scene.path(solid(255, 0, 0));
-            p.move_to(40.0, 20.0);
+            let mut p = scene.path(solid(255, 0, 0), 40.0, 20.0);
             p.arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0);
             p.arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0);
         }
@@ -902,13 +900,16 @@ mod tests {
         // segment and x=20 in an off segment.
         let mut scene = Scene::new(100.0, 20.0);
         {
-            let mut p = scene.path(PathStyle {
-                stroke: Paint::rgba(255, 0, 0, 1.0),
-                stroke_width: 3.0,
-                dash: crate::scene::Dash::new(vec![10.0, 10.0], 0.0).map(Box::new),
-                ..PathStyle::default()
-            });
-            p.move_to(5.0, 10.0);
+            let mut p = scene.path(
+                PathStyle {
+                    stroke: Paint::rgba(255, 0, 0, 1.0),
+                    stroke_width: 3.0,
+                    dash: crate::scene::Dash::new(vec![10.0, 10.0], 0.0).map(Box::new),
+                    ..PathStyle::default()
+                },
+                5.0,
+                10.0,
+            );
             p.line_to(95.0, 10.0);
         }
         let pm = rasterize(&scene);

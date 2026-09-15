@@ -11,13 +11,13 @@ vector, with text as glyph outlines.
 ```rust,no_run
 use sinteract::scene::{Paint, PathStyle, Scene};
 
+let blue = PathStyle {
+    fill: Paint::rgba(0, 0, 255, 1.0),
+    ..PathStyle::default()
+};
 let mut scene = Scene::new(40.0, 30.0);
 scene
-    .path(PathStyle {
-        fill: Paint::rgba(0, 0, 255, 1.0),
-        ..PathStyle::default()
-    })
-    .move_to(0.0, 0.0)
+    .path(blue, 0.0, 0.0)
     .line_to(40.0, 0.0)
     .line_to(40.0, 30.0)
     .line_to(0.0, 30.0);
@@ -26,10 +26,10 @@ sinteract::frontend::terminal::show_image(&scene);
 let pdf: Vec<u8> = sinteract::renderer::pdf::render_to_pdf(&scene);
 ```
 
-`Scene::path` returns a scope that commits the path when it is dropped, and
-`Scene::clip` returns a scope that collects what is drawn inside it into one
-clipped element. An arc becomes cubics inside the scope, so a renderer only
-sees moves, lines, quadratics and cubics.
+`Scene::path` begins a path at a point and returns a scope that commits it
+when it is dropped, and `Scene::clip` returns a scope that collects what is
+drawn inside it into one clipped element. An arc becomes cubics inside the
+scope, so a renderer only sees moves, lines, quadratics and cubics.
 
 For an animation, a `Frontend` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `InputEvent`. The

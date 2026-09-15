@@ -219,8 +219,9 @@ pub struct ClipPath {
 }
 
 impl ClipPath {
-    pub fn builder(fill_rule: FillRule) -> ClipPathBuilder {
-        ClipPathBuilder::new(fill_rule)
+    /// Begin a clip at `(x, y)`.
+    pub fn builder(fill_rule: FillRule, x: f32, y: f32) -> ClipPathBuilder {
+        ClipPathBuilder::new(fill_rule, x, y)
     }
 
     /// For the wire decoder, which refills a clip in place.
@@ -281,8 +282,7 @@ impl From<RotatedRect> for ClipPath {
         let p1 = apply_affine(m, 0.5, -0.5);
         let p2 = apply_affine(m, 0.5, 0.5);
         let p3 = apply_affine(m, -0.5, 0.5);
-        ClipPath::builder(FillRule::default())
-            .move_to(p0.0, p0.1)
+        ClipPath::builder(FillRule::default(), p0.0, p0.1)
             .line_to(p1.0, p1.1)
             .line_to(p2.0, p2.1)
             .line_to(p3.0, p3.1)
@@ -625,27 +625,34 @@ impl Iterator for Cubics<'_> {
 }
 
 /// The geometry half of [`PathBuilder`] and [`ClipPathBuilder`], so the arc
-/// expansion is written once.
-#[derive(Default)]
+/// expansion is written once. It begins with a move to the start point, so
+/// there is always a current point.
 struct GeometryBuilder {
     segs: Vec<Segment>,
-    last_point: Option<(f32, f32)>,
+    last_point: (f32, f32),
 }
 
 impl GeometryBuilder {
+    fn new(x: f32, y: f32) -> Self {
+        Self {
+            segs: vec![Segment::Move { x, y }],
+            last_point: (x, y),
+        }
+    }
+
     fn move_to(&mut self, x: f32, y: f32) {
         self.segs.push(Segment::Move { x, y });
-        self.last_point = Some((x, y));
+        self.last_point = (x, y);
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
         self.segs.push(Segment::Line { x, y });
-        self.last_point = Some((x, y));
+        self.last_point = (x, y);
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
         self.segs.push(Segment::Quad { cx, cy, x, y });
-        self.last_point = Some((x, y));
+        self.last_point = (x, y);
     }
 
     fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
@@ -657,11 +664,10 @@ impl GeometryBuilder {
             x,
             y,
         });
-        self.last_point = Some((x, y));
+        self.last_point = (x, y);
     }
 
-    /// Append an SVG endpoint arc as cubics. With no current point the arc
-    /// becomes a move to `(x, y)`, and a degenerate arc becomes a line.
+    /// Append an SVG endpoint arc as cubics. A degenerate arc becomes a line.
     #[allow(clippy::too_many_arguments)]
     fn arc_to(
         &mut self,
@@ -673,9 +679,7 @@ impl GeometryBuilder {
         x: f32,
         y: f32,
     ) {
-        let Some((x1, y1)) = self.last_point else {
-            return self.move_to(x, y);
-        };
+        let (x1, y1) = self.last_point;
         let svg_arc = kurbo::SvgArc {
             from: kurbo::Point::new(x1 as f64, y1 as f64),
             to: kurbo::Point::new(x as f64, y as f64),
@@ -699,7 +703,7 @@ impl GeometryBuilder {
                 });
             }
         }
-        self.last_point = Some((x, y));
+        self.last_point = (x, y);
     }
 }
 
@@ -712,8 +716,9 @@ pub struct Path {
 }
 
 impl Path {
-    pub fn builder(style: PathStyle) -> PathBuilder {
-        PathBuilder::new(style)
+    /// Begin a path at `(x, y)`.
+    pub fn builder(style: PathStyle, x: f32, y: f32) -> PathBuilder {
+        PathBuilder::new(style, x, y)
     }
 
     /// For the wire decoder, which refills a path in place.
@@ -743,8 +748,8 @@ pub enum Element {
 /// drop, and [`Self::clip`] returns a [`ClipScope`] that wraps the elements
 /// drawn while it lives into an [`Element::Clipped`] on drop, so a clip
 /// cannot be left open. A
-/// `PathScope` with no geometry commits nothing. Only [`Self::add_path`]
-/// can add an empty path.
+/// `PathScope` with nothing past its start point commits nothing. Only
+/// [`Self::add_path`] can add such a path.
 ///
 /// An arc is stored as cubics, so a renderer sees only move, line, quad and
 /// cubic.
@@ -786,12 +791,13 @@ impl Scene {
         self.elements.push(Element::Path(path));
     }
 
-    /// Begin a path. The [`PathScope`] commits it to [`Self::elements`] on
-    /// drop, or discards it if no geometry was added.
-    pub fn path(&mut self, style: PathStyle) -> PathScope<'_> {
+    /// Begin a path at `(x, y)`. The [`PathScope`] commits it to
+    /// [`Self::elements`] on drop, or discards it if nothing was added past
+    /// the start point.
+    pub fn path(&mut self, style: PathStyle, x: f32, y: f32) -> PathScope<'_> {
         PathScope {
             scene: self,
-            builder: PathBuilder::new(style),
+            builder: PathBuilder::new(style, x, y),
         }
     }
 
@@ -819,7 +825,7 @@ impl Scene {
 
 /// The path under construction by [`Scene::path`]. The geometry methods take
 /// `&mut self`, so a loop can build a path, and drop commits it to the
-/// scene, or discards it if it has no geometry.
+/// scene, or discards it if it has nothing past its start point.
 #[must_use = "PathScope commits the path on drop; bind it so geometry methods can run"]
 pub struct PathScope<'a> {
     scene: &'a mut Scene,
@@ -875,9 +881,11 @@ impl PathScope<'_> {
 
 impl Drop for PathScope<'_> {
     fn drop(&mut self) {
-        let builder = std::mem::take(&mut self.builder);
-        if !builder.geom.segs.is_empty() {
-            self.scene.elements.push(Element::Path(builder.build()));
+        if self.builder.geom.segs.len() > 1 {
+            self.scene.elements.push(Element::Path(Path {
+                style: std::mem::take(&mut self.builder.style),
+                segs: std::mem::take(&mut self.builder.geom.segs),
+            }));
         }
     }
 }
@@ -916,9 +924,7 @@ impl<'a> Drop for ClipScope<'a> {
     }
 }
 
-/// Builds a [`Path`] by value. `Default` exists so that the `Drop` of
-/// [`PathScope`] can take the builder out with `mem::take`.
-#[derive(Default)]
+/// Builds a [`Path`] by value.
 #[must_use = "PathBuilder yields a Path only when build() is called"]
 pub struct PathBuilder {
     style: PathStyle,
@@ -926,10 +932,10 @@ pub struct PathBuilder {
 }
 
 impl PathBuilder {
-    fn new(style: PathStyle) -> Self {
+    fn new(style: PathStyle, x: f32, y: f32) -> Self {
         Self {
             style,
-            geom: GeometryBuilder::default(),
+            geom: GeometryBuilder::new(x, y),
         }
     }
 
@@ -953,8 +959,7 @@ impl PathBuilder {
         self
     }
 
-    /// Append an SVG endpoint arc as cubics. With no current point the arc
-    /// becomes a move to `(x, y)`, and a degenerate arc becomes a line.
+    /// Append an SVG endpoint arc as cubics. A degenerate arc becomes a line.
     #[allow(clippy::too_many_arguments)]
     pub fn arc_to(
         mut self,
@@ -988,9 +993,9 @@ pub struct ClipPathBuilder {
 }
 
 impl ClipPathBuilder {
-    fn new(fill_rule: FillRule) -> Self {
+    fn new(fill_rule: FillRule, x: f32, y: f32) -> Self {
         Self {
-            geom: GeometryBuilder::default(),
+            geom: GeometryBuilder::new(x, y),
             fill_rule,
         }
     }
@@ -1015,8 +1020,7 @@ impl ClipPathBuilder {
         self
     }
 
-    /// Append an SVG endpoint arc as cubics. With no current point the arc
-    /// becomes a move to `(x, y)`, and a degenerate arc becomes a line.
+    /// Append an SVG endpoint arc as cubics. A degenerate arc becomes a line.
     #[allow(clippy::too_many_arguments)]
     pub fn arc_to(
         mut self,
@@ -1047,8 +1051,7 @@ mod tests {
 
     #[test]
     fn cubics_elevates_quads_against_the_current_point() {
-        let path = Path::builder(PathStyle::default())
-            .move_to(0.0, 0.0)
+        let path = Path::builder(PathStyle::default(), 0.0, 0.0)
             .quad_to(3.0, 3.0, 6.0, 0.0)
             .build();
         let segs: Vec<_> = path.segments().cubics().collect();
@@ -1068,27 +1071,15 @@ mod tests {
     }
 
     #[test]
-    fn cubics_drops_a_quad_with_no_anchor() {
-        let path = Path::builder(PathStyle::default())
-            .quad_to(3.0, 3.0, 6.0, 0.0)
-            .line_to(9.0, 0.0)
-            .build();
-        let segs: Vec<_> = path.segments().cubics().collect();
-        assert_eq!(segs, vec![Segment::Line { x: 9.0, y: 0.0 }]);
-    }
-
-    #[test]
     fn has_bitmaps_sees_through_clip_subtrees() {
         let mut scene = Scene::new(10.0, 10.0);
         {
-            let mut p = scene.path(PathStyle::default());
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(PathStyle::default(), 0.0, 0.0);
             p.line_to(5.0, 5.0);
         }
         assert!(!scene.has_bitmaps());
 
-        let clip = ClipPath::builder(FillRule::NonZero)
-            .move_to(0.0, 0.0)
+        let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
             .line_to(10.0, 10.0)
             .build();
         scene.clip(clip).bitmap(Bitmap::default());
@@ -1097,8 +1088,7 @@ mod tests {
 
     #[test]
     fn builders_append_one_segment_per_call() {
-        let clip = ClipPath::builder(FillRule::EvenOdd)
-            .move_to(0.0, 0.0)
+        let clip = ClipPath::builder(FillRule::EvenOdd, 0.0, 0.0)
             .line_to(10.0, 0.0)
             .quad_to(15.0, 5.0, 10.0, 10.0)
             .cubic_to(8.0, 8.0, 4.0, 6.0, 0.0, 10.0)
@@ -1118,8 +1108,7 @@ mod tests {
 
     #[test]
     fn segments_decodes_each_verb() {
-        let clip = ClipPath::builder(FillRule::NonZero)
-            .move_to(1.0, 2.0)
+        let clip = ClipPath::builder(FillRule::NonZero, 1.0, 2.0)
             .line_to(3.0, 4.0)
             .quad_to(5.0, 6.0, 7.0, 8.0)
             .cubic_to(9.0, 10.0, 11.0, 12.0, 13.0, 14.0)
@@ -1150,8 +1139,7 @@ mod tests {
 
     #[test]
     fn clip_builder_arc_to_expands_to_cubics() {
-        let clip = ClipPath::builder(FillRule::NonZero)
-            .move_to(0.0, 0.0)
+        let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
             .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0)
             .build();
         // The tolerance decides how many cubics the arc becomes.
@@ -1162,18 +1150,8 @@ mod tests {
     }
 
     #[test]
-    fn clip_builder_arc_to_without_current_point_moves() {
-        let clip = ClipPath::builder(FillRule::NonZero)
-            .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 10.0)
-            .build();
-        let segs: Vec<_> = clip.segments().collect();
-        assert_eq!(segs, [Segment::Move { x: 10.0, y: 10.0 }]);
-    }
-
-    #[test]
     fn standalone_path_builder_builds_the_segments_it_was_given() {
-        let p = Path::builder(PathStyle::default())
-            .move_to(0.0, 0.0)
+        let p = Path::builder(PathStyle::default(), 0.0, 0.0)
             .line_to(10.0, 0.0)
             .quad_to(15.0, 5.0, 10.0, 10.0)
             .build();
@@ -1197,8 +1175,7 @@ mod tests {
     fn scene_path_builder_commits_the_expanded_arc() {
         let mut scene = Scene::new(10.0, 10.0);
         scene
-            .path(PathStyle::default())
-            .move_to(0.0, 0.0)
+            .path(PathStyle::default(), 0.0, 0.0)
             .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0);
         let Element::Path(p) = &scene.elements[0] else {
             panic!("expected a path");
@@ -1209,8 +1186,7 @@ mod tests {
     #[test]
     fn add_path_appends_prebuilt_path() {
         let mut scene = Scene::new(10.0, 10.0);
-        let p = Path::builder(PathStyle::default())
-            .move_to(0.0, 0.0)
+        let p = Path::builder(PathStyle::default(), 0.0, 0.0)
             .line_to(5.0, 5.0)
             .build();
         scene.add_path(p);
@@ -1224,28 +1200,12 @@ mod tests {
     #[test]
     fn clip_wraps_only_elements_drawn_inside() {
         let mut scene = Scene::new(20.0, 20.0);
-        scene.add_path(
-            Path::builder(PathStyle::default())
-                .move_to(0.0, 0.0)
-                .build(),
-        );
+        scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
         {
-            let mut c = scene.clip(
-                ClipPath::builder(FillRule::NonZero)
-                    .move_to(0.0, 0.0)
-                    .build(),
-            );
-            c.add_path(
-                Path::builder(PathStyle::default())
-                    .move_to(1.0, 1.0)
-                    .build(),
-            );
+            let mut c = scene.clip(ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build());
+            c.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
         }
-        scene.add_path(
-            Path::builder(PathStyle::default())
-                .move_to(2.0, 2.0)
-                .build(),
-        );
+        scene.add_path(Path::builder(PathStyle::default(), 2.0, 2.0).build());
 
         assert!(matches!(scene.elements[0], Element::Path(_)));
         assert!(matches!(scene.elements[2], Element::Path(_)));
@@ -1264,27 +1224,11 @@ mod tests {
     fn nested_clips_wrap_inside_out() {
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let mut outer = scene.clip(
-                ClipPath::builder(FillRule::NonZero)
-                    .move_to(0.0, 0.0)
-                    .build(),
-            );
-            outer.add_path(
-                Path::builder(PathStyle::default())
-                    .move_to(1.0, 1.0)
-                    .build(),
-            );
+            let mut outer = scene.clip(ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build());
+            outer.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
             {
-                let mut inner = outer.clip(
-                    ClipPath::builder(FillRule::NonZero)
-                        .move_to(0.0, 0.0)
-                        .build(),
-                );
-                inner.add_path(
-                    Path::builder(PathStyle::default())
-                        .move_to(2.0, 2.0)
-                        .build(),
-                );
+                let mut inner = outer.clip(ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build());
+                inner.add_path(Path::builder(PathStyle::default(), 2.0, 2.0).build());
             }
         }
         // scene = [ Clipped{ outer, [ Path(1,1), Clipped{ inner, [ Path(2,2) ] } ] } ]

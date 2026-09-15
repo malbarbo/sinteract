@@ -430,8 +430,7 @@ mod tests {
     }
 
     fn square_path(style: PathStyle, side: f32) -> Path {
-        Path::builder(style)
-            .move_to(0.0, 0.0)
+        Path::builder(style, 0.0, 0.0)
             .line_to(side, 0.0)
             .line_to(side, side)
             .line_to(0.0, side)
@@ -439,8 +438,7 @@ mod tests {
     }
 
     fn square_clip(x: f32, y: f32, side: f32) -> ClipPath {
-        ClipPath::builder(FillRule::NonZero)
-            .move_to(x, y)
+        ClipPath::builder(FillRule::NonZero, x, y)
             .line_to(x + side, y)
             .line_to(x + side, y + side)
             .line_to(x, y + side)
@@ -569,15 +567,13 @@ mod tests {
         // would show after a long path followed by a short one.
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let mut p = scene.path(solid(0, 0, 255));
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(solid(0, 0, 255), 0.0, 0.0);
             p.line_to(20.0, 0.0);
             p.line_to(20.0, 8.0);
             p.cubic_to(14.0, 10.0, 6.0, 10.0, 0.0, 8.0);
         }
         {
-            let mut p = scene.path(solid(255, 0, 0));
-            p.move_to(0.0, 12.0);
+            let mut p = scene.path(solid(255, 0, 0), 0.0, 12.0);
             p.line_to(20.0, 20.0);
         }
         let bytes = crate::wire::encode_frame(&scene);
@@ -677,7 +673,7 @@ mod tests {
         // A clip inside it hides what it holds too.
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let mut empty = scene.clip(ClipPath::builder(FillRule::NonZero).build());
+            let mut empty = scene.clip(ClipPath::default());
             rect(&mut empty, solid(0, 255, 0), 0.0, 0.0, 20.0, 20.0);
             let mut inner = empty.clip(square_clip(0.0, 0.0, 20.0));
             rect(&mut inner, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);

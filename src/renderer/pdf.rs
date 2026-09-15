@@ -694,18 +694,6 @@ mod tests {
     }
 
     #[test]
-    fn a_path_no_move_opened_emits_nothing() {
-        // The elevated walk drops a quadratic with no current point, so the
-        // path must not leave a `q ... f Q` with no geometry.
-        let mut scene = Scene::new(100.0, 50.0);
-        scene.path(red_fill(1.0)).quad_to(10.0, 10.0, 20.0, 20.0);
-        assert_eq!(
-            render_to_pdf(&scene),
-            render_to_pdf(&Scene::new(100.0, 50.0))
-        );
-    }
-
-    #[test]
     fn text_emits_some_path_data() {
         let mut scene = Scene::new(100.0, 30.0);
         let fitted = TextSpec {
@@ -862,7 +850,7 @@ mod tests {
     fn an_empty_clip_clips_to_an_empty_rectangle() {
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let mut empty = scene.clip(ClipPath::builder(FillRule::NonZero).build());
+            let mut empty = scene.clip(ClipPath::default());
             rect(&mut empty, red_fill(1.0), 0.0, 0.0, 20.0, 20.0);
         }
         let s = pdf_text(&scene);

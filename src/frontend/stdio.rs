@@ -182,11 +182,14 @@ mod tests {
 
         let mut scene = Scene::new(10.0, 10.0);
         {
-            let mut p = scene.path(PathStyle {
-                fill: Paint::rgba(1, 2, 3, 1.0),
-                ..PathStyle::default()
-            });
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(
+                PathStyle {
+                    fill: Paint::rgba(1, 2, 3, 1.0),
+                    ..PathStyle::default()
+                },
+                0.0,
+                0.0,
+            );
             p.line_to(10.0, 10.0);
         }
         fr.present(&scene);

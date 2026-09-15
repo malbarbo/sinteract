@@ -175,8 +175,7 @@ pub(crate) mod tests {
     /// Adds a `w × h` rectangle at `(x, y)` to `scene`.
     pub(crate) fn rect(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
         scene
-            .path(style)
-            .move_to(x, y)
+            .path(style, x, y)
             .line_to(x + w, y)
             .line_to(x + w, y + h)
             .line_to(x, y + h);

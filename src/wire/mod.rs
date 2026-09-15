@@ -177,7 +177,7 @@ mod tests {
     use crate::protocol_capnp::message;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, LineCap, LineJoin, Paint,
-        PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
+        Path, PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
         TextSpec,
     };
     use crate::scene_capnp::element;
@@ -186,17 +186,20 @@ mod tests {
     fn sample_scene() -> Scene {
         let mut scene = Scene::new(120.0, 80.0);
         {
-            let mut p = scene.path(PathStyle {
-                fill: Paint::rgba(10, 20, 30, 0.5),
-                stroke: Paint::rgba(200, 0, 0, 1.0),
-                stroke_width: 2.5,
-                line_cap: LineCap::Round,
-                line_join: LineJoin::Bevel,
-                fill_rule: FillRule::EvenOdd,
-                closed: true,
-                ..PathStyle::default()
-            });
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(
+                PathStyle {
+                    fill: Paint::rgba(10, 20, 30, 0.5),
+                    stroke: Paint::rgba(200, 0, 0, 1.0),
+                    stroke_width: 2.5,
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Bevel,
+                    fill_rule: FillRule::EvenOdd,
+                    closed: true,
+                    ..PathStyle::default()
+                },
+                0.0,
+                0.0,
+            );
             p.line_to(10.0, 0.0);
             p.quad_to(15.0, 5.0, 20.0, 10.0);
             p.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
@@ -422,7 +425,7 @@ mod tests {
         // A path, then a clip that holds a path and a bitmap. The first path
         // and the bitmap become arms of a newer schema.
         let mut scene = Scene::new(10.0, 10.0);
-        scene.path(PathStyle::default()).move_to(0.0, 0.0);
+        scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
         {
             let mut clip = scene.clip(RotatedRect {
                 cx: 5.0,
@@ -431,7 +434,7 @@ mod tests {
                 h: 10.0,
                 angle_deg: 0.0,
             });
-            clip.path(PathStyle::default()).move_to(1.0, 1.0);
+            clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
             clip.bitmap(Bitmap::fit(
                 7,
                 4,
@@ -500,8 +503,7 @@ mod tests {
         // newer schema. Only the last path, at (9, 9), is left.
         let mut scene = Scene::new(10.0, 10.0);
         for _ in 0..3 {
-            let mut p = scene.path(PathStyle::default());
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(PathStyle::default(), 0.0, 0.0);
             p.line_to(1.0, 1.0);
         }
         scene
@@ -512,9 +514,8 @@ mod tests {
                 h: 10.0,
                 angle_deg: 0.0,
             })
-            .path(PathStyle::default())
-            .move_to(1.0, 1.0);
-        scene.path(PathStyle::default()).move_to(9.0, 9.0);
+            .add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+        scene.add_path(Path::builder(PathStyle::default(), 9.0, 9.0).build());
 
         let bytes = with_unknown_value(&encode_frame(&scene), |m| {
             tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
@@ -607,14 +608,17 @@ mod tests {
     fn dash_and_miter_round_trip() {
         let mut scene = Scene::new(100.0, 50.0);
         {
-            let mut p = scene.path(PathStyle {
-                stroke: Paint::rgba(0, 0, 0, 1.0),
-                stroke_width: 2.0,
-                miter_limit: 7.5,
-                dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5).map(Box::new),
-                ..PathStyle::default()
-            });
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(
+                PathStyle {
+                    stroke: Paint::rgba(0, 0, 0, 1.0),
+                    stroke_width: 2.0,
+                    miter_limit: 7.5,
+                    dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5).map(Box::new),
+                    ..PathStyle::default()
+                },
+                0.0,
+                0.0,
+            );
             p.line_to(50.0, 50.0);
         }
         let bytes = encode_frame(&scene);
@@ -672,11 +676,14 @@ mod tests {
             ],
         );
         {
-            let mut p = scene.path(PathStyle {
-                fill: Paint::gradient(gradient.clone()),
-                ..PathStyle::default()
-            });
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(
+                PathStyle {
+                    fill: Paint::gradient(gradient.clone()),
+                    ..PathStyle::default()
+                },
+                0.0,
+                0.0,
+            );
             p.line_to(50.0, 0.0);
             p.line_to(50.0, 50.0);
         }
@@ -721,11 +728,14 @@ mod tests {
             ],
         );
         {
-            let mut p = scene.path(PathStyle {
-                fill: Paint::gradient(gradient.clone()),
-                ..PathStyle::default()
-            });
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(
+                PathStyle {
+                    fill: Paint::gradient(gradient.clone()),
+                    ..PathStyle::default()
+                },
+                0.0,
+                0.0,
+            );
             p.line_to(50.0, 50.0);
         }
         let bytes = encode_frame(&scene);
@@ -771,11 +781,14 @@ mod tests {
         )
         .with_spread(SpreadMode::Reflect);
         {
-            let mut p = scene.path(PathStyle {
-                fill: Paint::gradient(linear.clone()),
-                ..PathStyle::default()
-            });
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(
+                PathStyle {
+                    fill: Paint::gradient(linear.clone()),
+                    ..PathStyle::default()
+                },
+                0.0,
+                0.0,
+            );
             p.line_to(50.0, 50.0);
         }
         let radial = Gradient::radial(
@@ -800,11 +813,14 @@ mod tests {
         )
         .with_spread(SpreadMode::Repeat);
         {
-            let mut p = scene.path(PathStyle {
-                fill: Paint::gradient(radial.clone()),
-                ..PathStyle::default()
-            });
-            p.move_to(0.0, 0.0);
+            let mut p = scene.path(
+                PathStyle {
+                    fill: Paint::gradient(radial.clone()),
+                    ..PathStyle::default()
+                },
+                0.0,
+                0.0,
+            );
             p.line_to(50.0, 50.0);
         }
         let bytes = encode_frame(&scene);
@@ -830,15 +846,13 @@ mod tests {
         let mut scene = Scene::new(50.0, 50.0);
         {
             let mut clip = scene.clip(
-                ClipPath::builder(FillRule::EvenOdd)
-                    .move_to(0.0, 0.0)
+                ClipPath::builder(FillRule::EvenOdd, 0.0, 0.0)
                     .line_to(30.0, 0.0)
                     .quad_to(40.0, 25.0, 30.0, 40.0)
                     .line_to(0.0, 40.0)
                     .build(),
             );
-            let mut p = clip.path(PathStyle::default());
-            p.move_to(0.0, 0.0);
+            let mut p = clip.path(PathStyle::default(), 0.0, 0.0);
             p.line_to(10.0, 10.0);
         }
         let bytes = encode_frame(&scene);
@@ -911,8 +925,7 @@ mod tests {
                 h: 80.0,
                 angle_deg: 0.0,
             });
-            let mut p = outer.path(PathStyle::default());
-            p.move_to(0.0, 0.0);
+            let mut p = outer.path(PathStyle::default(), 0.0, 0.0);
             p.line_to(100.0, 100.0);
             drop(p);
             let mut inner = outer.clip(RotatedRect {
@@ -922,8 +935,7 @@ mod tests {
                 h: 40.0,
                 angle_deg: 0.0,
             });
-            let mut p = inner.path(PathStyle::default());
-            p.move_to(10.0, 10.0);
+            let mut p = inner.path(PathStyle::default(), 10.0, 10.0);
             p.line_to(20.0, 20.0);
         }
         let bytes = encode_frame(&scene);
@@ -956,10 +968,7 @@ mod tests {
     #[test]
     fn default_style_uses_solid_transparent_paint() {
         let mut scene = Scene::new(10.0, 10.0);
-        {
-            let mut p = scene.path(PathStyle::default());
-            p.move_to(0.0, 0.0);
-        }
+        scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {

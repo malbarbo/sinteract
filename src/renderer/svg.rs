@@ -513,21 +513,10 @@ mod tests {
     fn a_quadratic_stays_a_quadratic() {
         let mut scene = Scene::new(10.0, 10.0);
         scene
-            .path(red_fill(1.0))
-            .move_to(0.0, 0.0)
+            .path(red_fill(1.0), 0.0, 0.0)
             .quad_to(5.0, 10.0, 10.0, 0.0);
         let svg = render_to_svg(&scene);
         assert!(svg.contains("d=\"M0 0 Q5 10 10 0\""), "{svg}");
-    }
-
-    #[test]
-    fn a_path_that_opens_with_no_move_writes_nothing() {
-        let mut scene = Scene::new(10.0, 10.0);
-        scene.path(red_fill(1.0)).quad_to(5.0, 10.0, 10.0, 0.0);
-        assert_eq!(
-            render_to_svg(&scene),
-            render_to_svg(&Scene::new(10.0, 10.0))
-        );
     }
 
     #[test]
@@ -623,8 +612,7 @@ mod tests {
     #[test]
     fn a_nested_clip_nests_its_group() {
         let square = |fill_rule| {
-            ClipPath::builder(fill_rule)
-                .move_to(0.0, 0.0)
+            ClipPath::builder(fill_rule, 0.0, 0.0)
                 .line_to(10.0, 0.0)
                 .line_to(10.0, 10.0)
                 .line_to(0.0, 10.0)
@@ -693,8 +681,7 @@ mod tests {
     fn render_stream_matches_render() {
         let mut scene = Scene::new(40.0, 40.0);
         {
-            let clip = ClipPath::builder(FillRule::NonZero)
-                .move_to(0.0, 0.0)
+            let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
                 .line_to(20.0, 0.0)
                 .line_to(20.0, 20.0)
                 .build();
@@ -727,8 +714,7 @@ mod tests {
             color: black(),
         }];
         {
-            let clip = ClipPath::builder(FillRule::NonZero)
-                .move_to(0.0, 0.0)
+            let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
                 .line_to(20.0, 0.0)
                 .line_to(20.0, 20.0)
                 .build();
