@@ -168,7 +168,61 @@ impl Canvas for SvgRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        render_text(node, self);
+        let do_fill = node.draws_fill();
+        let do_stroke = node.draws_stroke();
+        if !do_fill && !do_stroke {
+            return;
+        }
+        let Some(layout) = TextLayout::new(&node.spec) else {
+            return;
+        };
+
+        let mut uses = std::mem::take(&mut self.uses);
+        uses.clear();
+        uses.extend(
+            layout
+                .placed_glyphs()
+                .filter_map(|(glyph, x)| Some((self.glyph_id(glyph)?, x))),
+        );
+        let y = layout.baseline_y();
+
+        let [a, b, c, d, e, f] = node.transform;
+        let body = &mut self.body;
+        _ = writeln!(body, "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">");
+        // The fills of all the glyphs go down before any stroke, as in the other
+        // renderers, which paint the text as one path. A <use> that fills and
+        // strokes would cover the stroke of the glyph before it.
+        if do_fill {
+            body.push_str("<g");
+            write_color(node.fill, "fill", "fill-opacity", body);
+            body.push_str(">\n");
+            write_uses(&uses, &self.prefix, y, body);
+            body.push_str("</g>\n");
+        }
+        if do_stroke {
+            body.push_str("<g fill=\"none\"");
+            write_text_stroke(node, body);
+            body.push_str(">\n");
+            write_uses(&uses, &self.prefix, y, body);
+            body.push_str("</g>\n");
+        }
+        if node.underline {
+            // The underline paints on its own, as in the other renderers.
+            body.push_str("<path d=\"");
+            layout.outline_underline(&mut PathData::new(body));
+            body.push('"');
+            if do_fill {
+                write_color(node.fill, "fill", "fill-opacity", body);
+            } else {
+                body.push_str(" fill=\"none\"");
+            }
+            if do_stroke {
+                write_text_stroke(node, body);
+            }
+            body.push_str("/>\n");
+        }
+        body.push_str("</g>\n");
+        self.uses = uses;
     }
 
     fn end_frame(&mut self) {
@@ -324,64 +378,6 @@ fn write_list(values: &[f32], out: &mut String) {
         }
         _ = write!(out, "{v}");
     }
-}
-
-fn render_text(node: &Text, canvas: &mut SvgRenderer) {
-    let do_fill = node.draws_fill();
-    let do_stroke = node.draws_stroke();
-    if !do_fill && !do_stroke {
-        return;
-    }
-    let Some(layout) = TextLayout::new(&node.spec) else {
-        return;
-    };
-
-    let mut uses = std::mem::take(&mut canvas.uses);
-    uses.clear();
-    uses.extend(
-        layout
-            .placed_glyphs()
-            .filter_map(|(glyph, x)| Some((canvas.glyph_id(glyph)?, x))),
-    );
-    let y = layout.baseline_y();
-
-    let [a, b, c, d, e, f] = node.transform;
-    let body = &mut canvas.body;
-    _ = writeln!(body, "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">");
-    // The fills of all the glyphs go down before any stroke, as in the other
-    // renderers, which paint the text as one path. A <use> that fills and
-    // strokes would cover the stroke of the glyph before it.
-    if do_fill {
-        body.push_str("<g");
-        write_color(node.fill, "fill", "fill-opacity", body);
-        body.push_str(">\n");
-        write_uses(&uses, &canvas.prefix, y, body);
-        body.push_str("</g>\n");
-    }
-    if do_stroke {
-        body.push_str("<g fill=\"none\"");
-        write_text_stroke(node, body);
-        body.push_str(">\n");
-        write_uses(&uses, &canvas.prefix, y, body);
-        body.push_str("</g>\n");
-    }
-    if node.underline {
-        // The underline paints on its own, as in the other renderers.
-        body.push_str("<path d=\"");
-        layout.outline_underline(&mut PathData::new(body));
-        body.push('"');
-        if do_fill {
-            write_color(node.fill, "fill", "fill-opacity", body);
-        } else {
-            body.push_str(" fill=\"none\"");
-        }
-        if do_stroke {
-            write_text_stroke(node, body);
-        }
-        body.push_str("/>\n");
-    }
-    body.push_str("</g>\n");
-    canvas.uses = uses;
 }
 
 fn write_text_stroke(node: &Text, out: &mut String) {

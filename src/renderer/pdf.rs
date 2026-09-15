@@ -125,7 +125,38 @@ impl Canvas for PdfRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        render_text(node, self);
+        let do_fill = node.draws_fill();
+        let do_stroke = node.draws_stroke();
+        if !do_fill && !do_stroke {
+            return;
+        }
+        let Some(layout) = TextLayout::new(&node.spec) else {
+            return;
+        };
+
+        let (fill, stroke) = (Paint::Solid(node.fill), Paint::Solid(node.stroke));
+        self.begin_paint(do_fill.then_some(&fill), do_stroke.then_some(&stroke));
+        if do_stroke {
+            // The default miter limit is TEXT_MITER_LIMIT.
+            self.content.set_line_width(node.stroke_width);
+        }
+        self.content.transform(node.transform);
+
+        let mut out = PdfOutline::new(&mut self.content);
+        layout.outline(&mut out);
+        // A text of spaces has no outline, and a paint with no path is an error.
+        if !out.empty {
+            paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
+        }
+
+        if node.underline {
+            // The underline paints on its own. In one path, a glyph that winds
+            // the other way from the rectangle would cancel it where the two
+            // cross.
+            layout.outline_underline(&mut PdfOutline::new(&mut self.content));
+            paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
+        }
+        self.content.restore_state();
     }
 
     fn end_frame(&mut self) {
@@ -404,41 +435,6 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
             content.end_path();
         }
     }
-}
-
-fn render_text(node: &Text, canvas: &mut PdfRenderer) {
-    let do_fill = node.draws_fill();
-    let do_stroke = node.draws_stroke();
-    if !do_fill && !do_stroke {
-        return;
-    }
-    let Some(layout) = TextLayout::new(&node.spec) else {
-        return;
-    };
-
-    let (fill, stroke) = (Paint::Solid(node.fill), Paint::Solid(node.stroke));
-    canvas.begin_paint(do_fill.then_some(&fill), do_stroke.then_some(&stroke));
-    if do_stroke {
-        // The default miter limit is TEXT_MITER_LIMIT.
-        canvas.content.set_line_width(node.stroke_width);
-    }
-    canvas.content.transform(node.transform);
-
-    let mut out = PdfOutline::new(&mut canvas.content);
-    layout.outline(&mut out);
-    // A text of spaces has no outline, and a paint with no path is an error.
-    if !out.empty {
-        paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
-    }
-
-    if node.underline {
-        // The underline paints on its own. In one path, a glyph that winds
-        // the other way from the rectangle would cancel it where the two
-        // cross.
-        layout.outline_underline(&mut PdfOutline::new(&mut canvas.content));
-        paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
-    }
-    canvas.content.restore_state();
 }
 
 /// Path and glyph outlines, written straight into the content stream. PDF
