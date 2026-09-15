@@ -38,15 +38,15 @@ impl Segments<'_> {
 
 /// Turns every quadratic into a cubic for a [`PathSink`] that has no
 /// quadratic operator. It tracks the current point itself, from `(0, 0)` as
-/// a path of the wire does, and `close` returns the point to the start of
+/// a path of the scene does, and `close` returns the point to the start of
 /// the subpath, so the backend does not reconstruct it.
-pub(crate) struct ElevateQuads<'a, B: ?Sized> {
+pub(crate) struct ElevateQuads<'a, B> {
     inner: &'a mut B,
     start: (f32, f32),
     last: (f32, f32),
 }
 
-impl<'a, B: PathSink + ?Sized> ElevateQuads<'a, B> {
+impl<'a, B: PathSink> ElevateQuads<'a, B> {
     pub(crate) fn new(inner: &'a mut B) -> Self {
         Self {
             inner,
@@ -56,7 +56,7 @@ impl<'a, B: PathSink + ?Sized> ElevateQuads<'a, B> {
     }
 }
 
-impl<B: PathSink + ?Sized> PathSink for ElevateQuads<'_, B> {
+impl<B: PathSink> PathSink for ElevateQuads<'_, B> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.start = (x, y);
         self.last = (x, y);
@@ -87,13 +87,7 @@ impl<B: PathSink + ?Sized> PathSink for ElevateQuads<'_, B> {
 
 /// The two control points of the cubic equal to the quadratic from `p0`
 /// through the control `(cx, cy)` to `(x, y)`.
-pub(crate) fn quad_to_cubic(
-    p0: (f32, f32),
-    cx: f32,
-    cy: f32,
-    x: f32,
-    y: f32,
-) -> (f32, f32, f32, f32) {
+fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32, f32, f32) {
     let (p0x, p0y) = p0;
     (
         p0x + 2.0 / 3.0 * (cx - p0x),
