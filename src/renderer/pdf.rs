@@ -435,12 +435,10 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
         if do_stroke { node.stroke.a } else { 1.0 },
     );
     if do_fill {
-        let [r, g, b] = rgb_components(node.fill);
-        canvas.content.set_fill_rgb(r, g, b);
+        canvas.bind_paint(&Paint::Solid(node.fill), PaintTarget::Fill);
     }
     if do_stroke {
-        let [r, g, b] = rgb_components(node.stroke);
-        canvas.content.set_stroke_rgb(r, g, b);
+        canvas.bind_paint(&Paint::Solid(node.stroke), PaintTarget::Stroke);
         // The default miter limit is TEXT_MITER_LIMIT.
         canvas.content.set_line_width(node.stroke_width);
     }
