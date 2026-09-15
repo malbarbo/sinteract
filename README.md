@@ -3,10 +3,10 @@
 A 2D graphics library for [spython](https://github.com/malbarbo/spython)
 and [sgleam](https://github.com/malbarbo/sgleam). A program builds a
 `Scene`, a list of paths, text, bitmaps and clipped subtrees, and sinteract
-shows it in the terminal, in a window, or writes it as PDF. The terminal
-output uses the Kitty graphics protocol, DEC Sixel, or 24-bit half-blocks,
-whichever the terminal supports. The PDF output is vector, with text as
-glyph outlines.
+shows it in the terminal, in a window, or writes it as PDF or SVG. The
+terminal output uses the Kitty graphics protocol, DEC Sixel, or 24-bit
+half-blocks, whichever the terminal supports. The PDF and SVG outputs are
+vector, with text as glyph outlines.
 
 ```rust
 use sinteract::scene::{Paint, PathStyle, Scene};
@@ -38,8 +38,9 @@ messages and the input comes back. The schema is in `schema/`, one file for
 the drawing, one for the input and one for the session, and `PLAN.md`
 describes the server and client modes.
 
-The scene, the rasterizer, the text measuring and the PDF writer build on
-`wasm32`, so a browser client can paint a scene without a native host.
+The scene, the rasterizer, the text measuring and the PDF and SVG writers
+build on `wasm32`, so a browser client can paint a scene without a native
+host.
 
 ## License
 
