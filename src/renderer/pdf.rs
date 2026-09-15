@@ -77,7 +77,9 @@ impl Canvas for PdfRenderer {
         self.height = height.max(1.0);
         self.gstates.clear();
         self.gradients.clear();
-        let mut content = Content::new();
+        // The last document holds the last content stream, so its size saves
+        // the stream from growing a frame again.
+        let mut content = Content::with_capacity(self.bytes.len());
         content.transform(page_transform(self.height));
         self.content = content;
         Ok(())
