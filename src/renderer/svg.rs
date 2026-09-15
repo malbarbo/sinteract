@@ -283,9 +283,9 @@ impl SvgRenderer {
         let id = self.glyph_defs;
         let start = self.defs.len();
         _ = write!(self.defs, "<path id=\"{}g{id}\" d=\"", self.prefix);
-        let d = self.defs.len();
-        glyph.outline(0.0, 0.0, &mut PathData::new(&mut self.defs));
-        let id = if self.defs.len() == d {
+        let mut data = PathData::new(&mut self.defs);
+        glyph.outline(0.0, 0.0, &mut data);
+        let id = if data.empty {
             self.defs.truncate(start);
             None
         } else {
@@ -412,6 +412,7 @@ fn write_uses(uses: &[(usize, f32)], prefix: &str, y: f32, out: &mut String) {
 /// Path data, written as it arrives, with a space between two commands.
 struct PathData<'a> {
     d: &'a mut String,
+    /// `true` until the first command.
     empty: bool,
 }
 
