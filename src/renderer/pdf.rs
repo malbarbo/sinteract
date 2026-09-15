@@ -682,7 +682,7 @@ mod tests {
     #[test]
     fn rect_path_emits_fill_op() {
         let mut scene = Scene::new(100.0, 50.0);
-        rect(&mut scene, red_fill(1.0), 0.0, 0.0, 100.0, 50.0);
+        scene.add_path(rect(red_fill(1.0), 0.0, 0.0, 100.0, 50.0));
         let s = pdf_text(&scene);
         assert!(s.lines().any(|l| l == "f"), "expected fill operator: {s}");
     }
@@ -716,7 +716,7 @@ mod tests {
     fn output_reborrows_the_last_assembled_document() {
         // A second output must not re-assemble an empty document.
         let mut scene = Scene::new(20.0, 20.0);
-        rect(&mut scene, red_fill(1.0), 0.0, 0.0, 10.0, 10.0);
+        scene.add_path(rect(red_fill(1.0), 0.0, 0.0, 10.0, 10.0));
         let mut renderer = PdfRenderer::new();
         let rendered = renderer.render(&scene).expect("render").to_vec();
         assert!(!rendered.is_empty());
@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn alpha_creates_extgstate_resource() {
         let mut scene = Scene::new(100.0, 50.0);
-        rect(&mut scene, red_fill(0.5), 0.0, 0.0, 100.0, 50.0);
+        scene.add_path(rect(red_fill(0.5), 0.0, 0.0, 100.0, 50.0));
         let s = pdf_text(&scene);
         assert!(s.contains("ExtGState"), "expected ExtGState resource");
         assert!(s.contains("/Gs0"), "expected gs name reference");
@@ -756,7 +756,7 @@ mod tests {
             dash: Dash::new(vec![3.0, 2.0], 1.0).map(Box::new),
             ..PathStyle::default()
         };
-        rect(&mut scene, style, 0.0, 0.0, 100.0, 50.0);
+        scene.add_path(rect(style, 0.0, 0.0, 100.0, 50.0));
         let s = pdf_text(&scene);
         // `set_dash_pattern` emits `[a b] off d`.
         assert!(
@@ -776,7 +776,7 @@ mod tests {
             line_join: LineJoin::Miter,
             ..PathStyle::default()
         };
-        rect(&mut scene, style, 5.0, 5.0, 40.0, 40.0);
+        scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
         let s = pdf_text(&scene);
         assert!(s.contains("12 M"), "expected miter limit op: {s}");
     }
@@ -786,7 +786,7 @@ mod tests {
         let mut scene = Scene::new(50.0, 50.0);
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
         let style = gradient_fill(Gradient::linear(0.0, 0.0, 50.0, 0.0, stops));
-        rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
+        scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
         let s = pdf_text(&scene);
         // ShadingType 2 is axial.
         assert!(s.contains("/ShadingType 2"), "axial shading missing: {s}");
@@ -804,7 +804,7 @@ mod tests {
         let mut scene = Scene::new(50.0, 50.0);
         let stops = vec![stop(0.0, opaque(255, 255, 255)), stop(1.0, opaque(0, 0, 0))];
         let style = gradient_fill(Gradient::radial(25.0, 25.0, 20.0, stops));
-        rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
+        scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
         let s = pdf_text(&scene);
         // ShadingType 3 is radial.
         assert!(s.contains("/ShadingType 3"), "radial shading missing: {s}");
@@ -819,7 +819,7 @@ mod tests {
             stop(1.0, opaque(0, 0, 255)),
         ];
         let style = gradient_fill(Gradient::linear(0.0, 0.0, 60.0, 0.0, stops));
-        rect(&mut scene, style, 0.0, 0.0, 60.0, 10.0);
+        scene.add_path(rect(style, 0.0, 0.0, 60.0, 10.0));
         let s = pdf_text(&scene);
         // FunctionType 3 is stitching.
         assert!(
@@ -834,7 +834,7 @@ mod tests {
         let mut scene = Scene::new(100.0, 40.0);
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
         let style = gradient_fill(Gradient::linear(0.0, 0.0, 100.0, 0.0, stops));
-        rect(&mut scene, style, 0.0, 0.0, 100.0, 40.0);
+        scene.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
         let s = pdf_text(&scene);
         // The base transform of the content stream, for a page 40 pixels tall.
         assert!(s.contains("/Matrix [0.75 0 0 -0.75 0 30]"), "{s}");
@@ -845,7 +845,7 @@ mod tests {
         let mut scene = Scene::new(20.0, 20.0);
         {
             let mut empty = scene.clip(ClipPath::default());
-            rect(&mut empty, red_fill(1.0), 0.0, 0.0, 20.0, 20.0);
+            empty.add_path(rect(red_fill(1.0), 0.0, 0.0, 20.0, 20.0));
         }
         let s = pdf_text(&scene);
         assert!(s.contains("q\n0 0 0 0 re\nW\nn\n"), "{s}");

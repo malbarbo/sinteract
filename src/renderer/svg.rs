@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn a_path_writes_its_segments_and_its_fill() {
         let mut scene = Scene::new(100.0, 50.0);
-        rect(&mut scene, red_fill(0.5), 0.0, 0.0, 100.0, 50.0);
+        scene.add_path(rect(red_fill(0.5), 0.0, 0.0, 100.0, 50.0));
         let svg = render_to_svg(&scene);
         assert!(
             svg.contains(
@@ -518,7 +518,7 @@ mod tests {
             closed: true,
             ..PathStyle::default()
         };
-        rect(&mut scene, style, 5.0, 5.0, 40.0, 40.0);
+        scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
         let svg = render_to_svg(&scene);
         assert!(
             svg.contains(
@@ -540,7 +540,7 @@ mod tests {
                 miter_limit,
                 ..PathStyle::default()
             };
-            rect(&mut scene, style, 5.0, 5.0, 40.0, 40.0);
+            scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
             render_to_svg(&scene)
         };
         assert!(svg(12.0).contains(" stroke-miterlimit=\"12\""));
@@ -581,7 +581,7 @@ mod tests {
             fill: Paint::gradient(gradient),
             ..PathStyle::default()
         };
-        rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
+        scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
         let svg = render_to_svg(&scene);
         assert!(
             svg.contains(
@@ -609,7 +609,7 @@ mod tests {
         {
             let mut outer = scene.clip(square(FillRule::EvenOdd));
             let mut inner = outer.clip(square(FillRule::NonZero));
-            rect(&mut inner, red_fill(1.0), 0.0, 0.0, 20.0, 20.0);
+            inner.add_path(rect(red_fill(1.0), 0.0, 0.0, 20.0, 20.0));
         }
         let svg = render_to_svg(&scene);
         assert!(
@@ -673,7 +673,7 @@ mod tests {
                 .line_to(20.0, 20.0)
                 .build();
             let mut clipped = scene.clip(clip);
-            rect(&mut clipped, red_fill(0.5), 0.0, 0.0, 40.0, 40.0);
+            clipped.add_path(rect(red_fill(0.5), 0.0, 0.0, 40.0, 40.0));
             clipped.text(text("Hi"));
         }
         let bytes = crate::wire::encode_frame(&scene);
@@ -710,7 +710,7 @@ mod tests {
                 fill: Paint::gradient(Gradient::radial(20.0, 20.0, 10.0, stops)),
                 ..PathStyle::default()
             };
-            rect(&mut clipped, style, 0.0, 0.0, 40.0, 40.0);
+            clipped.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));
             clipped.text(text("a"));
         }
         let mut r = SvgRenderer::with_id_prefix("fig1-").expect("a valid prefix");

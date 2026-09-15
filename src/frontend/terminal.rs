@@ -471,7 +471,7 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Paint, PathStyle, Rgba, RotatedRect, Scene, Text, TextSpec};
+    use crate::scene::{Paint, Path, PathStyle, Rgba, RotatedRect, Scene, Text, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -514,17 +514,18 @@ mod tests {
         render_to_pixmap(scene, 1.0).expect("pixmap")
     }
 
-    fn rect_path(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        let mut p = scene.path(style, x, y);
-        p.line_to(x + w, y);
-        p.line_to(x + w, y + h);
-        p.line_to(x, y + h);
+    fn rect_path(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
+        Path::builder(style, x, y)
+            .line_to(x + w, y)
+            .line_to(x + w, y + h)
+            .line_to(x, y + h)
+            .build()
     }
 
     #[test]
     fn rasterize_filled_rectangle() {
         let mut scene = Scene::new(40.0, 30.0);
-        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 40.0, 30.0);
+        scene.add_path(rect_path(solid(0, 0, 255), 0.0, 0.0, 40.0, 30.0));
         let pm = rasterize(&scene);
         assert_eq!(pm.width(), 40);
         assert_eq!(pm.height(), 30);
@@ -556,7 +557,7 @@ mod tests {
                 h: 20.0,
                 angle_deg: 0.0,
             });
-            rect_path(&mut clip, solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0);
+            clip.add_path(rect_path(solid(0, 0, 255), -5.0, -5.0, 40.0, 30.0));
         }
         let pm = rasterize(&scene);
         assert_eq!(
@@ -663,7 +664,7 @@ mod tests {
     fn scale_to_fit_preserves_aspect() {
         // 200×100 into 50×50 fits the width, scale 0.25, output 50×25.
         let mut scene = Scene::new(200.0, 100.0);
-        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0);
+        scene.add_path(rect_path(solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0));
         let pm = render_to_pixmap(&scene, fit_capped(&scene, (50, 50), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 50);
         assert_eq!(pm.height(), 25);
@@ -674,7 +675,7 @@ mod tests {
     fn scale_to_fit_does_not_upscale() {
         // A 10×10 image keeps its size in a 1000×1000 target.
         let mut scene = Scene::new(10.0, 10.0);
-        rect_path(&mut scene, solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0);
+        scene.add_path(rect_path(solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0));
         let pm = render_to_pixmap(&scene, fit_capped(&scene, (1000, 1000), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 10);
         assert_eq!(pm.height(), 10);
@@ -684,7 +685,7 @@ mod tests {
     fn scale_to_fit_height_constrained() {
         // 100×200 into 200×50 fits the height, scale 0.25, output 25×50.
         let mut scene = Scene::new(100.0, 200.0);
-        rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0);
+        scene.add_path(rect_path(solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0));
         let pm = render_to_pixmap(&scene, fit_capped(&scene, (200, 50), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 25);
         assert_eq!(pm.height(), 50);
@@ -695,7 +696,7 @@ mod tests {
         // A 100×100 image for half-blocks with 8×16 cells shrinks to about
         // 100 / 8 pixels wide.
         let mut scene = Scene::new(100.0, 100.0);
-        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
+        scene.add_path(rect_path(solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0));
         // The target is the half-blocks box of an 80×24 terminal.
         let pm = render_to_pixmap(&scene, fit_capped(&scene, (80, 48), 1.0 / 8.0)).expect("pixmap");
         assert!(pm.width() <= 13, "got width {}", pm.width());
@@ -705,7 +706,7 @@ mod tests {
     #[test]
     fn text_blocks_renders_some_pixels() {
         let mut scene = Scene::new(4.0, 4.0);
-        rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 4.0, 4.0);
+        scene.add_path(rect_path(solid(255, 0, 0), 0.0, 0.0, 4.0, 4.0));
         let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
         let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
@@ -717,7 +718,7 @@ mod tests {
     #[test]
     fn text_blocks_uses_truecolor_codes() {
         let mut scene = Scene::new(2.0, 2.0);
-        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 2.0, 2.0);
+        scene.add_path(rect_path(solid(0, 0, 255), 0.0, 0.0, 2.0, 2.0));
         let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
         render_text_blocks(&mut buf, &pm).expect("write ok");
@@ -731,7 +732,7 @@ mod tests {
     fn text_blocks_handles_odd_height() {
         // The last cell row has no bottom pixel and takes black.
         let mut scene = Scene::new(3.0, 3.0);
-        rect_path(&mut scene, solid(255, 255, 255), 0.0, 0.0, 3.0, 3.0);
+        scene.add_path(rect_path(solid(255, 255, 255), 0.0, 0.0, 3.0, 3.0));
         let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
         let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
@@ -788,7 +789,7 @@ mod tests {
             )),
             ..PathStyle::default()
         };
-        rect_path(&mut scene, style, 0.0, 0.0, 40.0, 10.0);
+        scene.add_path(rect_path(style, 0.0, 0.0, 40.0, 10.0));
         let pm = rasterize(&scene);
         let left = pixel_rgba(&pm, 1, 5).0;
         let mid = pixel_rgba(&pm, 20, 5).0;
@@ -833,7 +834,7 @@ mod tests {
             )),
             ..PathStyle::default()
         };
-        rect_path(&mut scene, style, 0.0, 0.0, 40.0, 40.0);
+        scene.add_path(rect_path(style, 0.0, 0.0, 40.0, 40.0));
         let pm = rasterize(&scene);
         let center_a = pixel_rgba(&pm, 20, 20).3;
         let edge_a = pixel_rgba(&pm, 0, 20).3;
@@ -879,7 +880,7 @@ mod tests {
             ),
             ..PathStyle::default()
         };
-        rect_path(&mut scene, style, 0.0, 0.0, 80.0, 10.0);
+        scene.add_path(rect_path(style, 0.0, 0.0, 80.0, 10.0));
         let pm = rasterize(&scene);
         let mid_axis = pixel_rgba(&pm, 10, 5).0; // t = 0.5
         let pad_zone = pixel_rgba(&pm, 30, 5).0; // t = 1.5

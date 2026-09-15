@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn render_stream_matches_render_for_flat_path() {
         let mut scene = Scene::new(10.0, 10.0);
-        rect(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
         let bytes = crate::wire::encode_frame(&scene);
 
         let mut r_atomic = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
@@ -637,7 +637,7 @@ mod tests {
         let mut scene = Scene::new(20.0, 20.0);
         {
             let mut clip_scope = scene.clip(square_clip(0.0, 0.0, 10.0));
-            rect(&mut clip_scope, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);
+            clip_scope.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
         }
         let bytes = crate::wire::encode_frame(&scene);
 
@@ -651,8 +651,8 @@ mod tests {
     fn render_stream_skips_an_element_of_an_unknown_arm() {
         // A red path that becomes an arm of a newer schema, under a blue one.
         let mut scene = Scene::new(10.0, 10.0);
-        rect(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
-        rect(&mut scene, solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0);
+        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
+        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
         let bytes = crate::wire::with_unknown_value(&crate::wire::encode_frame(&scene), |m| {
             crate::wire::tag_of(crate::wire::frame_of(m).get_elements().unwrap().get(0))
         });
@@ -670,12 +670,12 @@ mod tests {
         use crate::scene_capnp::element::Which;
         use crate::wire::{encode_frame, frame_of, tag_of, with_unknown_value};
         let mut scene = Scene::new(10.0, 10.0);
-        rect(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
         {
             let mut clip_scope = scene.clip(square_clip(0.0, 0.0, 10.0));
-            rect(&mut clip_scope, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+            clip_scope.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
         }
-        rect(&mut scene, solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0);
+        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
         let bytes = with_unknown_value(&encode_frame(&scene), |m| {
             let Ok(Which::Path(p)) = frame_of(m).get_elements().unwrap().get(0).which() else {
                 panic!("expected Path");
@@ -719,9 +719,9 @@ mod tests {
         let mut scene = Scene::new(20.0, 20.0);
         {
             let mut empty = scene.clip(ClipPath::default());
-            rect(&mut empty, solid(0, 255, 0), 0.0, 0.0, 20.0, 20.0);
+            empty.add_path(rect(solid(0, 255, 0), 0.0, 0.0, 20.0, 20.0));
             let mut inner = empty.clip(square_clip(0.0, 0.0, 20.0));
-            rect(&mut inner, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);
+            inner.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
         }
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 10, 10).3, 0);
@@ -755,7 +755,7 @@ mod tests {
                 .line_to(90.0, 90.0)
                 .build();
             let mut inner = scene.clip(clip);
-            rect(&mut inner, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
+            inner.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0));
         } else {
             scene
                 .path(solid(0, 0, 255), 10.0, 10.0)
@@ -827,12 +827,12 @@ mod tests {
             miter_limit: mark,
             ..solid(255, 0, 0)
         };
-        rect(&mut scene, red, 0.0, 0.0, 10.0, 10.0);
+        scene.add_path(rect(red, 0.0, 0.0, 10.0, 10.0));
         {
             let mut clip_scope = scene.clip(square_clip(0.0, 0.0, mark));
-            rect(&mut clip_scope, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+            clip_scope.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
         }
-        rect(&mut scene, solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0);
+        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
         let bytes = crate::wire::with_float(&crate::wire::encode_frame(&scene), mark, f32::NAN);
 
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");

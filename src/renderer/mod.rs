@@ -146,14 +146,14 @@ impl<C> Drop for RestoreOnDrop<'_, C> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::scene::{PathStyle, Scene};
+    use crate::scene::{Path, PathStyle};
 
-    /// Adds a `w × h` rectangle at `(x, y)` to `scene`.
-    pub(crate) fn rect(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        scene
-            .path(style, x, y)
+    /// A `w × h` rectangle at `(x, y)`.
+    pub(crate) fn rect(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
+        Path::builder(style, x, y)
             .line_to(x + w, y)
             .line_to(x + w, y + h)
-            .line_to(x, y + h);
+            .line_to(x, y + h)
+            .build()
     }
 }

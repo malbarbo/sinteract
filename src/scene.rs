@@ -878,9 +878,9 @@ impl Scene {
     }
 
     /// Begin a clip to a [`ClipPath`] or to a [`RotatedRect`]. The
-    /// [`ClipScope`] derefs to this scene, and on drop it wraps the elements
+    /// [`ClipScope`] draws into this scene, and on drop it wraps the elements
     /// added since into an [`Element::Clipped`]. A nested clip is a
-    /// [`Self::clip`] through the deref.
+    /// [`ClipScope::clip`].
     pub fn clip(&mut self, clip: impl Into<ClipPath>) -> ClipScope<'_> {
         let mark = self.elements.len();
         ClipScope {
@@ -977,10 +977,20 @@ impl Drop for PathScope<'_> {
     }
 }
 
-/// The clip under construction by [`Scene::clip`].
-/// It derefs to the scene, and `mark` is where its elements begin. On drop
+/// The clip under construction by [`Scene::clip`]. It draws into the scene
+/// with the methods of [`Scene`], and `mark` is where its elements begin. On drop
 /// it moves `elements[mark..]` into an [`Element::Clipped`] at `mark`. A
 /// nested scope has a later mark and drops first, so the tree is well formed.
+///
+/// The scope only appends to the scene, so the scene cannot be replaced
+/// while the clip is open:
+///
+/// ```compile_fail,E0614
+/// use sinteract::scene::{RotatedRect, Scene};
+/// let mut scene = Scene::new(10.0, 10.0);
+/// let mut clip = scene.clip(RotatedRect::default());
+/// *clip = Scene::new(10.0, 10.0);
+/// ```
 #[must_use = "ClipScope commits the clip on drop; bind it where the clip should end"]
 pub struct ClipScope<'a> {
     scene: &'a mut Scene,
@@ -988,16 +998,30 @@ pub struct ClipScope<'a> {
     mark: usize,
 }
 
-impl<'a> std::ops::Deref for ClipScope<'a> {
-    type Target = Scene;
-    fn deref(&self) -> &Scene {
-        self.scene
+impl ClipScope<'_> {
+    /// [`Scene::add_path`] inside the clip.
+    pub fn add_path(&mut self, path: Path) {
+        self.scene.add_path(path);
     }
-}
 
-impl<'a> std::ops::DerefMut for ClipScope<'a> {
-    fn deref_mut(&mut self) -> &mut Scene {
-        self.scene
+    /// [`Scene::path`] inside the clip.
+    pub fn path(&mut self, style: PathStyle, x: f32, y: f32) -> PathScope<'_> {
+        self.scene.path(style, x, y)
+    }
+
+    /// [`Scene::clip`] inside the clip, which nests the two.
+    pub fn clip(&mut self, clip: impl Into<ClipPath>) -> ClipScope<'_> {
+        self.scene.clip(clip)
+    }
+
+    /// [`Scene::text`] inside the clip.
+    pub fn text(&mut self, node: Text) {
+        self.scene.text(node);
+    }
+
+    /// [`Scene::bitmap`] inside the clip.
+    pub fn bitmap(&mut self, node: Bitmap) {
+        self.scene.bitmap(node);
     }
 }
 
