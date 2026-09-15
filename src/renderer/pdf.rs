@@ -265,10 +265,7 @@ impl PdfRenderer {
     /// Returns the index of `g`, the `n` of its `/Pn` name.
     fn push_gradient(&mut self, g: &Gradient) -> usize {
         let idx = self.gradients.len();
-        self.gradients.push(Shading {
-            geom: g.geom,
-            stops: prepare_stops(&g.stops),
-        });
+        self.gradients.push(Shading::new(g));
         idx
     }
 
@@ -299,7 +296,7 @@ impl PdfRenderer {
         let gradient_refs: Vec<GradientRefs> = gradients
             .iter()
             .map(|g| {
-                let functions = (0..function_count(&g.stops)).map(|_| alloc()).collect();
+                let functions = (0..g.function_count()).map(|_| alloc()).collect();
                 GradientRefs {
                     functions,
                     shading: alloc(),
@@ -354,7 +351,7 @@ impl PdfRenderer {
         }
 
         for (gradient, refs) in gradients.iter().zip(gradient_refs.iter()) {
-            emit_gradient_objects(&mut pdf, gradient, refs, page_transform(h));
+            gradient.write(&mut pdf, refs, page_transform(h));
         }
 
         self.bytes = pdf.finish();
@@ -500,127 +497,135 @@ fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32,
 /// A gradient of the frame, with the stops that its functions take.
 struct Shading {
     geom: GradientGeom,
-    /// From [`prepare_stops`].
+    /// Sorted and padded by [`Shading::new`].
     stops: Vec<Stop>,
+}
+
+impl Shading {
+    /// `g` with its stops sorted, clamped to [0, 1], and padded so there are
+    /// at least two, the first at 0 and the last at 1. The pad repeats the
+    /// boundary color, as in CSS. No stops give two transparent ones, a case
+    /// the visibility check already excludes.
+    fn new(g: &Gradient) -> Self {
+        let mut stops: Vec<Stop> = g
+            .stops
+            .iter()
+            .map(|s| Stop {
+                offset: s.offset.clamp(0.0, 1.0),
+                color: s.color,
+            })
+            .collect();
+        stops.sort_by(|a, b| {
+            a.offset
+                .partial_cmp(&b.offset)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        if stops.len() <= 1 {
+            let color = stops.first().map_or(Rgba::default(), |s| s.color);
+            stops = vec![Stop { offset: 0.0, color }, Stop { offset: 1.0, color }];
+        }
+        let first = stops[0];
+        if first.offset > 0.0 {
+            stops.insert(
+                0,
+                Stop {
+                    offset: 0.0,
+                    color: first.color,
+                },
+            );
+        }
+        let last = *stops.last().unwrap();
+        if last.offset < 1.0 {
+            stops.push(Stop {
+                offset: 1.0,
+                color: last.color,
+            });
+        }
+        Self {
+            geom: g.geom,
+            stops,
+        }
+    }
+
+    /// One exponential function per interval of the stops, and a stitching
+    /// function over them when there is more than one interval.
+    fn function_count(&self) -> usize {
+        match self.stops.len() - 1 {
+            1 => 1,
+            intervals => intervals + 1,
+        }
+    }
+
+    /// Writes the functions, the shading and the pattern of the gradient into
+    /// `pdf`, under the ids of `refs`. `matrix` maps the gradient to the page.
+    fn write(&self, pdf: &mut Pdf, refs: &GradientRefs, matrix: [f32; 6]) {
+        let stops = &self.stops;
+
+        let intervals = stops.len() - 1;
+        for (pair, &r) in stops.windows(2).zip(&refs.functions) {
+            let mut f = pdf.exponential_function(r);
+            f.domain([0.0, 1.0]);
+            f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+            f.c0(rgb_components(pair[0].color));
+            f.c1(rgb_components(pair[1].color));
+            f.n(1.0);
+            f.finish();
+        }
+        let main_fn_ref = *refs.functions.last().expect("a gradient has a function");
+        if intervals > 1 {
+            let mut stitch = pdf.stitching_function(main_fn_ref);
+            stitch.domain([0.0, 1.0]);
+            stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+            stitch.functions(refs.functions[..intervals].iter().copied());
+            stitch.bounds(stops[1..intervals].iter().map(|s| s.offset));
+            // Each sub-function maps its interval back to [0, 1].
+            stitch.encode((0..intervals).flat_map(|_| [0.0, 1.0]));
+            stitch.finish();
+        }
+
+        {
+            let mut sh = pdf.function_shading(refs.shading);
+            sh.color_space().device_rgb();
+            match self.geom {
+                GradientGeom::Linear { x0, y0, x1, y1 } => {
+                    sh.shading_type(FunctionShadingType::Axial);
+                    sh.coords([x0, y0, x1, y1]);
+                }
+                GradientGeom::Radial { cx, cy, radius } => {
+                    sh.shading_type(FunctionShadingType::Radial);
+                    // One center and a zero inner radius, as in SVG.
+                    sh.coords([cx, cy, 0.0, cx, cy, radius]);
+                }
+            }
+            // A Type 2 or 3 shading only pads, so Reflect and Repeat render as
+            // Pad. They would need a Type 4 function.
+            sh.extend([true, true]);
+            sh.function(main_fn_ref);
+            sh.finish();
+        }
+
+        {
+            let mut pat = pdf.shading_pattern(refs.pattern);
+            // A pattern draws in the space of the page, so the `cm` at the top of
+            // the content stream does not apply to it.
+            pat.matrix(matrix);
+            pat.shading_ref(refs.shading);
+            pat.finish();
+        }
+    }
 }
 
 /// The indirect objects of one gradient.
 struct GradientRefs {
-    /// The functions, as many as [`function_count`] says, with the one the
-    /// shading references last.
+    /// The functions, as many as [`Shading::function_count`] says, with the
+    /// one the shading references last.
     functions: Vec<Ref>,
     shading: Ref,
     pattern: Ref,
 }
 
-/// One exponential function per interval of `stops`, and a stitching
-/// function over them when there is more than one interval.
-fn function_count(stops: &[Stop]) -> usize {
-    match stops.len() - 1 {
-        1 => 1,
-        intervals => intervals + 1,
-    }
-}
-
-/// The stops sorted, clamped to [0, 1], and padded so there are at least
-/// two, the first at 0 and the last at 1. The pad repeats the boundary
-/// color, as in CSS. No stops give two transparent ones, a case the
-/// visibility check already excludes.
-fn prepare_stops(stops: &[Stop]) -> Vec<Stop> {
-    let mut out: Vec<Stop> = stops
-        .iter()
-        .map(|s| Stop {
-            offset: s.offset.clamp(0.0, 1.0),
-            color: s.color,
-        })
-        .collect();
-    out.sort_by(|a, b| {
-        a.offset
-            .partial_cmp(&b.offset)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    if out.len() <= 1 {
-        let color = out.first().map_or(Rgba::default(), |s| s.color);
-        out = vec![Stop { offset: 0.0, color }, Stop { offset: 1.0, color }];
-    }
-    let first = out[0];
-    if first.offset > 0.0 {
-        out.insert(
-            0,
-            Stop {
-                offset: 0.0,
-                color: first.color,
-            },
-        );
-    }
-    let last = *out.last().unwrap();
-    if last.offset < 1.0 {
-        out.push(Stop {
-            offset: 1.0,
-            color: last.color,
-        });
-    }
-    out
-}
-
 fn rgb_components(c: Rgba) -> [f32; 3] {
     [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
-}
-
-fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Shading, refs: &GradientRefs, matrix: [f32; 6]) {
-    let stops = &gradient.stops;
-
-    let intervals = stops.len() - 1;
-    for (pair, &r) in stops.windows(2).zip(&refs.functions) {
-        let mut f = pdf.exponential_function(r);
-        f.domain([0.0, 1.0]);
-        f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-        f.c0(rgb_components(pair[0].color));
-        f.c1(rgb_components(pair[1].color));
-        f.n(1.0);
-        f.finish();
-    }
-    let main_fn_ref = *refs.functions.last().expect("a gradient has a function");
-    if intervals > 1 {
-        let mut stitch = pdf.stitching_function(main_fn_ref);
-        stitch.domain([0.0, 1.0]);
-        stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-        stitch.functions(refs.functions[..intervals].iter().copied());
-        stitch.bounds(stops[1..intervals].iter().map(|s| s.offset));
-        // Each sub-function maps its interval back to [0, 1].
-        stitch.encode((0..intervals).flat_map(|_| [0.0, 1.0]));
-        stitch.finish();
-    }
-
-    {
-        let mut sh = pdf.function_shading(refs.shading);
-        sh.color_space().device_rgb();
-        match gradient.geom {
-            GradientGeom::Linear { x0, y0, x1, y1 } => {
-                sh.shading_type(FunctionShadingType::Axial);
-                sh.coords([x0, y0, x1, y1]);
-            }
-            GradientGeom::Radial { cx, cy, radius } => {
-                sh.shading_type(FunctionShadingType::Radial);
-                // One center and a zero inner radius, as in SVG.
-                sh.coords([cx, cy, 0.0, cx, cy, radius]);
-            }
-        }
-        // A Type 2 or 3 shading only pads, so Reflect and Repeat render as
-        // Pad. They would need a Type 4 function.
-        sh.extend([true, true]);
-        sh.function(main_fn_ref);
-        sh.finish();
-    }
-
-    {
-        let mut pat = pdf.shading_pattern(refs.pattern);
-        // A pattern draws in the space of the page, so the `cm` at the top of
-        // the content stream does not apply to it.
-        pat.matrix(matrix);
-        pat.shading_ref(refs.shading);
-        pat.finish();
-    }
 }
 
 #[cfg(test)]
