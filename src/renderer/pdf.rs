@@ -636,19 +636,51 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Shading, refs: &GradientRefs,
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{PathStyle, RotatedRect, Scene, TextSpec};
+    use crate::scene::{Dash, PathStyle, RotatedRect, Scene, TextSpec};
 
     fn red_fill(a: f32) -> PathStyle {
         PathStyle {
-            fill: crate::scene::Paint::rgba(255, 0, 0, a),
+            fill: Paint::rgba(255, 0, 0, a),
             ..PathStyle::default()
         }
     }
 
+    fn gradient_fill(gradient: Gradient) -> PathStyle {
+        PathStyle {
+            fill: Paint::gradient(gradient),
+            ..PathStyle::default()
+        }
+    }
+
+    fn opaque(r: u8, g: u8, b: u8) -> Rgba {
+        Rgba { r, g, b, a: 1.0 }
+    }
+
+    fn stop(offset: f32, color: Rgba) -> Stop {
+        Stop { offset, color }
+    }
+
+    fn text(s: &str, size: f32) -> Text {
+        Text {
+            fill: opaque(0, 0, 0),
+            spec: TextSpec {
+                size,
+                text: s.to_owned(),
+                ..TextSpec::default()
+            },
+            ..Text::default()
+        }
+    }
+
+    /// The document of `scene` as text. pdf-writer does not compress a
+    /// stream, so the operators are searchable.
+    fn pdf_text(scene: &Scene) -> String {
+        String::from_utf8_lossy(&render_to_pdf(scene)).into_owned()
+    }
+
     #[test]
     fn header_only_emits_pdf_marker() {
-        let scene = Scene::new(100.0, 50.0);
-        let out = render_to_pdf(&scene);
+        let out = render_to_pdf(&Scene::new(100.0, 50.0));
         assert!(out.starts_with(b"%PDF-"), "missing PDF header");
         assert!(out.windows(5).any(|w| w == b"%%EOF"), "missing PDF trailer");
     }
@@ -657,17 +689,8 @@ mod tests {
     fn rect_path_emits_fill_op() {
         let mut scene = Scene::new(100.0, 50.0);
         rect(&mut scene, red_fill(1.0), 0.0, 0.0, 100.0, 50.0);
-        let out = render_to_pdf(&scene);
-        assert!(out.starts_with(b"%PDF-"));
-        // pdf-writer does not compress the stream, so the bytes are searchable.
-        let needle = b" f\n";
-        assert!(
-            out.windows(needle.len()).any(|w| w == needle)
-                || out.windows(3).any(|w| w == b" f\r")
-                || out.windows(3).any(|w| w == b"\nf\n"),
-            "expected fill operator in stream; bytes: {:?}",
-            String::from_utf8_lossy(&out)
-        );
+        let s = pdf_text(&scene);
+        assert!(s.lines().any(|l| l == "f"), "expected fill operator: {s}");
     }
 
     #[test]
@@ -685,7 +708,7 @@ mod tests {
     #[test]
     fn text_emits_some_path_data() {
         let mut scene = Scene::new(100.0, 30.0);
-        let text = TextSpec {
+        let fitted = TextSpec {
             size: 16.0,
             text: "Hi".to_owned(),
             ..TextSpec::default()
@@ -699,17 +722,11 @@ mod tests {
         })
         .expect("text fits");
         scene.text(Text {
-            fill: Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 1.0,
-            },
-            ..text
+            fill: opaque(0, 0, 0),
+            ..fitted
         });
-        let out = render_to_pdf(&scene);
-        assert!(out.starts_with(b"%PDF-"));
-        let s = String::from_utf8_lossy(&out);
+        let s = pdf_text(&scene);
+        assert!(s.starts_with("%PDF-"));
         assert!(s.contains(" cm"), "expected cm transform in content stream");
     }
 
@@ -730,25 +747,10 @@ mod tests {
         let fills = |underline: bool| {
             let mut scene = Scene::new(100.0, 30.0);
             scene.text(Text {
-                fill: Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 1.0,
-                },
-                spec: TextSpec {
-                    size: 16.0,
-                    text: "Hi".to_owned(),
-                    ..TextSpec::default()
-                },
                 underline,
-                ..Text::default()
+                ..text("Hi", 16.0)
             });
-            let out = render_to_pdf(&scene);
-            String::from_utf8_lossy(&out)
-                .lines()
-                .filter(|l| *l == "f")
-                .count()
+            pdf_text(&scene).lines().filter(|l| *l == "f").count()
         };
         assert_eq!(fills(false), 1, "the glyphs fill once");
         assert_eq!(fills(true), 2, "the underline fills apart from the glyphs");
@@ -758,8 +760,7 @@ mod tests {
     fn alpha_creates_extgstate_resource() {
         let mut scene = Scene::new(100.0, 50.0);
         rect(&mut scene, red_fill(0.5), 0.0, 0.0, 100.0, 50.0);
-        let out = render_to_pdf(&scene);
-        let s = String::from_utf8_lossy(&out);
+        let s = pdf_text(&scene);
         assert!(s.contains("ExtGState"), "expected ExtGState resource");
         assert!(s.contains("/Gs0"), "expected gs name reference");
     }
@@ -768,78 +769,48 @@ mod tests {
     fn dash_pattern_emits_d_operator() {
         let mut scene = Scene::new(100.0, 50.0);
         let style = PathStyle {
-            stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
+            stroke: Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 1.0,
-            dash: crate::scene::Dash::new(vec![3.0, 2.0], 1.0).map(Box::new),
+            dash: Dash::new(vec![3.0, 2.0], 1.0).map(Box::new),
             ..PathStyle::default()
         };
         rect(&mut scene, style, 0.0, 0.0, 100.0, 50.0);
-        let out = render_to_pdf(&scene);
-        let s = String::from_utf8_lossy(&out);
+        let s = pdf_text(&scene);
         // `set_dash_pattern` emits `[a b] off d`.
-        assert!(s.contains(" d\n") || s.contains(" d\r"), "no `d` op: {s}");
-        assert!(s.contains("[3 2]"), "dash array not found: {s}");
+        assert!(
+            s.lines()
+                .any(|l| l.starts_with("[3 2] ") && l.ends_with(" d")),
+            "no `d` op: {s}"
+        );
     }
 
     #[test]
     fn miter_limit_emits_m_operator() {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            stroke: crate::scene::Paint::rgba(0, 0, 0, 1.0),
+            stroke: Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 4.0,
             miter_limit: 12.0,
             line_join: LineJoin::Miter,
             ..PathStyle::default()
         };
         rect(&mut scene, style, 5.0, 5.0, 40.0, 40.0);
-        let out = render_to_pdf(&scene);
-        let s = String::from_utf8_lossy(&out);
+        let s = pdf_text(&scene);
         assert!(s.contains("12 M"), "expected miter limit op: {s}");
     }
 
     #[test]
     fn linear_gradient_emits_axial_shading() {
         let mut scene = Scene::new(50.0, 50.0);
-        let style = PathStyle {
-            fill: crate::scene::Paint::gradient(crate::scene::Gradient::linear(
-                0.0,
-                0.0,
-                50.0,
-                0.0,
-                vec![
-                    crate::scene::Stop {
-                        offset: 0.0,
-                        color: Rgba {
-                            r: 255,
-                            g: 0,
-                            b: 0,
-                            a: 1.0,
-                        },
-                    },
-                    crate::scene::Stop {
-                        offset: 1.0,
-                        color: Rgba {
-                            r: 0,
-                            g: 0,
-                            b: 255,
-                            a: 1.0,
-                        },
-                    },
-                ],
-            )),
-            ..PathStyle::default()
-        };
+        let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
+        let style = gradient_fill(Gradient::linear(0.0, 0.0, 50.0, 0.0, stops));
         rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
-        let out = render_to_pdf(&scene);
-        let s = String::from_utf8_lossy(&out);
+        let s = pdf_text(&scene);
         // ShadingType 2 is axial.
-        assert!(
-            s.contains("/ShadingType 2") || s.contains("/ShadingType  2"),
-            "axial shading missing: {s}"
-        );
+        assert!(s.contains("/ShadingType 2"), "axial shading missing: {s}");
         // FunctionType 2 is exponential.
         assert!(
-            s.contains("/FunctionType 2") || s.contains("/FunctionType  2"),
+            s.contains("/FunctionType 2"),
             "exponential function missing"
         );
         assert!(s.contains("/P0"), "pattern name missing: {s}");
@@ -849,91 +820,28 @@ mod tests {
     #[test]
     fn radial_gradient_emits_radial_shading() {
         let mut scene = Scene::new(50.0, 50.0);
-        let style = PathStyle {
-            fill: crate::scene::Paint::gradient(crate::scene::Gradient::radial(
-                25.0,
-                25.0,
-                20.0,
-                vec![
-                    crate::scene::Stop {
-                        offset: 0.0,
-                        color: Rgba {
-                            r: 255,
-                            g: 255,
-                            b: 255,
-                            a: 1.0,
-                        },
-                    },
-                    crate::scene::Stop {
-                        offset: 1.0,
-                        color: Rgba {
-                            r: 0,
-                            g: 0,
-                            b: 0,
-                            a: 1.0,
-                        },
-                    },
-                ],
-            )),
-            ..PathStyle::default()
-        };
+        let stops = vec![stop(0.0, opaque(255, 255, 255)), stop(1.0, opaque(0, 0, 0))];
+        let style = gradient_fill(Gradient::radial(25.0, 25.0, 20.0, stops));
         rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
-        let out = render_to_pdf(&scene);
-        let s = String::from_utf8_lossy(&out);
+        let s = pdf_text(&scene);
         // ShadingType 3 is radial.
-        assert!(
-            s.contains("/ShadingType 3") || s.contains("/ShadingType  3"),
-            "radial shading missing: {s}"
-        );
+        assert!(s.contains("/ShadingType 3"), "radial shading missing: {s}");
     }
 
     #[test]
     fn multi_stop_gradient_uses_stitching_function() {
         let mut scene = Scene::new(60.0, 10.0);
-        let style = PathStyle {
-            fill: crate::scene::Paint::gradient(crate::scene::Gradient::linear(
-                0.0,
-                0.0,
-                60.0,
-                0.0,
-                vec![
-                    crate::scene::Stop {
-                        offset: 0.0,
-                        color: Rgba {
-                            r: 255,
-                            g: 0,
-                            b: 0,
-                            a: 1.0,
-                        },
-                    },
-                    crate::scene::Stop {
-                        offset: 0.5,
-                        color: Rgba {
-                            r: 0,
-                            g: 255,
-                            b: 0,
-                            a: 1.0,
-                        },
-                    },
-                    crate::scene::Stop {
-                        offset: 1.0,
-                        color: Rgba {
-                            r: 0,
-                            g: 0,
-                            b: 255,
-                            a: 1.0,
-                        },
-                    },
-                ],
-            )),
-            ..PathStyle::default()
-        };
+        let stops = vec![
+            stop(0.0, opaque(255, 0, 0)),
+            stop(0.5, opaque(0, 255, 0)),
+            stop(1.0, opaque(0, 0, 255)),
+        ];
+        let style = gradient_fill(Gradient::linear(0.0, 0.0, 60.0, 0.0, stops));
         rect(&mut scene, style, 0.0, 0.0, 60.0, 10.0);
-        let out = render_to_pdf(&scene);
-        let s = String::from_utf8_lossy(&out);
+        let s = pdf_text(&scene);
         // FunctionType 3 is stitching.
         assert!(
-            s.contains("/FunctionType 3") || s.contains("/FunctionType  3"),
+            s.contains("/FunctionType 3"),
             "stitching function missing: {s}"
         );
         assert!(s.contains("/Bounds [0.5]"), "bounds missing: {s}");
@@ -942,23 +850,10 @@ mod tests {
     #[test]
     fn a_gradient_pattern_maps_pixels_to_the_page() {
         let mut scene = Scene::new(100.0, 40.0);
-        let color = |r, b| Rgba { r, g: 0, b, a: 1.0 };
-        let stops = vec![
-            Stop {
-                offset: 0.0,
-                color: color(255, 0),
-            },
-            Stop {
-                offset: 1.0,
-                color: color(0, 255),
-            },
-        ];
-        let style = PathStyle {
-            fill: crate::scene::Paint::gradient(Gradient::linear(0.0, 0.0, 100.0, 0.0, stops)),
-            ..PathStyle::default()
-        };
+        let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
+        let style = gradient_fill(Gradient::linear(0.0, 0.0, 100.0, 0.0, stops));
         rect(&mut scene, style, 0.0, 0.0, 100.0, 40.0);
-        let s = String::from_utf8_lossy(&render_to_pdf(&scene)).into_owned();
+        let s = pdf_text(&scene);
         // The base transform of the content stream, for a page 40 pixels tall.
         assert!(s.contains("/Matrix [0.75 0 0 -0.75 0 30]"), "{s}");
     }
@@ -970,28 +865,15 @@ mod tests {
             let mut empty = scene.clip(ClipPath::builder(FillRule::NonZero).build());
             rect(&mut empty, red_fill(1.0), 0.0, 0.0, 20.0, 20.0);
         }
-        let s = String::from_utf8_lossy(&render_to_pdf(&scene)).into_owned();
+        let s = pdf_text(&scene);
         assert!(s.contains("q\n0 0 0 0 re\nW\nn\n"), "{s}");
     }
 
     #[test]
     fn a_text_with_no_outline_paints_nothing() {
         let mut scene = Scene::new(40.0, 20.0);
-        scene.text(Text {
-            fill: Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 1.0,
-            },
-            spec: TextSpec {
-                size: 12.0,
-                text: "   ".to_owned(),
-                ..TextSpec::default()
-            },
-            ..Text::default()
-        });
-        let s = String::from_utf8_lossy(&render_to_pdf(&scene)).into_owned();
+        scene.text(text("   ", 12.0));
+        let s = pdf_text(&scene);
         assert!(!s.lines().any(|l| l == "f"), "{s}");
     }
 }
