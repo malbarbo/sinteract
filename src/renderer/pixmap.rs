@@ -109,11 +109,7 @@ impl Canvas for PixmapRenderer {
             return;
         };
         if style.draws_fill() {
-            let paint = SkPaint {
-                shader: paint_to_shader(&style.fill),
-                anti_alias: true,
-                ..SkPaint::default()
-            };
+            let paint = sk_paint(paint_to_shader(&style.fill));
             self.pixmap.fill_path(
                 &sk_path,
                 &paint,
@@ -123,11 +119,7 @@ impl Canvas for PixmapRenderer {
             );
         }
         if style.draws_stroke() {
-            let paint = SkPaint {
-                shader: paint_to_shader(&style.stroke),
-                anti_alias: true,
-                ..SkPaint::default()
-            };
+            let paint = sk_paint(paint_to_shader(&style.stroke));
             let dash = style
                 .dash
                 .as_ref()
@@ -275,6 +267,15 @@ fn sk_line_join(j: LineJoin) -> SkLineJoin {
     }
 }
 
+/// An anti-aliased paint with `shader`.
+fn sk_paint(shader: SkShader<'static>) -> SkPaint<'static> {
+    SkPaint {
+        shader,
+        anti_alias: true,
+        ..SkPaint::default()
+    }
+}
+
 /// A gradient that tiny-skia rejects, for a degenerate line or no stops,
 /// falls back to the primary color, so the path still draws.
 fn paint_to_shader(p: &Paint) -> SkShader<'static> {
@@ -383,16 +384,12 @@ fn paint_text_path(
         return;
     };
     if node.draws_fill() {
-        let mut paint = SkPaint::default();
-        paint.set_color(sk_color(node.fill));
-        paint.anti_alias = true;
+        let paint = sk_paint(SkShader::SolidColor(sk_color(node.fill)));
         // A TrueType glyph fills with non-zero winding.
         pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
     }
     if node.draws_stroke() {
-        let mut paint = SkPaint::default();
-        paint.set_color(sk_color(node.stroke));
-        paint.anti_alias = true;
+        let paint = sk_paint(SkShader::SolidColor(sk_color(node.stroke)));
         let stroke = Stroke {
             width: node.stroke_width,
             miter_limit: crate::renderer::TEXT_MITER_LIMIT,
