@@ -294,7 +294,7 @@ impl SvgRenderer {
         self.gradients += 1;
         let prefix = &self.prefix;
         let defs = &mut self.defs;
-        match g.geom {
+        match g.geom() {
             GradientGeom::Linear { x0, y0, x1, y1 } => {
                 _ = write!(
                     defs,
@@ -310,18 +310,18 @@ impl SvgRenderer {
                 );
             }
         }
-        match g.spread {
+        match g.spread() {
             SpreadMode::Pad => {}
             SpreadMode::Reflect => defs.push_str(" spreadMethod=\"reflect\""),
             SpreadMode::Repeat => defs.push_str(" spreadMethod=\"repeat\""),
         }
         defs.push('>');
-        for stop in &g.stops {
+        for stop in g.stops() {
             _ = write!(defs, "<stop offset=\"{}\"", stop.offset);
             write_color(stop.color, "stop-color", "stop-opacity", defs);
             defs.push_str("/>");
         }
-        match g.geom {
+        match g.geom() {
             GradientGeom::Linear { .. } => defs.push_str("</linearGradient>\n"),
             GradientGeom::Radial { .. } => defs.push_str("</radialGradient>\n"),
         }

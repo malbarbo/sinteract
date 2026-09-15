@@ -506,7 +506,7 @@ impl Shading {
     /// the visibility check already excludes.
     fn new(g: &Gradient) -> Self {
         let mut stops: Vec<Stop> = g
-            .stops
+            .stops()
             .iter()
             .map(|s| Stop {
                 offset: s.offset.clamp(0.0, 1.0),
@@ -540,7 +540,7 @@ impl Shading {
             });
         }
         Self {
-            geom: g.geom,
+            geom: g.geom(),
             stops,
         }
     }

@@ -37,12 +37,14 @@ pub enum GradientGeom {
     Radial { cx: f32, cy: f32, radius: f32 },
 }
 
-/// A color ramp along an axis. `stops` are sorted by offset.
+/// A color ramp along an axis. The stops are sorted by offset. The fields
+/// are private, so a gradient reaches a [`Paint`] through
+/// [`Paint::gradient`], which resolves one with no extent.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gradient {
-    pub geom: GradientGeom,
-    pub stops: Vec<Stop>,
-    pub spread: SpreadMode,
+    geom: GradientGeom,
+    stops: Vec<Stop>,
+    spread: SpreadMode,
 }
 
 impl Gradient {
@@ -65,6 +67,27 @@ impl Gradient {
     pub fn with_spread(mut self, spread: SpreadMode) -> Self {
         self.spread = spread;
         self
+    }
+
+    /// For the wire decoder, which reads the three parts apart.
+    pub(crate) fn new(geom: GradientGeom, stops: Vec<Stop>, spread: SpreadMode) -> Self {
+        Self {
+            geom,
+            stops,
+            spread,
+        }
+    }
+
+    pub fn geom(&self) -> GradientGeom {
+        self.geom
+    }
+
+    pub fn stops(&self) -> &[Stop] {
+        &self.stops
+    }
+
+    pub fn spread(&self) -> SpreadMode {
+        self.spread
     }
 }
 

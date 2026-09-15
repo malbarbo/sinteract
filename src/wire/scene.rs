@@ -172,23 +172,23 @@ fn read_stops(r: capnp::struct_list::Reader<'_, wire_stop::Owned>) -> Result<Vec
 fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
     match p {
         Paint::Solid(c) => write_rgba(b.init_solid(), *c),
-        Paint::Gradient(g) => match g.geom {
+        Paint::Gradient(g) => match g.geom() {
             GradientGeom::Linear { x0, y0, x1, y1 } => {
                 let mut b = b.init_linear();
                 b.set_x0(x0);
                 b.set_y0(y0);
                 b.set_x1(x1);
                 b.set_y1(y1);
-                b.set_spread(spread_to_wire(g.spread));
-                write_stops(b.init_stops(g.stops.len() as u32), &g.stops);
+                b.set_spread(spread_to_wire(g.spread()));
+                write_stops(b.init_stops(g.stops().len() as u32), g.stops());
             }
             GradientGeom::Radial { cx, cy, radius } => {
                 let mut b = b.init_radial();
                 b.set_cx(cx);
                 b.set_cy(cy);
                 b.set_radius(radius);
-                b.set_spread(spread_to_wire(g.spread));
-                write_stops(b.init_stops(g.stops.len() as u32), &g.stops);
+                b.set_spread(spread_to_wire(g.spread()));
+                write_stops(b.init_stops(g.stops().len() as u32), g.stops());
             }
         },
     }
@@ -229,11 +229,11 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ReadError> {
             (geom, read_stops(g.get_stops()?)?, g.get_spread()?)
         }
     };
-    Ok(Paint::gradient(Gradient {
+    Ok(Paint::gradient(Gradient::new(
         geom,
         stops,
-        spread: spread_from_wire(spread),
-    }))
+        spread_from_wire(spread),
+    )))
 }
 
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {

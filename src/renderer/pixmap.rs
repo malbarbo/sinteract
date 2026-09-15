@@ -295,9 +295,9 @@ fn paint_to_shader(p: &Paint) -> SkShader<'static> {
         Paint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
         Paint::Gradient(g) => g,
     };
-    let stops = sk_stops(&g.stops);
-    let spread = sk_spread(g.spread);
-    match g.geom {
+    let stops = sk_stops(g.stops());
+    let spread = sk_spread(g.spread());
+    match g.geom() {
         GradientGeom::Linear { x0, y0, x1, y1 } => tiny_skia::LinearGradient::new(
             SkPoint::from_xy(x0, y0),
             SkPoint::from_xy(x1, y1),
