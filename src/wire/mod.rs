@@ -544,7 +544,11 @@ mod tests {
                 angle_deg: 0.0,
             })
             .add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
-        scene.add_path(Path::builder(PathStyle::default(), 9.0, 9.0).build());
+        scene.add_path(
+            Path::builder(PathStyle::default(), 9.0, 9.0)
+                .line_to(10.0, 10.0)
+                .build(),
+        );
 
         let bytes = with_unknown_value(&encode_frame(&scene), |m| {
             tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
@@ -569,7 +573,10 @@ mod tests {
         };
         assert_eq!(
             p.segments().collect::<Vec<_>>(),
-            [Segment::Move { x: 9.0, y: 9.0 }]
+            [
+                Segment::Move { x: 9.0, y: 9.0 },
+                Segment::Line { x: 10.0, y: 10.0 }
+            ]
         );
     }
 

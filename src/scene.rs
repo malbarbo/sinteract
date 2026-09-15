@@ -557,7 +557,9 @@ impl ExactSizeIterator for Segments<'_> {}
 
 /// The geometry half of [`PathBuilder`] and [`ClipPathBuilder`], so the arc
 /// expansion is written once. It begins with a move to the start point, so
-/// there is always a current point.
+/// there is always a current point. A move that no segment follows draws
+/// nothing, so a move replaces a move before it and [`Self::finish`] drops
+/// a move at the end.
 struct GeometryBuilder {
     segs: Vec<Segment>,
     last_point: (f32, f32),
@@ -572,7 +574,7 @@ impl GeometryBuilder {
     }
 
     fn move_to(&mut self, x: f32, y: f32) {
-        self.segs.push(Segment::Move { x, y });
+        push_segment(&mut self.segs, Segment::Move { x, y });
         self.last_point = (x, y);
     }
 
@@ -636,6 +638,28 @@ impl GeometryBuilder {
         }
         self.last_point = (x, y);
     }
+
+    /// Take the segments, with no move at the end.
+    fn finish(&mut self) -> Vec<Segment> {
+        let mut segs = std::mem::take(&mut self.segs);
+        end_segments(&mut segs);
+        segs
+    }
+}
+
+/// Append `seg` to `segs`. A move replaces a move that ends `segs`.
+fn push_segment(segs: &mut Vec<Segment>, seg: Segment) {
+    match (seg, segs.last_mut()) {
+        (Segment::Move { .. }, Some(last @ Segment::Move { .. })) => *last = seg,
+        _ => segs.push(seg),
+    }
+}
+
+/// Drop the move that ends `segs`, since no segment follows it.
+fn end_segments(segs: &mut Vec<Segment>) {
+    if matches!(segs.last(), Some(Segment::Move { .. })) {
+        segs.pop();
+    }
 }
 
 /// A style and the [`Segment`]s it applies to. [`Path::builder`] and
@@ -678,9 +702,9 @@ pub enum Element {
 /// replays. [`Self::path`] returns a [`PathScope`] that commits its path on
 /// drop, and [`Self::clip`] returns a [`ClipScope`] that wraps the elements
 /// drawn while it lives into an [`Element::Clipped`] on drop, so a clip
-/// cannot be left open. A
-/// `PathScope` with nothing past its start point commits nothing. Only
-/// [`Self::add_path`] can add such a path.
+/// cannot be left open. A move that no segment follows draws nothing, so the
+/// builders drop it. A `PathScope` with no segment past its moves commits
+/// nothing, and [`PathBuilder::build`] returns a path with no segments.
 ///
 /// An arc is stored as cubics, so a renderer sees only move, line, quad and
 /// cubic.
@@ -723,8 +747,8 @@ impl Scene {
     }
 
     /// Begin a path at `(x, y)`. The [`PathScope`] commits it to
-    /// [`Self::elements`] on drop, or discards it if nothing was added past
-    /// the start point.
+    /// [`Self::elements`] on drop, or discards it if no segment follows its
+    /// moves.
     pub fn path(&mut self, style: PathStyle, x: f32, y: f32) -> PathScope<'_> {
         PathScope {
             scene: self,
@@ -756,7 +780,7 @@ impl Scene {
 
 /// The path under construction by [`Scene::path`]. The geometry methods take
 /// `&mut self`, so a loop can build a path, and drop commits it to the
-/// scene, or discards it if it has nothing past its start point.
+/// scene, or discards it if no segment follows its moves.
 #[must_use = "PathScope commits the path on drop; bind it so geometry methods can run"]
 pub struct PathScope<'a> {
     scene: &'a mut Scene,
@@ -812,10 +836,11 @@ impl PathScope<'_> {
 
 impl Drop for PathScope<'_> {
     fn drop(&mut self) {
-        if self.builder.geom.segs.len() > 1 {
+        let segs = self.builder.geom.finish();
+        if !segs.is_empty() {
             self.scene.elements.push(Element::Path(Path {
                 style: std::mem::take(&mut self.builder.style),
-                segs: std::mem::take(&mut self.builder.geom.segs),
+                segs,
             }));
         }
     }
@@ -907,10 +932,10 @@ impl PathBuilder {
         self
     }
 
-    pub fn build(self) -> Path {
+    pub fn build(mut self) -> Path {
         Path {
             style: self.style,
-            segs: self.geom.segs,
+            segs: self.geom.finish(),
         }
     }
 }
@@ -968,9 +993,9 @@ impl ClipPathBuilder {
         self
     }
 
-    pub fn build(self) -> ClipPath {
+    pub fn build(mut self) -> ClipPath {
         ClipPath {
-            segs: self.geom.segs,
+            segs: self.geom.finish(),
             fill_rule: self.fill_rule,
         }
     }
@@ -1108,12 +1133,50 @@ mod tests {
     }
 
     #[test]
+    fn a_move_replaces_a_move_before_it_and_a_last_move_is_dropped() {
+        let p = Path::builder(PathStyle::default(), 1.0, 1.0)
+            .move_to(2.0, 2.0)
+            .line_to(3.0, 3.0)
+            .move_to(4.0, 4.0)
+            .build();
+        let segs: Vec<_> = p.segments().collect();
+        assert_eq!(
+            segs,
+            [
+                Segment::Move { x: 2.0, y: 2.0 },
+                Segment::Line { x: 3.0, y: 3.0 }
+            ]
+        );
+    }
+
+    #[test]
+    fn a_builder_with_only_a_start_point_builds_no_segments() {
+        let p = Path::builder(PathStyle::default(), 1.0, 1.0).build();
+        assert_eq!(p.segments().len(), 0);
+        let clip = ClipPath::builder(FillRule::NonZero, 1.0, 1.0)
+            .move_to(2.0, 2.0)
+            .build();
+        assert_eq!(clip.segments().len(), 0);
+    }
+
+    #[test]
+    fn a_path_scope_with_only_moves_commits_nothing() {
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.path(PathStyle::default(), 1.0, 1.0).move_to(2.0, 2.0);
+        assert!(scene.elements.is_empty());
+    }
+
+    #[test]
     fn clip_wraps_only_elements_drawn_inside() {
         let mut scene = Scene::new(20.0, 20.0);
         scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
         {
             let mut c = scene.clip(ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build());
-            c.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+            c.add_path(
+                Path::builder(PathStyle::default(), 1.0, 1.0)
+                    .line_to(2.0, 2.0)
+                    .build(),
+            );
         }
         scene.add_path(Path::builder(PathStyle::default(), 2.0, 2.0).build());
 
@@ -1127,7 +1190,13 @@ mod tests {
             panic!("expected a path inside the clip");
         };
         let segs: Vec<_> = p.segments().collect();
-        assert_eq!(segs, [Segment::Move { x: 1.0, y: 1.0 }]);
+        assert_eq!(
+            segs,
+            [
+                Segment::Move { x: 1.0, y: 1.0 },
+                Segment::Line { x: 2.0, y: 2.0 }
+            ]
+        );
     }
 
     #[test]
