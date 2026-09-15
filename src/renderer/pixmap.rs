@@ -8,7 +8,7 @@ use tiny_skia::{
     Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::renderer::{Renderer, outline_segments, sealed::Canvas};
+use crate::renderer::{Renderer, RestoreOnDrop, outline_segments, sealed::Canvas};
 use crate::scene::{ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Text};
 use crate::text::OutlineBuilder;
 
@@ -153,7 +153,14 @@ impl Canvas for PixmapRenderer {
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.push_clip(clip);
-        let guard = ClipGuard { canvas: self };
+        let guard = RestoreOnDrop {
+            canvas: self,
+            restore: |c: &mut Self| {
+                if let Some(Some(mask)) = c.clip_stack.pop() {
+                    c.mask_pool.push(mask);
+                }
+            },
+        };
         inside(&mut *guard.canvas)
     }
 }
@@ -209,20 +216,6 @@ impl PixmapRenderer {
                 Some(m)
             }
             None => Mask::new(self.out_w, self.out_h),
-        }
-    }
-}
-
-/// Pops the clip of [`Canvas::with_clip`] when dropped, so the stack stays
-/// balanced when the body panics.
-struct ClipGuard<'a> {
-    canvas: &'a mut PixmapRenderer,
-}
-
-impl Drop for ClipGuard<'_> {
-    fn drop(&mut self) {
-        if let Some(Some(mask)) = self.canvas.clip_stack.pop() {
-            self.canvas.mask_pool.push(mask);
         }
     }
 }

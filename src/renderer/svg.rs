@@ -12,7 +12,9 @@
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
-use crate::renderer::{Renderer, TEXT_MITER_LIMIT, outline_segments, sealed::Canvas};
+use crate::renderer::{
+    Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, outline_segments, sealed::Canvas,
+};
 use crate::scene::{
     ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint,
     Path, Rgba, Segment, Segments, SpreadMode, Text,
@@ -199,7 +201,10 @@ impl Canvas for SvgRenderer {
         }
         self.defs.push_str("/></clipPath>\n");
         _ = writeln!(self.body, "<g clip-path=\"url(#{prefix}c{id})\">");
-        let guard = CloseGroup { canvas: self };
+        let guard = RestoreOnDrop {
+            canvas: self,
+            restore: |c: &mut Self| c.body.push_str("</g>\n"),
+        };
         inside(&mut *guard.canvas)
     }
 }
@@ -283,18 +288,6 @@ impl SvgRenderer {
         });
         self.glyphs.insert(glyph, id);
         id
-    }
-}
-
-/// Writes `</g>` when dropped, so the group of [`Canvas::with_clip`] closes
-/// even when the body panics.
-struct CloseGroup<'a> {
-    canvas: &'a mut SvgRenderer,
-}
-
-impl Drop for CloseGroup<'_> {
-    fn drop(&mut self) {
-        self.canvas.body.push_str("</g>\n");
     }
 }
 

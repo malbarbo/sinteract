@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::renderer::{Renderer, outline_segments, sealed::Canvas};
+use crate::renderer::{Renderer, RestoreOnDrop, outline_segments, sealed::Canvas};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment,
     Stop, Text,
@@ -175,7 +175,12 @@ impl Canvas for PdfRenderer {
             }
         }
         self.content.end_path();
-        let guard = RestoreGuard { canvas: self };
+        let guard = RestoreOnDrop {
+            canvas: self,
+            restore: |c: &mut Self| {
+                c.content.restore_state();
+            },
+        };
         inside(&mut *guard.canvas)
     }
 }
@@ -354,18 +359,6 @@ impl PdfRenderer {
 enum PaintTarget {
     Fill,
     Stroke,
-}
-
-/// Emits `restore_state` when dropped, so the `save_state` of a clip in
-/// [`Canvas::with_clip`] is balanced even when the body panics.
-struct RestoreGuard<'a> {
-    canvas: &'a mut PdfRenderer,
-}
-
-impl Drop for RestoreGuard<'_> {
-    fn drop(&mut self) {
-        self.canvas.content.restore_state();
-    }
 }
 
 /// Draw-list coordinates are CSS pixels, 96 per inch, and PDF points are 72

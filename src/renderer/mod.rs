@@ -154,3 +154,16 @@ pub(crate) fn outline_segments(
         }
     }
 }
+
+/// Runs `restore` on `canvas` when dropped, so the `with_clip` of a backend
+/// undoes its clip even when `inside` unwinds.
+pub(crate) struct RestoreOnDrop<'a, C> {
+    pub(crate) canvas: &'a mut C,
+    pub(crate) restore: fn(&mut C),
+}
+
+impl<C> Drop for RestoreOnDrop<'_, C> {
+    fn drop(&mut self) {
+        (self.restore)(self.canvas);
+    }
+}
