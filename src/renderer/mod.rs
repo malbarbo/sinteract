@@ -25,6 +25,41 @@ use std::io::Read;
 
 use crate::scene::Scene;
 
+/// A renderer that draws a [`Scene`] or a streamed frame into a surface it
+/// owns. The [module docs](self) describe the lifecycle.
+pub trait Renderer: sealed::Canvas {
+    /// What a rendered frame borrows out, such as `&Pixmap` or `&[u8]`. It
+    /// borrows `&mut self`, so the frame is read before the next `render`.
+    type Output<'a>
+    where
+        Self: 'a;
+
+    /// Borrow the last rendered frame.
+    fn output(&self) -> Self::Output<'_>;
+
+    /// Render a [`Scene`] and borrow the result. Fails only if sizing the
+    /// surface fails.
+    fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, AllocError> {
+        self.ensure_size(scene.width, scene.height)?;
+        self.paint_elements(&scene.elements);
+        self.end_frame();
+        Ok(self.output())
+    }
+
+    /// Decode one `Frame` from `reader` and render it without building the
+    /// [`Element`](crate::scene::Element) tree. A message that is not a
+    /// `Frame` returns
+    /// [`StreamError::WrongMessageKind`](crate::wire::StreamError::WrongMessageKind).
+    fn render_stream(
+        &mut self,
+        reader: impl Read,
+    ) -> Result<Self::Output<'_>, crate::wire::StreamError> {
+        crate::wire::stream_frame(self, reader)?;
+        self.end_frame();
+        Ok(self.output())
+    }
+}
+
 /// Sizing a surface failed. It is the only way a render fails, and only a
 /// backend that allocates a surface returns it. The pdf backend never does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,41 +123,6 @@ pub(crate) mod sealed {
                 }
             }
         }
-    }
-}
-
-/// A renderer that draws a [`Scene`] or a streamed frame into a surface it
-/// owns. The [module docs](self) describe the lifecycle.
-pub trait Renderer: sealed::Canvas {
-    /// What a rendered frame borrows out, such as `&Pixmap` or `&[u8]`. It
-    /// borrows `&mut self`, so the frame is read before the next `render`.
-    type Output<'a>
-    where
-        Self: 'a;
-
-    /// Borrow the last rendered frame.
-    fn output(&self) -> Self::Output<'_>;
-
-    /// Render a [`Scene`] and borrow the result. Fails only if sizing the
-    /// surface fails.
-    fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, AllocError> {
-        self.ensure_size(scene.width, scene.height)?;
-        self.paint_elements(&scene.elements);
-        self.end_frame();
-        Ok(self.output())
-    }
-
-    /// Decode one `Frame` from `reader` and render it without building the
-    /// [`Element`](crate::scene::Element) tree. A message that is not a
-    /// `Frame` returns
-    /// [`StreamError::WrongMessageKind`](crate::wire::StreamError::WrongMessageKind).
-    fn render_stream(
-        &mut self,
-        reader: impl Read,
-    ) -> Result<Self::Output<'_>, crate::wire::StreamError> {
-        crate::wire::stream_frame(self, reader)?;
-        self.end_frame();
-        Ok(self.output())
     }
 }
 

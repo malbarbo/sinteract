@@ -125,12 +125,12 @@ impl Canvas for PdfRenderer {
         self.content.restore_state();
     }
 
-    fn end_frame(&mut self) {
-        self.assemble();
-    }
-
     fn draw_text(&mut self, node: &Text) {
         render_text(node, self);
+    }
+
+    fn end_frame(&mut self) {
+        self.assemble();
     }
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
@@ -189,16 +189,6 @@ impl PdfRenderer {
         }
     }
 
-    /// Returns the index of `g`, the `n` of its `/Pn` name.
-    fn push_gradient(&mut self, g: &Gradient) -> usize {
-        let idx = self.gradients.len();
-        self.gradients.push(Shading {
-            geom: g.geom,
-            stops: prepare_stops(&g.stops),
-        });
-        idx
-    }
-
     /// Emits `/Gsn gs` for the alpha pair, allocating the ExtGState the first
     /// time. Both alphas at 1.0 is the PDF default, so that pair emits
     /// nothing.
@@ -240,6 +230,16 @@ impl PdfRenderer {
                 self.content.set_stroke_pattern(None, name)
             }
         };
+    }
+
+    /// Returns the index of `g`, the `n` of its `/Pn` name.
+    fn push_gradient(&mut self, g: &Gradient) -> usize {
+        let idx = self.gradients.len();
+        self.gradients.push(Shading {
+            geom: g.geom,
+            stops: prepare_stops(&g.stops),
+        });
+        idx
     }
 
     /// Writes the page into `bytes` and empties the content. The next
