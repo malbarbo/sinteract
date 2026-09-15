@@ -635,6 +635,7 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Shading, refs: &GradientRefs,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::tests::rect;
     use crate::scene::{PathStyle, RotatedRect, Scene, TextSpec};
 
     fn red_fill(a: f32) -> PathStyle {
@@ -642,14 +643,6 @@ mod tests {
             fill: crate::scene::Paint::rgba(255, 0, 0, a),
             ..PathStyle::default()
         }
-    }
-
-    fn rect(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        let mut p = scene.path(style);
-        p.move_to(x, y);
-        p.line_to(x + w, y);
-        p.line_to(x + w, y + h);
-        p.line_to(x, y + h);
     }
 
     #[test]

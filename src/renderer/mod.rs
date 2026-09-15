@@ -167,3 +167,18 @@ impl<C> Drop for RestoreOnDrop<'_, C> {
         (self.restore)(self.canvas);
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::scene::{PathStyle, Scene};
+
+    /// Adds a `w × h` rectangle at `(x, y)` to `scene`.
+    pub(crate) fn rect(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
+        scene
+            .path(style)
+            .move_to(x, y)
+            .line_to(x + w, y)
+            .line_to(x + w, y + h)
+            .line_to(x, y + h);
+    }
+}

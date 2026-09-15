@@ -455,15 +455,8 @@ impl OutlineBuilder for PathData<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::tests::rect;
     use crate::scene::{Dash, PathStyle, Scene, Stop, TextSpec};
-
-    fn rect(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
-        let mut p = scene.path(style);
-        p.move_to(x, y);
-        p.line_to(x + w, y);
-        p.line_to(x + w, y + h);
-        p.line_to(x, y + h);
-    }
 
     fn red_fill(a: f32) -> PathStyle {
         PathStyle {
