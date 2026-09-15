@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::outline::{ElevateQuads, PathSink};
+use crate::outline::PathSink;
 use crate::renderer::{AllocError, Renderer, RestoreOnDrop, sealed::Canvas};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Stop, Text,
@@ -114,9 +114,8 @@ impl Canvas for PdfRenderer {
                     .set_dash_pattern(dash.array().iter().copied(), dash.offset());
             }
         }
-        // PDF has no quadratic operator.
-        let mut out = PdfOutline::new(&mut self.content);
-        path.segments().outline(&mut ElevateQuads::new(&mut out));
+        path.segments()
+            .outline(&mut PdfOutline::new(&mut self.content));
         if style.closed {
             self.content.close_path();
         }
@@ -136,8 +135,8 @@ impl Canvas for PdfRenderer {
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
         if clip.segments().next().is_some() {
-            let mut out = PdfOutline::new(&mut self.content);
-            clip.segments().outline(&mut ElevateQuads::new(&mut out));
+            clip.segments()
+                .outline(&mut PdfOutline::new(&mut self.content));
             self.content.close_path();
         } else {
             // A close with no current point is an error. An empty rectangle
@@ -425,11 +424,10 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
     }
     canvas.content.transform(node.transform);
 
-    // PDF has no quadratic operator.
-    let mut adapter = PdfOutline::new(&mut canvas.content);
-    layout.outline(&mut ElevateQuads::new(&mut adapter));
+    let mut out = PdfOutline::new(&mut canvas.content);
+    layout.outline(&mut out);
     // A text of spaces has no outline, and a paint with no path is an error.
-    if !adapter.empty {
+    if !out.empty {
         paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
     }
 
@@ -443,11 +441,16 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
     canvas.content.restore_state();
 }
 
-/// Path and glyph outlines, written straight into the content stream.
+/// Path and glyph outlines, written straight into the content stream. PDF
+/// has no quadratic operator, so a quadratic goes in as the equal cubic.
 struct PdfOutline<'a> {
     content: &'a mut Content,
     /// `true` until the first move.
     empty: bool,
+    /// The start of the subpath, where `close` returns the current point.
+    start: (f32, f32),
+    /// The current point, from `(0, 0)` as in a path of the scene.
+    last: (f32, f32),
 }
 
 impl<'a> PdfOutline<'a> {
@@ -455,6 +458,8 @@ impl<'a> PdfOutline<'a> {
         Self {
             content,
             empty: true,
+            start: (0.0, 0.0),
+            last: (0.0, 0.0),
         }
     }
 }
@@ -463,21 +468,37 @@ impl PathSink for PdfOutline<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.content.move_to(x, y);
         self.empty = false;
+        self.start = (x, y);
+        self.last = (x, y);
     }
     fn line_to(&mut self, x: f32, y: f32) {
         self.content.line_to(x, y);
+        self.last = (x, y);
     }
-    fn quad_to(&mut self, _cx: f32, _cy: f32, x: f32, y: f32) {
-        // Paths, clips and glyphs come through ElevateQuads, so this never
-        // runs. A line is the fallback for a direct caller.
-        self.content.line_to(x, y);
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        let (c1x, c1y, c2x, c2y) = quad_to_cubic(self.last, cx, cy, x, y);
+        self.cubic_to(c1x, c1y, c2x, c2y, x, y);
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
         self.content.cubic_to(cx1, cy1, cx2, cy2, x, y);
+        self.last = (x, y);
     }
     fn close(&mut self) {
         self.content.close_path();
+        self.last = self.start;
     }
+}
+
+/// The two control points of the cubic equal to the quadratic from `p0`
+/// through the control `(cx, cy)` to `(x, y)`.
+fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32, f32, f32) {
+    let (p0x, p0y) = p0;
+    (
+        p0x + 2.0 / 3.0 * (cx - p0x),
+        p0y + 2.0 / 3.0 * (cy - p0y),
+        x + 2.0 / 3.0 * (cx - x),
+        y + 2.0 / 3.0 * (cy - y),
+    )
 }
 
 /// A gradient of the frame, with the stops that its functions take.
@@ -829,6 +850,28 @@ mod tests {
         }
         let s = pdf_text(&scene);
         assert!(s.contains("q\n0 0 0 0 re\nW\nn\n"), "{s}");
+    }
+
+    #[test]
+    fn a_quadratic_after_a_close_starts_at_the_start_of_the_subpath() {
+        let mut content = Content::new();
+        {
+            let mut out = PdfOutline::new(&mut content);
+            out.move_to(0.0, 0.0);
+            out.line_to(6.0, 0.0);
+            out.close();
+            out.quad_to(3.0, 3.0, 6.0, 0.0);
+        }
+        let ops = String::from_utf8(content.finish().to_vec()).expect("ascii");
+        assert_eq!(ops, "0 0 m\n6 0 l\nh\n2 2 4 2 6 0 c");
+    }
+
+    #[test]
+    fn a_quadratic_with_no_move_starts_at_the_origin() {
+        let mut content = Content::new();
+        PdfOutline::new(&mut content).quad_to(3.0, 3.0, 6.0, 0.0);
+        let ops = String::from_utf8(content.finish().to_vec()).expect("ascii");
+        assert_eq!(ops, "2 2 4 2 6 0 c");
     }
 
     #[test]

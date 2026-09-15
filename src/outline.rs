@@ -1,6 +1,4 @@
-//! The sink that paths, clips and glyphs are outlined into, and the adapter
-//! that turns quadratics into cubics for a backend that has no quadratic
-//! operator.
+//! The sink that paths, clips and glyphs are outlined into.
 
 use crate::scene::{Segment, Segments};
 
@@ -36,67 +34,6 @@ impl Segments<'_> {
     }
 }
 
-/// Turns every quadratic into a cubic for a [`PathSink`] that has no
-/// quadratic operator. It tracks the current point itself, from `(0, 0)` as
-/// a path of the scene does, and `close` returns the point to the start of
-/// the subpath, so the backend does not reconstruct it.
-pub(crate) struct ElevateQuads<'a, B> {
-    inner: &'a mut B,
-    start: (f32, f32),
-    last: (f32, f32),
-}
-
-impl<'a, B: PathSink> ElevateQuads<'a, B> {
-    pub(crate) fn new(inner: &'a mut B) -> Self {
-        Self {
-            inner,
-            start: (0.0, 0.0),
-            last: (0.0, 0.0),
-        }
-    }
-}
-
-impl<B: PathSink> PathSink for ElevateQuads<'_, B> {
-    fn move_to(&mut self, x: f32, y: f32) {
-        self.start = (x, y);
-        self.last = (x, y);
-        self.inner.move_to(x, y);
-    }
-
-    fn line_to(&mut self, x: f32, y: f32) {
-        self.last = (x, y);
-        self.inner.line_to(x, y);
-    }
-
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        let (c1x, c1y, c2x, c2y) = quad_to_cubic(self.last, cx, cy, x, y);
-        self.last = (x, y);
-        self.inner.cubic_to(c1x, c1y, c2x, c2y, x, y);
-    }
-
-    fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        self.last = (x, y);
-        self.inner.cubic_to(cx1, cy1, cx2, cy2, x, y);
-    }
-
-    fn close(&mut self) {
-        self.last = self.start;
-        self.inner.close();
-    }
-}
-
-/// The two control points of the cubic equal to the quadratic from `p0`
-/// through the control `(cx, cy)` to `(x, y)`.
-fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32, f32, f32) {
-    let (p0x, p0y) = p0;
-    (
-        p0x + 2.0 / 3.0 * (cx - p0x),
-        p0y + 2.0 / 3.0 * (cy - p0y),
-        x + 2.0 / 3.0 * (cx - x),
-        y + 2.0 / 3.0 * (cy - y),
-    )
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -130,43 +67,5 @@ pub(crate) mod tests {
         fn close(&mut self) {
             self.ops.push("Z".to_string());
         }
-    }
-
-    #[test]
-    fn elevate_quads_tracks_the_point_across_close() {
-        // After `close` the current point is the start of the subpath, not
-        // the end of the last op.
-        let mut sink = Recorder::default();
-        {
-            let mut out = ElevateQuads::new(&mut sink);
-            out.move_to(0.0, 0.0);
-            out.line_to(6.0, 0.0);
-            out.close();
-            out.quad_to(3.0, 3.0, 6.0, 0.0);
-        }
-        assert_eq!(
-            sink.ops,
-            vec![
-                "M 0 0".to_string(),
-                "L 6 0".to_string(),
-                "Z".to_string(),
-                // anchored at (0, 0), the start of the subpath
-                "C 2 2 4 2 6 0".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn elevate_quads_starts_a_contour_opening_on_a_quad_at_the_origin() {
-        let mut sink = Recorder::default();
-        {
-            let mut out = ElevateQuads::new(&mut sink);
-            out.quad_to(3.0, 3.0, 6.0, 0.0);
-            out.move_to(1.0, 1.0);
-        }
-        assert_eq!(
-            sink.ops,
-            vec!["C 2 2 4 2 6 0".to_string(), "M 1 1".to_string()]
-        );
     }
 }
