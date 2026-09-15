@@ -236,8 +236,14 @@ impl Paint for PdfRenderer {
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
-        emit_segments(clip.segments(), &mut self.content);
-        self.content.close_path();
+        if clip.segments().any(|s| matches!(s, Segment::Move { .. })) {
+            emit_segments(clip.segments(), &mut self.content);
+            self.content.close_path();
+        } else {
+            // A close with no current point is an error. An empty rectangle
+            // covers nothing, so the clip hides what it holds.
+            self.content.rect(0.0, 0.0, 0.0, 0.0);
+        }
         match clip.fill_rule {
             FillRule::NonZero => {
                 self.content.clip_nonzero();
@@ -999,5 +1005,16 @@ mod tests {
         let s = String::from_utf8_lossy(&render_to_pdf(&scene)).into_owned();
         // The base transform of the content stream, for a page 40 pixels tall.
         assert!(s.contains("/Matrix [0.75 0 0 -0.75 0 30]"), "{s}");
+    }
+
+    #[test]
+    fn an_empty_clip_clips_to_an_empty_rectangle() {
+        let mut scene = Scene::new(20.0, 20.0);
+        {
+            let mut empty = scene.clip(ClipPath::builder(FillRule::NonZero).build());
+            rect(&mut empty, red_fill(1.0), 0.0, 0.0, 20.0, 20.0);
+        }
+        let s = String::from_utf8_lossy(&render_to_pdf(&scene)).into_owned();
+        assert!(s.contains("q\n0 0 0 0 re\nW\nn\n"), "{s}");
     }
 }
