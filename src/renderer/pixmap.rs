@@ -429,6 +429,38 @@ mod tests {
         }
     }
 
+    fn square_path(style: PathStyle, side: f32) -> Path {
+        Path::builder(style)
+            .move_to(0.0, 0.0)
+            .line_to(side, 0.0)
+            .line_to(side, side)
+            .line_to(0.0, side)
+            .build()
+    }
+
+    fn square_clip(x: f32, y: f32, side: f32) -> ClipPath {
+        ClipPath::builder(FillRule::NonZero)
+            .move_to(x, y)
+            .line_to(x + side, y)
+            .line_to(x + side, y + side)
+            .line_to(x, y + side)
+            .build()
+    }
+
+    fn assert_same_pixels(expected: &Pixmap, got: &Pixmap) {
+        let size = |pm: &Pixmap| (pm.width(), pm.height());
+        assert_eq!(size(expected), size(got));
+        for y in 0..expected.height() {
+            for x in 0..expected.width() {
+                assert_eq!(
+                    pixel_rgba(expected, x, y),
+                    pixel_rgba(got, x, y),
+                    "mismatch at ({x}, {y})"
+                );
+            }
+        }
+    }
+
     #[test]
     fn underline_stays_whole_across_a_glyph_that_winds_the_other_way() {
         // URW Gothic is a CFF face, whose contours wind the other way from
@@ -483,13 +515,7 @@ mod tests {
     #[test]
     fn draw_path_paints_rectangle() {
         let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
-        let path = Path::builder(solid(0, 255, 0))
-            .move_to(0.0, 0.0)
-            .line_to(20.0, 0.0)
-            .line_to(20.0, 20.0)
-            .line_to(0.0, 20.0)
-            .build();
-        r.draw_path(&path);
+        r.draw_path(&square_path(solid(0, 255, 0), 20.0));
         let pm = r.into_pixmap();
         assert_eq!(pixel_rgba(&pm, 10, 10), (0, 255, 0, 255));
     }
@@ -497,20 +523,8 @@ mod tests {
     #[test]
     fn with_clip_excludes_outside() {
         let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
-        let clip = ClipPath::builder(FillRule::NonZero)
-            .move_to(0.0, 0.0)
-            .line_to(10.0, 0.0)
-            .line_to(10.0, 10.0)
-            .line_to(0.0, 10.0)
-            .build();
-        r.with_clip(&clip, |c| {
-            let path = Path::builder(solid(0, 0, 255))
-                .move_to(0.0, 0.0)
-                .line_to(20.0, 0.0)
-                .line_to(20.0, 20.0)
-                .line_to(0.0, 20.0)
-                .build();
-            c.draw_path(&path);
+        r.with_clip(&square_clip(0.0, 0.0, 10.0), |c| {
+            c.draw_path(&square_path(solid(0, 0, 255), 20.0));
         });
         let pm = r.into_pixmap();
         assert_eq!(pixel_rgba(&pm, 5, 5), (0, 0, 255, 255));
@@ -530,15 +544,7 @@ mod tests {
         let mut r_stream = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let pm_streamed = r_stream.render_stream(&bytes[..]).expect("decode + render");
 
-        for y in 0..10 {
-            for x in 0..10 {
-                assert_eq!(
-                    pixel_rgba(pm_atomic, x, y),
-                    pixel_rgba(pm_streamed, x, y),
-                    "mismatch at ({x}, {y})"
-                );
-            }
-        }
+        assert_same_pixels(pm_atomic, pm_streamed);
         assert_eq!(pixel_rgba(pm_streamed, 5, 5), (255, 0, 0, 255));
     }
 
@@ -546,25 +552,9 @@ mod tests {
     fn a_recycled_mask_does_not_leak_the_previous_clip() {
         // Sibling clips reuse one mask buffer.
         let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
-        let cover = |c: &mut PixmapRenderer| {
-            let path = Path::builder(solid(0, 0, 255))
-                .move_to(0.0, 0.0)
-                .line_to(20.0, 0.0)
-                .line_to(20.0, 20.0)
-                .line_to(0.0, 20.0)
-                .build();
-            c.draw_path(&path);
-        };
-        let box_at = |x: f32| {
-            ClipPath::builder(FillRule::NonZero)
-                .move_to(x, 0.0)
-                .line_to(x + 8.0, 0.0)
-                .line_to(x + 8.0, 8.0)
-                .line_to(x, 8.0)
-                .build()
-        };
-        r.with_clip(&box_at(0.0), cover);
-        r.with_clip(&box_at(10.0), cover);
+        let cover = |c: &mut PixmapRenderer| c.draw_path(&square_path(solid(0, 0, 255), 20.0));
+        r.with_clip(&square_clip(0.0, 0.0, 8.0), cover);
+        r.with_clip(&square_clip(10.0, 0.0, 8.0), cover);
 
         let pm = r.into_pixmap();
         // Each clip painted its own box, and neither painted the gap.
@@ -598,28 +588,14 @@ mod tests {
         let mut streamed = PixmapRenderer::new(1.0, scene.width, scene.height).expect("alloc");
         let got = streamed.render_stream(&bytes[..]).expect("decode + render");
 
-        for y in 0..20 {
-            for x in 0..20 {
-                assert_eq!(
-                    pixel_rgba(&expected, x, y),
-                    pixel_rgba(got, x, y),
-                    "mismatch at ({x}, {y})"
-                );
-            }
-        }
+        assert_same_pixels(&expected, got);
     }
 
     #[test]
     fn render_stream_handles_nested_clip() {
         let mut scene = Scene::new(20.0, 20.0);
         {
-            let clip = ClipPath::builder(FillRule::NonZero)
-                .move_to(0.0, 0.0)
-                .line_to(10.0, 0.0)
-                .line_to(10.0, 10.0)
-                .line_to(0.0, 10.0)
-                .build();
-            let mut clip_scope = scene.clip(clip);
+            let mut clip_scope = scene.clip(square_clip(0.0, 0.0, 10.0));
             rect(&mut clip_scope, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);
         }
         let bytes = crate::wire::encode_frame(&scene);
@@ -655,13 +631,7 @@ mod tests {
         let mut scene = Scene::new(10.0, 10.0);
         rect(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
         {
-            let clip = ClipPath::builder(FillRule::NonZero)
-                .move_to(0.0, 0.0)
-                .line_to(10.0, 0.0)
-                .line_to(10.0, 10.0)
-                .line_to(0.0, 10.0)
-                .build();
-            let mut clip_scope = scene.clip(clip);
+            let mut clip_scope = scene.clip(square_clip(0.0, 0.0, 10.0));
             rect(&mut clip_scope, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
         }
         rect(&mut scene, solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0);
@@ -709,13 +679,7 @@ mod tests {
         {
             let mut empty = scene.clip(ClipPath::builder(FillRule::NonZero).build());
             rect(&mut empty, solid(0, 255, 0), 0.0, 0.0, 20.0, 20.0);
-            let square = ClipPath::builder(FillRule::NonZero)
-                .move_to(0.0, 0.0)
-                .line_to(20.0, 0.0)
-                .line_to(20.0, 20.0)
-                .line_to(0.0, 20.0)
-                .build();
-            let mut inner = empty.clip(square);
+            let mut inner = empty.clip(square_clip(0.0, 0.0, 20.0));
             rect(&mut inner, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);
         }
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
