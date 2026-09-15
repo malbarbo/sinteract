@@ -40,6 +40,9 @@ pub struct SvgRenderer {
     /// as a space, has no id.
     glyphs: HashMap<Glyph, Option<usize>>,
     glyph_defs: usize,
+    /// The glyphs of the text being written, with their x, kept for the
+    /// capacity.
+    uses: Vec<(usize, f32)>,
     gradients: usize,
     clips: usize,
     /// The start of every id in the document.
@@ -58,6 +61,7 @@ impl SvgRenderer {
             body: String::new(),
             glyphs: HashMap::new(),
             glyph_defs: 0,
+            uses: Vec::new(),
             gradients: 0,
             clips: 0,
             prefix: String::new(),
@@ -343,10 +347,13 @@ fn render_text(node: &Text, canvas: &mut SvgRenderer) {
         return;
     }
 
-    let uses: Vec<(usize, f32)> = layout
-        .placed_glyphs()
-        .filter_map(|(glyph, x)| Some((canvas.glyph_id(glyph)?, x)))
-        .collect();
+    let mut uses = std::mem::take(&mut canvas.uses);
+    uses.clear();
+    uses.extend(
+        layout
+            .placed_glyphs()
+            .filter_map(|(glyph, x)| Some((canvas.glyph_id(glyph)?, x))),
+    );
     let y = layout.baseline_y();
 
     let [a, b, c, d, e, f] = node.transform;
@@ -385,6 +392,7 @@ fn render_text(node: &Text, canvas: &mut SvgRenderer) {
         body.push_str("/>\n");
     }
     body.push_str("</g>\n");
+    canvas.uses = uses;
 }
 
 fn write_text_stroke(node: &Text, out: &mut String) {
