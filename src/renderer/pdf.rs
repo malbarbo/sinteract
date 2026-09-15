@@ -191,14 +191,14 @@ impl Renderer for PdfRenderer {
 }
 
 impl PdfRenderer {
-    /// Returns the `/Pn` name of `g`.
-    fn push_gradient(&mut self, g: &Gradient) -> String {
+    /// Returns the index of `g`, the `n` of its `/Pn` name.
+    fn push_gradient(&mut self, g: &Gradient) -> usize {
         let idx = self.gradients.len();
         self.gradients.push(Shading {
             geom: g.geom,
             stops: prepare_stops(&g.stops),
         });
-        format!("P{idx}")
+        idx
     }
 
     /// Emits `/Gsn gs` for the alpha pair, allocating the ExtGState the first
@@ -212,8 +212,7 @@ impl PdfRenderer {
         }
         let next = self.gstates.len() as u32;
         let idx = *self.gstates.entry((fk, sk)).or_insert(next);
-        let name = format!("Gs{idx}");
-        self.content.set_parameters(Name(name.as_bytes()));
+        self.content.set_parameters(Name(gs_name(idx).as_bytes()));
     }
 
     /// Sets the fill or the stroke paint. A gradient goes through the Pattern
@@ -230,7 +229,7 @@ impl PdfRenderer {
             }
             Paint::Gradient(g) => g,
         };
-        let name = self.push_gradient(gradient);
+        let name = pattern_name(self.push_gradient(gradient));
         let name = Name(name.as_bytes());
         let pattern = pdf_writer::types::ColorSpaceOperand::Pattern;
         match target {
@@ -258,17 +257,15 @@ impl PdfRenderer {
         let pages_id = Ref::new(2);
         let page_id = Ref::new(3);
         let content_id = Ref::new(4);
-        let mut next_id: i32 = 5;
+        // The ExtGStates take the ids after the content, in the order of
+        // their keys.
+        let gstate_ref = |k: usize| Ref::new(5 + k as i32);
+        let mut next_id = 5 + gstates.len() as i32;
         let mut alloc = || {
             let r = Ref::new(next_id);
             next_id += 1;
             r
         };
-
-        let gstate_refs: Vec<((u16, u16), Ref, u32)> = gstates
-            .iter()
-            .map(|(&(fk, sk), &idx)| ((fk, sk), alloc(), idx))
-            .collect();
 
         let gradient_refs: Vec<GradientRefs> = gradients
             .iter()
@@ -295,19 +292,17 @@ impl PdfRenderer {
             page.media_box(Rect::new(0.0, 0.0, w * PX_TO_PT, h * PX_TO_PT));
             page.contents(content_id);
             let mut resources = page.resources();
-            if !gstate_refs.is_empty() {
+            if !gstates.is_empty() {
                 let mut gs_dict = resources.ext_g_states();
-                for ((_fk, _sk), r, idx) in &gstate_refs {
-                    let name = format!("Gs{idx}");
-                    gs_dict.pair(Name(name.as_bytes()), *r);
+                for (k, &idx) in gstates.values().enumerate() {
+                    gs_dict.pair(Name(gs_name(idx).as_bytes()), gstate_ref(k));
                 }
                 gs_dict.finish();
             }
             if !gradient_refs.is_empty() {
                 let mut pat_dict = resources.patterns();
                 for (i, gr) in gradient_refs.iter().enumerate() {
-                    let name = format!("P{i}");
-                    pat_dict.pair(Name(name.as_bytes()), gr.pattern);
+                    pat_dict.pair(Name(pattern_name(i).as_bytes()), gr.pattern);
                 }
                 pat_dict.finish();
             }
@@ -317,13 +312,13 @@ impl PdfRenderer {
 
         pdf.stream(content_id, buf.as_slice());
 
-        for ((fk, sk), r, _idx) in &gstate_refs {
-            let mut gs = pdf.ext_graphics(*r);
-            if *fk != 1000 {
-                gs.non_stroking_alpha(alpha_value(*fk));
+        for (k, &(fk, sk)) in gstates.keys().enumerate() {
+            let mut gs = pdf.ext_graphics(gstate_ref(k));
+            if fk != 1000 {
+                gs.non_stroking_alpha(alpha_value(fk));
             }
-            if *sk != 1000 {
-                gs.stroking_alpha(alpha_value(*sk));
+            if sk != 1000 {
+                gs.stroking_alpha(alpha_value(sk));
             }
             gs.finish();
         }
@@ -361,6 +356,16 @@ fn alpha_key(a: f32) -> u16 {
 
 fn alpha_value(key: u16) -> f32 {
     f32::from(key) / 1000.0
+}
+
+/// The name of the ExtGState at `idx` in the resources of the page.
+fn gs_name(idx: u32) -> String {
+    format!("Gs{idx}")
+}
+
+/// The name of the pattern of the gradient at `idx`.
+fn pattern_name(idx: usize) -> String {
+    format!("P{idx}")
 }
 
 fn pdf_line_cap(c: LineCap) -> LineCapStyle {
