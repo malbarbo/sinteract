@@ -118,9 +118,6 @@ impl Canvas for PdfRenderer {
         }
         if do_stroke {
             self.bind_paint(&style.stroke, PaintTarget::Stroke);
-        }
-
-        if do_stroke {
             self.content.set_line_width(style.stroke_width);
             self.content.set_line_cap(pdf_line_cap(style.line_cap));
             self.content.set_line_join(pdf_line_join(style.line_join));
