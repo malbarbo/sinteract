@@ -109,6 +109,21 @@ impl Paint {
             Self::Gradient(g) => g.stops.first().map(|s| s.color).unwrap_or_default(),
         }
     }
+
+    /// Returns `true` if every float of the paint is finite, `false`
+    /// otherwise.
+    pub(crate) fn is_finite(&self) -> bool {
+        match self {
+            Self::Solid(c) => c.a.is_finite(),
+            Self::Gradient(g) => {
+                let geom = match g.geom {
+                    GradientGeom::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
+                    GradientGeom::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
+                };
+                geom && g.stops.iter().all(|s| all_finite(&[s.offset, s.color.a]))
+            }
+        }
+    }
 }
 
 /// A dash pattern. `array` alternates on and off lengths in path units and
@@ -178,6 +193,14 @@ impl PathStyle {
     pub fn draws_stroke(&self) -> bool {
         self.stroke.is_visible() && self.stroke_width > 0.0
     }
+
+    /// Returns `true` if every float of the style is finite, `false`
+    /// otherwise. A [`Dash`] is always finite.
+    pub(crate) fn is_finite(&self) -> bool {
+        self.fill.is_finite()
+            && self.stroke.is_finite()
+            && all_finite(&[self.stroke_width, self.miter_limit])
+    }
 }
 
 impl Default for PathStyle {
@@ -244,6 +267,12 @@ impl ClipPath {
 
     pub fn segments(&self) -> Segments<'_> {
         Segments(self.segs.iter())
+    }
+
+    /// Returns `true` if every coordinate of the clip is finite, `false`
+    /// otherwise.
+    pub(crate) fn is_finite(&self) -> bool {
+        self.segs.iter().all(|s| s.is_finite())
     }
 }
 
@@ -335,6 +364,17 @@ impl Text {
     pub fn draws_stroke(&self) -> bool {
         self.stroke.a > 0.0 && self.stroke_width > 0.0
     }
+
+    /// Returns `true` if every float of the text is finite, `false`
+    /// otherwise.
+    pub(crate) fn is_finite(&self) -> bool {
+        all_finite(&[
+            self.fill.a,
+            self.stroke.a,
+            self.stroke_width,
+            self.spec.size,
+        ]) && all_finite(&self.transform)
+    }
 }
 
 impl Default for Text {
@@ -424,6 +464,10 @@ fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
+fn all_finite(values: &[f32]) -> bool {
+    values.iter().all(|v| v.is_finite())
+}
+
 /// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
 /// the wire, and the renderer resolves it to pixels. `transform` maps the
 /// image to the canvas in the convention of [`Text::transform`], with the
@@ -453,6 +497,12 @@ impl Bitmap {
             id,
             transform: rect.affine(img_w as f32, img_h as f32),
         }
+    }
+
+    /// Returns `true` if every float of the transform is finite, `false`
+    /// otherwise.
+    pub(crate) fn is_finite(&self) -> bool {
+        all_finite(&self.transform)
     }
 }
 
@@ -545,6 +595,11 @@ impl Segment {
                 y,
             } => [c1x, c1y, c2x, c2y, x, y],
         }
+    }
+
+    /// Returns `true` if every coordinate is finite, `false` otherwise.
+    pub(crate) fn is_finite(self) -> bool {
+        all_finite(&self.wire_coords())
     }
 }
 
@@ -698,6 +753,12 @@ impl Path {
     pub fn segments(&self) -> Segments<'_> {
         Segments(self.segs.iter())
     }
+
+    /// Returns `true` if every float of the style and of the segments is
+    /// finite, `false` otherwise.
+    pub(crate) fn is_finite(&self) -> bool {
+        self.style.is_finite() && self.segs.iter().all(|s| s.is_finite())
+    }
 }
 
 /// One node of a [`Scene`]. A clip holds the elements it applies to. A
@@ -724,6 +785,9 @@ pub enum Element {
 ///
 /// An arc is stored as cubics, so a renderer sees only move, line, quad and
 /// cubic.
+///
+/// A float that is not finite has no drawing, so the scene drops an element
+/// that holds one, and a clip whose path holds one drops with all it holds.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
     pub width: f32,
@@ -759,7 +823,9 @@ impl Scene {
 
     /// Append a [`Path`] built elsewhere. [`Self::path`] builds one in place.
     pub fn add_path(&mut self, path: Path) {
-        self.elements.push(Element::Path(path));
+        if path.is_finite() {
+            self.elements.push(Element::Path(path));
+        }
     }
 
     /// Begin a path at `(x, y)`. The [`PathScope`] commits it to
@@ -786,11 +852,15 @@ impl Scene {
     }
 
     pub fn text(&mut self, node: Text) {
-        self.elements.push(Element::Text(node));
+        if node.is_finite() {
+            self.elements.push(Element::Text(node));
+        }
     }
 
     pub fn bitmap(&mut self, node: Bitmap) {
-        self.elements.push(Element::Bitmap(node));
+        if node.is_finite() {
+            self.elements.push(Element::Bitmap(node));
+        }
     }
 }
 
@@ -854,10 +924,10 @@ impl Drop for PathScope<'_> {
     fn drop(&mut self) {
         let segs = self.builder.geom.finish();
         if !segs.is_empty() {
-            self.scene.elements.push(Element::Path(Path {
+            self.scene.add_path(Path {
                 style: std::mem::take(&mut self.builder.style),
                 segs,
-            }));
+            });
         }
     }
 }
@@ -890,9 +960,11 @@ impl<'a> Drop for ClipScope<'a> {
     fn drop(&mut self) {
         let clip = std::mem::take(&mut self.clip);
         let elements = self.scene.elements.split_off(self.mark);
-        self.scene
-            .elements
-            .push(Element::Clipped { clip, elements });
+        if clip.is_finite() {
+            self.scene
+                .elements
+                .push(Element::Clipped { clip, elements });
+        }
     }
 }
 
@@ -1332,5 +1404,121 @@ mod tests {
             (x - 62.0).abs() < 1e-4 && (y - 24.0).abs() < 1e-4,
             "{x}, {y}"
         );
+    }
+
+    fn a_line(style: PathStyle, x: f32, y: f32) -> Path {
+        Path::builder(style, 0.0, 0.0).line_to(x, y).build()
+    }
+
+    fn a_unit_rect(angle_deg: f32) -> RotatedRect {
+        RotatedRect {
+            cx: 5.0,
+            cy: 5.0,
+            w: 10.0,
+            h: 10.0,
+            angle_deg,
+        }
+    }
+
+    #[test]
+    fn an_element_with_a_non_finite_float_is_not_added() {
+        let (nan, inf) = (f32::NAN, f32::INFINITY);
+        let stop = |offset, a| Stop {
+            offset,
+            color: Rgba {
+                a,
+                ..Rgba::default()
+            },
+        };
+        let styles = [
+            PathStyle {
+                stroke_width: inf,
+                ..PathStyle::default()
+            },
+            PathStyle {
+                miter_limit: nan,
+                ..PathStyle::default()
+            },
+            PathStyle {
+                fill: Paint::rgba(0, 0, 0, nan),
+                ..PathStyle::default()
+            },
+            PathStyle {
+                stroke: Paint::gradient(Gradient::radial(0.0, 0.0, inf, vec![stop(0.0, 1.0)])),
+                ..PathStyle::default()
+            },
+            PathStyle {
+                fill: Paint::gradient(Gradient::linear(0.0, 0.0, 1.0, 1.0, vec![stop(nan, 1.0)])),
+                ..PathStyle::default()
+            },
+            PathStyle {
+                fill: Paint::gradient(Gradient::linear(0.0, 0.0, 1.0, 1.0, vec![stop(0.0, inf)])),
+                ..PathStyle::default()
+            },
+        ];
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.add_path(a_line(PathStyle::default(), nan, 5.0));
+        scene
+            .path(PathStyle::default(), 0.0, 0.0)
+            .cubic_to(1.0, 2.0, 3.0, 4.0, 5.0, -inf);
+        for style in styles {
+            scene.path(style.clone(), 0.0, 0.0).line_to(5.0, 5.0);
+            scene.add_path(a_line(style, 5.0, 5.0));
+        }
+        let text = TextSpec {
+            size: 12.0,
+            text: "Hi".into(),
+            ..TextSpec::default()
+        }
+        .fit(a_unit_rect(0.0))
+        .expect("text fits");
+        scene.text(Text {
+            spec: TextSpec {
+                size: inf,
+                ..text.spec.clone()
+            },
+            ..text.clone()
+        });
+        scene.text(Text {
+            stroke_width: nan,
+            ..text.clone()
+        });
+        scene.text(Text {
+            fill: Rgba {
+                a: nan,
+                ..text.fill
+            },
+            ..text.clone()
+        });
+        scene.text(Text {
+            transform: [1.0, 0.0, 0.0, 1.0, inf, 0.0],
+            ..text
+        });
+        scene.bitmap(Bitmap::fit(1, 8, 8, a_unit_rect(nan)));
+        assert!(scene.elements.is_empty(), "{:?}", scene.elements);
+    }
+
+    #[test]
+    fn a_clip_with_a_non_finite_float_drops_what_it_holds() {
+        let mut scene = Scene::new(10.0, 10.0);
+        {
+            let mut clip = scene.clip(a_unit_rect(f32::NAN));
+            clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+        }
+        assert!(scene.elements.is_empty(), "{:?}", scene.elements);
+    }
+
+    #[test]
+    fn a_non_finite_element_inside_a_clip_drops_alone() {
+        let mut scene = Scene::new(10.0, 10.0);
+        {
+            let mut clip = scene.clip(a_unit_rect(0.0));
+            clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+            clip.add_path(a_line(PathStyle::default(), f32::NAN, 5.0));
+        }
+        let [Element::Clipped { elements, .. }] = &scene.elements[..] else {
+            panic!("expected one clip, got {:?}", scene.elements);
+        };
+        assert_eq!(elements.len(), 1);
     }
 }
