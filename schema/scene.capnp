@@ -220,6 +220,7 @@ struct Clipped {
     elements @1 :List(Element);
 }
 
+# A width or a height that is not finite is 0.
 struct Scene {
     width    @0 :Float32;
     height   @1 :Float32;

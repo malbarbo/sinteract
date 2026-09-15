@@ -277,8 +277,8 @@ mod tests {
     }
 
     fn assert_scene_eq(a: &Scene, b: &Scene) {
-        assert_eq!(a.width, b.width);
-        assert_eq!(a.height, b.height);
+        assert_eq!(a.width(), b.width());
+        assert_eq!(a.height(), b.height());
         assert_eq!(a.elements().len(), b.elements().len(), "node count");
         for (i, (x, y)) in a.elements().iter().zip(b.elements().iter()).enumerate() {
             assert_eq!(format!("{x:?}"), format!("{y:?}"), "node {i}");
@@ -312,8 +312,8 @@ mod tests {
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Decoded::Frame(d) => {
-                assert_eq!(d.width, 640.0);
-                assert_eq!(d.height, 480.0);
+                assert_eq!(d.width(), 640.0);
+                assert_eq!(d.height(), 480.0);
                 assert!(d.elements().is_empty());
             }
             _ => panic!(),

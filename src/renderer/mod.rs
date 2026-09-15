@@ -40,7 +40,7 @@ pub trait Renderer: sealed::Canvas {
     /// Render a [`Scene`] and borrow the result. Fails only if sizing the
     /// surface fails.
     fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, AllocError> {
-        self.ensure_size(scene.width, scene.height)?;
+        self.ensure_size(scene.width(), scene.height())?;
         self.paint_elements(scene.elements());
         self.end_frame();
         Ok(self.output())

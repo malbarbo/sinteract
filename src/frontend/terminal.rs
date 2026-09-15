@@ -247,7 +247,7 @@ pub fn show_image(scene: &crate::scene::Scene) {
     let Some(backend) = pick_backend() else {
         return;
     };
-    let scale = scale_for_backend(backend, scene.width, scene.height);
+    let scale = scale_for_backend(backend, scene.width(), scene.height());
     let Some(pixmap) = render_to_pixmap(scene, scale) else {
         eprintln!("[sinteract] failed to rasterize draw list");
         return;
@@ -656,7 +656,7 @@ mod tests {
     /// Fit into `target`, then apply `cap`, as `scale_for_backend` does when
     /// the grid is known.
     fn fit_capped(scene: &Scene, target: (u32, u32), cap: f32) -> f32 {
-        crate::renderer::pixmap::fit_scale(scene.width, scene.height, target).min(cap)
+        crate::renderer::pixmap::fit_scale(scene.width(), scene.height(), target).min(cap)
     }
 
     #[test]

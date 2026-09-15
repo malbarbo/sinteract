@@ -510,8 +510,8 @@ fn write_element_list(
 }
 
 pub(super) fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
-    b.set_width(scene.width);
-    b.set_height(scene.height);
+    b.set_width(scene.width());
+    b.set_height(scene.height());
     write_element_list(
         b.init_elements(scene.elements().len() as u32),
         scene.elements(),

@@ -805,8 +805,8 @@ impl Element {
 /// that holds one, and a clip whose path holds one drops with all it holds.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
-    pub width: f32,
-    pub height: f32,
+    width: f32,
+    height: f32,
     elements: Vec<Element>,
 }
 
@@ -814,10 +814,11 @@ pub struct Scene {
 const ARC_TOLERANCE: f64 = 0.1;
 
 impl Scene {
+    /// A scene of `width` by `height`. A size that is not finite is 0.
     pub fn new(width: f32, height: f32) -> Self {
         Self {
-            width,
-            height,
+            width: finite_size(width),
+            height: finite_size(height),
             elements: Vec::new(),
         }
     }
@@ -827,10 +828,17 @@ impl Scene {
     pub(crate) fn decoded(width: f32, height: f32, elements: Vec<Element>) -> Self {
         debug_assert!(elements.iter().all(Element::is_finite));
         Self {
-            width,
-            height,
             elements,
+            ..Self::new(width, height)
         }
+    }
+
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+
+    pub fn height(&self) -> f32 {
+        self.height
     }
 
     /// The elements in drawing order. None holds a float that is not finite.
@@ -893,6 +901,12 @@ impl Scene {
             self.elements.push(Element::Bitmap(node));
         }
     }
+}
+
+/// A width or a height of a scene, with one that is not finite as 0. The
+/// stream, which sizes a frame without a [`Scene`], applies it too.
+pub(crate) fn finite_size(size: f32) -> f32 {
+    if size.is_finite() { size } else { 0.0 }
 }
 
 /// The path under construction by [`Scene::path`]. The geometry methods take

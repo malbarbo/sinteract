@@ -734,4 +734,16 @@ mod tests {
         }
         assert!(SvgRenderer::with_id_prefix("_a-1").is_some());
     }
+
+    #[test]
+    fn a_size_that_is_not_finite_draws_as_zero() {
+        let zero = render_to_svg(&Scene::new(0.0, 0.0));
+        assert_eq!(render_to_svg(&Scene::new(f32::INFINITY, f32::NAN)), zero);
+        let (width, height) = (777.0, 778.0);
+        let bytes = crate::wire::encode_frame(&Scene::new(width, height));
+        let bytes = crate::wire::with_float(&bytes, width, f32::INFINITY);
+        let bytes = crate::wire::with_float(&bytes, height, f32::NAN);
+        let mut r = SvgRenderer::new();
+        assert_eq!(r.render_stream(&bytes[..]).expect("decode + render"), zero);
+    }
 }

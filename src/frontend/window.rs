@@ -267,8 +267,8 @@ pub fn closed() -> bool {
 /// call.
 pub fn show_image(scene: &crate::scene::Scene) {
     let dl_size = (
-        scene.width.ceil().max(1.0) as u32,
-        scene.height.ceil().max(1.0) as u32,
+        scene.width().ceil().max(1.0) as u32,
+        scene.height().ceil().max(1.0) as u32,
     );
     STATE.with(|cell| {
         if let Some(state) = cell.borrow_mut().as_mut()
@@ -304,7 +304,7 @@ pub fn show_image(scene: &crate::scene::Scene) {
 
         let target_px = (w.get(), h.get());
         // The scene fills the window, so there is no cap on the scale.
-        let scale = crate::renderer::pixmap::fit_scale(scene.width, scene.height, target_px);
+        let scale = crate::renderer::pixmap::fit_scale(scene.width(), scene.height(), target_px);
         let pixmap = match crate::renderer::pixmap::render_to_pixmap(scene, scale) {
             Some(p) => p,
             None => return,

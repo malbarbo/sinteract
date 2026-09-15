@@ -19,7 +19,7 @@ use crate::text::TextLayout;
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
 /// own pixels. See [`fit_scale`].
 pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
-    let mut renderer = PixmapRenderer::new(scale, scene.width, scene.height)?;
+    let mut renderer = PixmapRenderer::new(scale, scene.width(), scene.height())?;
     renderer.render(scene).ok()?;
     Some(renderer.into_pixmap())
 }
@@ -580,7 +580,7 @@ mod tests {
         rect(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
         let bytes = crate::wire::encode_frame(&scene);
 
-        let mut r_atomic = PixmapRenderer::new(1.0, scene.width, scene.height).expect("alloc");
+        let mut r_atomic = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
         let pm_atomic = r_atomic.render(&scene).expect("render");
 
         // A different size, so render_stream has to resize.
@@ -623,10 +623,10 @@ mod tests {
         }
         let bytes = crate::wire::encode_frame(&scene);
 
-        let mut direct = PixmapRenderer::new(1.0, scene.width, scene.height).expect("alloc");
+        let mut direct = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
         let expected = direct.render(&scene).expect("render").clone();
 
-        let mut streamed = PixmapRenderer::new(1.0, scene.width, scene.height).expect("alloc");
+        let mut streamed = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
         let got = streamed.render_stream(&bytes[..]).expect("decode + render");
 
         assert_same_pixels(&expected, got);
