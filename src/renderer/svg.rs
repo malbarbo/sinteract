@@ -278,14 +278,19 @@ impl SvgRenderer {
         if let Some(&id) = self.glyphs.get(&glyph) {
             return id;
         }
-        let mut d = String::new();
-        glyph.outline(0.0, 0.0, &mut PathData::new(&mut d));
-        let id = (!d.is_empty()).then(|| {
-            let id = self.glyph_defs;
+        let id = self.glyph_defs;
+        let start = self.defs.len();
+        _ = write!(self.defs, "<path id=\"{}g{id}\" d=\"", self.prefix);
+        let d = self.defs.len();
+        glyph.outline(0.0, 0.0, &mut PathData::new(&mut self.defs));
+        let id = if self.defs.len() == d {
+            self.defs.truncate(start);
+            None
+        } else {
+            self.defs.push_str("\"/>\n");
             self.glyph_defs += 1;
-            _ = writeln!(self.defs, "<path id=\"{}g{id}\" d=\"{d}\"/>", self.prefix);
-            id
-        });
+            Some(id)
+        };
         self.glyphs.insert(glyph, id);
         id
     }
