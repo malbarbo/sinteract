@@ -78,8 +78,8 @@ impl Canvas for PdfRenderer {
         self.height = height.max(1.0);
         self.gstates.clear();
         self.gradients.clear();
-        // The last document holds the last content stream, so its size saves
-        // the stream from growing a frame again.
+        // The last document holds the last content stream, so its size is a
+        // good guess at the size of this one.
         let mut content = Content::with_capacity(self.bytes.len());
         content.transform(page_transform(self.height));
         self.content = content;
