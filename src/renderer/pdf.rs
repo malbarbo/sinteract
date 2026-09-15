@@ -505,8 +505,8 @@ fn function_count(stops: &[Stop]) -> usize {
 
 /// The stops sorted, clamped to [0, 1], and padded so there are at least
 /// two, the first at 0 and the last at 1. The pad repeats the boundary
-/// color, as in CSS. No stops give one black stop, a case the visibility
-/// check already excludes.
+/// color, as in CSS. No stops give two transparent ones, a case the
+/// visibility check already excludes.
 fn prepare_stops(stops: &[Stop]) -> Vec<Stop> {
     let mut out: Vec<Stop> = stops
         .iter()
@@ -520,24 +520,9 @@ fn prepare_stops(stops: &[Stop]) -> Vec<Stop> {
             .partial_cmp(&b.offset)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    if out.is_empty() {
-        out.push(Stop {
-            offset: 0.0,
-            color: Rgba::default(),
-        });
-    }
-    if out.len() == 1 {
-        let only = out[0];
-        out = vec![
-            Stop {
-                offset: 0.0,
-                ..only
-            },
-            Stop {
-                offset: 1.0,
-                ..only
-            },
-        ];
+    if out.len() <= 1 {
+        let color = out.first().map_or(Rgba::default(), |s| s.color);
+        out = vec![Stop { offset: 0.0, color }, Stop { offset: 1.0, color }];
     }
     let first = out[0];
     if first.offset > 0.0 {
