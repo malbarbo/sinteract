@@ -20,7 +20,10 @@ pub struct PixmapRenderer {
     pixmap: Pixmap,
     /// The scale as a transform, applied to every path.
     base: Transform,
-    clip_stack: Vec<Mask>,
+    /// The mask of each clip in effect. `None` is a clip that hides what it
+    /// holds, because its path is empty, a clip around it hides what it
+    /// holds, or its mask could not be allocated.
+    clip_stack: Vec<Option<Mask>>,
     /// Masks popped off `clip_stack`, for the next push. Every mask is
     /// canvas-sized, so any one fits.
     mask_pool: Vec<Mask>,
@@ -110,31 +113,36 @@ impl PixmapRenderer {
         self.pixmap
     }
 
-    /// Returns `true` if a mask was pushed, `false` otherwise. An empty clip
-    /// pushes nothing, and the guard in [`Paint::with_clip`] pops only what
-    /// was pushed.
-    fn push_clip(&mut self, clip: &ClipPath) -> bool {
+    /// Pushes the mask of `clip`, intersected with the clip in effect.
+    fn push_clip(&mut self, clip: &ClipPath) {
+        let mask = self.clip_mask(clip);
+        self.clip_stack.push(mask);
+    }
+
+    /// The coverage of `clip` inside the clip in effect, or `None` when the
+    /// clip hides what it holds. A clip that gets no mask hides what it
+    /// holds, so nothing paints outside it.
+    fn clip_mask(&mut self, clip: &ClipPath) -> Option<Mask> {
+        if matches!(self.clip_stack.last(), Some(None)) {
+            return None;
+        }
         let mut builder = PathBuilder::new();
         append_segments(&mut builder, clip.segments());
         // A sub-path of a clip is closed, as in an SVG clipPath. tiny_skia
         // accepts a close on a closed contour.
         builder.close();
-        let Some(path) = builder.finish() else {
-            return false;
-        };
-        let Some(mut mask) = self.take_mask() else {
-            return false;
-        };
+        // An empty path covers nothing.
+        let path = builder.finish()?;
+        let mut mask = self.take_mask()?;
         mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
-        if let Some(parent) = self.clip_stack.last() {
+        if let Some(Some(parent)) = self.clip_stack.last() {
             // Mask::intersect_path would rasterize into a second canvas-sized
             // mask.
             for (a, b) in mask.data_mut().iter_mut().zip(parent.data()) {
                 *a = mask_mul(*a, *b);
             }
         }
-        self.clip_stack.push(mask);
-        true
+        Some(mask)
     }
 
     /// A cleared canvas-sized mask, from the pool when one is there.
@@ -162,16 +170,22 @@ fn mask_mul(a: u8, b: u8) -> u8 {
 /// balanced when the body panics.
 struct ClipGuard<'a> {
     canvas: &'a mut PixmapRenderer,
-    pushed: bool,
 }
 
 impl Drop for ClipGuard<'_> {
     fn drop(&mut self) {
-        if self.pushed
-            && let Some(mask) = self.canvas.clip_stack.pop()
-        {
+        if let Some(Some(mask)) = self.canvas.clip_stack.pop() {
             self.canvas.mask_pool.push(mask);
         }
+    }
+}
+
+/// The mask to paint through, `Some(None)` outside any clip, or `None`
+/// inside a clip that hides what it holds.
+fn mask_in_effect(clip_stack: &[Option<Mask>]) -> Option<Option<&Mask>> {
+    match clip_stack.last() {
+        None => Some(None),
+        Some(mask) => mask.as_ref().map(Some),
     }
 }
 
@@ -182,7 +196,7 @@ impl Paint for PixmapRenderer {
         self.base = base;
         // A frame ends with an empty clip stack, and its masks serve the next
         // frame.
-        self.mask_pool.append(&mut self.clip_stack);
+        self.mask_pool.extend(self.clip_stack.drain(..).flatten());
         if (out_w, out_h) == (self.out_w, self.out_h) {
             self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
         } else {
@@ -199,6 +213,9 @@ impl Paint for PixmapRenderer {
     }
 
     fn draw_path(&mut self, path: &Path) {
+        let Some(mask) = mask_in_effect(&self.clip_stack) else {
+            return;
+        };
         let style = &path.style;
         let mut builder = PathBuilder::new();
         if !append_segments(&mut builder, path.segments()) {
@@ -210,8 +227,6 @@ impl Paint for PixmapRenderer {
         let Some(sk_path) = builder.finish() else {
             return;
         };
-        let mask = self.clip_stack.last();
-
         if style.draws_fill() {
             let paint = SkPaint {
                 shader: paint_to_shader(&style.fill),
@@ -249,15 +264,14 @@ impl Paint for PixmapRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        render_text(node, &mut self.pixmap, self.clip_stack.last(), self.base);
+        if let Some(mask) = mask_in_effect(&self.clip_stack) {
+            render_text(node, &mut self.pixmap, mask, self.base);
+        }
     }
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
-        let pushed = self.push_clip(clip);
-        let guard = ClipGuard {
-            canvas: self,
-            pushed,
-        };
+        self.push_clip(clip);
+        let guard = ClipGuard { canvas: self };
         inside(&mut *guard.canvas)
     }
 }
@@ -733,5 +747,25 @@ mod tests {
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let err = r.render_stream(&bytes[..]).expect_err("not a frame");
         assert!(matches!(err, crate::wire::StreamError::WrongMessageKind));
+    }
+
+    #[test]
+    fn an_empty_clip_hides_what_it_holds() {
+        // A clip inside it hides what it holds too.
+        let mut scene = Scene::new(20.0, 20.0);
+        {
+            let mut empty = scene.clip(ClipPath::builder(FillRule::NonZero).build());
+            rect_path(&mut empty, solid(0, 255, 0), 0.0, 0.0, 20.0, 20.0);
+            let square = ClipPath::builder(FillRule::NonZero)
+                .move_to(0.0, 0.0)
+                .line_to(20.0, 0.0)
+                .line_to(20.0, 20.0)
+                .line_to(0.0, 20.0)
+                .build();
+            let mut inner = empty.clip(square);
+            rect_path(&mut inner, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);
+        }
+        let pm = rasterize_scene(&scene, 1.0).expect("pixmap");
+        assert_eq!(pixel_rgba(&pm, 10, 10).3, 0);
     }
 }
