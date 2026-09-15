@@ -23,8 +23,7 @@ pub mod svg;
 
 use std::io::Read;
 
-use crate::outline::PathSink;
-use crate::scene::{Scene, Segment};
+use crate::scene::Scene;
 
 /// Sizing a surface failed. It is the only way a render fails, and only a
 /// backend that allocates a surface returns it. The pdf backend never does.
@@ -131,26 +130,6 @@ pub trait Renderer: sealed::Canvas {
 /// the cap and the join do not show, and the limit is the PDF default, which
 /// the pdf backend leaves unset.
 pub(crate) const TEXT_MITER_LIMIT: f32 = 10.0;
-
-/// Feeds `segments` to `out`, so a backend draws paths, clips and glyph
-/// outlines through one sink.
-pub(crate) fn outline_segments(segments: impl Iterator<Item = Segment>, out: &mut impl PathSink) {
-    for seg in segments {
-        match seg {
-            Segment::Move { x, y } => out.move_to(x, y),
-            Segment::Line { x, y } => out.line_to(x, y),
-            Segment::Quad { cx, cy, x, y } => out.quad_to(cx, cy, x, y),
-            Segment::Cubic {
-                c1x,
-                c1y,
-                c2x,
-                c2y,
-                x,
-                y,
-            } => out.cubic_to(c1x, c1y, c2x, c2y, x, y),
-        }
-    }
-}
 
 /// Runs `restore` on `canvas` when dropped, so the `with_clip` of a backend
 /// undoes its clip even when `inside` unwinds.

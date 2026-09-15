@@ -17,7 +17,7 @@ use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::outline::{ElevateQuads, PathSink};
-use crate::renderer::{Renderer, RestoreOnDrop, outline_segments, sealed::Canvas};
+use crate::renderer::{Renderer, RestoreOnDrop, sealed::Canvas};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment,
     Stop, Text,
@@ -129,10 +129,10 @@ impl Canvas for PdfRenderer {
             }
         }
         // PDF has no quadratic operator.
-        outline_segments(
-            path.segments(),
-            &mut ElevateQuads::new(&mut PdfOutline::new(&mut self.content)),
-        );
+        path.segments()
+            .outline(&mut ElevateQuads::new(&mut PdfOutline::new(
+                &mut self.content,
+            )));
         if style.closed {
             self.content.close_path();
         }
@@ -152,10 +152,10 @@ impl Canvas for PdfRenderer {
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
         if clip.segments().any(|s| matches!(s, Segment::Move { .. })) {
-            outline_segments(
-                clip.segments(),
-                &mut ElevateQuads::new(&mut PdfOutline::new(&mut self.content)),
-            );
+            clip.segments()
+                .outline(&mut ElevateQuads::new(&mut PdfOutline::new(
+                    &mut self.content,
+                )));
             self.content.close_path();
         } else {
             // A close with no current point is an error. An empty rectangle

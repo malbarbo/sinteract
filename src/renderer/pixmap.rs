@@ -9,7 +9,7 @@ use tiny_skia::{
 };
 
 use crate::outline::PathSink;
-use crate::renderer::{Renderer, RestoreOnDrop, outline_segments, sealed::Canvas};
+use crate::renderer::{Renderer, RestoreOnDrop, sealed::Canvas};
 use crate::scene::{ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Text};
 
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
@@ -101,7 +101,7 @@ impl Canvas for PixmapRenderer {
         };
         let style = &path.style;
         let mut builder = std::mem::take(&mut self.builder);
-        outline_segments(path.segments(), &mut builder);
+        path.segments().outline(&mut builder);
         if style.closed {
             builder.close();
         }
@@ -175,7 +175,7 @@ impl PixmapRenderer {
             return None;
         }
         let mut builder = std::mem::take(&mut self.builder);
-        outline_segments(clip.segments(), &mut builder);
+        clip.segments().outline(&mut builder);
         // A sub-path of a clip is closed, as in an SVG clipPath. tiny_skia
         // accepts a close on a closed contour.
         builder.close();
@@ -391,7 +391,7 @@ fn paint_text_path(
 }
 
 /// The inherent methods of [`PathBuilder`], so paths, clips and glyphs build
-/// through [`outline_segments`] and [`crate::text::TextLayout::outline`].
+/// through [`crate::scene::Segments::outline`] and [`crate::text::TextLayout::outline`].
 impl PathSink for PathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
         PathBuilder::move_to(self, x, y);

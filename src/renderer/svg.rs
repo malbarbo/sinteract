@@ -13,9 +13,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Write};
 
 use crate::outline::PathSink;
-use crate::renderer::{
-    Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, outline_segments, sealed::Canvas,
-};
+use crate::renderer::{Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, sealed::Canvas};
 use crate::scene::{
     ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint,
     Path, Rgba, Segment, Segments, SpreadMode, Text,
@@ -329,11 +327,10 @@ fn write_list(values: &[f32], out: &mut String) {
     }
 }
 
-/// Writes `segments` as path data from the first move on. SVG has a
-/// quadratic command, so a quadratic stays one.
+/// Writes `segments` as path data. SVG has a quadratic command, so a
+/// quadratic stays one.
 fn write_segments(segments: Segments<'_>, out: &mut String) {
-    let from_move = segments.skip_while(|s| !matches!(s, Segment::Move { .. }));
-    outline_segments(from_move, &mut PathData::new(out));
+    segments.outline(&mut PathData::new(out));
 }
 
 #[allow(clippy::similar_names)]

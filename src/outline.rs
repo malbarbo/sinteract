@@ -2,6 +2,8 @@
 //! that turns quadratics into cubics for a backend that has no quadratic
 //! operator.
 
+use crate::scene::{Segment, Segments};
+
 /// Receives an outline: the segments of a path or of a clip, or the glyphs
 /// and the underline of a text. Each backend implements it once.
 pub(crate) trait PathSink {
@@ -10,6 +12,28 @@ pub(crate) trait PathSink {
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32);
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32);
     fn close(&mut self);
+}
+
+impl Segments<'_> {
+    /// Feeds the segments to `out`, so a backend draws paths, clips and glyph
+    /// outlines through one sink.
+    pub(crate) fn outline(self, out: &mut impl PathSink) {
+        for seg in self {
+            match seg {
+                Segment::Move { x, y } => out.move_to(x, y),
+                Segment::Line { x, y } => out.line_to(x, y),
+                Segment::Quad { cx, cy, x, y } => out.quad_to(cx, cy, x, y),
+                Segment::Cubic {
+                    c1x,
+                    c1y,
+                    c2x,
+                    c2y,
+                    x,
+                    y,
+                } => out.cubic_to(c1x, c1y, c2x, c2y, x, y),
+            }
+        }
+    }
 }
 
 /// Turns every quadratic into a cubic for a [`PathSink`] that has no
