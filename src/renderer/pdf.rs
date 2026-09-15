@@ -404,7 +404,6 @@ fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) 
     }
 }
 
-#[allow(clippy::similar_names)]
 fn render_text(node: &Text, canvas: &mut PdfRenderer) {
     let do_fill = node.draws_fill();
     let do_stroke = node.draws_stroke();

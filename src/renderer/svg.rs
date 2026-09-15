@@ -332,7 +332,6 @@ fn write_segments(segments: Segments<'_>, out: &mut String) {
     segments.outline(&mut PathData::new(out));
 }
 
-#[allow(clippy::similar_names)]
 fn render_text(node: &Text, canvas: &mut SvgRenderer) {
     let do_fill = node.draws_fill();
     let do_stroke = node.draws_stroke();
