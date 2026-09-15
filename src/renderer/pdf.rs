@@ -19,8 +19,7 @@ use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 use crate::outline::{ElevateQuads, PathSink};
 use crate::renderer::{Renderer, RestoreOnDrop, sealed::Canvas};
 use crate::scene::{
-    ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment,
-    Stop, Text,
+    ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Stop, Text,
 };
 
 /// Render a [`crate::scene::Scene`] to PDF bytes.
@@ -149,7 +148,7 @@ impl Canvas for PdfRenderer {
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
-        if clip.segments().any(|s| matches!(s, Segment::Move { .. })) {
+        if clip.segments().next().is_some() {
             let mut out = PdfOutline::new(&mut self.content);
             clip.segments().outline(&mut ElevateQuads::new(&mut out));
             self.content.close_path();
