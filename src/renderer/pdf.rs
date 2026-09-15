@@ -273,17 +273,7 @@ impl PdfRenderer {
         let gradient_refs: Vec<GradientRefs> = gradients
             .iter()
             .map(|g| {
-                let prepared = &g.stops;
-                // Two stops need one exponential function. More need one per
-                // interval and a stitching function.
-                let n_subfns = if prepared.len() <= 2 {
-                    1
-                } else {
-                    prepared.len() - 1
-                };
-                let need_stitch = prepared.len() > 2;
-                let n_fn_refs = n_subfns + if need_stitch { 1 } else { 0 };
-                let functions: Vec<Ref> = (0..n_fn_refs).map(|_| alloc()).collect();
+                let functions = (0..function_count(&g.stops)).map(|_| alloc()).collect();
                 GradientRefs {
                     functions,
                     shading: alloc(),
@@ -503,10 +493,20 @@ struct Shading {
 
 /// The indirect objects of one gradient.
 struct GradientRefs {
-    /// The functions, with the one the shading references last.
+    /// The functions, as many as [`function_count`] says, with the one the
+    /// shading references last.
     functions: Vec<Ref>,
     shading: Ref,
     pattern: Ref,
+}
+
+/// One exponential function per interval of `stops`, and a stitching
+/// function over them when there is more than one interval.
+fn function_count(stops: &[Stop]) -> usize {
+    match stops.len() - 1 {
+        1 => 1,
+        intervals => intervals + 1,
+    }
 }
 
 /// The stops sorted, clamped to [0, 1], and padded so there are at least
@@ -572,41 +572,27 @@ fn rgb_components(c: Rgba) -> [f32; 3] {
 fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Shading, refs: &GradientRefs, matrix: [f32; 6]) {
     let stops = &gradient.stops;
 
-    let main_fn_ref = if stops.len() == 2 {
-        let r = refs.functions[0];
+    let intervals = stops.len() - 1;
+    for (pair, &r) in stops.windows(2).zip(&refs.functions) {
         let mut f = pdf.exponential_function(r);
         f.domain([0.0, 1.0]);
         f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-        f.c0(rgb_components(stops[0].color));
-        f.c1(rgb_components(stops[1].color));
+        f.c0(rgb_components(pair[0].color));
+        f.c1(rgb_components(pair[1].color));
         f.n(1.0);
         f.finish();
-        r
-    } else {
-        let n_subfns = stops.len() - 1;
-        debug_assert_eq!(refs.functions.len(), n_subfns + 1);
-        for i in 0..n_subfns {
-            let r = refs.functions[i];
-            let mut f = pdf.exponential_function(r);
-            f.domain([0.0, 1.0]);
-            f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-            f.c0(rgb_components(stops[i].color));
-            f.c1(rgb_components(stops[i + 1].color));
-            f.n(1.0);
-            f.finish();
-        }
-        let stitch_ref = *refs.functions.last().unwrap();
-        let mut stitch = pdf.stitching_function(stitch_ref);
+    }
+    let main_fn_ref = *refs.functions.last().expect("a gradient has a function");
+    if intervals > 1 {
+        let mut stitch = pdf.stitching_function(main_fn_ref);
         stitch.domain([0.0, 1.0]);
         stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-        stitch.functions(refs.functions[..n_subfns].iter().copied());
-        stitch.bounds(stops[1..stops.len() - 1].iter().map(|s| s.offset));
+        stitch.functions(refs.functions[..intervals].iter().copied());
+        stitch.bounds(stops[1..intervals].iter().map(|s| s.offset));
         // Each sub-function maps its interval back to [0, 1].
-        let encode: Vec<f32> = (0..n_subfns).flat_map(|_| [0.0, 1.0]).collect();
-        stitch.encode(encode);
+        stitch.encode((0..intervals).flat_map(|_| [0.0, 1.0]));
         stitch.finish();
-        stitch_ref
-    };
+    }
 
     {
         let mut sh = pdf.function_shading(refs.shading);
