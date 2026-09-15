@@ -45,6 +45,9 @@ pub struct PixmapRenderer {
     /// Masks popped off `clip_stack`, for the next push. Every mask is
     /// canvas-sized, so any one fits.
     mask_pool: Vec<Mask>,
+    /// The builder of the next path. A finished path clears back into it, so
+    /// the next path reuses its capacity.
+    builder: PathBuilder,
 }
 
 impl PixmapRenderer {
@@ -60,6 +63,7 @@ impl PixmapRenderer {
             base: Transform::from_scale(scale, scale),
             clip_stack: Vec::new(),
             mask_pool: Vec::new(),
+            builder: PathBuilder::new(),
         })
     }
 
@@ -96,7 +100,7 @@ impl Canvas for PixmapRenderer {
             return;
         };
         let style = &path.style;
-        let mut builder = PathBuilder::new();
+        let mut builder = std::mem::take(&mut self.builder);
         outline_segments(path.segments(), &mut builder);
         if style.closed {
             builder.close();
@@ -138,11 +142,12 @@ impl Canvas for PixmapRenderer {
             self.pixmap
                 .stroke_path(&sk_path, &paint, &stroke, self.base, mask);
         }
+        self.builder = sk_path.clear();
     }
 
     fn draw_text(&mut self, node: &Text) {
         if let Some(mask) = mask_in_effect(&self.clip_stack) {
-            render_text(node, &mut self.pixmap, mask, self.base);
+            render_text(node, &mut self.pixmap, mask, self.base, &mut self.builder);
         }
     }
 
@@ -182,23 +187,26 @@ impl PixmapRenderer {
         if matches!(self.clip_stack.last(), Some(None)) {
             return None;
         }
-        let mut builder = PathBuilder::new();
+        let mut builder = std::mem::take(&mut self.builder);
         outline_segments(clip.segments(), &mut builder);
         // A sub-path of a clip is closed, as in an SVG clipPath. tiny_skia
         // accepts a close on a closed contour.
         builder.close();
         // An empty path covers nothing.
         let path = builder.finish()?;
-        let mut mask = self.take_mask()?;
-        mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
-        if let Some(Some(parent)) = self.clip_stack.last() {
-            // Mask::intersect_path would rasterize into a second canvas-sized
-            // mask.
-            for (a, b) in mask.data_mut().iter_mut().zip(parent.data()) {
-                *a = mask_mul(*a, *b);
+        let mask = self.take_mask().map(|mut mask| {
+            mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
+            if let Some(Some(parent)) = self.clip_stack.last() {
+                // Mask::intersect_path would rasterize into a second
+                // canvas-sized mask.
+                for (a, b) in mask.data_mut().iter_mut().zip(parent.data()) {
+                    *a = mask_mul(*a, *b);
+                }
             }
-        }
-        Some(mask)
+            mask
+        });
+        self.builder = path.clear();
+        mask
     }
 
     /// A cleared canvas-sized mask, from the pool when one is there.
@@ -323,20 +331,16 @@ fn sk_spread(s: crate::scene::SpreadMode) -> SkSpread {
 // Text
 // -----------------------------------------------------------------------------
 
-fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Transform) {
+fn render_text(
+    node: &Text,
+    pixmap: &mut Pixmap,
+    mask: Option<&Mask>,
+    base: Transform,
+    builder: &mut PathBuilder,
+) {
     let Some(layout) = crate::text::TextLayout::new(&node.spec) else {
         return;
     };
-
-    let mut glyphs = PathBuilder::new();
-    layout.outline(&mut glyphs);
-    // The underline paints on its own. In one path, a glyph that winds the
-    // other way from the rectangle would cancel it where the two cross.
-    let underline = node.underline.then(|| {
-        let mut b = PathBuilder::new();
-        layout.outline_underline(&mut b);
-        b
-    });
 
     // The transform is in the `cm` convention, which is the order of
     // Transform::from_row.
@@ -351,31 +355,53 @@ fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Tran
     // The text transform applies first, then the scale.
     let transform = local.post_concat(base);
 
-    for path in [Some(glyphs), underline]
-        .into_iter()
-        .flatten()
-        .filter_map(PathBuilder::finish)
-    {
-        if node.draws_fill() {
-            let mut paint = SkPaint::default();
-            paint.set_color(sk_color(node.fill));
-            paint.anti_alias = true;
-            // A TrueType glyph fills with non-zero winding.
-            pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
-        }
-        if node.draws_stroke() {
-            let mut paint = SkPaint::default();
-            paint.set_color(sk_color(node.stroke));
-            paint.anti_alias = true;
-            let stroke = Stroke {
-                width: node.stroke_width,
-                miter_limit: crate::renderer::TEXT_MITER_LIMIT,
-                dash: None,
-                ..Stroke::default()
-            };
-            pixmap.stroke_path(&path, &paint, &stroke, transform, mask);
-        }
+    paint_text_path(node, pixmap, mask, transform, builder, |out| {
+        layout.outline(out)
+    });
+    // The underline paints on its own. In one path, a glyph that winds the
+    // other way from the rectangle would cancel it where the two cross.
+    if node.underline {
+        paint_text_path(node, pixmap, mask, transform, builder, |out| {
+            layout.outline_underline(out)
+        });
     }
+}
+
+/// Builds a path of `node` with `outline`, then fills and strokes it. The
+/// finished path clears back into `builder`.
+fn paint_text_path(
+    node: &Text,
+    pixmap: &mut Pixmap,
+    mask: Option<&Mask>,
+    transform: Transform,
+    builder: &mut PathBuilder,
+    outline: impl FnOnce(&mut PathBuilder),
+) {
+    let mut b = std::mem::take(builder);
+    outline(&mut b);
+    let Some(path) = b.finish() else {
+        return;
+    };
+    if node.draws_fill() {
+        let mut paint = SkPaint::default();
+        paint.set_color(sk_color(node.fill));
+        paint.anti_alias = true;
+        // A TrueType glyph fills with non-zero winding.
+        pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
+    }
+    if node.draws_stroke() {
+        let mut paint = SkPaint::default();
+        paint.set_color(sk_color(node.stroke));
+        paint.anti_alias = true;
+        let stroke = Stroke {
+            width: node.stroke_width,
+            miter_limit: crate::renderer::TEXT_MITER_LIMIT,
+            dash: None,
+            ..Stroke::default()
+        };
+        pixmap.stroke_path(&path, &paint, &stroke, transform, mask);
+    }
+    *builder = path.clear();
 }
 
 /// The inherent methods of [`PathBuilder`], so paths, clips and glyphs build
