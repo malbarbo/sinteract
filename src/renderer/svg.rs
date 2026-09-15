@@ -16,7 +16,7 @@ use crate::outline::PathSink;
 use crate::renderer::{AllocError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, sealed::Canvas};
 use crate::scene::{
     ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint,
-    Path, Rgba, Segments, SpreadMode, Text,
+    Path, Rgba, SpreadMode, Text,
 };
 use crate::text::{Glyph, TextLayout};
 
@@ -123,7 +123,7 @@ impl Canvas for SvgRenderer {
         }
 
         self.body.push_str("<path d=\"");
-        write_segments(path.segments(), &mut self.body);
+        path.segments().outline(&mut PathData::new(&mut self.body));
         if style.closed {
             self.body.push_str(" Z");
         }
@@ -196,7 +196,7 @@ impl Canvas for SvgRenderer {
         self.clips += 1;
         let prefix = &self.prefix;
         _ = write!(self.defs, "<clipPath id=\"{prefix}c{id}\"><path d=\"");
-        write_segments(clip.segments(), &mut self.defs);
+        clip.segments().outline(&mut PathData::new(&mut self.defs));
         self.defs.push('"');
         if clip.fill_rule == FillRule::EvenOdd {
             self.defs.push_str(" clip-rule=\"evenodd\"");
@@ -326,12 +326,6 @@ fn write_list(values: &[f32], out: &mut String) {
     }
 }
 
-/// Writes `segments` as path data. SVG has a quadratic command, so a
-/// quadratic stays one.
-fn write_segments(segments: Segments<'_>, out: &mut String) {
-    segments.outline(&mut PathData::new(out));
-}
-
 fn render_text(node: &Text, canvas: &mut SvgRenderer) {
     let do_fill = node.draws_fill();
     let do_stroke = node.draws_stroke();
@@ -408,7 +402,8 @@ fn write_uses(uses: &[(usize, f32)], prefix: &str, y: f32, out: &mut String) {
     }
 }
 
-/// Path data, written as it arrives, with a space between two commands.
+/// Path data, written as it arrives, with a space between two commands. SVG
+/// has a quadratic command, so a quadratic stays one.
 struct PathData<'a> {
     d: &'a mut String,
     /// `true` until the first command.
