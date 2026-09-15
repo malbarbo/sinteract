@@ -16,7 +16,7 @@ use crate::outline::PathSink;
 use crate::renderer::{Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, sealed::Canvas};
 use crate::scene::{
     ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint,
-    Path, Rgba, Segment, Segments, SpreadMode, Text,
+    Path, Rgba, Segments, SpreadMode, Text,
 };
 use crate::text::{Glyph, TextLayout};
 
@@ -117,9 +117,8 @@ impl Canvas for SvgRenderer {
         if !do_fill && !do_stroke {
             return;
         }
-        // Path data that does not open with a move is an error in SVG, and a
-        // renderer draws nothing after the error.
-        if !path.segments().any(|s| matches!(s, Segment::Move { .. })) {
+        // A path with no segments would write an empty `<path>`.
+        if path.segments().next().is_none() {
             return;
         }
 
