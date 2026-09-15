@@ -16,7 +16,7 @@ use crate::scene_capnp::{
     rgba as wire_rgba, scene as wire_scene, stop as wire_stop, text_node,
 };
 
-use super::{Error, finish};
+use super::{Error, finish, skip_unknown};
 
 /// Encode a scene as a message whose root is the `Scene` struct of
 /// `schema/scene.capnp`, with no session envelope around it. A host that
@@ -472,14 +472,18 @@ pub(super) fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
     );
 }
 
-/// `None` for an element of an arm from a newer schema, which the reader
-/// skips.
+/// `None` for an element of an arm from a newer schema, or for one that
+/// holds a value from a newer schema, which the reader skips.
 fn read_element(node: element::Reader<'_>) -> Result<Option<Element>, Error> {
-    use element::Which;
     let Ok(which) = node.which() else {
         return Ok(None);
     };
-    Ok(Some(match which {
+    skip_unknown(read_known_element(which))
+}
+
+fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, Error> {
+    use element::Which;
+    Ok(match which {
         Which::Path(p) => Element::Path(read_path(p?)?),
         Which::Clipped(c) => {
             let c = c?;
@@ -489,7 +493,7 @@ fn read_element(node: element::Reader<'_>) -> Result<Option<Element>, Error> {
         }
         Which::Text(t) => Element::Text(read_text_node(t?)?),
         Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?)),
-    }))
+    })
 }
 
 fn read_element_list(

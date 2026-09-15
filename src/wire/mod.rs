@@ -46,15 +46,16 @@ pub enum Error {
     Parse(capnp::Error),
     /// A union inside an element or an event, such as `Paint`, holds an arm
     /// this crate does not know, or an enum holds a value it does not know.
-    /// An element, an event or a message of an unknown arm is skipped
-    /// instead, and is not an error.
+    /// The decoders skip the element or the event that holds it, so they do
+    /// not return this.
     UnknownVariant(&'static str, u16),
     /// A required nested struct or list is unset.
     MissingField(&'static str),
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
-    /// A `Path` carries a verb byte this crate does not know.
+    /// A `Path` or a clip carries a verb byte this crate does not know. The
+    /// decoders skip the element that holds it, so they do not return this.
     UnknownVerb(u8),
 }
 
@@ -95,12 +96,22 @@ impl From<std::str::Utf8Error> for Error {
     }
 }
 
-/// Rewrite the tag of the union struct that `find` points at, so `bytes`
-/// hold an arm this crate does not know, as a peer with a newer schema
-/// writes it. Every union of the schema keeps its tag at offset 0 of its
-/// data section.
+/// `None` when reading an element or an event met a value from a newer
+/// schema, so the reader skips what holds it. Damage stays an error.
+fn skip_unknown<T>(read: Result<T, Error>) -> Result<Option<T>, Error> {
+    match read {
+        Ok(v) => Ok(Some(v)),
+        Err(Error::UnknownVariant(..) | Error::UnknownVerb(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Overwrite the two bytes that `find` points at with a value this crate
+/// does not know, as a peer with a newer schema writes it. `find` points at
+/// the tag of a union, which every union of the schema keeps at offset 0 of
+/// its data section, at an enum field, or at the first two verbs of a path.
 #[cfg(test)]
-pub(crate) fn with_unknown_arm(
+pub(crate) fn with_unknown_value(
     bytes: &[u8],
     find: impl FnOnce(crate::protocol_capnp::message::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
@@ -120,13 +131,14 @@ pub(crate) fn with_unknown_arm(
     out
 }
 
-/// Where the tag of a union struct starts, for [`with_unknown_arm`].
+/// Where the data section of a struct starts, which is the tag of a union,
+/// for [`with_unknown_value`].
 #[cfg(test)]
 pub(crate) fn tag_of<'a>(r: impl capnp::traits::IntoInternalStructReader<'a>) -> *const u8 {
     capnp::raw::get_struct_data_section(r).as_ptr()
 }
 
-/// The scene of a `Message::Frame`, for [`with_unknown_arm`].
+/// The scene of a `Message::Frame`, for [`with_unknown_value`].
 #[cfg(test)]
 pub(crate) fn frame_of(
     m: crate::protocol_capnp::message::Reader<'_>,
@@ -145,6 +157,7 @@ pub(crate) fn frame_of(
 mod tests {
     use super::*;
     use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
+    use crate::event_capnp::input_event;
     use crate::protocol_capnp::message;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, LineCap, LineJoin, Paint,
@@ -416,10 +429,10 @@ mod tests {
                 },
             ));
         }
-        let bytes = with_unknown_arm(&encode_frame(&scene), |m| {
+        let bytes = with_unknown_value(&encode_frame(&scene), |m| {
             tag_of(frame_of(m).get_elements().unwrap().get(0))
         });
-        let bytes = with_unknown_arm(&bytes, |m| {
+        let bytes = with_unknown_value(&bytes, |m| {
             let Ok(element::Which::Clipped(c)) = frame_of(m).get_elements().unwrap().get(1).which()
             else {
                 panic!("expected Clipped");
@@ -437,32 +450,102 @@ mod tests {
 
     #[test]
     fn a_message_of_an_unknown_arm_decodes_as_unknown() {
-        let bytes = with_unknown_arm(&encode_close(), |m| tag_of(m));
+        let bytes = with_unknown_value(&encode_close(), |m| tag_of(m));
         assert!(matches!(decode(&bytes).unwrap(), Decoded::Unknown));
     }
 
     #[test]
     fn an_event_of_an_unknown_arm_decodes_as_unknown() {
-        let bytes = with_unknown_arm(&encode_event(&InputEvent::Vsync), |m| match m.which() {
+        let bytes = with_unknown_value(&encode_event(&InputEvent::Vsync), |m| match m.which() {
             Ok(message::Event(e)) => tag_of(e.unwrap()),
             _ => panic!("not an event"),
         });
         assert!(matches!(decode(&bytes).unwrap(), Decoded::Unknown));
     }
 
+    fn element_at(m: message::Reader<'_>, i: u32) -> element::WhichReader<'_> {
+        let Ok(which) = frame_of(m).get_elements().unwrap().get(i).which() else {
+            panic!("element {i} of an unknown arm");
+        };
+        which
+    }
+
+    fn path_at(m: message::Reader<'_>, i: u32) -> crate::scene_capnp::path::Reader<'_> {
+        let element::Which::Path(p) = element_at(m, i) else {
+            panic!("element {i} is not a Path");
+        };
+        p.unwrap()
+    }
+
     #[test]
-    fn a_paint_of_an_unknown_arm_is_an_error() {
+    fn an_element_that_holds_an_unknown_value_is_skipped() {
+        // Four paths and a clip. The first three paths get a paint arm, a
+        // line cap and verbs of a newer schema, and the clip gets verbs of a
+        // newer schema. Only the last path, at (9, 9), is left.
         let mut scene = Scene::new(10.0, 10.0);
-        scene.path(PathStyle::default()).move_to(0.0, 0.0);
-        let bytes = with_unknown_arm(&encode_frame(&scene), |m| {
-            let Ok(element::Which::Path(p)) = frame_of(m).get_elements().unwrap().get(0).which()
-            else {
-                panic!("expected Path");
-            };
-            tag_of(p.unwrap().get_style().unwrap().get_fill().unwrap())
+        for _ in 0..3 {
+            let mut p = scene.path(PathStyle::default());
+            p.move_to(0.0, 0.0);
+            p.line_to(1.0, 1.0);
+        }
+        scene
+            .clip(RotatedRect {
+                cx: 5.0,
+                cy: 5.0,
+                w: 10.0,
+                h: 10.0,
+                angle_deg: 0.0,
+            })
+            .path(PathStyle::default())
+            .move_to(1.0, 1.0);
+        scene.path(PathStyle::default()).move_to(9.0, 9.0);
+
+        let bytes = with_unknown_value(&encode_frame(&scene), |m| {
+            tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
         });
-        let err = decode(&bytes).unwrap_err();
-        assert!(matches!(err, Error::UnknownVariant(..)), "got {err:?}");
+        // The line cap is the u16 at byte 4 of the data of a PathStyle.
+        let bytes = with_unknown_value(&bytes, |m| {
+            tag_of(path_at(m, 1).get_style().unwrap()).wrapping_add(4)
+        });
+        let bytes = with_unknown_value(&bytes, |m| path_at(m, 2).get_verbs().unwrap().as_ptr());
+        let bytes = with_unknown_value(&bytes, |m| {
+            let element::Which::Clipped(c) = element_at(m, 3) else {
+                panic!("expected Clipped");
+            };
+            c.unwrap().get_clip().unwrap().get_verbs().unwrap().as_ptr()
+        });
+
+        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Path(p)] = &d.elements[..] else {
+            panic!("expected one Path, got {:?}", d.elements);
+        };
+        assert_eq!(
+            p.segments().collect::<Vec<_>>(),
+            [Segment::Move { x: 9.0, y: 9.0 }]
+        );
+    }
+
+    #[test]
+    fn an_event_that_holds_an_unknown_value_decodes_as_unknown() {
+        let key = InputEvent::Key(KeyEvent {
+            kind: KeyKind::Press,
+            key: "a".into(),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        });
+        // The kind is the u16 at byte 0 of the data of a KeyEvent.
+        let bytes = with_unknown_value(&encode_event(&key), |m| {
+            let Ok(message::Event(e)) = m.which() else {
+                panic!("not an event");
+            };
+            let Ok(input_event::Which::Key(k)) = e.unwrap().which() else {
+                panic!("not a key");
+            };
+            tag_of(k.unwrap())
+        });
+        assert!(matches!(decode(&bytes).unwrap(), Decoded::Unknown));
     }
 
     #[test]

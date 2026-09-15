@@ -3,7 +3,7 @@
 use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
 use crate::event_capnp::{KeyKind as WKeyKind, input_event, key_event as wire_key_event};
 
-use super::Error;
+use super::{Error, skip_unknown};
 
 fn key_kind_to_wire(k: KeyKind) -> WKeyKind {
     match k {
@@ -38,14 +38,18 @@ pub(super) fn write_input_event(mut b: input_event::Builder<'_>, ev: &InputEvent
     }
 }
 
-/// `None` for an event of an arm from a newer schema, which the reader
-/// skips.
+/// `None` for an event of an arm from a newer schema, or for one that holds
+/// a value from a newer schema, such as a key kind, which the reader skips.
 pub(super) fn read_input_event(r: input_event::Reader<'_>) -> Result<Option<InputEvent>, Error> {
-    use input_event::Which;
     let Ok(which) = r.which() else {
         return Ok(None);
     };
-    Ok(Some(match which {
+    skip_unknown(read_known_input_event(which))
+}
+
+fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEvent, Error> {
+    use input_event::Which;
+    Ok(match which {
         Which::Key(k) => {
             let k = k?;
             InputEvent::Key(KeyEvent {
@@ -62,5 +66,5 @@ pub(super) fn read_input_event(r: input_event::Reader<'_>) -> Result<Option<Inpu
         }
         Which::Tick(()) => InputEvent::Vsync,
         Which::Close(()) => InputEvent::Close,
-    }))
+    })
 }

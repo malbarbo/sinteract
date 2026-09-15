@@ -669,8 +669,46 @@ mod tests {
         let mut scene = Scene::new(10.0, 10.0);
         rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
         rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0);
-        let bytes = crate::wire::with_unknown_arm(&crate::wire::encode_frame(&scene), |m| {
+        let bytes = crate::wire::with_unknown_value(&crate::wire::encode_frame(&scene), |m| {
             crate::wire::tag_of(crate::wire::frame_of(m).get_elements().unwrap().get(0))
+        });
+
+        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
+        let pm = r.render_stream(&bytes[..]).expect("decode + render");
+        assert_eq!(pixel_rgba(pm, 2, 2), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(pm, 7, 7).3, 0);
+    }
+
+    #[test]
+    fn render_stream_skips_an_element_that_holds_an_unknown_value() {
+        // A red path with a paint arm of a newer schema, a clip with verbs of
+        // a newer schema around another red path, and a blue path.
+        use crate::scene_capnp::element::Which;
+        use crate::wire::{encode_frame, frame_of, tag_of, with_unknown_value};
+        let mut scene = Scene::new(10.0, 10.0);
+        rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+        {
+            let clip = ClipPath::builder(FillRule::NonZero)
+                .move_to(0.0, 0.0)
+                .line_to(10.0, 0.0)
+                .line_to(10.0, 10.0)
+                .line_to(0.0, 10.0)
+                .build();
+            let mut clip_scope = scene.clip(clip);
+            rect_path(&mut clip_scope, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+        }
+        rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0);
+        let bytes = with_unknown_value(&encode_frame(&scene), |m| {
+            let Ok(Which::Path(p)) = frame_of(m).get_elements().unwrap().get(0).which() else {
+                panic!("expected Path");
+            };
+            tag_of(p.unwrap().get_style().unwrap().get_fill().unwrap())
+        });
+        let bytes = with_unknown_value(&bytes, |m| {
+            let Ok(Which::Clipped(c)) = frame_of(m).get_elements().unwrap().get(1).which() else {
+                panic!("expected Clipped");
+            };
+            c.unwrap().get_clip().unwrap().get_verbs().unwrap().as_ptr()
         });
 
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
@@ -689,8 +727,9 @@ mod tests {
 
     #[test]
     fn render_stream_rejects_a_message_of_an_unknown_arm() {
-        let bytes =
-            crate::wire::with_unknown_arm(&crate::wire::encode_close(), |m| crate::wire::tag_of(m));
+        let bytes = crate::wire::with_unknown_value(&crate::wire::encode_close(), |m| {
+            crate::wire::tag_of(m)
+        });
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let err = r.render_stream(&bytes[..]).expect_err("not a frame");
         assert!(matches!(err, crate::wire::StreamError::WrongMessageKind));

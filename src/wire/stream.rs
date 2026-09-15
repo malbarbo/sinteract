@@ -12,6 +12,7 @@ use crate::renderer::AllocError;
 
 use super::Error as PayloadError;
 use super::scene::{read_bitmap, read_clip_path, read_path_into, read_text_node};
+use super::skip_unknown;
 
 /// Decoding a frame and painting it fail in three ways, and only the first
 /// leaves the session usable.
@@ -109,26 +110,30 @@ fn stream_elements<P: PaintSink>(
     use element::Which;
     for node in list.iter() {
         // An element of an arm from a newer schema is skipped, as `decode`
-        // skips it.
+        // skips it, and so is one that holds a value from a newer schema.
         let Ok(which) = node.which() else {
             continue;
         };
         match which {
             Which::Path(p) => {
-                read_path_into(p?, scratch)?;
-                paint.draw_path(scratch);
+                if skip_unknown(read_path_into(p?, scratch))?.is_some() {
+                    paint.draw_path(scratch);
+                }
             }
             Which::Clipped(c) => {
                 let c = c?;
-                let clip = read_clip_path(c.get_clip()?)?;
+                let Some(clip) = skip_unknown(read_clip_path(c.get_clip()?))? else {
+                    continue;
+                };
                 let children = c.get_elements()?;
                 // with_clip returns the value of the closure, so the Result
                 // of the nested walk comes straight out.
                 paint.with_clip(&clip, |p2| stream_elements(p2, children, &mut *scratch))?;
             }
             Which::Text(t) => {
-                let t = read_text_node(t?)?;
-                paint.draw_text(&t);
+                if let Some(t) = skip_unknown(read_text_node(t?))? {
+                    paint.draw_text(&t);
+                }
             }
             Which::Bitmap(b) => {
                 let b = read_bitmap(b?);

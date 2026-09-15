@@ -247,13 +247,14 @@ mod tests {
 
     #[test]
     fn wait_event_skips_a_message_and_an_event_of_an_unknown_arm() {
-        let unknown_message = wire::with_unknown_arm(&wire::encode_close(), |m| wire::tag_of(m));
-        let unknown_event = wire::with_unknown_arm(&wire::encode_event(&InputEvent::Close), |m| {
-            match m.which() {
-                Ok(crate::protocol_capnp::message::Event(e)) => wire::tag_of(e.unwrap()),
-                _ => panic!("not an event"),
-            }
-        });
+        let unknown_message = wire::with_unknown_value(&wire::encode_close(), |m| wire::tag_of(m));
+        let unknown_event =
+            wire::with_unknown_value(&wire::encode_event(&InputEvent::Close), |m| {
+                match m.which() {
+                    Ok(crate::protocol_capnp::message::Event(e)) => wire::tag_of(e.unwrap()),
+                    _ => panic!("not an event"),
+                }
+            });
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&unknown_message));
         stream.extend_from_slice(&frame(&unknown_event));
