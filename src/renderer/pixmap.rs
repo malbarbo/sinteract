@@ -96,10 +96,15 @@ impl Canvas for PixmapRenderer {
     }
 
     fn draw_path(&mut self, path: &Path) {
+        let style = &path.style;
+        let do_fill = style.draws_fill();
+        let do_stroke = style.draws_stroke();
+        if !do_fill && !do_stroke {
+            return;
+        }
         let Some(mask) = mask_in_effect(&self.clip_stack) else {
             return;
         };
-        let style = &path.style;
         let mut builder = std::mem::take(&mut self.builder);
         path.segments().outline(&mut builder);
         if style.closed {
@@ -108,7 +113,7 @@ impl Canvas for PixmapRenderer {
         let Some(sk_path) = builder.finish() else {
             return;
         };
-        if style.draws_fill() {
+        if do_fill {
             let paint = sk_paint(paint_to_shader(&style.fill));
             self.pixmap.fill_path(
                 &sk_path,
@@ -118,7 +123,7 @@ impl Canvas for PixmapRenderer {
                 mask,
             );
         }
-        if style.draws_stroke() {
+        if do_stroke {
             let paint = sk_paint(paint_to_shader(&style.stroke));
             let dash = style
                 .dash
