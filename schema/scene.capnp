@@ -90,6 +90,13 @@ struct Paint {
         linear @1 :LinearGradient;
         radial @2 :RadialGradient;
     }
+
+    # The color, as 0xRRGGBBAA, that a reader draws when it does not know the
+    # arm above. A writer of an arm newer than radial sets it and
+    # hasFallback. Without it, a reader skips the element. Both fit in the
+    # word of the union tag, so an unset fallback costs no bytes.
+    fallback    @3 :UInt32;
+    hasFallback @4 :Bool;
 }
 
 # ----- Path / clip / text / bitmap nodes -----
