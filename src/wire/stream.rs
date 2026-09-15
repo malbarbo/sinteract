@@ -12,7 +12,7 @@ use crate::renderer::AllocError;
 
 use super::Error as PayloadError;
 use super::scene::{read_bitmap, read_clip_path, read_path_into, read_text_node};
-use super::skip_unknown;
+use super::skip_unusable;
 
 /// Decoding a frame and painting it fail in three ways, and only the first
 /// leaves the session usable.
@@ -104,19 +104,20 @@ fn stream_elements<P: Canvas>(
     use element::Which;
     for node in list.iter() {
         // An element of an arm from a newer schema is skipped, as `decode`
-        // skips it, and so is one that holds a value from a newer schema.
+        // skips it, and so is one that holds a value from a newer schema or
+        // a float that is not finite.
         let Ok(which) = node.which() else {
             continue;
         };
         match which {
             Which::Path(p) => {
-                if skip_unknown(read_path_into(p?, scratch))?.is_some() {
+                if skip_unusable(read_path_into(p?, scratch))?.is_some() {
                     paint.draw_path(scratch);
                 }
             }
             Which::Clipped(c) => {
                 let c = c?;
-                let Some(clip) = skip_unknown(read_clip_path(c.get_clip()?))? else {
+                let Some(clip) = skip_unusable(read_clip_path(c.get_clip()?))? else {
                     continue;
                 };
                 let children = c.get_elements()?;
@@ -125,13 +126,14 @@ fn stream_elements<P: Canvas>(
                 paint.with_clip(&clip, |p2| stream_elements(p2, children, &mut *scratch))?;
             }
             Which::Text(t) => {
-                if let Some(t) = skip_unknown(read_text_node(t?))? {
+                if let Some(t) = skip_unusable(read_text_node(t?))? {
                     paint.draw_text(&t);
                 }
             }
             Which::Bitmap(b) => {
-                let b = read_bitmap(b?);
-                paint.draw_bitmap(&b);
+                if let Some(b) = skip_unusable(read_bitmap(b?))? {
+                    paint.draw_bitmap(&b);
+                }
             }
         }
     }

@@ -3,7 +3,7 @@
 use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
 use crate::event_capnp::{KeyKind as WKeyKind, input_event, key_event as wire_key_event};
 
-use super::{Error, ReadError, skip_unknown};
+use super::{Error, ReadError, skip_unusable};
 
 fn key_kind_to_wire(k: KeyKind) -> WKeyKind {
     match k {
@@ -44,7 +44,7 @@ pub(super) fn read_input_event(r: input_event::Reader<'_>) -> Result<Option<Inpu
     let Ok(which) = r.which() else {
         return Ok(None);
     };
-    skip_unknown(read_known_input_event(which))
+    skip_unusable(read_known_input_event(which))
 }
 
 fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEvent, ReadError> {

@@ -16,7 +16,7 @@ use crate::scene_capnp::{
     rgba as wire_rgba, scene as wire_scene, stop as wire_stop, text_node,
 };
 
-use super::{Error, ReadError, finish, skip_unknown};
+use super::{Error, ReadError, finish, skip_unusable};
 
 /// Encode a scene as a message whose root is the `Scene` struct of
 /// `schema/scene.capnp`, with no session envelope around it. A host that
@@ -284,10 +284,13 @@ fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
     write_coords(&mut b.init_coords(coord_count(c.segments())), c.segments());
 }
 
+/// A clip that is not finite is [`ReadError::NotFinite`], before its
+/// children are read, so the decoder and the stream skip them alike.
 pub(super) fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ReadError> {
     let mut clip = ClipPath::default();
     clip.fill_rule = fill_rule_from_wire(r.get_fill_rule()?);
     read_segments(clip.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
+    finite(clip.is_finite())?;
     Ok(clip)
 }
 
@@ -301,8 +304,8 @@ fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap) {
     b.set_m5(n.transform[5]);
 }
 
-pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Bitmap {
-    Bitmap {
+pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ReadError> {
+    let bitmap = Bitmap {
         id: r.get_id(),
         transform: [
             r.get_m0(),
@@ -312,7 +315,9 @@ pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Bitmap {
             r.get_m4(),
             r.get_m5(),
         ],
-    }
+    };
+    finite(bitmap.is_finite())?;
+    Ok(bitmap)
 }
 
 fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
@@ -334,7 +339,7 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
 }
 
 pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ReadError> {
-    Ok(Text {
+    let text = Text {
         fill: read_rgba(r.get_fill()?),
         stroke: read_rgba(r.get_stroke()?),
         stroke_width: r.get_stroke_width(),
@@ -354,7 +359,19 @@ pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ReadError
             text: r.get_text()?.to_str()?.to_owned(),
         },
         underline: r.get_underline(),
-    })
+    };
+    finite(text.is_finite())?;
+    Ok(text)
+}
+
+/// [`ReadError::NotFinite`] unless `is_finite`, the rule of
+/// [`Scene`] for an element.
+fn finite(is_finite: bool) -> Result<(), ReadError> {
+    if is_finite {
+        Ok(())
+    } else {
+        Err(ReadError::NotFinite)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -459,7 +476,8 @@ fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
 /// one for a whole frame.
 pub(super) fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Result<(), ReadError> {
     path.style = read_path_style(r.get_style()?)?;
-    read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)
+    read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
+    finite(path.is_finite())
 }
 
 fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ReadError> {
@@ -501,12 +519,13 @@ pub(super) fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
 }
 
 /// `None` for an element of an arm from a newer schema, or for one that
-/// holds a value from a newer schema, which the reader skips.
+/// holds a value from a newer schema or a float that is not finite, which
+/// the reader skips.
 fn read_element(node: element::Reader<'_>) -> Result<Option<Element>, Error> {
     let Ok(which) = node.which() else {
         return Ok(None);
     };
-    skip_unknown(read_known_element(which))
+    skip_unusable(read_known_element(which))
 }
 
 fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, ReadError> {
@@ -520,7 +539,7 @@ fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, ReadEr
             Element::Clipped { clip, elements }
         }
         Which::Text(t) => Element::Text(read_text_node(t?)?),
-        Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?)),
+        Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?)?),
     })
 }
 

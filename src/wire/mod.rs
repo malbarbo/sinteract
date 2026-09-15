@@ -39,7 +39,8 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
 /// A payload is malformed. It says the scene, the event or the message is
 /// unusable, and never that the session is. A server that gets one from
 /// [`decode`] drops the message and keeps the peer. A value from a newer
-/// schema is not an error, since the decoders skip what holds it.
+/// schema and a float that is not finite are not errors, since the decoders
+/// skip what holds them.
 #[derive(Debug)]
 pub enum Error {
     /// Cap'n Proto rejected the bytes as malformed, truncated, or of the
@@ -79,13 +80,16 @@ impl From<std::str::Utf8Error> for Error {
 }
 
 /// How reading the values inside an element or an event fails. Only
-/// `skip_unknown` looks inside, so no decoder returns it.
+/// `skip_unusable` looks inside, so no decoder returns it.
 enum ReadError {
     /// The bytes are damaged, and the whole payload is unusable.
     Malformed(Error),
     /// A paint arm, an enum value or a verb byte from a newer schema. The
     /// reader skips the element or the event that holds it.
     Newer,
+    /// A float that is not finite, which draws nothing. The reader skips the
+    /// element that holds it.
+    NotFinite,
 }
 
 impl From<Error> for ReadError {
@@ -113,11 +117,12 @@ impl From<std::str::Utf8Error> for ReadError {
 }
 
 /// `None` when reading an element or an event met a value from a newer
-/// schema, so the reader skips what holds it. Damage stays an error.
-fn skip_unknown<T>(read: Result<T, ReadError>) -> Result<Option<T>, Error> {
+/// schema or a float that is not finite, so the reader skips what holds it.
+/// Damage stays an error.
+fn skip_unusable<T>(read: Result<T, ReadError>) -> Result<Option<T>, Error> {
     match read {
         Ok(v) => Ok(Some(v)),
-        Err(ReadError::Newer) => Ok(None),
+        Err(ReadError::Newer | ReadError::NotFinite) => Ok(None),
         Err(ReadError::Malformed(e)) => Err(e),
     }
 }
@@ -163,6 +168,23 @@ pub(crate) fn frame_of(
         Ok(crate::protocol_capnp::message::Frame(f)) => f.expect("frame"),
         _ => panic!("not a frame"),
     }
+}
+
+/// Replace every float `from` in `bytes` with `to`, as a peer that writes a
+/// float that is not finite does. A `Scene` never holds one, so a test
+/// encodes a marker and swaps it. Cap'n Proto aligns a float to 4 bytes.
+#[cfg(test)]
+pub(crate) fn with_float(bytes: &[u8], from: f32, to: f32) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let mut swapped = false;
+    for chunk in out.as_chunks_mut::<4>().0 {
+        if *chunk == from.to_le_bytes() {
+            *chunk = to.to_le_bytes();
+            swapped = true;
+        }
+    }
+    assert!(swapped, "no {from} in the bytes");
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1063,5 +1085,66 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn an_element_that_holds_a_non_finite_float_is_skipped() {
+        // Every element but the last two marks a float that becomes NaN on
+        // the wire: a coordinate, a stroke width, a clip, a path inside a
+        // clip, a text and a bitmap. The clip around a good path and the path
+        // at (9, 9) are left.
+        let mark = 777.0;
+        let line = |style, x| Path::builder(style, 0.0, 0.0).line_to(x, 1.0).build();
+        let rect = RotatedRect {
+            cx: 5.0,
+            cy: 5.0,
+            w: 10.0,
+            h: 10.0,
+            angle_deg: 0.0,
+        };
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.add_path(line(PathStyle::default(), mark));
+        scene.add_path(line(
+            PathStyle {
+                stroke_width: mark,
+                ..PathStyle::default()
+            },
+            1.0,
+        ));
+        scene
+            .clip(
+                ClipPath::builder(FillRule::NonZero, mark, 0.0)
+                    .line_to(1.0, 1.0)
+                    .build(),
+            )
+            .add_path(line(PathStyle::default(), 1.0));
+        {
+            let mut clip = scene.clip(rect);
+            clip.add_path(line(PathStyle::default(), mark));
+            clip.add_path(line(PathStyle::default(), 1.0));
+        }
+        scene.text(Text {
+            stroke_width: mark,
+            ..Text::default()
+        });
+        scene.bitmap(Bitmap {
+            id: 1,
+            transform: [1.0, 0.0, 0.0, 1.0, mark, 0.0],
+        });
+        scene.add_path(
+            Path::builder(PathStyle::default(), 9.0, 9.0)
+                .line_to(10.0, 10.0)
+                .build(),
+        );
+
+        let bytes = with_float(&encode_frame(&scene), mark, f32::NAN);
+        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Clipped { elements, .. }, Element::Path(p)] = &d.elements[..] else {
+            panic!("expected a Clipped and a Path, got {:?}", d.elements);
+        };
+        assert_eq!(elements.len(), 1, "{elements:?}");
+        assert_eq!(p.segments().next(), Some(Segment::Move { x: 9.0, y: 9.0 }));
     }
 }

@@ -815,4 +815,29 @@ mod tests {
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 50, 20).3, 0);
     }
+
+    #[test]
+    fn render_stream_skips_an_element_that_holds_a_non_finite_float() {
+        // A red path with a miter limit and a clip with a coordinate that
+        // become NaN on the wire, the clip around another red path, and a
+        // blue path.
+        let mark = 777.0;
+        let mut scene = Scene::new(10.0, 10.0);
+        let red = PathStyle {
+            miter_limit: mark,
+            ..solid(255, 0, 0)
+        };
+        rect(&mut scene, red, 0.0, 0.0, 10.0, 10.0);
+        {
+            let mut clip_scope = scene.clip(square_clip(0.0, 0.0, mark));
+            rect(&mut clip_scope, solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0);
+        }
+        rect(&mut scene, solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0);
+        let bytes = crate::wire::with_float(&crate::wire::encode_frame(&scene), mark, f32::NAN);
+
+        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
+        let pm = r.render_stream(&bytes[..]).expect("decode + render");
+        assert_eq!(pixel_rgba(pm, 2, 2), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(pm, 7, 7).3, 0);
+    }
 }

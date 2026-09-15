@@ -15,6 +15,11 @@
 # the writer set one, instead. Damage, such as a bad pointer or verbs that
 # disagree with their coords, makes the whole scene unusable.
 #
+# A float that is not finite draws nothing. A reader skips an element that
+# holds one in any float, drawn or not, such as the width of a transparent
+# stroke, and a clip that holds one is skipped with all it holds. The dash
+# is the exception: its comment says when it makes the stroke solid.
+#
 # Regenerate the Rust bindings for the three schema files with:
 #   capnp compile -orust:src/wire --src-prefix=schema \
 #     schema/scene.capnp schema/event.capnp schema/protocol.capnp
