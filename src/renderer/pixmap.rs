@@ -340,14 +340,8 @@ fn render_text(
 
     // The transform is in the `cm` convention, which is the order of
     // Transform::from_row.
-    let local = Transform::from_row(
-        node.transform[0],
-        node.transform[1],
-        node.transform[2],
-        node.transform[3],
-        node.transform[4],
-        node.transform[5],
-    );
+    let [a, b, c, d, e, f] = node.transform;
+    let local = Transform::from_row(a, b, c, d, e, f);
     // The text transform applies first, then the scale.
     let transform = local.post_concat(base);
 
