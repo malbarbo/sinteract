@@ -180,7 +180,9 @@ struct TextNode {
 #   1 = line    (2 floats: x, y)
 #   2 = quad    (4 floats: cx, cy, x, y)
 #   3 = cubic   (6 floats: c1x, c1y, c2x, c2y, x, y)
-# A decoder rejects a path whose coords do not match its verbs.
+# A path whose first verb is not a move begins at (0, 0), as if a move to
+# (0, 0) came first. A decoder rejects a path whose coords do not match its
+# verbs.
 
 struct Path {
     style  @0 :PathStyle;

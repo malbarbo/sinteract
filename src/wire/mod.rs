@@ -390,6 +390,35 @@ mod tests {
     }
 
     #[test]
+    fn a_path_with_no_initial_move_begins_at_the_origin() {
+        let mut builder = MessageBuilder::new_default();
+        {
+            let msg = builder.init_root::<message::Builder>();
+            let frame = msg.init_frame();
+            let mut nodes = frame.init_elements(1);
+            let node = nodes.reborrow().get(0);
+            let mut p = node.init_path();
+            let _ = p.reborrow().init_style();
+            p.set_verbs(&[SegmentKind::Line as u8, SegmentKind::Line as u8]);
+            let mut coords = p.init_coords(4);
+            for (i, v) in [5.0, 10.0, 20.0, 0.0].into_iter().enumerate() {
+                coords.set(i as u32, v);
+            }
+        }
+        let Decoded::Frame(d) = decode(&finish(builder)).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Path(p)] = &d.elements[..] else {
+            panic!("expected one Path, got {:?}", d.elements);
+        };
+        let expected = Path::builder(PathStyle::default(), 0.0, 0.0)
+            .line_to(5.0, 10.0)
+            .line_to(20.0, 0.0)
+            .build();
+        assert!(p.segments().eq(expected.segments()), "{p:?}");
+    }
+
+    #[test]
     fn malformed_path_is_rejected() {
         // One Cubic claims 6 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();

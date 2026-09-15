@@ -535,7 +535,9 @@ impl Segment {
     }
 }
 
-/// An iterator over the segments of a path.
+/// An iterator over the segments of a path. They are empty or begin with a
+/// [`Segment::Move`], since the builders take the start point and the
+/// decoder begins a path of the wire that lacks one at `(0, 0)`.
 #[must_use = "Segments yields nothing unless iterated"]
 pub struct Segments<'a>(std::slice::Iter<'a, Segment>);
 

@@ -390,9 +390,10 @@ fn write_coords(out: &mut capnp::primitive_list::Builder<'_, f32>, segs: Segment
     }
 }
 
-/// Rebuild the segments into `out`, reusing its allocation. An unknown verb
-/// byte is a value from a newer schema, and a coord stream that does not
-/// hold exactly what the verbs claim is damage.
+/// Rebuild the segments into `out`, reusing its allocation. A path whose
+/// first verb is not a move begins at `(0, 0)`. An unknown verb byte is a
+/// value from a newer schema, and a coord stream that does not hold exactly
+/// what the verbs claim is damage.
 fn read_segments(
     out: &mut Vec<Segment>,
     verbs: &[u8],
@@ -405,7 +406,10 @@ fn read_segments(
         })
     };
     out.clear();
-    out.reserve(verbs.len());
+    out.reserve(verbs.len() + 1);
+    if verbs.first().is_some_and(|&b| b != SegmentKind::Move as u8) {
+        out.push(Segment::Move { x: 0.0, y: 0.0 });
+    }
     let mut i = 0;
     for &b in verbs {
         let kind = SegmentKind::from_u8(b).ok_or(ReadError::Newer)?;
