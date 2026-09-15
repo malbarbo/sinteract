@@ -9,8 +9,11 @@ use tiny_skia::{
 };
 
 use crate::outline::PathSink;
-use crate::renderer::{Renderer, RestoreOnDrop, sealed::Canvas};
-use crate::scene::{ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Text};
+use crate::renderer::{AllocError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, sealed::Canvas};
+use crate::scene::{
+    ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, SpreadMode, Stop, Text,
+};
+use crate::text::TextLayout;
 
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
 /// own pixels. See [`fit_scale`].
@@ -75,19 +78,19 @@ impl PixmapRenderer {
 
 impl Canvas for PixmapRenderer {
     /// Clears the surface, and reallocates it when the scaled size changed.
-    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::renderer::AllocError> {
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
         let (out_w, out_h) = out_size(width, height, self.base.sx);
         // A frame ends with an empty clip stack, and its masks serve the next
         // frame.
         self.mask_pool.extend(self.clip_stack.drain(..).flatten());
         if (out_w, out_h) == (self.pixmap.width(), self.pixmap.height()) {
-            self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
+            self.pixmap.fill(SkColor::TRANSPARENT);
         } else {
             // Masks are canvas-sized, so a resize invalidates every pooled one.
             self.mask_pool.clear();
             // A new pixmap is transparent, so the background of the backend
             // shows through.
-            self.pixmap = Pixmap::new(out_w, out_h).ok_or(crate::renderer::AllocError {
+            self.pixmap = Pixmap::new(out_w, out_h).ok_or(AllocError {
                 width: out_w,
                 height: out_h,
             })?;
@@ -316,18 +319,18 @@ fn sk_color(c: Rgba) -> SkColor {
     SkColor::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8)
 }
 
-fn sk_stops(stops: &[crate::scene::Stop]) -> Vec<SkStop> {
+fn sk_stops(stops: &[Stop]) -> Vec<SkStop> {
     stops
         .iter()
         .map(|s| SkStop::new(s.offset, sk_color(s.color)))
         .collect()
 }
 
-fn sk_spread(s: crate::scene::SpreadMode) -> SkSpread {
+fn sk_spread(s: SpreadMode) -> SkSpread {
     match s {
-        crate::scene::SpreadMode::Pad => SkSpread::Pad,
-        crate::scene::SpreadMode::Reflect => SkSpread::Reflect,
-        crate::scene::SpreadMode::Repeat => SkSpread::Repeat,
+        SpreadMode::Pad => SkSpread::Pad,
+        SpreadMode::Reflect => SkSpread::Reflect,
+        SpreadMode::Repeat => SkSpread::Repeat,
     }
 }
 
@@ -342,7 +345,7 @@ fn render_text(
     base: Transform,
     builder: &mut PathBuilder,
 ) {
-    let Some(layout) = crate::text::TextLayout::new(&node.spec) else {
+    let Some(layout) = TextLayout::new(&node.spec) else {
         return;
     };
 
@@ -389,7 +392,7 @@ fn paint_text_path(
         let paint = sk_paint(SkShader::SolidColor(sk_color(node.stroke)));
         let stroke = Stroke {
             width: node.stroke_width,
-            miter_limit: crate::renderer::TEXT_MITER_LIMIT,
+            miter_limit: TEXT_MITER_LIMIT,
             dash: None,
             ..Stroke::default()
         };

@@ -17,10 +17,11 @@ use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::outline::{ElevateQuads, PathSink};
-use crate::renderer::{Renderer, RestoreOnDrop, sealed::Canvas};
+use crate::renderer::{AllocError, Renderer, RestoreOnDrop, sealed::Canvas};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Stop, Text,
 };
+use crate::text::TextLayout;
 
 /// Render a [`crate::scene::Scene`] to PDF bytes.
 pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
@@ -72,7 +73,7 @@ impl Default for PdfRenderer {
 impl Canvas for PdfRenderer {
     /// Starts a new page and writes the base transform. Nothing here
     /// allocates a surface, so it never fails.
-    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::renderer::AllocError> {
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
         self.width = width.max(1.0);
         self.height = height.max(1.0);
         self.gstates.clear();
@@ -412,7 +413,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
     if !do_fill && !do_stroke {
         return;
     }
-    let Some(layout) = crate::text::TextLayout::new(&node.spec) else {
+    let Some(layout) = TextLayout::new(&node.spec) else {
         return;
     };
 
