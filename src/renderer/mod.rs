@@ -23,8 +23,8 @@ pub mod svg;
 
 use std::io::Read;
 
+use crate::outline::OutlineBuilder;
 use crate::scene::{Scene, Segment};
-use crate::text::OutlineBuilder;
 
 /// Sizing a surface failed. It is the only way a render fails, and only a
 /// backend that allocates a surface returns it. The pdf backend never does.

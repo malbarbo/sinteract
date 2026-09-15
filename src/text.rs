@@ -22,6 +22,7 @@ use std::sync::OnceLock;
 
 use ttf_parser::{Face, GlyphId};
 
+use crate::outline::OutlineBuilder;
 use crate::scene::{FontStyle, TextSpec};
 
 // ---------------------------------------------------------------------------
@@ -207,8 +208,8 @@ pub(crate) struct Glyph {
 }
 
 impl Glyph {
-    /// The outline with the origin of the glyph at (x, y), in the box-local
-    /// space of [`OutlineBuilder`].
+    /// The outline with the origin of the glyph at (x, y), box-local, with
+    /// the origin at the center of the box and y down.
     pub(crate) fn outline(self, x: f32, y: f32, out: &mut dyn OutlineBuilder) {
         let mut adapter = OutlineAdapter {
             out,
@@ -243,69 +244,6 @@ impl std::hash::Hash for Glyph {
 // 1000-unit em, so its top sits at -75.
 const FALLBACK_UNDERLINE_POS: f32 = -0.075;
 const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
-
-/// Receives the outline of the glyphs and of the underline. Coordinates are
-/// box-local, with the origin at the center of the box and y down.
-pub(crate) trait OutlineBuilder {
-    fn move_to(&mut self, x: f32, y: f32);
-    fn line_to(&mut self, x: f32, y: f32);
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32);
-    fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32);
-    fn close(&mut self);
-}
-
-/// Turns every quadratic into a cubic for an [`OutlineBuilder`] that has no
-/// quadratic operator. It tracks the current point itself, and `close`
-/// returns the point to the start of the subpath, so the backend does not
-/// reconstruct it.
-pub(crate) struct ElevateQuads<'a, B: ?Sized> {
-    inner: &'a mut B,
-    start: Option<(f32, f32)>,
-    last: Option<(f32, f32)>,
-}
-
-impl<'a, B: OutlineBuilder + ?Sized> ElevateQuads<'a, B> {
-    pub(crate) fn new(inner: &'a mut B) -> Self {
-        Self {
-            inner,
-            start: None,
-            last: None,
-        }
-    }
-}
-
-impl<B: OutlineBuilder + ?Sized> OutlineBuilder for ElevateQuads<'_, B> {
-    fn move_to(&mut self, x: f32, y: f32) {
-        self.start = Some((x, y));
-        self.last = Some((x, y));
-        self.inner.move_to(x, y);
-    }
-
-    fn line_to(&mut self, x: f32, y: f32) {
-        self.last = Some((x, y));
-        self.inner.line_to(x, y);
-    }
-
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        // A path that opens on a quadratic has no current point, so the
-        // quadratic is dropped. After a close, the current point is the start
-        // of the closed subpath.
-        let Some(p0) = self.last else { return };
-        let (c1x, c1y, c2x, c2y) = crate::scene::quad_to_cubic(p0, cx, cy, x, y);
-        self.last = Some((x, y));
-        self.inner.cubic_to(c1x, c1y, c2x, c2y, x, y);
-    }
-
-    fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        self.last = Some((x, y));
-        self.inner.cubic_to(cx1, cy1, cx2, cy2, x, y);
-    }
-
-    fn close(&mut self) {
-        self.last = self.start;
-        self.inner.close();
-    }
-}
 
 /// Maps the outline of one glyph from font units, with y up, to box-local
 /// coordinates, with y down, for an [`OutlineBuilder`].
@@ -547,6 +485,7 @@ fn variant_index(weight: u16, style: FontStyle) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outline::tests::Recorder;
     use crate::scene::RotatedRect;
 
     /// Liberation Sans Regular, the face of a node that names no family.
@@ -573,72 +512,6 @@ mod tests {
         if let Some(layout) = TextLayout::new(spec) {
             layout.outline(out);
         }
-    }
-
-    /// Records the ops, so a test asserts them exactly.
-    #[derive(Default)]
-    struct Recorder {
-        ops: Vec<String>,
-    }
-
-    impl Recorder {
-        /// The number of ops of one kind, by its letter.
-        fn count(&self, op: char) -> usize {
-            self.ops.iter().filter(|o| o.starts_with(op)).count()
-        }
-    }
-
-    impl OutlineBuilder for Recorder {
-        fn move_to(&mut self, x: f32, y: f32) {
-            self.ops.push(format!("M {x} {y}"));
-        }
-        fn line_to(&mut self, x: f32, y: f32) {
-            self.ops.push(format!("L {x} {y}"));
-        }
-        fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-            self.ops.push(format!("Q {cx} {cy} {x} {y}"));
-        }
-        fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
-            self.ops.push(format!("C {c1x} {c1y} {c2x} {c2y} {x} {y}"));
-        }
-        fn close(&mut self) {
-            self.ops.push("Z".to_string());
-        }
-    }
-
-    #[test]
-    fn elevate_quads_tracks_the_point_across_close() {
-        // After `close` the current point is the start of the subpath, not
-        // the end of the last op.
-        let mut sink = Recorder::default();
-        {
-            let mut out = ElevateQuads::new(&mut sink);
-            out.move_to(0.0, 0.0);
-            out.line_to(6.0, 0.0);
-            out.close();
-            out.quad_to(3.0, 3.0, 6.0, 0.0);
-        }
-        assert_eq!(
-            sink.ops,
-            vec![
-                "M 0 0".to_string(),
-                "L 6 0".to_string(),
-                "Z".to_string(),
-                // anchored at (0, 0), the start of the subpath
-                "C 2 2 4 2 6 0".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn elevate_quads_drops_a_contour_opening_on_a_quad() {
-        let mut sink = Recorder::default();
-        {
-            let mut out = ElevateQuads::new(&mut sink);
-            out.quad_to(3.0, 3.0, 6.0, 0.0);
-            out.move_to(1.0, 1.0);
-        }
-        assert_eq!(sink.ops, vec!["M 1 1".to_string()]);
     }
 
     #[test]

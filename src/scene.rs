@@ -565,24 +565,6 @@ impl Iterator for Segments<'_> {
 
 impl ExactSizeIterator for Segments<'_> {}
 
-/// The two control points of the cubic equal to the quadratic from `p0`
-/// through the control `(cx, cy)` to `(x, y)`.
-pub(crate) fn quad_to_cubic(
-    p0: (f32, f32),
-    cx: f32,
-    cy: f32,
-    x: f32,
-    y: f32,
-) -> (f32, f32, f32, f32) {
-    let (p0x, p0y) = p0;
-    (
-        p0x + 2.0 / 3.0 * (cx - p0x),
-        p0y + 2.0 / 3.0 * (cy - p0y),
-        x + 2.0 / 3.0 * (cx - x),
-        y + 2.0 / 3.0 * (cy - y),
-    )
-}
-
 /// [`Segments`] with every quadratic elevated to a cubic, for a backend
 /// that has no quadratic operator. The elevation needs the current point,
 /// and tracking it here keeps it out of every backend.
@@ -610,7 +592,7 @@ impl Iterator for Cubics<'_> {
                 Segment::Quad { cx, cy, x, y } => {
                     // A quad with no current point has nothing to elevate from.
                     let Some(p0) = self.last else { continue };
-                    let (c1x, c1y, c2x, c2y) = quad_to_cubic(p0, cx, cy, x, y);
+                    let (c1x, c1y, c2x, c2y) = crate::outline::quad_to_cubic(p0, cx, cy, x, y);
                     self.last = Some((x, y));
                     return Some(Segment::Cubic {
                         c1x,

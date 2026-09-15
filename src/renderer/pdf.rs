@@ -438,7 +438,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
 
     // PDF has no quadratic operator.
     let mut adapter = PdfOutline::new(&mut canvas.content);
-    layout.outline(&mut crate::text::ElevateQuads::new(&mut adapter));
+    layout.outline(&mut crate::outline::ElevateQuads::new(&mut adapter));
     // A text of spaces has no outline, and a paint with no path is an error.
     if !adapter.empty {
         paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
@@ -470,7 +470,7 @@ impl<'a> PdfOutline<'a> {
     }
 }
 
-impl crate::text::OutlineBuilder for PdfOutline<'_> {
+impl crate::outline::OutlineBuilder for PdfOutline<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.content.move_to(x, y);
         self.empty = false;

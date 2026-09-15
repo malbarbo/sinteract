@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
+use crate::outline::OutlineBuilder;
 use crate::renderer::{
     Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, outline_segments, sealed::Canvas,
 };
@@ -19,7 +20,7 @@ use crate::scene::{
     ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint,
     Path, Rgba, Segment, Segments, SpreadMode, Text,
 };
-use crate::text::{Glyph, OutlineBuilder, TextLayout};
+use crate::text::{Glyph, TextLayout};
 
 /// Render a [`crate::scene::Scene`] to an SVG document.
 pub fn render_to_svg(scene: &crate::scene::Scene) -> String {

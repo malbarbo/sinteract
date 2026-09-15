@@ -15,6 +15,7 @@
 
 pub mod event;
 pub mod frontend;
+mod outline;
 pub mod renderer;
 pub mod scene;
 pub mod text;

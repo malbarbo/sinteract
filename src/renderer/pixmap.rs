@@ -8,9 +8,9 @@ use tiny_skia::{
     Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
+use crate::outline::OutlineBuilder;
 use crate::renderer::{Renderer, RestoreOnDrop, outline_segments, sealed::Canvas};
 use crate::scene::{ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Text};
-use crate::text::OutlineBuilder;
 
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
 /// own pixels. See [`fit_scale`].
