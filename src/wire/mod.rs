@@ -45,8 +45,6 @@ pub enum Error {
     /// Cap'n Proto rejected the bytes as malformed, truncated, or of the
     /// wrong root.
     Parse(capnp::Error),
-    /// A required nested struct or list is unset.
-    MissingField(&'static str),
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
@@ -56,7 +54,6 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Parse(e) => write!(f, "parse error: {e}"),
-            Error::MissingField(name) => write!(f, "missing required field: {name}"),
             Error::PathLengthMismatch { verbs, coords } => {
                 write!(
                     f,
