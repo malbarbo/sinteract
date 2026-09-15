@@ -129,10 +129,8 @@ impl Canvas for PdfRenderer {
             }
         }
         // PDF has no quadratic operator.
-        path.segments()
-            .outline(&mut ElevateQuads::new(&mut PdfOutline::new(
-                &mut self.content,
-            )));
+        let mut out = PdfOutline::new(&mut self.content);
+        path.segments().outline(&mut ElevateQuads::new(&mut out));
         if style.closed {
             self.content.close_path();
         }
@@ -152,10 +150,8 @@ impl Canvas for PdfRenderer {
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
         if clip.segments().any(|s| matches!(s, Segment::Move { .. })) {
-            clip.segments()
-                .outline(&mut ElevateQuads::new(&mut PdfOutline::new(
-                    &mut self.content,
-                )));
+            let mut out = PdfOutline::new(&mut self.content);
+            clip.segments().outline(&mut ElevateQuads::new(&mut out));
             self.content.close_path();
         } else {
             // A close with no current point is an error. An empty rectangle
