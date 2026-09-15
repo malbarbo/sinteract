@@ -483,15 +483,13 @@ impl PathSink for PdfOutline<'_> {
 }
 
 /// The two control points of the cubic equal to the quadratic from `p0`
-/// through the control `(cx, cy)` to `(x, y)`.
+/// through the control `(cx, cy)` to `(x, y)`. Each is a third of the way
+/// from the control to an end, so it lies between them. The sum is taken in
+/// `f64`, where two finite `f32` cannot overflow.
 fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32, f32, f32) {
+    let third = |end: f32, control: f32| ((f64::from(end) + 2.0 * f64::from(control)) / 3.0) as f32;
     let (p0x, p0y) = p0;
-    (
-        p0x + 2.0 / 3.0 * (cx - p0x),
-        p0y + 2.0 / 3.0 * (cy - p0y),
-        x + 2.0 / 3.0 * (cx - x),
-        y + 2.0 / 3.0 * (cy - y),
-    )
+    (third(p0x, cx), third(p0y, cy), third(x, cx), third(y, cy))
 }
 
 /// A gradient of the frame, with the stops that its functions take.
@@ -873,6 +871,28 @@ mod tests {
         PdfOutline::new(&mut content).quad_to(3.0, 3.0, 6.0, 0.0);
         let ops = String::from_utf8(content.finish().to_vec()).expect("ascii");
         assert_eq!(ops, "2 2 4 2 6 0 c");
+    }
+
+    #[test]
+    fn a_quadratic_between_far_points_elevates_to_finite_controls() {
+        let mut content = Content::new();
+        {
+            let mut out = PdfOutline::new(&mut content);
+            out.move_to(-f32::MAX, 0.0);
+            out.quad_to(f32::MAX, 0.0, 0.0, 9.0);
+        }
+        let ops = String::from_utf8(content.finish().to_vec()).expect("ascii");
+        let controls: Vec<f32> = ops
+            .lines()
+            .last()
+            .expect("a curve")
+            .split(' ')
+            .take(4)
+            .map(|v| v.parse().expect("a number"))
+            .collect();
+        assert!(controls.iter().all(|v| v.is_finite()), "{ops}");
+        assert_eq!(controls[1], 0.0);
+        assert_eq!(controls[3], 3.0);
     }
 
     #[test]
