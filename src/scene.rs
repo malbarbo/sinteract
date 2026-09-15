@@ -541,16 +541,6 @@ impl Segment {
 #[must_use = "Segments yields nothing unless iterated"]
 pub struct Segments<'a>(std::slice::Iter<'a, Segment>);
 
-impl<'a> Segments<'a> {
-    /// The same walk with every quadratic elevated to a cubic.
-    pub fn cubics(self) -> Cubics<'a> {
-        Cubics {
-            inner: self,
-            last: None,
-        }
-    }
-}
-
 impl Iterator for Segments<'_> {
     type Item = Segment;
 
@@ -564,49 +554,6 @@ impl Iterator for Segments<'_> {
 }
 
 impl ExactSizeIterator for Segments<'_> {}
-
-/// [`Segments`] with every quadratic elevated to a cubic, for a backend
-/// that has no quadratic operator. The elevation needs the current point,
-/// and tracking it here keeps it out of every backend.
-#[must_use = "Cubics yields nothing unless iterated"]
-pub struct Cubics<'a> {
-    inner: Segments<'a>,
-    last: Option<(f32, f32)>,
-}
-
-impl Iterator for Cubics<'_> {
-    type Item = Segment;
-
-    fn next(&mut self) -> Option<Segment> {
-        loop {
-            let seg = self.inner.next()?;
-            match seg {
-                Segment::Move { x, y } | Segment::Line { x, y } => {
-                    self.last = Some((x, y));
-                    return Some(seg);
-                }
-                Segment::Cubic { x, y, .. } => {
-                    self.last = Some((x, y));
-                    return Some(seg);
-                }
-                Segment::Quad { cx, cy, x, y } => {
-                    // A quad with no current point has nothing to elevate from.
-                    let Some(p0) = self.last else { continue };
-                    let (c1x, c1y, c2x, c2y) = crate::outline::quad_to_cubic(p0, cx, cy, x, y);
-                    self.last = Some((x, y));
-                    return Some(Segment::Cubic {
-                        c1x,
-                        c1y,
-                        c2x,
-                        c2y,
-                        x,
-                        y,
-                    });
-                }
-            }
-        }
-    }
-}
 
 /// The geometry half of [`PathBuilder`] and [`ClipPathBuilder`], so the arc
 /// expansion is written once. It begins with a move to the start point, so
@@ -1032,27 +979,6 @@ impl ClipPathBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cubics_elevates_quads_against_the_current_point() {
-        let path = Path::builder(PathStyle::default(), 0.0, 0.0)
-            .quad_to(3.0, 3.0, 6.0, 0.0)
-            .build();
-        let segs: Vec<_> = path.segments().cubics().collect();
-        assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0], Segment::Move { x: 0.0, y: 0.0 });
-        assert_eq!(
-            segs[1],
-            Segment::Cubic {
-                c1x: 2.0,
-                c1y: 2.0,
-                c2x: 4.0,
-                c2y: 2.0,
-                x: 6.0,
-                y: 0.0,
-            }
-        );
-    }
 
     #[test]
     fn has_bitmaps_sees_through_clip_subtrees() {
