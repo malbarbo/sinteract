@@ -471,7 +471,7 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Paint as IrPaint, PathStyle, Rgba, RotatedRect, Scene, Text, TextSpec};
+    use crate::scene::{Paint, PathStyle, Rgba, RotatedRect, Scene, Text, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -481,7 +481,7 @@ mod tests {
 
     fn solid(r: u8, g: u8, b: u8) -> PathStyle {
         PathStyle {
-            fill: IrPaint::rgba(r, g, b, 1.0),
+            fill: Paint::rgba(r, g, b, 1.0),
             ..PathStyle::default()
         }
     }
@@ -762,7 +762,7 @@ mod tests {
         // right near white, and the middle a gray between them.
         let mut scene = Scene::new(40.0, 10.0);
         let style = PathStyle {
-            fill: IrPaint::gradient(Gradient::linear(
+            fill: Paint::gradient(Gradient::linear(
                 0.0,
                 0.0,
                 40.0,
@@ -808,7 +808,7 @@ mod tests {
         // White at the center, transparent at the edge.
         let mut scene = Scene::new(40.0, 40.0);
         let style = PathStyle {
-            fill: IrPaint::gradient(Gradient::radial(
+            fill: Paint::gradient(Gradient::radial(
                 20.0,
                 20.0,
                 20.0,
@@ -850,7 +850,7 @@ mod tests {
         // would clamp x=30 to white.
         let mut scene = Scene::new(80.0, 10.0);
         let style = PathStyle {
-            fill: IrPaint::gradient(
+            fill: Paint::gradient(
                 crate::scene::Gradient::linear(
                     0.0,
                     0.0,
@@ -903,7 +903,7 @@ mod tests {
         let mut scene = Scene::new(100.0, 20.0);
         {
             let mut p = scene.path(PathStyle {
-                stroke: IrPaint::rgba(255, 0, 0, 1.0),
+                stroke: Paint::rgba(255, 0, 0, 1.0),
                 stroke_width: 3.0,
                 dash: crate::scene::Dash::new(vec![10.0, 10.0], 0.0).map(Box::new),
                 ..PathStyle::default()
