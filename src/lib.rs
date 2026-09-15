@@ -32,3 +32,8 @@ mod protocol_capnp;
 #[path = "wire/scene_capnp.rs"]
 #[allow(dead_code)]
 mod scene_capnp;
+
+// A wrong path in the example of the README fails the doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

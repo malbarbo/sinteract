@@ -8,7 +8,7 @@ terminal output uses the Kitty graphics protocol, DEC Sixel, or 24-bit
 half-blocks, whichever the terminal supports. The PDF and SVG outputs are
 vector, with text as glyph outlines.
 
-```rust
+```rust,no_run
 use sinteract::scene::{Paint, PathStyle, Scene};
 
 let mut scene = Scene::new(40.0, 30.0);
@@ -22,8 +22,8 @@ scene
     .line_to(40.0, 30.0)
     .line_to(0.0, 30.0);
 
-sinteract::terminal::show_image(&scene);
-let pdf: Vec<u8> = sinteract::pdf::render_to_pdf(&scene);
+sinteract::frontend::terminal::show_image(&scene);
+let pdf: Vec<u8> = sinteract::renderer::pdf::render_to_pdf(&scene);
 ```
 
 `Scene::path` returns a scope that commits the path when it is dropped, and
