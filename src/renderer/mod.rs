@@ -23,7 +23,7 @@ pub mod svg;
 
 use std::io::Read;
 
-use crate::outline::OutlineBuilder;
+use crate::outline::PathSink;
 use crate::scene::{Scene, Segment};
 
 /// Sizing a surface failed. It is the only way a render fails, and only a
@@ -134,10 +134,7 @@ pub(crate) const TEXT_MITER_LIMIT: f32 = 10.0;
 
 /// Feeds `segments` to `out`, so a backend draws paths, clips and glyph
 /// outlines through one sink.
-pub(crate) fn outline_segments(
-    segments: impl Iterator<Item = Segment>,
-    out: &mut impl OutlineBuilder,
-) {
+pub(crate) fn outline_segments(segments: impl Iterator<Item = Segment>, out: &mut impl PathSink) {
     for seg in segments {
         match seg {
             Segment::Move { x, y } => out.move_to(x, y),

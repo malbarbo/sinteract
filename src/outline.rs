@@ -4,7 +4,7 @@
 
 /// Receives an outline: the segments of a path or of a clip, or the glyphs
 /// and the underline of a text. Each backend implements it once.
-pub(crate) trait OutlineBuilder {
+pub(crate) trait PathSink {
     fn move_to(&mut self, x: f32, y: f32);
     fn line_to(&mut self, x: f32, y: f32);
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32);
@@ -12,7 +12,7 @@ pub(crate) trait OutlineBuilder {
     fn close(&mut self);
 }
 
-/// Turns every quadratic into a cubic for an [`OutlineBuilder`] that has no
+/// Turns every quadratic into a cubic for a [`PathSink`] that has no
 /// quadratic operator. It tracks the current point itself, and `close`
 /// returns the point to the start of the subpath, so the backend does not
 /// reconstruct it.
@@ -22,7 +22,7 @@ pub(crate) struct ElevateQuads<'a, B: ?Sized> {
     last: Option<(f32, f32)>,
 }
 
-impl<'a, B: OutlineBuilder + ?Sized> ElevateQuads<'a, B> {
+impl<'a, B: PathSink + ?Sized> ElevateQuads<'a, B> {
     pub(crate) fn new(inner: &'a mut B) -> Self {
         Self {
             inner,
@@ -32,7 +32,7 @@ impl<'a, B: OutlineBuilder + ?Sized> ElevateQuads<'a, B> {
     }
 }
 
-impl<B: OutlineBuilder + ?Sized> OutlineBuilder for ElevateQuads<'_, B> {
+impl<B: PathSink + ?Sized> PathSink for ElevateQuads<'_, B> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.start = Some((x, y));
         self.last = Some((x, y));
@@ -100,7 +100,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl OutlineBuilder for Recorder {
+    impl PathSink for Recorder {
         fn move_to(&mut self, x: f32, y: f32) {
             self.ops.push(format!("M {x} {y}"));
         }

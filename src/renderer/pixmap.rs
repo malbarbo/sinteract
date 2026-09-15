@@ -8,7 +8,7 @@ use tiny_skia::{
     Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::outline::OutlineBuilder;
+use crate::outline::PathSink;
 use crate::renderer::{Renderer, RestoreOnDrop, outline_segments, sealed::Canvas};
 use crate::scene::{ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Text};
 
@@ -392,7 +392,7 @@ fn paint_text_path(
 
 /// The inherent methods of [`PathBuilder`], so paths, clips and glyphs build
 /// through [`outline_segments`] and [`crate::text::TextLayout::outline`].
-impl OutlineBuilder for PathBuilder {
+impl PathSink for PathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
         PathBuilder::move_to(self, x, y);
     }

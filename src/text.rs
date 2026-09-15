@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 
 use ttf_parser::{Face, GlyphId};
 
-use crate::outline::OutlineBuilder;
+use crate::outline::PathSink;
 use crate::scene::{FontStyle, TextSpec};
 
 // ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ impl<'a> TextLayout<'a> {
     }
 
     /// The glyph outlines of the text.
-    pub(crate) fn outline(&self, out: &mut dyn OutlineBuilder) {
+    pub(crate) fn outline(&self, out: &mut dyn PathSink) {
         for (glyph, x) in self.placed_glyphs() {
             glyph.outline(x, self.baseline_y, out);
         }
@@ -152,7 +152,7 @@ impl<'a> TextLayout<'a> {
     }
 
     /// The underline as a closed contour.
-    pub(crate) fn outline_underline(&self, out: &mut dyn OutlineBuilder) {
+    pub(crate) fn outline_underline(&self, out: &mut dyn PathSink) {
         let u = self.underline_rect();
         out.move_to(u.x_l, u.y_top);
         out.line_to(u.x_r, u.y_top);
@@ -210,7 +210,7 @@ pub(crate) struct Glyph {
 impl Glyph {
     /// The outline with the origin of the glyph at (x, y), box-local, with
     /// the origin at the center of the box and y down.
-    pub(crate) fn outline(self, x: f32, y: f32, out: &mut dyn OutlineBuilder) {
+    pub(crate) fn outline(self, x: f32, y: f32, out: &mut dyn PathSink) {
         let mut adapter = OutlineAdapter {
             out,
             scale: em_scale(self.face, self.size) as f32,
@@ -246,9 +246,9 @@ const FALLBACK_UNDERLINE_POS: f32 = -0.075;
 const FALLBACK_UNDERLINE_THICKNESS: f32 = 0.05;
 
 /// Maps the outline of one glyph from font units, with y up, to box-local
-/// coordinates, with y down, for an [`OutlineBuilder`].
+/// coordinates, with y down, for a [`PathSink`].
 struct OutlineAdapter<'a> {
-    out: &'a mut dyn OutlineBuilder,
+    out: &'a mut dyn PathSink,
     scale: f32,
     origin_x: f32,
     baseline_y: f32,
@@ -508,7 +508,7 @@ mod tests {
     }
 
     /// Outline a spec as a renderer does.
-    fn outline_spec(spec: &TextSpec, out: &mut dyn OutlineBuilder) {
+    fn outline_spec(spec: &TextSpec, out: &mut dyn PathSink) {
         if let Some(layout) = TextLayout::new(spec) {
             layout.outline(out);
         }

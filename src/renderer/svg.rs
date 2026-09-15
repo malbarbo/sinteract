@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
-use crate::outline::OutlineBuilder;
+use crate::outline::PathSink;
 use crate::renderer::{
     Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, outline_segments, sealed::Canvas,
 };
@@ -435,7 +435,7 @@ impl<'a> PathData<'a> {
     }
 }
 
-impl OutlineBuilder for PathData<'_> {
+impl PathSink for PathData<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         _ = write!(self.separate(), "M{x} {y}");
     }

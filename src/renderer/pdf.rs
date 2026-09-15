@@ -470,7 +470,7 @@ impl<'a> PdfOutline<'a> {
     }
 }
 
-impl crate::outline::OutlineBuilder for PdfOutline<'_> {
+impl crate::outline::PathSink for PdfOutline<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.content.move_to(x, y);
         self.empty = false;
