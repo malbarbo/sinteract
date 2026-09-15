@@ -249,7 +249,7 @@ pub fn show_image(scene: &crate::scene::Scene) {
     };
     let scale = scale_for_backend(backend, scene.width, scene.height);
     let Some(pixmap) = render_to_pixmap(scene, scale) else {
-        eprintln!("[spython] failed to rasterize draw list");
+        eprintln!("[sinteract] failed to rasterize draw list");
         return;
     };
     paint_pixmap(backend, pixmap);
@@ -337,7 +337,7 @@ pub fn enter_animation() {
     state.closed = false;
     if !kitty_supported() && !sixel::sixel_supported() && !text_blocks_supported() {
         eprintln!(
-            "[spython] terminal does not advertise graphics support; \
+            "[sinteract] terminal does not advertise graphics support; \
              World output will fall back to printing SVG. \
              Try Kitty, Ghostty, WezTerm, Konsole, a Sixel-capable \
              terminal (Windows Terminal ≥ 1.22, mlterm, foot, mintty), \
