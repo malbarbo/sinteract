@@ -88,8 +88,19 @@ impl Paint {
         Self::Solid(Rgba { r, g, b, a })
     }
 
+    /// A gradient paint, or the solid color of the last stop for a gradient
+    /// with no extent, which is a radius that is not positive or a line
+    /// whose ends meet. SVG paints the last stop for those, and tiny-skia
+    /// and the pdf disagreed with it and with each other.
     pub fn gradient(g: Gradient) -> Self {
-        Self::Gradient(Box::new(g))
+        let no_extent = match g.geom {
+            GradientGeom::Linear { x0, y0, x1, y1 } => x0 == x1 && y0 == y1,
+            GradientGeom::Radial { radius, .. } => radius <= 0.0,
+        };
+        match g.stops.last() {
+            Some(last) if no_extent => Self::Solid(last.color),
+            _ => Self::Gradient(Box::new(g)),
+        }
     }
 
     /// Returns `true` if the paint marks at least one pixel, `false`
@@ -1589,5 +1600,47 @@ mod tests {
             panic!("expected one clip, got {:?}", scene.elements);
         };
         assert_eq!(elements.len(), 1);
+    }
+
+    #[test]
+    fn a_gradient_with_no_extent_paints_its_last_stop() {
+        let stop = |offset, r| Stop {
+            offset,
+            color: Rgba {
+                r,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+        };
+        let stops = vec![stop(0.0, 10), stop(1.0, 200)];
+        let last = Paint::Solid(stop(1.0, 200).color);
+        for geom in [
+            GradientGeom::Radial {
+                cx: 5.0,
+                cy: 5.0,
+                radius: 0.0,
+            },
+            GradientGeom::Radial {
+                cx: 5.0,
+                cy: 5.0,
+                radius: -3.0,
+            },
+            GradientGeom::Linear {
+                x0: 5.0,
+                y0: 5.0,
+                x1: 5.0,
+                y1: 5.0,
+            },
+        ] {
+            let g = Gradient {
+                geom,
+                stops: stops.clone(),
+                spread: SpreadMode::Repeat,
+            };
+            assert_eq!(Paint::gradient(g), last, "{geom:?}");
+        }
+        let ramp = Gradient::radial(5.0, 5.0, 1.0, stops);
+        assert!(matches!(Paint::gradient(ramp), Paint::Gradient(_)));
     }
 }

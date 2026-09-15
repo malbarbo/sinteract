@@ -287,8 +287,9 @@ fn sk_paint(shader: SkShader<'static>) -> SkPaint<'static> {
     }
 }
 
-/// A gradient that tiny-skia rejects, for a degenerate line or no stops,
-/// falls back to the primary color, so the path still draws.
+/// A gradient that tiny-skia rejects, such as one with no stops, falls back
+/// to the primary color, so the path still draws. One with no extent is a
+/// solid color before it gets here.
 fn paint_to_shader(p: &Paint) -> SkShader<'static> {
     let g = match p {
         Paint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
@@ -459,7 +460,7 @@ impl PathSink for PathBuilder {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, PathStyle, Scene, TextSpec};
+    use crate::scene::{Dash, Gradient, PathStyle, Scene, Stop, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -839,5 +840,27 @@ mod tests {
         let pm = r.render_stream(&bytes[..]).expect("decode + render");
         assert_eq!(pixel_rgba(pm, 2, 2), (0, 0, 255, 255));
         assert_eq!(pixel_rgba(pm, 7, 7).3, 0);
+    }
+
+    #[test]
+    fn a_radial_gradient_of_no_radius_paints_its_last_stop() {
+        let stop = |offset, b| Stop {
+            offset,
+            color: Rgba {
+                r: 0,
+                g: 0,
+                b,
+                a: 1.0,
+            },
+        };
+        let stops = vec![stop(0.0, 10), stop(1.0, 200)];
+        let style = PathStyle {
+            fill: Paint::gradient(Gradient::radial(10.0, 10.0, 0.0, stops)),
+            ..PathStyle::default()
+        };
+        let mut scene = Scene::new(20.0, 20.0);
+        scene.add_path(rect(style, 0.0, 0.0, 20.0, 20.0));
+        let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
+        assert_eq!(pixel_rgba(&pm, 10, 10), (0, 0, 200, 255));
     }
 }
