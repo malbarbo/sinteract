@@ -711,7 +711,7 @@ mod tests {
                 };
                 assert_eq!(p.style.miter_limit, 7.5);
                 let dash = p.style.dash.as_ref().unwrap();
-                assert_eq!(dash.array(), [4.0, 2.0, 1.0]);
+                assert_eq!(dash.array(), [4.0, 2.0, 1.0, 4.0, 2.0, 1.0]);
                 assert_eq!(dash.offset(), 1.5);
             }
             _ => panic!(),

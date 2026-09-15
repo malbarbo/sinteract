@@ -255,8 +255,8 @@ fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
 }
 
 fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ReadError> {
-    // An empty array is a solid stroke, so Dash::new returns None and drops
-    // any stray offset.
+    // Dash::new returns None for an array that draws a solid stroke, such as
+    // an empty one, and drops any stray offset.
     let dash = Dash::new(
         r.get_dash_array()?.iter().collect::<Vec<_>>(),
         r.get_dash_offset(),

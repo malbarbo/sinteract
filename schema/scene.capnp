@@ -113,6 +113,9 @@ struct PathStyle {
     fillRule    @5 :FillRule;
     closed      @6 :Bool;
     miterLimit  @7 :Float32;
+    # Alternating on and off lengths. An odd list repeats to an even one.
+    # An empty list, a negative or non-finite length, lengths that sum to
+    # zero or a non-finite offset make the stroke solid.
     dashArray   @8 :List(Float32);
     dashOffset  @9 :Float32;
 }

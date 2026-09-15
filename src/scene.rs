@@ -112,9 +112,9 @@ impl Paint {
 }
 
 /// A dash pattern. `array` alternates on and off lengths in path units and
-/// repeats, and the pattern starts `offset` units in. [`Dash::new`] rejects
-/// an empty array, because a dash with no lengths is a solid stroke, and
-/// that case is the `None` of `PathStyle::dash`.
+/// repeats, and the pattern starts `offset` units in. The array has an even
+/// length, its lengths are not negative and their sum is positive and
+/// finite, and the offset is finite.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dash {
     array: Box<[f32]>,
@@ -122,9 +122,21 @@ pub struct Dash {
 }
 
 impl Dash {
-    pub fn new(array: impl Into<Box<[f32]>>, offset: f32) -> Option<Self> {
-        let array = array.into();
-        (!array.is_empty()).then_some(Self { array, offset })
+    /// Repeats an odd array to an even one, as SVG and PDF do. Returns
+    /// `None`, the solid stroke of `PathStyle::dash`, for an array that SVG
+    /// draws solid: empty, with a negative length or with lengths that sum
+    /// to zero. A length or an offset that is not finite is `None` too.
+    pub fn new(array: impl Into<Vec<f32>>, offset: f32) -> Option<Self> {
+        let mut array = array.into();
+        if array.len() % 2 == 1 {
+            array.extend_from_within(..);
+        }
+        let sum: f32 = array.iter().sum();
+        let valid = array.iter().all(|v| *v >= 0.0) && sum > 0.0 && sum.is_finite();
+        (valid && offset.is_finite()).then(|| Self {
+            array: array.into(),
+            offset,
+        })
     }
 
     pub fn array(&self) -> &[f32] {
@@ -1165,6 +1177,38 @@ mod tests {
         let mut scene = Scene::new(10.0, 10.0);
         scene.path(PathStyle::default(), 1.0, 1.0).move_to(2.0, 2.0);
         assert!(scene.elements.is_empty());
+    }
+
+    #[test]
+    fn an_odd_dash_array_is_repeated_to_an_even_one() {
+        let dash = Dash::new(vec![4.0, 2.0, 1.0], 1.5).unwrap();
+        assert_eq!(dash.array(), [4.0, 2.0, 1.0, 4.0, 2.0, 1.0]);
+        assert_eq!(dash.offset(), 1.5);
+    }
+
+    #[test]
+    fn a_dash_that_draws_a_solid_stroke_is_none() {
+        let inf = f32::INFINITY;
+        for array in [
+            vec![],
+            vec![0.0],
+            vec![0.0, 0.0],
+            vec![3.0, -1.0],
+            vec![3.0, f32::NAN],
+            vec![3.0, inf],
+            vec![f32::MAX, f32::MAX],
+        ] {
+            assert_eq!(Dash::new(array.clone(), 0.0), None, "{array:?}");
+        }
+        assert_eq!(Dash::new(vec![3.0, 2.0], f32::NAN), None);
+        assert_eq!(Dash::new(vec![3.0, 2.0], inf), None);
+    }
+
+    #[test]
+    fn a_dash_of_zero_lengths_with_gaps_is_valid() {
+        let dash = Dash::new(vec![0.0, 2.0], -1.0).unwrap();
+        assert_eq!(dash.array(), [0.0, 2.0]);
+        assert_eq!(dash.offset(), -1.0);
     }
 
     #[test]

@@ -421,7 +421,7 @@ impl PathSink for PathBuilder {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{PathStyle, Scene, TextSpec};
+    use crate::scene::{Dash, PathStyle, Scene, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -687,5 +687,23 @@ mod tests {
         }
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 10, 10).3, 0);
+    }
+
+    #[test]
+    fn an_odd_dash_draws_like_its_array_repeated() {
+        let line = |array: Vec<f32>| {
+            let mut scene = Scene::new(40.0, 10.0);
+            let style = PathStyle {
+                stroke: Paint::rgba(0, 0, 0, 1.0),
+                stroke_width: 2.0,
+                dash: Dash::new(array, 0.0).map(Box::new),
+                ..PathStyle::default()
+            };
+            scene.path(style, 0.0, 5.0).line_to(40.0, 5.0);
+            render_to_pixmap(&scene, 1.0).expect("pixmap")
+        };
+        let odd = line(vec![5.0]);
+        assert_eq!(pixel_rgba(&odd, 7, 5).3, 0, "no gap");
+        assert_same_pixels(&line(vec![5.0, 5.0]), &odd);
     }
 }
