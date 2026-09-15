@@ -37,49 +37,45 @@ impl Segments<'_> {
 }
 
 /// Turns every quadratic into a cubic for a [`PathSink`] that has no
-/// quadratic operator. It tracks the current point itself, and `close`
-/// returns the point to the start of the subpath, so the backend does not
-/// reconstruct it.
+/// quadratic operator. It tracks the current point itself, from `(0, 0)` as
+/// a path of the wire does, and `close` returns the point to the start of
+/// the subpath, so the backend does not reconstruct it.
 pub(crate) struct ElevateQuads<'a, B: ?Sized> {
     inner: &'a mut B,
-    start: Option<(f32, f32)>,
-    last: Option<(f32, f32)>,
+    start: (f32, f32),
+    last: (f32, f32),
 }
 
 impl<'a, B: PathSink + ?Sized> ElevateQuads<'a, B> {
     pub(crate) fn new(inner: &'a mut B) -> Self {
         Self {
             inner,
-            start: None,
-            last: None,
+            start: (0.0, 0.0),
+            last: (0.0, 0.0),
         }
     }
 }
 
 impl<B: PathSink + ?Sized> PathSink for ElevateQuads<'_, B> {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.start = Some((x, y));
-        self.last = Some((x, y));
+        self.start = (x, y);
+        self.last = (x, y);
         self.inner.move_to(x, y);
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.last = Some((x, y));
+        self.last = (x, y);
         self.inner.line_to(x, y);
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        // A path that opens on a quadratic has no current point, so the
-        // quadratic is dropped. After a close, the current point is the start
-        // of the closed subpath.
-        let Some(p0) = self.last else { return };
-        let (c1x, c1y, c2x, c2y) = quad_to_cubic(p0, cx, cy, x, y);
-        self.last = Some((x, y));
+        let (c1x, c1y, c2x, c2y) = quad_to_cubic(self.last, cx, cy, x, y);
+        self.last = (x, y);
         self.inner.cubic_to(c1x, c1y, c2x, c2y, x, y);
     }
 
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        self.last = Some((x, y));
+        self.last = (x, y);
         self.inner.cubic_to(cx1, cy1, cx2, cy2, x, y);
     }
 
@@ -167,13 +163,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn elevate_quads_drops_a_contour_opening_on_a_quad() {
+    fn elevate_quads_starts_a_contour_opening_on_a_quad_at_the_origin() {
         let mut sink = Recorder::default();
         {
             let mut out = ElevateQuads::new(&mut sink);
             out.quad_to(3.0, 3.0, 6.0, 0.0);
             out.move_to(1.0, 1.0);
         }
-        assert_eq!(sink.ops, vec!["M 1 1".to_string()]);
+        assert_eq!(
+            sink.ops,
+            vec!["C 2 2 4 2 6 0".to_string(), "M 1 1".to_string()]
+        );
     }
 }
