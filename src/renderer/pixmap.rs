@@ -8,10 +8,9 @@ use tiny_skia::{
     Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::renderer::{Renderer, sealed::Canvas};
-use crate::scene::{
-    ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment, Segments, Text,
-};
+use crate::renderer::{Renderer, outline_segments, sealed::Canvas};
+use crate::scene::{ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Text};
+use crate::text::OutlineBuilder;
 
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
 /// own pixels. See [`fit_scale`].
@@ -103,9 +102,7 @@ impl Canvas for PixmapRenderer {
         };
         let style = &path.style;
         let mut builder = PathBuilder::new();
-        if !append_segments(&mut builder, path.segments()) {
-            return;
-        }
+        outline_segments(path.segments(), &mut builder);
         if style.closed {
             builder.close();
         }
@@ -184,7 +181,7 @@ impl PixmapRenderer {
             return None;
         }
         let mut builder = PathBuilder::new();
-        append_segments(&mut builder, clip.segments());
+        outline_segments(clip.segments(), &mut builder);
         // A sub-path of a clip is closed, as in an SVG clipPath. tiny_skia
         // accepts a close on a closed contour.
         builder.close();
@@ -268,29 +265,6 @@ fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
         pm.fill(tiny_skia::Color::TRANSPARENT);
         pm
     })
-}
-
-/// Returns `true` if any segment was appended, a lone move included, `false`
-/// otherwise.
-fn append_segments(builder: &mut PathBuilder, segments: Segments<'_>) -> bool {
-    let mut any = false;
-    for seg in segments {
-        match seg {
-            Segment::Move { x, y } => builder.move_to(x, y),
-            Segment::Line { x, y } => builder.line_to(x, y),
-            Segment::Quad { cx, cy, x, y } => builder.quad_to(cx, cy, x, y),
-            Segment::Cubic {
-                c1x,
-                c1y,
-                c2x,
-                c2y,
-                x,
-                y,
-            } => builder.cubic_to(c1x, c1y, c2x, c2y, x, y),
-        }
-        any = true;
-    }
-    any
 }
 
 fn sk_fill_rule(r: FillRule) -> SkFillRule {
@@ -378,12 +352,12 @@ fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Tran
     };
 
     let mut glyphs = PathBuilder::new();
-    layout.outline(&mut SkiaOutline { b: &mut glyphs });
+    layout.outline(&mut glyphs);
     // The underline paints on its own. In one path, a glyph that winds the
     // other way from the rectangle would cancel it where the two cross.
     let underline = node.underline.then(|| {
         let mut b = PathBuilder::new();
-        layout.outline_underline(&mut SkiaOutline { b: &mut b });
+        layout.outline_underline(&mut b);
         b
     });
 
@@ -429,25 +403,23 @@ fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Tran
     }
 }
 
-struct SkiaOutline<'a> {
-    b: &'a mut PathBuilder,
-}
-
-impl<'a> crate::text::OutlineBuilder for SkiaOutline<'a> {
+/// The inherent methods of [`PathBuilder`], so paths, clips and glyphs build
+/// through [`outline_segments`] and [`crate::text::TextLayout::outline`].
+impl OutlineBuilder for PathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.b.move_to(x, y);
+        PathBuilder::move_to(self, x, y);
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.b.line_to(x, y);
+        PathBuilder::line_to(self, x, y);
     }
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        self.b.quad_to(cx, cy, x, y);
+        PathBuilder::quad_to(self, cx, cy, x, y);
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        self.b.cubic_to(cx1, cy1, cx2, cy2, x, y);
+        PathBuilder::cubic_to(self, cx1, cy1, cx2, cy2, x, y);
     }
     fn close(&mut self) {
-        self.b.close();
+        PathBuilder::close(self);
     }
 }
 

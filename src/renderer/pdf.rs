@@ -16,10 +16,10 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::renderer::{Renderer, sealed::Canvas};
+use crate::renderer::{Renderer, outline_segments, sealed::Canvas};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment,
-    Segments, Stop, Text,
+    Stop, Text,
 };
 
 /// Render a [`crate::scene::Scene`] to PDF bytes.
@@ -132,7 +132,11 @@ impl Canvas for PdfRenderer {
                     .set_dash_pattern(dash.array().iter().copied(), dash.offset());
             }
         }
-        emit_segments(path.segments(), &mut self.content);
+        // PDF has no quadratic operator.
+        outline_segments(
+            path.segments().cubics(),
+            &mut PdfOutline::new(&mut self.content),
+        );
         if style.closed {
             self.content.close_path();
         }
@@ -152,7 +156,10 @@ impl Canvas for PdfRenderer {
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         self.content.save_state();
         if clip.segments().any(|s| matches!(s, Segment::Move { .. })) {
-            emit_segments(clip.segments(), &mut self.content);
+            outline_segments(
+                clip.segments().cubics(),
+                &mut PdfOutline::new(&mut self.content),
+            );
             self.content.close_path();
         } else {
             // A close with no current point is an error. An empty rectangle
@@ -397,35 +404,6 @@ fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
     }
 }
 
-/// Writes `segments` as path ops. PDF has no quadratic operator, so the walk
-/// goes through [`Segments::cubics`].
-fn emit_segments(segments: Segments<'_>, content: &mut Content) {
-    for seg in segments.cubics() {
-        match seg {
-            Segment::Move { x, y } => {
-                content.move_to(x, y);
-            }
-            Segment::Line { x, y } => {
-                content.line_to(x, y);
-            }
-            Segment::Cubic {
-                c1x,
-                c1y,
-                c2x,
-                c2y,
-                x,
-                y,
-            } => {
-                content.cubic_to(c1x, c1y, c2x, c2y, x, y);
-            }
-            // cubics() yields no quadratic, so this arm never runs.
-            Segment::Quad { x, y, .. } => {
-                content.line_to(x, y);
-            }
-        }
-    }
-}
-
 fn paint(content: &mut Content, do_fill: bool, do_stroke: bool, rule: FillRule) {
     match (do_fill, do_stroke, rule) {
         (true, true, FillRule::NonZero) => {
@@ -480,10 +458,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
     canvas.content.transform(node.transform);
 
     // PDF has no quadratic operator.
-    let mut adapter = PdfOutline {
-        content: &mut canvas.content,
-        empty: true,
-    };
+    let mut adapter = PdfOutline::new(&mut canvas.content);
     layout.outline(&mut crate::text::ElevateQuads::new(&mut adapter));
     // A text of spaces has no outline, and a paint with no path is an error.
     if !adapter.empty {
@@ -494,21 +469,26 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
         // The underline paints on its own. In one path, a glyph that winds
         // the other way from the rectangle would cancel it where the two
         // cross.
-        let mut adapter = PdfOutline {
-            content: &mut canvas.content,
-            empty: true,
-        };
-        layout.outline_underline(&mut adapter);
+        layout.outline_underline(&mut PdfOutline::new(&mut canvas.content));
         paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
     }
     canvas.content.restore_state();
 }
 
-/// Glyph outlines, written straight into the content stream.
+/// Path and glyph outlines, written straight into the content stream.
 struct PdfOutline<'a> {
     content: &'a mut Content,
     /// `true` until the first move.
     empty: bool,
+}
+
+impl<'a> PdfOutline<'a> {
+    fn new(content: &'a mut Content) -> Self {
+        Self {
+            content,
+            empty: true,
+        }
+    }
 }
 
 impl crate::text::OutlineBuilder for PdfOutline<'_> {
@@ -520,8 +500,8 @@ impl crate::text::OutlineBuilder for PdfOutline<'_> {
         self.content.line_to(x, y);
     }
     fn quad_to(&mut self, _cx: f32, _cy: f32, x: f32, y: f32) {
-        // Glyphs come through ElevateQuads, so this never runs. A line is the
-        // fallback for a direct caller.
+        // Paths come through Segments::cubics and glyphs through ElevateQuads,
+        // so this never runs. A line is the fallback for a direct caller.
         self.content.line_to(x, y);
     }
     fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
