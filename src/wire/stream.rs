@@ -4,7 +4,7 @@ use capnp::message::ReaderOptions;
 use capnp::serialize;
 
 use crate::protocol_capnp::message;
-use crate::renderer::sealed::Paint as PaintSink;
+use crate::renderer::sealed::Canvas;
 use crate::scene::Path;
 use crate::scene_capnp::element;
 
@@ -69,7 +69,7 @@ impl From<AllocError> for Error {
 /// The surface is sized once, after the dimensions are known and before any
 /// element is painted. Any other message returns [`Error::WrongMessageKind`].
 /// Use [`decode`] for those.
-pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
+pub(crate) fn stream_frame<P: Canvas, R: std::io::Read>(
     paint: &mut P,
     reader: R,
 ) -> Result<(), Error> {
@@ -96,7 +96,7 @@ pub(crate) fn stream_frame<P: PaintSink, R: std::io::Read>(
 
 /// `scratch` is the one [`Path`] of the frame. A clip gets its own, because
 /// it is still live while its children decode.
-fn stream_elements<P: PaintSink>(
+fn stream_elements<P: Canvas>(
     paint: &mut P,
     list: capnp::struct_list::Reader<'_, element::Owned>,
     scratch: &mut Path,

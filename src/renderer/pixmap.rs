@@ -8,10 +8,9 @@ use tiny_skia::{
     Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::renderer::{Renderer, sealed::Paint};
+use crate::renderer::{Renderer, sealed::Canvas};
 use crate::scene::{
-    ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba, Segment,
-    Segments, Text,
+    ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment, Segments, Text,
 };
 
 /// A raster surface. It reallocates its pixmap only when the frame size
@@ -166,7 +165,7 @@ fn mask_mul(a: u8, b: u8) -> u8 {
     ((prod + (prod >> 8)) >> 8) as u8
 }
 
-/// Pops the clip of [`Paint::with_clip`] when dropped, so the stack stays
+/// Pops the clip of [`Canvas::with_clip`] when dropped, so the stack stays
 /// balanced when the body panics.
 struct ClipGuard<'a> {
     canvas: &'a mut PixmapRenderer,
@@ -189,7 +188,7 @@ fn mask_in_effect(clip_stack: &[Option<Mask>]) -> Option<Option<&Mask>> {
     }
 }
 
-impl Paint for PixmapRenderer {
+impl Canvas for PixmapRenderer {
     /// Clears the surface, and reallocates it when the scaled size changed.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::renderer::AllocError> {
         let (out_w, out_h, base) = fit(width, height, self.scale);
@@ -328,10 +327,10 @@ fn sk_spread(s: crate::scene::SpreadMode) -> SkSpread {
 
 /// A gradient that tiny-skia rejects, for a degenerate line or no stops,
 /// falls back to the primary color, so the path still draws.
-fn paint_to_shader(p: &IrPaint) -> SkShader<'static> {
+fn paint_to_shader(p: &Paint) -> SkShader<'static> {
     let g = match p {
-        IrPaint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
-        IrPaint::Gradient(g) => g,
+        Paint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
+        Paint::Gradient(g) => g,
     };
     let stops = sk_stops(&g.stops);
     let spread = sk_spread(g.spread);
@@ -463,7 +462,7 @@ mod tests {
 
     fn solid(r: u8, g: u8, b: u8) -> PathStyle {
         PathStyle {
-            fill: IrPaint::rgba(r, g, b, 1.0),
+            fill: Paint::rgba(r, g, b, 1.0),
             ..PathStyle::default()
         }
     }

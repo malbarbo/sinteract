@@ -16,10 +16,10 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::renderer::{Renderer, sealed::Paint};
+use crate::renderer::{Renderer, sealed::Canvas};
 use crate::scene::{
-    ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint as IrPaint, Path, Rgba,
-    Segment, Segments, Stop, Text,
+    ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Segment,
+    Segments, Stop, Text,
 };
 
 /// Draw-list coordinates are CSS pixels, 96 per inch, and PDF points are 72
@@ -110,9 +110,9 @@ impl PdfRenderer {
 
     /// Sets the fill or the stroke paint. A gradient goes through the Pattern
     /// color space and its `/Pn` name.
-    fn bind_paint(&mut self, paint: &IrPaint, target: PaintTarget) {
+    fn bind_paint(&mut self, paint: &Paint, target: PaintTarget) {
         let gradient = match paint {
-            IrPaint::Solid(c) => {
+            Paint::Solid(c) => {
                 let [r, g, b] = rgb_components(*c);
                 match target {
                     PaintTarget::Fill => self.content.set_fill_rgb(r, g, b),
@@ -120,7 +120,7 @@ impl PdfRenderer {
                 };
                 return;
             }
-            IrPaint::Gradient(g) => g,
+            Paint::Gradient(g) => g,
         };
         let name = self.push_gradient(gradient);
         let name = Name(name.as_bytes());
@@ -146,7 +146,7 @@ enum PaintTarget {
 }
 
 /// Emits `restore_state` when dropped, so the `save_state` of a clip in
-/// [`Paint::with_clip`] is balanced even when the body panics.
+/// [`Canvas::with_clip`] is balanced even when the body panics.
 struct RestoreGuard<'a> {
     canvas: &'a mut PdfRenderer,
 }
@@ -157,7 +157,7 @@ impl Drop for RestoreGuard<'_> {
     }
 }
 
-impl Paint for PdfRenderer {
+impl Canvas for PdfRenderer {
     /// Starts a new page and writes the base transform. Nothing here
     /// allocates a surface, so it never fails.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::renderer::AllocError> {

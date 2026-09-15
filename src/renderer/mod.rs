@@ -1,4 +1,4 @@
-//! The [`Renderer`] trait and its sealed half, `Paint`.
+//! The [`Renderer`] trait and its sealed half, `Canvas`.
 //!
 //! A renderer owns its surface and redraws into it frame after frame.
 //! `render` takes `&mut self`, so a redraw loop reuses one allocation, and
@@ -6,7 +6,7 @@
 //! the next render and never copied. Sizing the surface is the only step
 //! that can fail, and it returns a [`Result`].
 //!
-//! The primitives live on `Paint`, in a module private to the crate, so a
+//! The primitives live on `Canvas`, in a module private to the crate, so a
 //! backend implements them and the scene and stream walkers call them, but
 //! an application cannot name them. `render` and `render_stream` are
 //! provided, so the order of sizing, painting and closing a frame is the
@@ -48,7 +48,7 @@ pub(crate) mod sealed {
     /// The primitives a backend provides and the walkers of the crate call.
     /// `pub` in a private module, so nothing outside the crate can name or
     /// implement it.
-    pub trait Paint: Sized {
+    pub trait Canvas: Sized {
         /// Size the surface for a frame of `width` by `height` and clear it,
         /// reallocating only when the size changed.
         fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), super::AllocError>;
@@ -93,7 +93,7 @@ pub(crate) mod sealed {
 
 /// A renderer that draws a [`Scene`] or a streamed frame into a surface it
 /// owns. The [module docs](self) describe the lifecycle.
-pub trait Renderer: sealed::Paint {
+pub trait Renderer: sealed::Canvas {
     /// What a rendered frame borrows out, such as `&Pixmap` or `&[u8]`. It
     /// borrows `&mut self`, so the frame is read before the next `render`.
     type Output<'a>

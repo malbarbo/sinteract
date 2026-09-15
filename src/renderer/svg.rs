@@ -12,10 +12,10 @@
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
-use crate::renderer::{Renderer, sealed::Paint};
+use crate::renderer::{Renderer, sealed::Canvas};
 use crate::scene::{
-    ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin,
-    Paint as IrPaint, Path, Rgba, Segment, Segments, SpreadMode, Text,
+    ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint,
+    Path, Rgba, Segment, Segments, SpreadMode, Text,
 };
 use crate::text::{Glyph, OutlineBuilder, TextLayout};
 
@@ -72,7 +72,7 @@ impl Default for SvgRenderer {
     }
 }
 
-impl Paint for SvgRenderer {
+impl Canvas for SvgRenderer {
     /// Starts a new document. Nothing here allocates a surface, so it never
     /// fails.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::renderer::AllocError> {
@@ -197,10 +197,10 @@ impl SvgRenderer {
     /// Writes the attribute of `paint`, and the opacity attribute when the
     /// color is translucent. A gradient goes into `defs`, and the attribute
     /// references it.
-    fn write_paint(&mut self, paint: &IrPaint, attr: &str, opacity_attr: &str) {
+    fn write_paint(&mut self, paint: &Paint, attr: &str, opacity_attr: &str) {
         match paint {
-            IrPaint::Solid(c) => write_color(*c, attr, opacity_attr, &mut self.body),
-            IrPaint::Gradient(g) => {
+            Paint::Solid(c) => write_color(*c, attr, opacity_attr, &mut self.body),
+            Paint::Gradient(g) => {
                 let id = self.push_gradient(g);
                 _ = write!(self.body, " {attr}=\"url(#p{id})\"");
             }
@@ -266,7 +266,7 @@ impl SvgRenderer {
     }
 }
 
-/// Writes `</g>` when dropped, so the group of [`Paint::with_clip`] closes
+/// Writes `</g>` when dropped, so the group of [`Canvas::with_clip`] closes
 /// even when the body panics.
 struct CloseGroup<'a> {
     canvas: &'a mut SvgRenderer,
@@ -454,7 +454,7 @@ mod tests {
 
     fn red_fill(a: f32) -> PathStyle {
         PathStyle {
-            fill: IrPaint::rgba(255, 0, 0, a),
+            fill: Paint::rgba(255, 0, 0, a),
             ..PathStyle::default()
         }
     }
@@ -528,7 +528,7 @@ mod tests {
     fn a_stroke_writes_its_width_cap_join_and_dash() {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            stroke: IrPaint::rgba(0, 0, 0, 1.0),
+            stroke: Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 2.0,
             line_cap: LineCap::Round,
             line_join: LineJoin::Bevel,
@@ -553,7 +553,7 @@ mod tests {
         let svg = |miter_limit: f32| {
             let mut scene = Scene::new(50.0, 50.0);
             let style = PathStyle {
-                stroke: IrPaint::rgba(0, 0, 0, 1.0),
+                stroke: Paint::rgba(0, 0, 0, 1.0),
                 stroke_width: 4.0,
                 miter_limit,
                 ..PathStyle::default()
@@ -596,7 +596,7 @@ mod tests {
         )
         .with_spread(SpreadMode::Reflect);
         let style = PathStyle {
-            fill: IrPaint::gradient(gradient),
+            fill: Paint::gradient(gradient),
             ..PathStyle::default()
         };
         rect(&mut scene, style, 0.0, 0.0, 50.0, 50.0);
