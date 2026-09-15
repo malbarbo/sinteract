@@ -244,14 +244,15 @@ impl PdfRenderer {
         };
     }
 
-    /// Writes the page into `bytes` and empties the content and the resources
-    /// for the next render.
+    /// Writes the page into `bytes` and empties the content. The next
+    /// `ensure_size` clears the resources and keeps their capacity.
     fn assemble(&mut self) {
         let w = self.width;
         let h = self.height;
-        let gstates = std::mem::take(&mut self.gstates);
-        let gradients = std::mem::take(&mut self.gradients);
-        let buf = std::mem::replace(&mut self.content, Content::new()).finish();
+        let gstates = &self.gstates;
+        let gradients = &self.gradients;
+        // An empty content holds no buffer until the next render opens one.
+        let buf = std::mem::replace(&mut self.content, Content::with_capacity(0)).finish();
 
         let catalog_id = Ref::new(1);
         let pages_id = Ref::new(2);
@@ -279,7 +280,8 @@ impl PdfRenderer {
             })
             .collect();
 
-        let mut pdf = Pdf::new();
+        // The last document is a good guess at the size of this one.
+        let mut pdf = Pdf::with_capacity(self.bytes.len());
         // Version 1.5 is what tectonic writes, so a document that embeds this
         // one gets no version warning.
         pdf.set_version(1, 5);
