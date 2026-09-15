@@ -122,21 +122,27 @@ impl<'a> TextLayout<'a> {
 
     /// The glyph outlines of the text.
     pub(crate) fn outline(&self, out: &mut dyn OutlineBuilder) {
-        let face = self.face;
-        let scale = em_scale(face, self.size);
-        let x_left = self.x_left();
-        let mut adapter = OutlineAdapter {
-            out,
-            scale: scale as f32,
-            origin_x: x_left,
-            baseline_y: self.baseline_y,
-        };
-        let mut pen_x: f64 = 0.0;
-        for (gid, advance) in glyphs(face, self.text) {
-            adapter.origin_x = x_left + (pen_x * scale) as f32;
-            let _ = face.outline_glyph(gid, &mut adapter);
-            pen_x += advance;
+        for (glyph, x) in self.placed_glyphs() {
+            glyph.outline(x, self.baseline_y, out);
         }
+    }
+
+    /// Each glyph of the text and the box-local x of its origin. Every
+    /// origin sits on [`Self::baseline_y`].
+    pub(crate) fn placed_glyphs(&self) -> impl Iterator<Item = (Glyph, f32)> + '_ {
+        let scale = em_scale(self.face, self.size);
+        let x_left = self.x_left();
+        let mut pen_x: f64 = 0.0;
+        glyphs(self.face, self.text).map(move |(id, advance)| {
+            let x = x_left + (pen_x * scale) as f32;
+            pen_x += advance;
+            let glyph = Glyph {
+                face: self.face,
+                id,
+                size: self.size,
+            };
+            (glyph, x)
+        })
     }
 
     /// The underline as a closed contour.
@@ -184,6 +190,47 @@ pub(crate) struct UnderlineRect {
     pub(crate) x_r: f32,
     pub(crate) y_top: f32,
     pub(crate) y_bot: f32,
+}
+
+/// One glyph of a face at a size. Two equal glyphs have the same outline, so
+/// a backend can write the outline once and place it many times.
+#[derive(Clone, Copy)]
+pub(crate) struct Glyph {
+    face: &'static Face<'static>,
+    id: GlyphId,
+    size: f32,
+}
+
+impl Glyph {
+    /// The outline with the origin of the glyph at (x, y), in the box-local
+    /// space of [`OutlineBuilder`].
+    pub(crate) fn outline(self, x: f32, y: f32, out: &mut dyn OutlineBuilder) {
+        let mut adapter = OutlineAdapter {
+            out,
+            scale: em_scale(self.face, self.size) as f32,
+            origin_x: x,
+            baseline_y: y,
+        };
+        let _ = self.face.outline_glyph(self.id, &mut adapter);
+    }
+}
+
+impl PartialEq for Glyph {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.face, other.face)
+            && self.id == other.id
+            && self.size.to_bits() == other.size.to_bits()
+    }
+}
+
+impl Eq for Glyph {}
+
+impl std::hash::Hash for Glyph {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.face, state);
+        self.id.0.hash(state);
+        self.size.to_bits().hash(state);
+    }
 }
 
 // The underline of a face that carries no `post` table, as a fraction of the
