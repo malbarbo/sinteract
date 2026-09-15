@@ -144,7 +144,8 @@ impl Canvas for PixmapRenderer {
     }
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
-        self.push_clip(clip);
+        let mask = self.clip_mask(clip);
+        self.clip_stack.push(mask);
         let guard = RestoreOnDrop {
             canvas: self,
             restore: |c: &mut Self| {
@@ -166,12 +167,6 @@ impl Renderer for PixmapRenderer {
 }
 
 impl PixmapRenderer {
-    /// Pushes the mask of `clip`, intersected with the clip in effect.
-    fn push_clip(&mut self, clip: &ClipPath) {
-        let mask = self.clip_mask(clip);
-        self.clip_stack.push(mask);
-    }
-
     /// The coverage of `clip` inside the clip in effect, or `None` when the
     /// clip hides what it holds. A clip that gets no mask hides what it
     /// holds, so nothing paints outside it.
