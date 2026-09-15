@@ -36,6 +36,12 @@ fn alpha_value(key: u16) -> f32 {
     f32::from(key) / 1000.0
 }
 
+/// Maps draw-list pixels, with y down, to PDF points, with y up, on a page
+/// `height` pixels tall.
+fn page_transform(height: f32) -> [f32; 6] {
+    [PX_TO_PT, 0.0, 0.0, -PX_TO_PT, 0.0, PX_TO_PT * height]
+}
+
 /// Accumulates a content stream and its resources, then assembles a one-page
 /// document into `bytes`.
 pub struct PdfRenderer {
@@ -156,9 +162,8 @@ impl Paint for PdfRenderer {
         self.height = height.max(1.0);
         self.gstates.clear();
         self.gradients.clear();
-        let s = PX_TO_PT;
         let mut content = Content::new();
-        content.transform([s, 0.0, 0.0, -s, 0.0, s * self.height]);
+        content.transform(page_transform(self.height));
         self.content = content;
         Ok(())
     }
@@ -386,7 +391,7 @@ impl PdfRenderer {
         }
 
         for (gradient, refs) in gradients.iter().zip(gradient_refs.iter()) {
-            emit_gradient_objects(&mut pdf, gradient, refs);
+            emit_gradient_objects(&mut pdf, gradient, refs, page_transform(h));
         }
 
         self.bytes = pdf.finish();
@@ -453,7 +458,12 @@ fn rgb_components(c: Rgba) -> [f32; 3] {
     [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
 }
 
-fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs) {
+fn emit_gradient_objects(
+    pdf: &mut Pdf,
+    gradient: &Gradient,
+    refs: &GradientRefs,
+    matrix: [f32; 6],
+) {
     let stops = prepare_stops(&gradient.stops);
 
     let main_fn_ref = if stops.len() == 2 {
@@ -515,6 +525,9 @@ fn emit_gradient_objects(pdf: &mut Pdf, gradient: &Gradient, refs: &GradientRefs
 
     {
         let mut pat = pdf.shading_pattern(refs.pattern);
+        // A pattern draws in the space of the page, so the `cm` at the top of
+        // the content stream does not apply to it.
+        pat.matrix(matrix);
         pat.shading_ref(refs.shading);
         pat.finish();
     }
@@ -962,5 +975,29 @@ mod tests {
             "stitching function missing: {s}"
         );
         assert!(s.contains("/Bounds [0.5]"), "bounds missing: {s}");
+    }
+
+    #[test]
+    fn a_gradient_pattern_maps_pixels_to_the_page() {
+        let mut scene = Scene::new(100.0, 40.0);
+        let color = |r, b| Rgba { r, g: 0, b, a: 1.0 };
+        let stops = vec![
+            Stop {
+                offset: 0.0,
+                color: color(255, 0),
+            },
+            Stop {
+                offset: 1.0,
+                color: color(0, 255),
+            },
+        ];
+        let style = PathStyle {
+            fill: crate::scene::Paint::gradient(Gradient::linear(0.0, 0.0, 100.0, 0.0, stops)),
+            ..PathStyle::default()
+        };
+        rect(&mut scene, style, 0.0, 0.0, 100.0, 40.0);
+        let s = String::from_utf8_lossy(&render_to_pdf(&scene)).into_owned();
+        // The base transform of the content stream, for a page 40 pixels tall.
+        assert!(s.contains("/Matrix [0.75 0 0 -0.75 0 30]"), "{s}");
     }
 }
