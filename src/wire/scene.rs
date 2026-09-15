@@ -136,6 +136,17 @@ fn read_rgba(r: wire_rgba::Reader<'_>) -> Rgba {
     }
 }
 
+/// A `0xRRGGBBAA` color, as the fallback of a paint carries it.
+fn rgba_from_u32(c: u32) -> Rgba {
+    let [r, g, b, a] = c.to_be_bytes();
+    Rgba {
+        r,
+        g,
+        b,
+        a: f32::from(a) / 255.0,
+    }
+}
+
 fn write_stop(mut b: wire_stop::Builder<'_>, s: Stop) {
     b.set_offset(s.offset);
     write_rgba(b.reborrow().init_color(), s.color);
@@ -185,9 +196,18 @@ fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
 
 fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, Error> {
     use wire_paint::Which;
+    let which = match r.which() {
+        Ok(which) => which,
+        // An arm from a newer schema draws the fallback color of its writer.
+        // Without one, the element that holds the paint is skipped.
+        Err(_) if r.get_has_fallback() => {
+            return Ok(Paint::Solid(rgba_from_u32(r.get_fallback())));
+        }
+        Err(e) => return Err(e.into()),
+    };
     // A null stops pointer reads as an empty list, so an absent ramp needs
     // no guard.
-    let (geom, stops, spread) = match r.which()? {
+    let (geom, stops, spread) = match which {
         Which::Solid(c) => return Ok(Paint::Solid(read_rgba(c?))),
         Which::Linear(g) => {
             let g = g?;

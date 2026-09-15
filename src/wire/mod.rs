@@ -549,6 +549,45 @@ mod tests {
     }
 
     #[test]
+    fn a_paint_of_an_unknown_arm_draws_its_fallback_color() {
+        // The writer of a newer schema sets the fallback, which this crate
+        // never writes, so the path is built by hand.
+        let mut builder = MessageBuilder::new_default();
+        {
+            let msg = builder.init_root::<message::Builder>();
+            let frame = msg.init_frame();
+            let mut nodes = frame.init_elements(1);
+            let node = nodes.reborrow().get(0);
+            let mut p = node.init_path();
+            let mut fill = p.reborrow().init_style().init_fill();
+            fill.set_fallback(0x3366_ff80);
+            fill.set_has_fallback(true);
+            let _ = fill.init_solid();
+            p.set_verbs(&[SegmentKind::Move as u8]);
+            let mut coords = p.init_coords(2);
+            coords.set(0, 1.0);
+            coords.set(1, 1.0);
+        }
+        let bytes = with_unknown_value(&finish(builder), |m| {
+            tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
+        });
+
+        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Path(p)] = &d.elements[..] else {
+            panic!("expected one Path, got {:?}", d.elements);
+        };
+        let color = Rgba {
+            r: 0x33,
+            g: 0x66,
+            b: 0xff,
+            a: 128.0 / 255.0,
+        };
+        assert_eq!(p.style.fill, Paint::Solid(color));
+    }
+
+    #[test]
     fn dash_and_miter_round_trip() {
         let mut scene = Scene::new(100.0, 50.0);
         {
