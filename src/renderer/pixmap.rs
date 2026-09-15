@@ -35,7 +35,8 @@ pub fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
 /// changes.
 pub struct PixmapRenderer {
     pixmap: Pixmap,
-    /// The scale as a transform, applied to every path.
+    /// The scale as a transform, applied to every path. The caller sets the
+    /// scale once, and decides with it whether a frame may grow.
     base: Transform,
     /// The mask of each clip in effect. `None` is a clip that hides what it
     /// holds, because its path is empty, a clip around it hides what it
@@ -44,10 +45,6 @@ pub struct PixmapRenderer {
     /// Masks popped off `clip_stack`, for the next push. Every mask is
     /// canvas-sized, so any one fits.
     mask_pool: Vec<Mask>,
-    out_w: u32,
-    out_h: u32,
-    /// The scale from the caller, who decides whether a frame may grow.
-    scale: f32,
 }
 
 impl PixmapRenderer {
@@ -55,15 +52,14 @@ impl PixmapRenderer {
     /// sized first for a `width × height` frame. `None` when the surface
     /// cannot be allocated.
     pub fn new(scale: f32, width: f32, height: f32) -> Option<Self> {
-        let (out_w, out_h, base) = fit(width, height, scale);
+        // A zero or negative scale would allocate nothing to draw into.
+        let scale = scale.max(1e-3);
+        let (out_w, out_h) = out_size(width, height, scale);
         Some(Self {
-            pixmap: new_pixmap(out_w, out_h)?,
-            base,
+            pixmap: Pixmap::new(out_w, out_h)?,
+            base: Transform::from_scale(scale, scale),
             clip_stack: Vec::new(),
             mask_pool: Vec::new(),
-            out_w,
-            out_h,
-            scale,
         })
     }
 
@@ -76,22 +72,21 @@ impl PixmapRenderer {
 impl Canvas for PixmapRenderer {
     /// Clears the surface, and reallocates it when the scaled size changed.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), crate::renderer::AllocError> {
-        let (out_w, out_h, base) = fit(width, height, self.scale);
-        self.base = base;
+        let (out_w, out_h) = out_size(width, height, self.base.sx);
         // A frame ends with an empty clip stack, and its masks serve the next
         // frame.
         self.mask_pool.extend(self.clip_stack.drain(..).flatten());
-        if (out_w, out_h) == (self.out_w, self.out_h) {
+        if (out_w, out_h) == (self.pixmap.width(), self.pixmap.height()) {
             self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
         } else {
             // Masks are canvas-sized, so a resize invalidates every pooled one.
             self.mask_pool.clear();
-            self.pixmap = new_pixmap(out_w, out_h).ok_or(crate::renderer::AllocError {
+            // A new pixmap is transparent, so the background of the backend
+            // shows through.
+            self.pixmap = Pixmap::new(out_w, out_h).ok_or(crate::renderer::AllocError {
                 width: out_w,
                 height: out_h,
             })?;
-            self.out_w = out_w;
-            self.out_h = out_h;
         }
         Ok(())
     }
@@ -215,7 +210,7 @@ impl PixmapRenderer {
                 m.clear();
                 Some(m)
             }
-            None => Mask::new(self.out_w, self.out_h),
+            None => Mask::new(self.pixmap.width(), self.pixmap.height()),
         }
     }
 }
@@ -241,23 +236,12 @@ fn frame_px(width: f32, height: f32) -> (u32, u32) {
     (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32)
 }
 
-/// The output size and the transform of a frame at `scale`.
-fn fit(width: f32, height: f32, scale: f32) -> (u32, u32, Transform) {
+/// The size in output pixels of a frame at `scale`.
+fn out_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
     let (w, h) = frame_px(width, height);
-    // A zero or negative scale would allocate nothing to draw into.
-    let s = scale.max(1e-3);
-    let out_w = ((w as f32) * s).ceil().max(1.0) as u32;
-    let out_h = ((h as f32) * s).ceil().max(1.0) as u32;
-    (out_w, out_h, Transform::from_scale(s, s))
-}
-
-/// A transparent pixmap, so the background of the backend shows through.
-/// `None` when the allocation fails.
-fn new_pixmap(out_w: u32, out_h: u32) -> Option<Pixmap> {
-    Pixmap::new(out_w, out_h).map(|mut pm| {
-        pm.fill(tiny_skia::Color::TRANSPARENT);
-        pm
-    })
+    let out_w = ((w as f32) * scale).ceil().max(1.0) as u32;
+    let out_h = ((h as f32) * scale).ceil().max(1.0) as u32;
+    (out_w, out_h)
 }
 
 fn sk_fill_rule(r: FillRule) -> SkFillRule {
