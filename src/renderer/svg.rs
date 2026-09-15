@@ -334,15 +334,14 @@ fn write_segments(segments: Segments<'_>, out: &mut String) {
 
 #[allow(clippy::similar_names)]
 fn render_text(node: &Text, canvas: &mut SvgRenderer) {
-    let Some(layout) = TextLayout::new(&node.spec) else {
-        return;
-    };
-
     let do_fill = node.draws_fill();
     let do_stroke = node.draws_stroke();
     if !do_fill && !do_stroke {
         return;
     }
+    let Some(layout) = TextLayout::new(&node.spec) else {
+        return;
+    };
 
     let mut uses = std::mem::take(&mut canvas.uses);
     uses.clear();

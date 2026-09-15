@@ -138,6 +138,9 @@ impl Canvas for PixmapRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
+        if !node.draws_fill() && !node.draws_stroke() {
+            return;
+        }
         if let Some(mask) = mask_in_effect(&self.clip_stack) {
             render_text(node, &mut self.pixmap, mask, self.base, &mut self.builder);
         }
