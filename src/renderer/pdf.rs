@@ -621,15 +621,16 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
     }
     canvas.content.transform(node.transform);
 
-    {
-        // PDF has no quadratic operator.
-        let mut adapter = PdfOutline {
-            content: &mut canvas.content,
-        };
-        let mut out = crate::text::ElevateQuads::new(&mut adapter);
-        layout.outline(&mut out);
+    // PDF has no quadratic operator.
+    let mut adapter = PdfOutline {
+        content: &mut canvas.content,
+        empty: true,
+    };
+    layout.outline(&mut crate::text::ElevateQuads::new(&mut adapter));
+    // A text of spaces has no outline, and a paint with no path is an error.
+    if !adapter.empty {
+        paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
     }
-    paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
 
     if node.underline {
         // The underline paints on its own. In one path, a glyph that winds
@@ -637,6 +638,7 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
         // cross.
         let mut adapter = PdfOutline {
             content: &mut canvas.content,
+            empty: true,
         };
         layout.outline_underline(&mut adapter);
         paint(&mut canvas.content, do_fill, do_stroke, FillRule::NonZero);
@@ -647,11 +649,14 @@ fn render_text(node: &Text, canvas: &mut PdfRenderer) {
 /// Glyph outlines, written straight into the content stream.
 struct PdfOutline<'a> {
     content: &'a mut Content,
+    /// `true` until the first move.
+    empty: bool,
 }
 
 impl crate::text::OutlineBuilder for PdfOutline<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.content.move_to(x, y);
+        self.empty = false;
     }
     fn line_to(&mut self, x: f32, y: f32) {
         self.content.line_to(x, y);
@@ -1016,5 +1021,26 @@ mod tests {
         }
         let s = String::from_utf8_lossy(&render_to_pdf(&scene)).into_owned();
         assert!(s.contains("q\n0 0 0 0 re\nW\nn\n"), "{s}");
+    }
+
+    #[test]
+    fn a_text_with_no_outline_paints_nothing() {
+        let mut scene = Scene::new(40.0, 20.0);
+        scene.text(Text {
+            fill: Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            spec: TextSpec {
+                size: 12.0,
+                text: "   ".to_owned(),
+                ..TextSpec::default()
+            },
+            ..Text::default()
+        });
+        let s = String::from_utf8_lossy(&render_to_pdf(&scene)).into_owned();
+        assert!(!s.lines().any(|l| l == "f"), "{s}");
     }
 }
