@@ -18,7 +18,7 @@ use tiny_skia::Pixmap;
 
 use super::sixel;
 use crate::event::{KeyKind, key};
-use crate::renderer::pixmap::rasterize_scene;
+use crate::renderer::pixmap::render_to_pixmap;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
 const KITTY_ONESHOT_ID_BASE: u32 = 2000;
@@ -248,7 +248,7 @@ pub fn show_image(scene: &crate::scene::Scene) {
         return;
     };
     let scale = scale_for_backend(backend, scene.width, scene.height);
-    let Some(pixmap) = rasterize_scene(scene, scale) else {
+    let Some(pixmap) = render_to_pixmap(scene, scale) else {
         eprintln!("[spython] failed to rasterize draw list");
         return;
     };
@@ -511,7 +511,7 @@ mod tests {
     }
 
     fn rasterize(scene: &Scene) -> Pixmap {
-        rasterize_scene(scene, 1.0).expect("pixmap")
+        render_to_pixmap(scene, 1.0).expect("pixmap")
     }
 
     fn rect_path(scene: &mut Scene, style: PathStyle, x: f32, y: f32, w: f32, h: f32) {
@@ -666,7 +666,7 @@ mod tests {
         // 200×100 into 50×50 fits the width, scale 0.25, output 50×25.
         let mut scene = Scene::new(200.0, 100.0);
         rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0);
-        let pm = rasterize_scene(&scene, fit_capped(&scene, (50, 50), 1.0)).expect("pixmap");
+        let pm = render_to_pixmap(&scene, fit_capped(&scene, (50, 50), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 50);
         assert_eq!(pm.height(), 25);
         assert_eq!(pixel_rgba(&pm, 25, 12), (0, 0, 255, 255));
@@ -677,7 +677,7 @@ mod tests {
         // A 10×10 image keeps its size in a 1000×1000 target.
         let mut scene = Scene::new(10.0, 10.0);
         rect_path(&mut scene, solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0);
-        let pm = rasterize_scene(&scene, fit_capped(&scene, (1000, 1000), 1.0)).expect("pixmap");
+        let pm = render_to_pixmap(&scene, fit_capped(&scene, (1000, 1000), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 10);
         assert_eq!(pm.height(), 10);
     }
@@ -687,7 +687,7 @@ mod tests {
         // 100×200 into 200×50 fits the height, scale 0.25, output 25×50.
         let mut scene = Scene::new(100.0, 200.0);
         rect_path(&mut scene, solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0);
-        let pm = rasterize_scene(&scene, fit_capped(&scene, (200, 50), 1.0)).expect("pixmap");
+        let pm = render_to_pixmap(&scene, fit_capped(&scene, (200, 50), 1.0)).expect("pixmap");
         assert_eq!(pm.width(), 25);
         assert_eq!(pm.height(), 50);
     }
@@ -699,7 +699,7 @@ mod tests {
         let mut scene = Scene::new(100.0, 100.0);
         rect_path(&mut scene, solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0);
         // The target is the half-blocks box of an 80×24 terminal.
-        let pm = rasterize_scene(&scene, fit_capped(&scene, (80, 48), 1.0 / 8.0)).expect("pixmap");
+        let pm = render_to_pixmap(&scene, fit_capped(&scene, (80, 48), 1.0 / 8.0)).expect("pixmap");
         assert!(pm.width() <= 13, "got width {}", pm.width());
         assert!(pm.height() <= 13, "got height {}", pm.height());
     }

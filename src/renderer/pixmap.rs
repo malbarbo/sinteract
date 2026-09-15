@@ -360,7 +360,7 @@ fn paint_to_shader(p: &Paint) -> SkShader<'static> {
 
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
 /// own pixels. See [`fit_scale`].
-pub fn rasterize_scene(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
+pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
     let mut renderer = PixmapRenderer::new(scale, scene.width, scene.height)?;
     renderer.render(scene).ok()?;
     Some(renderer.into_pixmap())
@@ -511,7 +511,7 @@ mod tests {
         let x_r = (160.0 + u.x_r).floor() as u32 - 1;
         let mut scene = Scene::new(320.0, 120.0);
         scene.text(node);
-        let pixmap = rasterize_scene(&scene, 1.0).expect("pixmap");
+        let pixmap = render_to_pixmap(&scene, 1.0).expect("pixmap");
         for x in x_l..x_r {
             assert_eq!(pixel_rgba(&pixmap, x, y).3, 255, "a hole at x {x}");
         }
@@ -764,7 +764,7 @@ mod tests {
             let mut inner = empty.clip(square);
             rect_path(&mut inner, solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0);
         }
-        let pm = rasterize_scene(&scene, 1.0).expect("pixmap");
+        let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 10, 10).3, 0);
     }
 }
