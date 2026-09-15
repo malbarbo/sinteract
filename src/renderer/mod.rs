@@ -19,6 +19,7 @@
 
 pub mod pdf;
 pub mod pixmap;
+pub mod svg;
 
 use std::io::Read;
 

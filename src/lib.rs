@@ -1,11 +1,11 @@
-//! 2D graphics with terminal, window and PDF outputs.
+//! 2D graphics with terminal, window, PDF and SVG outputs.
 //!
 //! A front end builds a [`scene::Scene`] and a [`renderer::Renderer`]
 //! replays it. [`renderer::pixmap`] rasterizes a scene to a tiny-skia
-//! `Pixmap` and [`renderer::pdf`] writes it as PDF with the text as glyph
-//! outlines. [`text`] holds the embedded Liberation families and measures
-//! and outlines glyphs, and [`wire`] converts a scene and an event to and
-//! from Cap'n Proto. These build on wasm32 too, except the system font
+//! `Pixmap`, and [`renderer::pdf`] and [`renderer::svg`] write it as PDF
+//! and SVG with the text as glyph outlines. [`text`] holds the embedded
+//! Liberation families and measures and outlines glyphs, and [`wire`]
+//! converts a scene and an event to and from Cap'n Proto. These build on wasm32 too, except the system font
 //! lookup of `text`, which the `native-fonts` feature carries.
 //!
 //! [`frontend`] shows a scene and reads the input back, through the

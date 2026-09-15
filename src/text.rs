@@ -145,6 +145,11 @@ impl<'a> TextLayout<'a> {
         })
     }
 
+    /// The baseline, box-local with y down.
+    pub(crate) fn baseline_y(&self) -> f32 {
+        self.baseline_y
+    }
+
     /// The underline as a closed contour.
     pub(crate) fn outline_underline(&self, out: &mut dyn OutlineBuilder) {
         let u = self.underline_rect();
