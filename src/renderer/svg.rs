@@ -353,8 +353,8 @@ fn render_text(node: &Text, canvas: &mut SvgRenderer) {
         return;
     };
 
-    let do_fill = node.fill.a > 0.0;
-    let do_stroke = node.stroke.a > 0.0 && node.stroke_width > 0.0;
+    let do_fill = node.draws_fill();
+    let do_stroke = node.draws_stroke();
     if !do_fill && !do_stroke {
         return;
     }

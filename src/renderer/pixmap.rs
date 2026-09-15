@@ -405,14 +405,14 @@ fn render_text(node: &Text, pixmap: &mut Pixmap, mask: Option<&Mask>, base: Tran
         .flatten()
         .filter_map(PathBuilder::finish)
     {
-        if node.fill.a > 0.0 {
+        if node.draws_fill() {
             let mut paint = SkPaint::default();
             paint.set_color(sk_color(node.fill));
             paint.anti_alias = true;
             // A TrueType glyph fills with non-zero winding.
             pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
         }
-        if node.stroke.a > 0.0 && node.stroke_width > 0.0 {
+        if node.draws_stroke() {
             let mut paint = SkPaint::default();
             paint.set_color(sk_color(node.stroke));
             paint.anti_alias = true;

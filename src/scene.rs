@@ -311,6 +311,19 @@ pub struct Text {
     pub underline: bool,
 }
 
+impl Text {
+    /// Returns `true` if the fill marks the canvas, `false` otherwise.
+    pub fn draws_fill(&self) -> bool {
+        self.fill.a > 0.0
+    }
+
+    /// Returns `true` if the stroke marks the canvas, `false` otherwise. A
+    /// zero width draws nothing, whatever the color.
+    pub fn draws_stroke(&self) -> bool {
+        self.stroke.a > 0.0 && self.stroke_width > 0.0
+    }
+}
+
 impl Default for Text {
     fn default() -> Self {
         Self {
