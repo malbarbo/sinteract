@@ -10,6 +10,12 @@
 //! Glyphs go in as filled paths from [`crate::text`], as in the raster
 //! renderer, so the PDF embeds no font and text measures the same in both.
 //! The text is not selectable.
+//!
+//! A gradient draws with [`SpreadMode::Pad`](crate::scene::SpreadMode),
+//! whichever it asks for. A PDF shading extends its two ends and has no
+//! other way to repeat, so reflect and repeat need a sampled function,
+//! which this backend does not write. A frame that uses them differs here
+//! from the raster and the svg.
 
 use std::collections::BTreeMap;
 
