@@ -477,7 +477,9 @@ fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
 pub(super) fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Result<(), ReadError> {
     path.style = read_path_style(r.get_style()?)?;
     read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
-    finite(path.is_finite())
+    finite(path.is_finite())?;
+    path.style.normalize();
+    Ok(())
 }
 
 fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ReadError> {

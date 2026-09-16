@@ -121,6 +121,8 @@ struct PathStyle {
     lineJoin    @4 :LineJoin;
     fillRule    @5 :FillRule;
     closed      @6 :Bool;
+    # A miter limit below 1 is 1. The limit compares a ratio that is never
+    # below 1, so the two say the same thing, and SVG rejects a smaller one.
     miterLimit  @7 :Float32;
     # Alternating on and off lengths. An odd list repeats to an even one.
     # An empty list, a negative or non-finite length, lengths that sum to

@@ -1183,4 +1183,25 @@ mod tests {
             [0.25, 0.25]
         );
     }
+
+    #[test]
+    fn a_decoded_miter_limit_below_1_rises_to_1() {
+        // The scene raises the limit, so the bytes are patched to hold one
+        // below 1, as a writer from elsewhere could send it.
+        let style = PathStyle {
+            miter_limit: 8.0,
+            ..PathStyle::default()
+        };
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.add_path(Path::builder(style, 0.0, 0.0).line_to(10.0, 10.0).build());
+        let bytes = with_float(&encode_frame(&scene), 8.0, 0.25);
+
+        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Path(p)] = d.elements() else {
+            panic!("expected one Path, got {:?}", d.elements());
+        };
+        assert_eq!(p.style.miter_limit, 1.0);
+    }
 }

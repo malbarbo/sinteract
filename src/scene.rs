@@ -235,6 +235,15 @@ impl PathStyle {
         self.stroke.is_visible() && self.stroke_width > 0.0
     }
 
+    /// Raises a miter limit below 1 to 1. The limit compares a ratio that
+    /// is never below 1, so the two say the same thing, and SVG rejects a
+    /// smaller one and falls back to [`DEFAULT_MITER_LIMIT`] instead. The
+    /// scene and the decoder normalize, so a renderer writes the limit as
+    /// it is.
+    pub(crate) fn normalize(&mut self) {
+        self.miter_limit = self.miter_limit.max(1.0);
+    }
+
     /// Returns `true` if every float of the style is finite, `false`
     /// otherwise. A [`Dash`] is always finite.
     pub(crate) fn is_finite(&self) -> bool {
@@ -902,8 +911,11 @@ impl Scene {
     }
 
     /// Append a [`Path`] built elsewhere. [`Self::path`] builds one in place.
-    pub fn add_path(&mut self, path: Path) {
+    pub fn add_path(&mut self, mut path: Path) {
+        // The finiteness first, so a limit that is not finite still drops
+        // the path instead of becoming 1.
         if path.is_finite() {
+            path.style.normalize();
             self.elements.push(Element::Path(path));
         }
     }
@@ -1695,5 +1707,26 @@ mod tests {
             offsets(Gradient::linear(0.0, 0.0, 5.0, 5.0, out_of_range)),
             [0.0, 0.5, 1.0]
         );
+    }
+
+    #[test]
+    fn a_miter_limit_below_1_rises_to_1() {
+        let style = |miter_limit| PathStyle {
+            miter_limit,
+            ..PathStyle::default()
+        };
+        let mut scene = Scene::new(10.0, 10.0);
+        for limit in [0.25, -2.0, 8.0] {
+            scene.add_path(a_line(style(limit), 5.0, 5.0));
+        }
+        let limits: Vec<f32> = scene
+            .elements()
+            .iter()
+            .map(|e| match e {
+                Element::Path(p) => p.style.miter_limit,
+                other => panic!("expected a Path, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(limits, [1.0, 1.0, 8.0]);
     }
 }
