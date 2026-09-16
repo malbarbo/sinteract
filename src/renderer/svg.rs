@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn a_gradient_goes_into_defs_with_its_spread_and_stop_opacity() {
         let mut scene = Scene::new(50.0, 50.0);
-        let gradient = Gradient::linear(
+        let gradient = Paint::linear(
             0.0,
             0.0,
             50.0,
@@ -580,7 +580,7 @@ mod tests {
         )
         .with_spread(SpreadMode::Reflect);
         let style = PathStyle {
-            fill: Paint::gradient(gradient),
+            fill: gradient,
             ..PathStyle::default()
         };
         scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
@@ -709,7 +709,7 @@ mod tests {
                 .build();
             let mut clipped = scene.clip(clip);
             let style = PathStyle {
-                fill: Paint::gradient(Gradient::radial(20.0, 20.0, 10.0, stops)),
+                fill: Paint::radial(20.0, 20.0, 10.0, stops),
                 ..PathStyle::default()
             };
             clipped.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));

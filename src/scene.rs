@@ -37,9 +37,16 @@ pub enum GradientGeom {
     Radial { cx: f32, cy: f32, radius: f32 },
 }
 
-/// A color ramp along an axis. The stops rise by offset, in [0, 1]. The fields
-/// are private, so a gradient reaches a [`Paint`] through
-/// [`Paint::gradient`], which resolves one with no extent.
+/// A color ramp along an axis. The stops rise by offset, in [0, 1].
+///
+/// [`Paint::linear`] and [`Paint::radial`] build one, and they resolve a
+/// gradient with no extent, so an unresolved one cannot be built and then
+/// put into a [`Paint`]:
+///
+/// ```compile_fail,E0599
+/// use sinteract::scene::Gradient;
+/// let g = Gradient::linear(0.0, 0.0, 10.0, 0.0, Vec::new());
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gradient {
     geom: GradientGeom,
@@ -48,27 +55,6 @@ pub struct Gradient {
 }
 
 impl Gradient {
-    pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Self {
-        Self::new(
-            GradientGeom::Linear { x0, y0, x1, y1 },
-            stops,
-            SpreadMode::Pad,
-        )
-    }
-
-    pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Self {
-        Self::new(
-            GradientGeom::Radial { cx, cy, radius },
-            stops,
-            SpreadMode::Pad,
-        )
-    }
-
-    pub fn with_spread(mut self, spread: SpreadMode) -> Self {
-        self.spread = spread;
-        self
-    }
-
     /// The only constructor, which the wire decoder uses because it reads
     /// the three parts apart. It raises a stop that is below the one before
     /// it, and clamps every offset to [0, 1], as SVG and Skia do.
@@ -118,11 +104,42 @@ impl Paint {
         Self::Solid(Rgba { r, g, b, a })
     }
 
+    /// A ramp along the line from `(x0, y0)` to `(x1, y1)`, with
+    /// [`SpreadMode::Pad`] outside it.
+    pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Self {
+        Self::gradient(Gradient::new(
+            GradientGeom::Linear { x0, y0, x1, y1 },
+            stops,
+            SpreadMode::Pad,
+        ))
+    }
+
+    /// A ramp outward from `(cx, cy)` to `radius`, with [`SpreadMode::Pad`]
+    /// outside it.
+    pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Self {
+        Self::gradient(Gradient::new(
+            GradientGeom::Radial { cx, cy, radius },
+            stops,
+            SpreadMode::Pad,
+        ))
+    }
+
+    /// The paint with `spread` outside its ramp. The spread does not decide
+    /// whether a gradient has extent, so a solid color, which is what one
+    /// with no extent became, comes back as it is.
+    pub fn with_spread(mut self, spread: SpreadMode) -> Self {
+        if let Self::Gradient(g) = &mut self {
+            g.spread = spread;
+        }
+        self
+    }
+
     /// A gradient paint, or the solid color of the last stop for a gradient
     /// with no extent, which is a radius, or a distance between the ends of
     /// a line, of 2^-15 or less. SVG paints the last stop for those, and
-    /// tiny-skia and the pdf disagreed with it and with each other.
-    pub fn gradient(g: Gradient) -> Self {
+    /// tiny-skia and the pdf disagreed with it and with each other. The
+    /// wire decoder calls it, because it reads the three parts apart.
+    pub(crate) fn gradient(g: Gradient) -> Self {
         // The threshold of tiny-skia, which cannot tell a gradient below it
         // from one of no extent at all, so the scene decides here and the
         // three backends agree.
@@ -1577,15 +1594,15 @@ mod tests {
                 ..PathStyle::default()
             },
             PathStyle {
-                stroke: Paint::gradient(Gradient::radial(0.0, 0.0, inf, vec![stop(0.0, 1.0)])),
+                stroke: Paint::radial(0.0, 0.0, inf, vec![stop(0.0, 1.0)]),
                 ..PathStyle::default()
             },
             PathStyle {
-                fill: Paint::gradient(Gradient::linear(0.0, 0.0, 1.0, 1.0, vec![stop(nan, 1.0)])),
+                fill: Paint::linear(0.0, 0.0, 1.0, 1.0, vec![stop(nan, 1.0)]),
                 ..PathStyle::default()
             },
             PathStyle {
-                fill: Paint::gradient(Gradient::linear(0.0, 0.0, 1.0, 1.0, vec![stop(0.0, inf)])),
+                fill: Paint::linear(0.0, 0.0, 1.0, 1.0, vec![stop(0.0, inf)]),
                 ..PathStyle::default()
             },
         ];
@@ -1705,8 +1722,10 @@ mod tests {
             };
             assert_eq!(Paint::gradient(g), last, "{geom:?}");
         }
-        let ramp = Gradient::radial(5.0, 5.0, 1.0, stops);
-        assert!(matches!(Paint::gradient(ramp), Paint::Gradient(_)));
+        assert!(matches!(
+            Paint::radial(5.0, 5.0, 1.0, stops),
+            Paint::Gradient(_)
+        ));
     }
 
     #[test]
@@ -1715,19 +1734,22 @@ mod tests {
             offset,
             color: Rgba::default(),
         };
-        let offsets = |g: Gradient| g.stops().iter().map(|s| s.offset).collect::<Vec<_>>();
+        let offsets = |p: Paint| match p {
+            Paint::Gradient(g) => g.stops().iter().map(|s| s.offset).collect::<Vec<_>>(),
+            solid => panic!("expected a gradient, got {solid:?}"),
+        };
         let out_of_order = vec![stop(0.8), stop(0.2), stop(1.0)];
         assert_eq!(
-            offsets(Gradient::radial(0.0, 0.0, 5.0, out_of_order.clone())),
+            offsets(Paint::radial(0.0, 0.0, 5.0, out_of_order.clone())),
             [0.8, 0.8, 1.0]
         );
         assert_eq!(
-            offsets(Gradient::linear(0.0, 0.0, 5.0, 5.0, out_of_order)),
+            offsets(Paint::linear(0.0, 0.0, 5.0, 5.0, out_of_order)),
             [0.8, 0.8, 1.0]
         );
         let out_of_range = vec![stop(-0.5), stop(0.5), stop(2.0)];
         assert_eq!(
-            offsets(Gradient::linear(0.0, 0.0, 5.0, 5.0, out_of_range)),
+            offsets(Paint::linear(0.0, 0.0, 5.0, 5.0, out_of_range)),
             [0.0, 0.5, 1.0]
         );
     }

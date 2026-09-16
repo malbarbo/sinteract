@@ -627,9 +627,9 @@ mod tests {
         }
     }
 
-    fn gradient_fill(gradient: Gradient) -> PathStyle {
+    fn gradient_fill(gradient: Paint) -> PathStyle {
         PathStyle {
-            fill: Paint::gradient(gradient),
+            fill: gradient,
             ..PathStyle::default()
         }
     }
@@ -773,7 +773,7 @@ mod tests {
     fn linear_gradient_emits_axial_shading() {
         let mut scene = Scene::new(50.0, 50.0);
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
-        let style = gradient_fill(Gradient::linear(0.0, 0.0, 50.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 50.0, 0.0, stops));
         scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
         let s = pdf_text(&scene);
         // ShadingType 2 is axial.
@@ -791,7 +791,7 @@ mod tests {
     fn radial_gradient_emits_radial_shading() {
         let mut scene = Scene::new(50.0, 50.0);
         let stops = vec![stop(0.0, opaque(255, 255, 255)), stop(1.0, opaque(0, 0, 0))];
-        let style = gradient_fill(Gradient::radial(25.0, 25.0, 20.0, stops));
+        let style = gradient_fill(Paint::radial(25.0, 25.0, 20.0, stops));
         scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
         let s = pdf_text(&scene);
         // ShadingType 3 is radial.
@@ -806,7 +806,7 @@ mod tests {
             stop(0.5, opaque(0, 255, 0)),
             stop(1.0, opaque(0, 0, 255)),
         ];
-        let style = gradient_fill(Gradient::linear(0.0, 0.0, 60.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops));
         scene.add_path(rect(style, 0.0, 0.0, 60.0, 10.0));
         let s = pdf_text(&scene);
         // FunctionType 3 is stitching.
@@ -821,7 +821,7 @@ mod tests {
     fn a_gradient_pattern_maps_pixels_to_the_page() {
         let mut scene = Scene::new(100.0, 40.0);
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
-        let style = gradient_fill(Gradient::linear(0.0, 0.0, 100.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops));
         scene.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
         let s = pdf_text(&scene);
         // The base transform of the content stream, for a page 40 pixels tall.
@@ -899,7 +899,7 @@ mod tests {
             stop(0.8, opaque(0, 255, 0)),
             stop(0.2, opaque(0, 0, 255)),
         ];
-        let style = gradient_fill(Gradient::linear(0.0, 0.0, 60.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops));
         scene.add_path(rect(style, 0.0, 0.0, 60.0, 10.0));
         let s = pdf_text(&scene);
         // The third stop moved up to the second, so both bounds are 0.8.

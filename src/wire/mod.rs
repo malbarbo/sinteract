@@ -198,8 +198,8 @@ mod tests {
     use crate::event_capnp::input_event;
     use crate::protocol_capnp::message;
     use crate::scene::{
-        Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, LineCap, LineJoin, Paint,
-        Path, PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
+        Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, LineCap, LineJoin, Paint, Path,
+        PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
         TextSpec,
     };
     use crate::scene_capnp::element;
@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn linear_gradient_paint_round_trips() {
         let mut scene = Scene::new(50.0, 50.0);
-        let gradient = Gradient::linear(
+        let gradient = Paint::linear(
             0.0,
             0.0,
             50.0,
@@ -781,7 +781,7 @@ mod tests {
         {
             let mut p = scene.path(
                 PathStyle {
-                    fill: Paint::gradient(gradient.clone()),
+                    fill: gradient.clone(),
                     ..PathStyle::default()
                 },
                 0.0,
@@ -796,7 +796,7 @@ mod tests {
                 let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
-                assert_eq!(p.style.fill, Paint::gradient(gradient));
+                assert_eq!(p.style.fill, gradient);
             }
             _ => panic!(),
         }
@@ -805,7 +805,7 @@ mod tests {
     #[test]
     fn radial_gradient_paint_round_trips() {
         let mut scene = Scene::new(50.0, 50.0);
-        let gradient = Gradient::radial(
+        let gradient = Paint::radial(
             25.0,
             25.0,
             20.0,
@@ -833,7 +833,7 @@ mod tests {
         {
             let mut p = scene.path(
                 PathStyle {
-                    fill: Paint::gradient(gradient.clone()),
+                    fill: gradient.clone(),
                     ..PathStyle::default()
                 },
                 0.0,
@@ -847,7 +847,7 @@ mod tests {
                 let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
-                assert_eq!(p.style.fill, Paint::gradient(gradient));
+                assert_eq!(p.style.fill, gradient);
             }
             _ => panic!(),
         }
@@ -856,7 +856,7 @@ mod tests {
     #[test]
     fn gradient_spread_mode_round_trips() {
         let mut scene = Scene::new(50.0, 50.0);
-        let linear = Gradient::linear(
+        let linear = Paint::linear(
             0.0,
             0.0,
             25.0,
@@ -886,7 +886,7 @@ mod tests {
         {
             let mut p = scene.path(
                 PathStyle {
-                    fill: Paint::gradient(linear.clone()),
+                    fill: linear.clone(),
                     ..PathStyle::default()
                 },
                 0.0,
@@ -894,7 +894,7 @@ mod tests {
             );
             p.line_to(50.0, 50.0);
         }
-        let radial = Gradient::radial(
+        let radial = Paint::radial(
             25.0,
             25.0,
             10.0,
@@ -918,7 +918,7 @@ mod tests {
         {
             let mut p = scene.path(
                 PathStyle {
-                    fill: Paint::gradient(radial.clone()),
+                    fill: radial.clone(),
                     ..PathStyle::default()
                 },
                 0.0,
@@ -932,11 +932,11 @@ mod tests {
                 let Element::Path(p0) = &d.elements()[0] else {
                     panic!();
                 };
-                assert_eq!(p0.style.fill, Paint::gradient(linear));
+                assert_eq!(p0.style.fill, linear);
                 let Element::Path(p1) = &d.elements()[1] else {
                     panic!();
                 };
-                assert_eq!(p1.style.fill, Paint::gradient(radial));
+                assert_eq!(p1.style.fill, radial);
             }
             _ => panic!(),
         }
@@ -1162,7 +1162,7 @@ mod tests {
             },
         ];
         let style = PathStyle {
-            fill: Paint::gradient(Gradient::linear(0.0, 0.0, 10.0, 0.0, stops)),
+            fill: Paint::linear(0.0, 0.0, 10.0, 0.0, stops),
             ..PathStyle::default()
         };
         let mut scene = Scene::new(10.0, 10.0);

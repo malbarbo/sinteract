@@ -753,7 +753,7 @@ mod tests {
     // Gradient + dash rendering
     // -----------------------------------------------------------------------
 
-    use crate::scene::{Gradient, Stop};
+    use crate::scene::Stop;
 
     #[test]
     fn rasterize_linear_gradient_left_to_right() {
@@ -761,7 +761,7 @@ mod tests {
         // right near white, and the middle a gray between them.
         let mut scene = Scene::new(40.0, 10.0);
         let style = PathStyle {
-            fill: Paint::gradient(Gradient::linear(
+            fill: Paint::linear(
                 0.0,
                 0.0,
                 40.0,
@@ -786,7 +786,7 @@ mod tests {
                         },
                     },
                 ],
-            )),
+            ),
             ..PathStyle::default()
         };
         scene.add_path(rect_path(style, 0.0, 0.0, 40.0, 10.0));
@@ -807,7 +807,7 @@ mod tests {
         // White at the center, transparent at the edge.
         let mut scene = Scene::new(40.0, 40.0);
         let style = PathStyle {
-            fill: Paint::gradient(Gradient::radial(
+            fill: Paint::radial(
                 20.0,
                 20.0,
                 20.0,
@@ -831,7 +831,7 @@ mod tests {
                         },
                     },
                 ],
-            )),
+            ),
             ..PathStyle::default()
         };
         scene.add_path(rect_path(style, 0.0, 0.0, 40.0, 40.0));
@@ -849,35 +849,33 @@ mod tests {
         // would clamp x=30 to white.
         let mut scene = Scene::new(80.0, 10.0);
         let style = PathStyle {
-            fill: Paint::gradient(
-                crate::scene::Gradient::linear(
-                    0.0,
-                    0.0,
-                    20.0,
-                    0.0,
-                    vec![
-                        crate::scene::Stop {
-                            offset: 0.0,
-                            color: Rgba {
-                                r: 0,
-                                g: 0,
-                                b: 0,
-                                a: 1.0,
-                            },
+            fill: crate::scene::Paint::linear(
+                0.0,
+                0.0,
+                20.0,
+                0.0,
+                vec![
+                    crate::scene::Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 1.0,
                         },
-                        crate::scene::Stop {
-                            offset: 1.0,
-                            color: Rgba {
-                                r: 255,
-                                g: 255,
-                                b: 255,
-                                a: 1.0,
-                            },
+                    },
+                    crate::scene::Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 1.0,
                         },
-                    ],
-                )
-                .with_spread(crate::scene::SpreadMode::Reflect),
-            ),
+                    },
+                ],
+            )
+            .with_spread(crate::scene::SpreadMode::Reflect),
             ..PathStyle::default()
         };
         scene.add_path(rect_path(style, 0.0, 0.0, 80.0, 10.0));

@@ -467,7 +467,7 @@ impl PathSink for PathBuilder {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, Gradient, PathStyle, Scene, Stop, TextSpec};
+    use crate::scene::{Dash, PathStyle, Scene, Stop, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -862,7 +862,7 @@ mod tests {
         };
         let stops = vec![stop(0.0, 10), stop(1.0, 200)];
         let style = PathStyle {
-            fill: Paint::gradient(Gradient::radial(10.0, 10.0, 0.0, stops)),
+            fill: Paint::radial(10.0, 10.0, 0.0, stops),
             ..PathStyle::default()
         };
         let mut scene = Scene::new(20.0, 20.0);
