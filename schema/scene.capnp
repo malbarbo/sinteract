@@ -68,6 +68,10 @@ enum FontStyle {
 # A gradient with no extent paints the color of its last stop, as in SVG. A
 # radius, or a distance between the ends of a line, of 2^-15 or less is no
 # extent, because below that a rasterizer cannot tell it from zero.
+#
+# At the other end, a line longer than a 32 bit float measures as infinite,
+# so a reader scales such a line about the origin until it measures. The
+# color under a path moves by less than a step of that float.
 
 struct Stop {
     offset @0 :Float32;

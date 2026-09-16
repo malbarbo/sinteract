@@ -57,7 +57,8 @@ pub struct Gradient {
 impl Gradient {
     /// The only constructor, which the wire decoder uses because it reads
     /// the three parts apart. It raises a stop that is below the one before
-    /// it, and clamps every offset to [0, 1], as SVG and Skia do.
+    /// it, and clamps every offset to [0, 1], as SVG and Skia do, and
+    /// shortens an axis too long to measure.
     pub(crate) fn new(geom: GradientGeom, mut stops: Vec<Stop>, spread: SpreadMode) -> Self {
         let mut prev = 0.0;
         for stop in &mut stops {
@@ -65,7 +66,7 @@ impl Gradient {
             prev = stop.offset;
         }
         Self {
-            geom,
+            geom: measurable(geom),
             stops,
             spread,
         }
@@ -81,6 +82,34 @@ impl Gradient {
 
     pub fn spread(&self) -> SpreadMode {
         self.spread
+    }
+}
+
+/// The geometry with a line a rasterizer can measure. A line longer than an
+/// f32 measures as infinite, and tiny-skia turns the gradient down and paints
+/// the first stop, where the svg and the pdf, which measure in wider floats,
+/// paint the ramp. Scaling the line about the origin brings the length back
+/// and moves the color under a path by the distance of the path from the
+/// origin over a length above 1e38, which is less than a step of an f32. A
+/// radius is one float and is already as long as one can be. A coordinate
+/// that is not finite leaves the length not finite, and the geometry goes
+/// through as it is, for an entry to drop the element.
+fn measurable(geom: GradientGeom) -> GradientGeom {
+    let GradientGeom::Linear { x0, y0, x1, y1 } = geom else {
+        return geom;
+    };
+    let length = (x1 as f64 - x0 as f64).hypot(y1 as f64 - y0 as f64);
+    if !(length > f32::MAX as f64 && length.is_finite()) {
+        return geom;
+    }
+    // Half of the longest an f32 measures, so the length still has room after
+    // the four products round.
+    let k = (0.5 * f32::MAX as f64 / length) as f32;
+    GradientGeom::Linear {
+        x0: x0 * k,
+        y0: y0 * k,
+        x1: x1 * k,
+        y1: y1 * k,
     }
 }
 
@@ -1726,6 +1755,35 @@ mod tests {
             Paint::radial(5.0, 5.0, 1.0, stops),
             Paint::Gradient(_)
         ));
+    }
+
+    #[test]
+    fn a_gradient_axis_too_long_to_measure_shrinks_about_the_origin() {
+        let stops = vec![Stop::default(), Stop::default()];
+        let axis = |p: Paint| match p {
+            Paint::Gradient(g) => match g.geom() {
+                GradientGeom::Linear { x0, y0, x1, y1 } => (x0, y0, x1, y1),
+                radial => panic!("expected a line, got {radial:?}"),
+            },
+            solid => panic!("expected a gradient, got {solid:?}"),
+        };
+        // A length a rasterizer can measure passes through as it is.
+        let short = (-1e38, 0.0, 1e38, 0.0);
+        assert_eq!(
+            axis(Paint::linear(
+                short.0,
+                short.1,
+                short.2,
+                short.3,
+                stops.clone()
+            )),
+            short
+        );
+        let (x0, y0, x1, y1) = axis(Paint::linear(-3e38, 0.0, 3e38, 0.0, stops));
+        assert!((x1 - x0).hypot(y1 - y0).is_finite(), "{x0} to {x1}");
+        // The ends keep their direction from the origin, so the color under a
+        // path near it stays where it was.
+        assert_eq!((y0, y1, x0 / x1), (0.0, 0.0, -1.0));
     }
 
     #[test]

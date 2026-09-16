@@ -330,12 +330,12 @@ fn sk_paint(shader: SkShader<'static>) -> SkPaint<'static> {
     }
 }
 
-/// A gradient with no stops and one with no extent are a solid color before
-/// they get here, so the one tiny-skia still turns down is the one whose
-/// ends lie so far apart that it measures the length as infinite. It falls
-/// back to the primary color, the first stop, so the path still draws. The
-/// svg and the pdf measure in wider floats and paint the color the ramp
-/// reaches over the path, which no paint could pick in advance.
+/// A gradient tiny-skia turns down falls back to the primary color, the first
+/// stop, so the path still draws. Nothing arrives here that it turns down: a
+/// gradient with no stops does not draw at all, one with no extent is a solid
+/// color before it gets here, a line too long to measure is shortened by the
+/// scene, and the transform is the identity. The fallback stands for a rule a
+/// later version adds.
 fn paint_to_shader(p: &Paint) -> SkShader<'static> {
     let g = match p {
         Paint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
@@ -909,5 +909,28 @@ mod tests {
         scene.add_path(rect(style, 0.0, 0.0, 20.0, 20.0));
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 10, 10), (0, 0, 200, 255));
+    }
+
+    #[test]
+    fn a_gradient_axis_too_long_to_measure_paints_its_ramp() {
+        let stop = |offset, b| Stop {
+            offset,
+            color: Rgba {
+                r: 0,
+                g: 0,
+                b,
+                a: 1.0,
+            },
+        };
+        let style = PathStyle {
+            fill: Paint::linear(-3e38, 0.0, 3e38, 0.0, vec![stop(0.0, 0), stop(1.0, 200)]),
+            ..PathStyle::default()
+        };
+        let mut scene = Scene::new(20.0, 20.0);
+        scene.add_path(rect(style, 0.0, 0.0, 20.0, 20.0));
+        let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
+        // The square sits at the middle of the axis, so it takes the middle
+        // of the ramp, which is where the svg and the pdf put it too.
+        assert_eq!(pixel_rgba(&pm, 10, 10), (0, 0, 100, 255));
     }
 }
