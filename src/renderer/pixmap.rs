@@ -427,10 +427,11 @@ fn within_reach(path: &SkPath, transform: Transform, pad: f32) -> bool {
 
 /// Returns `true` if `stroke` of `path` under `transform` stays within
 /// [`MAX_REACH`], `false` otherwise. A join or a cap reaches at most
-/// `miter_limit.max(1.0)` widths past the path, so that bound settles most
-/// strokes, and only a stroke past it is outlined to find where it reaches.
+/// `miter_limit` widths past the path, and the limit is never below 1, so
+/// that bound settles most strokes, and only a stroke past it is outlined to
+/// find where it reaches.
 fn stroke_within_reach(path: &SkPath, stroke: &Stroke, transform: Transform) -> bool {
-    within_reach(path, transform, stroke.width * stroke.miter_limit.max(1.0))
+    within_reach(path, transform, stroke.width * stroke.miter_limit)
         || path
             .stroke(stroke, PathStroker::compute_resolution_scale(&transform))
             .is_some_and(|outline| within_reach(&outline, transform, 0.0))
