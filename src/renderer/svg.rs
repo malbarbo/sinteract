@@ -246,7 +246,9 @@ impl Canvas for SvgRenderer {
     }
 
     /// The clip goes into `defs`, and the elements inside it go into a group
-    /// that references it. A nested group intersects the clips.
+    /// that references it. A nested group intersects the clips. A clip with
+    /// no segments writes an empty `d`, which covers nothing, so it hides
+    /// what it holds, as in the other backends.
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
         let id = self.clips;
         self.clips += 1;

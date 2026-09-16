@@ -117,6 +117,8 @@ impl Canvas for PixmapRenderer {
         if style.closed {
             builder.close();
         }
+        // A path with no segments builds nothing. The pdf and the svg test
+        // the segments before they write, and here the builder answers.
         let Some(sk_path) = builder.finish() else {
             return;
         };
@@ -132,6 +134,9 @@ impl Canvas for PixmapRenderer {
         }
         if do_stroke {
             let paint = sk_paint(paint_to_shader(&style.stroke));
+            // A Dash is even and not empty, holds no negative length, sums
+            // above zero and is finite, which is all StrokeDash asks for, so
+            // it never refuses. One that did would draw the stroke solid.
             let dash = style
                 .dash
                 .as_ref()
@@ -325,9 +330,12 @@ fn sk_paint(shader: SkShader<'static>) -> SkPaint<'static> {
     }
 }
 
-/// A gradient that tiny-skia rejects, such as one with no stops, falls back
-/// to the primary color, so the path still draws. One with no extent is a
-/// solid color before it gets here.
+/// A gradient with no stops and one with no extent are a solid color before
+/// they get here, so the one tiny-skia still turns down is the one whose
+/// ends lie so far apart that it measures the length as infinite. It falls
+/// back to the primary color, the first stop, so the path still draws. The
+/// svg and the pdf measure in wider floats and paint the color the ramp
+/// reaches over the path, which no paint could pick in advance.
 fn paint_to_shader(p: &Paint) -> SkShader<'static> {
     let g = match p {
         Paint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
