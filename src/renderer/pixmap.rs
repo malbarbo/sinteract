@@ -44,10 +44,8 @@ pub struct PixmapRenderer {
     /// The scale as a transform, applied to every path. The caller sets the
     /// scale once, and decides with it whether a frame may grow.
     base: Transform,
-    /// The mask of each clip in effect. `None` is a clip that hides what it
-    /// holds, because its path is empty, a clip around it hides what it
-    /// holds, or its mask could not be allocated.
-    clip_stack: Vec<Option<Mask>>,
+    /// What each clip in effect leaves of the canvas.
+    clip_stack: Vec<Clip>,
     /// Masks popped off `clip_stack`, for the next push. Every mask is
     /// canvas-sized, so any one fits.
     mask_pool: Vec<Mask>,
@@ -85,7 +83,8 @@ impl Canvas for PixmapRenderer {
         let (out_w, out_h) = out_size(width, height, self.base.sx);
         // A frame ends with an empty clip stack, and its masks serve the next
         // frame.
-        self.mask_pool.extend(self.clip_stack.drain(..).flatten());
+        self.mask_pool
+            .extend(self.clip_stack.drain(..).filter_map(Clip::into_mask));
         if (out_w, out_h) == (self.pixmap.width(), self.pixmap.height()) {
             self.pixmap.fill(SkColor::TRANSPARENT);
         } else {
@@ -108,8 +107,10 @@ impl Canvas for PixmapRenderer {
         if !do_fill && !do_stroke {
             return;
         }
-        let Some(mask) = mask_in_effect(&self.clip_stack) else {
-            return;
+        let mask = match in_effect(&self.clip_stack) {
+            InEffect::Nothing => return,
+            InEffect::Everything => None,
+            InEffect::Through(mask) => Some(mask),
         };
         let mut builder = std::mem::take(&mut self.builder);
         path.segments().outline(&mut builder);
@@ -154,18 +155,21 @@ impl Canvas for PixmapRenderer {
         if !node.draws_fill() && !node.draws_stroke() {
             return;
         }
-        if let Some(mask) = mask_in_effect(&self.clip_stack) {
-            render_text(node, &mut self.pixmap, mask, self.base, &mut self.builder);
-        }
+        let mask = match in_effect(&self.clip_stack) {
+            InEffect::Nothing => return,
+            InEffect::Everything => None,
+            InEffect::Through(mask) => Some(mask),
+        };
+        render_text(node, &mut self.pixmap, mask, self.base, &mut self.builder);
     }
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
-        let mask = self.clip_mask(clip);
-        self.clip_stack.push(mask);
+        let clip = self.clip_mask(clip);
+        self.clip_stack.push(clip);
         let guard = RestoreOnDrop {
             canvas: self,
             restore: |c: &mut Self| {
-                if let Some(Some(mask)) = c.clip_stack.pop() {
+                if let Some(Clip::Mask(mask)) = c.clip_stack.pop() {
                     c.mask_pool.push(mask);
                 }
             },
@@ -183,12 +187,11 @@ impl Renderer for PixmapRenderer {
 }
 
 impl PixmapRenderer {
-    /// The coverage of `clip` inside the clip in effect, or `None` when the
-    /// clip hides what it holds. A clip that gets no mask hides what it
-    /// holds, so nothing paints outside it.
-    fn clip_mask(&mut self, clip: &ClipPath) -> Option<Mask> {
-        if matches!(self.clip_stack.last(), Some(None)) {
-            return None;
+    /// The coverage of `clip` inside the clip in effect. A clip that gets no
+    /// mask hides what it holds, so nothing paints outside it.
+    fn clip_mask(&mut self, clip: &ClipPath) -> Clip {
+        if matches!(self.clip_stack.last(), Some(Clip::Hidden)) {
+            return Clip::Hidden;
         }
         let mut builder = std::mem::take(&mut self.builder);
         clip.segments().outline(&mut builder);
@@ -196,12 +199,14 @@ impl PixmapRenderer {
         // accepts a close on a closed contour.
         builder.close();
         // An empty path covers nothing.
-        let path = builder.finish()?;
+        let Some(path) = builder.finish() else {
+            return Clip::Hidden;
+        };
         // A clip that reaches too far hides what it holds.
         let reach = within_reach(&path, self.base, 0.0);
         let mask = reach.then(|| self.take_mask()).flatten().map(|mut mask| {
             mask.fill_path(&path, sk_fill_rule(clip.fill_rule), true, self.base);
-            if let Some(Some(parent)) = self.clip_stack.last() {
+            if let Some(Clip::Mask(parent)) = self.clip_stack.last() {
                 // Mask::intersect_path would rasterize into a second
                 // canvas-sized mask.
                 for (a, b) in mask.data_mut().iter_mut().zip(parent.data()) {
@@ -211,7 +216,7 @@ impl PixmapRenderer {
             mask
         });
         self.builder = path.clear();
-        mask
+        mask.map_or(Clip::Hidden, Clip::Mask)
     }
 
     /// A cleared canvas-sized mask, from the pool when one is there.
@@ -228,12 +233,39 @@ impl PixmapRenderer {
     }
 }
 
-/// The mask to paint through, `Some(None)` outside any clip, or `None`
-/// inside a clip that hides what it holds.
-fn mask_in_effect(clip_stack: &[Option<Mask>]) -> Option<Option<&Mask>> {
+/// What one clip leaves of the canvas.
+enum Clip {
+    /// The coverage that everything inside the clip paints through.
+    Mask(Mask),
+    /// Nothing paints, because the clip has no area, a clip around it hides
+    /// it, or its mask could not be allocated.
+    Hidden,
+}
+
+impl Clip {
+    /// The mask, for the pool.
+    fn into_mask(self) -> Option<Mask> {
+        match self {
+            Clip::Mask(mask) => Some(mask),
+            Clip::Hidden => None,
+        }
+    }
+}
+
+/// What the clips in effect leave for the next draw.
+enum InEffect<'a> {
+    Everything,
+    Through(&'a Mask),
+    Nothing,
+}
+
+/// Reads the stack alone, and not `&self`, so the caller still holds the
+/// pixmap and the builder while it paints through the mask.
+fn in_effect(clip_stack: &[Clip]) -> InEffect<'_> {
     match clip_stack.last() {
-        None => Some(None),
-        Some(mask) => mask.as_ref().map(Some),
+        None => InEffect::Everything,
+        Some(Clip::Mask(mask)) => InEffect::Through(mask),
+        Some(Clip::Hidden) => InEffect::Nothing,
     }
 }
 
