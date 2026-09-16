@@ -37,7 +37,7 @@ pub enum GradientGeom {
     Radial { cx: f32, cy: f32, radius: f32 },
 }
 
-/// A color ramp along an axis. The stops are sorted by offset. The fields
+/// A color ramp along an axis. The stops rise by offset, in [0, 1]. The fields
 /// are private, so a gradient reaches a [`Paint`] through
 /// [`Paint::gradient`], which resolves one with no extent.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,19 +49,19 @@ pub struct Gradient {
 
 impl Gradient {
     pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Self {
-        Self {
-            geom: GradientGeom::Linear { x0, y0, x1, y1 },
+        Self::new(
+            GradientGeom::Linear { x0, y0, x1, y1 },
             stops,
-            spread: SpreadMode::Pad,
-        }
+            SpreadMode::Pad,
+        )
     }
 
     pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Self {
-        Self {
-            geom: GradientGeom::Radial { cx, cy, radius },
+        Self::new(
+            GradientGeom::Radial { cx, cy, radius },
             stops,
-            spread: SpreadMode::Pad,
-        }
+            SpreadMode::Pad,
+        )
     }
 
     pub fn with_spread(mut self, spread: SpreadMode) -> Self {
@@ -69,8 +69,15 @@ impl Gradient {
         self
     }
 
-    /// For the wire decoder, which reads the three parts apart.
-    pub(crate) fn new(geom: GradientGeom, stops: Vec<Stop>, spread: SpreadMode) -> Self {
+    /// The only constructor, which the wire decoder uses because it reads
+    /// the three parts apart. It raises a stop that is below the one before
+    /// it, and clamps every offset to [0, 1], as SVG and Skia do.
+    pub(crate) fn new(geom: GradientGeom, mut stops: Vec<Stop>, spread: SpreadMode) -> Self {
+        let mut prev = 0.0;
+        for stop in &mut stops {
+            stop.offset = stop.offset.clamp(prev, 1.0);
+            prev = stop.offset;
+        }
         Self {
             geom,
             stops,
@@ -1665,5 +1672,28 @@ mod tests {
         }
         let ramp = Gradient::radial(5.0, 5.0, 1.0, stops);
         assert!(matches!(Paint::gradient(ramp), Paint::Gradient(_)));
+    }
+
+    #[test]
+    fn a_stop_before_the_one_before_it_moves_up_to_it() {
+        let stop = |offset| Stop {
+            offset,
+            color: Rgba::default(),
+        };
+        let offsets = |g: Gradient| g.stops().iter().map(|s| s.offset).collect::<Vec<_>>();
+        let out_of_order = vec![stop(0.8), stop(0.2), stop(1.0)];
+        assert_eq!(
+            offsets(Gradient::radial(0.0, 0.0, 5.0, out_of_order.clone())),
+            [0.8, 0.8, 1.0]
+        );
+        assert_eq!(
+            offsets(Gradient::linear(0.0, 0.0, 5.0, 5.0, out_of_order)),
+            [0.8, 0.8, 1.0]
+        );
+        let out_of_range = vec![stop(-0.5), stop(0.5), stop(2.0)];
+        assert_eq!(
+            offsets(Gradient::linear(0.0, 0.0, 5.0, 5.0, out_of_range)),
+            [0.0, 0.5, 1.0]
+        );
     }
 }

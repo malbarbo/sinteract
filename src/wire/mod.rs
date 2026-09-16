@@ -1147,4 +1147,40 @@ mod tests {
         assert_eq!(elements.len(), 1, "{elements:?}");
         assert_eq!(p.segments().next(), Some(Segment::Move { x: 9.0, y: 9.0 }));
     }
+
+    #[test]
+    fn a_decoded_stop_moves_up_to_the_one_before_it() {
+        // The second stop becomes 0.125 on the wire, before the first.
+        let stops = vec![
+            Stop {
+                offset: 0.25,
+                color: Rgba::default(),
+            },
+            Stop {
+                offset: 0.75,
+                color: Rgba::default(),
+            },
+        ];
+        let style = PathStyle {
+            fill: Paint::gradient(Gradient::linear(0.0, 0.0, 10.0, 0.0, stops)),
+            ..PathStyle::default()
+        };
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.add_path(Path::builder(style, 0.0, 0.0).line_to(10.0, 10.0).build());
+        let bytes = with_float(&encode_frame(&scene), 0.75, 0.125);
+
+        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Path(p)] = d.elements() else {
+            panic!("expected one Path, got {:?}", d.elements());
+        };
+        let Paint::Gradient(g) = &p.style.fill else {
+            panic!("expected a gradient, got {:?}", p.style.fill);
+        };
+        assert_eq!(
+            g.stops().iter().map(|s| s.offset).collect::<Vec<_>>(),
+            [0.25, 0.25]
+        );
+    }
 }

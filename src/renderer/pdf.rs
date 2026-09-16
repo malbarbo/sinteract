@@ -495,29 +495,17 @@ fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32,
 /// A gradient of the frame, with the stops that its functions take.
 struct Shading {
     geom: GradientGeom,
-    /// Sorted and padded by [`Shading::new`].
+    /// Padded by [`Shading::new`].
     stops: Vec<Stop>,
 }
 
 impl Shading {
-    /// `g` with its stops sorted, clamped to [0, 1], and padded so there are
-    /// at least two, the first at 0 and the last at 1. The pad repeats the
-    /// boundary color, as in CSS. No stops give two transparent ones, a case
-    /// the visibility check already excludes.
+    /// `g` with its stops padded so there are at least two, the first at 0
+    /// and the last at 1. The pad repeats the boundary color, as in CSS. A
+    /// [`Gradient`] already raises and clamps its offsets. No stops give two
+    /// transparent ones, a case the visibility check already excludes.
     fn new(g: &Gradient) -> Self {
-        let mut stops: Vec<Stop> = g
-            .stops()
-            .iter()
-            .map(|s| Stop {
-                offset: s.offset.clamp(0.0, 1.0),
-                color: s.color,
-            })
-            .collect();
-        stops.sort_by(|a, b| {
-            a.offset
-                .partial_cmp(&b.offset)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let mut stops: Vec<Stop> = g.stops().to_vec();
         if stops.len() <= 1 {
             let color = stops.first().map_or(Rgba::default(), |s| s.color);
             stops = vec![Stop { offset: 0.0, color }, Stop { offset: 1.0, color }];
@@ -901,5 +889,20 @@ mod tests {
         scene.text(text("   ", 12.0));
         let s = pdf_text(&scene);
         assert!(!s.lines().any(|l| l == "f"), "{s}");
+    }
+
+    #[test]
+    fn a_gradient_keeps_the_order_of_its_stops() {
+        let mut scene = Scene::new(60.0, 10.0);
+        let stops = vec![
+            stop(0.0, opaque(255, 0, 0)),
+            stop(0.8, opaque(0, 255, 0)),
+            stop(0.2, opaque(0, 0, 255)),
+        ];
+        let style = gradient_fill(Gradient::linear(0.0, 0.0, 60.0, 0.0, stops));
+        scene.add_path(rect(style, 0.0, 0.0, 60.0, 10.0));
+        let s = pdf_text(&scene);
+        // The third stop moved up to the second, so both bounds are 0.8.
+        assert!(s.contains("/Bounds [0.8 0.8]"), "bounds missing: {s}");
     }
 }
