@@ -5,7 +5,7 @@ use capnp::serialize;
 
 use crate::protocol_capnp::message;
 use crate::renderer::sealed::Canvas;
-use crate::scene::{Path, finite_size};
+use crate::scene::{Path, frame_size};
 use crate::scene_capnp::element;
 
 use crate::renderer::AllocError;
@@ -82,8 +82,8 @@ pub(crate) fn stream_frame<P: Canvas, R: std::io::Read>(
         message::Frame(f) => {
             let frame = f?;
             paint.ensure_size(
-                finite_size(frame.get_width()),
-                finite_size(frame.get_height()),
+                frame_size(frame.get_width()),
+                frame_size(frame.get_height()),
             )?;
             if frame.has_elements() {
                 let mut scratch = Path::default();

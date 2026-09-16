@@ -868,11 +868,13 @@ pub struct Scene {
 const ARC_TOLERANCE: f64 = 0.1;
 
 impl Scene {
-    /// A scene of `width` by `height`. A size that is not finite is 0.
+    /// A scene of `width` by `height`. A size that describes no frame, which
+    /// is one that is not finite or is negative, is 0. A scene of no width or
+    /// no height is empty, as the empty image of a producer is.
     pub fn new(width: f32, height: f32) -> Self {
         Self {
-            width: finite_size(width),
-            height: finite_size(height),
+            width: frame_size(width),
+            height: frame_size(height),
             elements: Vec::new(),
         }
     }
@@ -960,10 +962,15 @@ impl Scene {
     }
 }
 
-/// A width or a height of a scene, with one that is not finite as 0. The
+/// A width or a height of a frame. A size that describes no frame, which is
+/// one that is not finite or is not above zero, is 0, the empty frame. The
 /// stream, which sizes a frame without a [`Scene`], applies it too.
-pub(crate) fn finite_size(size: f32) -> f32 {
-    if size.is_finite() { size } else { 0.0 }
+pub(crate) fn frame_size(size: f32) -> f32 {
+    if size.is_finite() && size > 0.0 {
+        size
+    } else {
+        0.0
+    }
 }
 
 /// The path under construction by [`Scene::path`]. The geometry methods take
@@ -1744,5 +1751,25 @@ mod tests {
             })
             .collect();
         assert_eq!(limits, [1.0, 1.0, 8.0]);
+    }
+
+    #[test]
+    fn a_size_that_describes_no_frame_is_zero() {
+        for (width, height) in [
+            (-5.0, 10.0),
+            (10.0, f32::NEG_INFINITY),
+            (f32::NAN, -0.0),
+            (f32::INFINITY, 10.0),
+        ] {
+            let scene = Scene::new(width, height);
+            assert!(
+                scene.width() >= 0.0 && scene.height() >= 0.0,
+                "{width} by {height} gave {} by {}",
+                scene.width(),
+                scene.height()
+            );
+        }
+        let scene = Scene::new(0.5, 10.0);
+        assert_eq!((scene.width(), scene.height()), (0.5, 10.0));
     }
 }

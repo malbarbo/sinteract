@@ -227,7 +227,8 @@ struct Clipped {
     elements @1 :List(Element);
 }
 
-# A width or a height that is not finite is 0.
+# A width or a height that describes no frame, which is one that is not
+# finite or is negative, is 0. A frame of no width or no height is empty.
 struct Scene {
     width    @0 :Float32;
     height   @1 :Float32;
