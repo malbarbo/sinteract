@@ -119,13 +119,17 @@ impl Paint {
     }
 
     /// A gradient paint, or the solid color of the last stop for a gradient
-    /// with no extent, which is a radius that is not positive or a line
-    /// whose ends meet. SVG paints the last stop for those, and tiny-skia
-    /// and the pdf disagreed with it and with each other.
+    /// with no extent, which is a radius, or a distance between the ends of
+    /// a line, of 2^-15 or less. SVG paints the last stop for those, and
+    /// tiny-skia and the pdf disagreed with it and with each other.
     pub fn gradient(g: Gradient) -> Self {
+        // The threshold of tiny-skia, which cannot tell a gradient below it
+        // from one of no extent at all, so the scene decides here and the
+        // three backends agree.
+        const NO_EXTENT: f32 = 1.0 / (1 << 15) as f32;
         let no_extent = match g.geom {
-            GradientGeom::Linear { x0, y0, x1, y1 } => x0 == x1 && y0 == y1,
-            GradientGeom::Radial { radius, .. } => radius <= 0.0,
+            GradientGeom::Linear { x0, y0, x1, y1 } => (x1 - x0).hypot(y1 - y0) <= NO_EXTENT,
+            GradientGeom::Radial { radius, .. } => radius <= NO_EXTENT,
         };
         match g.stops.last() {
             Some(last) if no_extent => Self::Solid(last.color),
@@ -1672,6 +1676,18 @@ mod tests {
                 x0: 5.0,
                 y0: 5.0,
                 x1: 5.0,
+                y1: 5.0,
+            },
+            // Below the threshold of a rasterizer, so it has no extent too.
+            GradientGeom::Radial {
+                cx: 5.0,
+                cy: 5.0,
+                radius: 1e-6,
+            },
+            GradientGeom::Linear {
+                x0: 5.0,
+                y0: 5.0,
+                x1: 5.000001,
                 y1: 5.0,
             },
         ] {

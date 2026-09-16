@@ -65,8 +65,9 @@ enum FontStyle {
 # and clamps every offset to that range, as SVG and Skia do. A renderer
 # without gradients uses the color of the first stop.
 #
-# A gradient with no extent, which is a radius that is not positive or a
-# line whose ends meet, paints the color of its last stop, as in SVG.
+# A gradient with no extent paints the color of its last stop, as in SVG. A
+# radius, or a distance between the ends of a line, of 2^-15 or less is no
+# extent, because below that a rasterizer cannot tell it from zero.
 
 struct Stop {
     offset @0 :Float32;
