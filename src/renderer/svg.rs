@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::fmt::{self, Write};
 
 use crate::outline::PathSink;
-use crate::renderer::{AllocError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, sealed::Canvas};
+use crate::renderer::{
+    AllocError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
+};
 use crate::scene::{
     ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint,
     Path, Rgba, SpreadMode, Text,
@@ -99,8 +101,8 @@ impl Canvas for SvgRenderer {
     /// Starts a new document. Nothing here allocates a surface, so it never
     /// fails.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
-        self.width = width.max(1.0);
-        self.height = height.max(1.0);
+        self.width = frame_side(width);
+        self.height = frame_side(height);
         self.defs.clear();
         self.body.clear();
         self.glyphs.clear();

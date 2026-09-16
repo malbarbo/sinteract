@@ -17,7 +17,7 @@ use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::outline::PathSink;
-use crate::renderer::{AllocError, Renderer, RestoreOnDrop, sealed::Canvas};
+use crate::renderer::{AllocError, Renderer, RestoreOnDrop, frame_side, sealed::Canvas};
 use crate::scene::{
     ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Stop, Text,
 };
@@ -74,8 +74,8 @@ impl Canvas for PdfRenderer {
     /// Starts a new page and writes the base transform. Nothing here
     /// allocates a surface, so it never fails.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
-        self.width = width.max(1.0);
-        self.height = height.max(1.0);
+        self.width = frame_side(width);
+        self.height = frame_side(height);
         self.gstates.clear();
         self.gradients.clear();
         // The last document holds the last content stream, so its size is a

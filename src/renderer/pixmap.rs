@@ -10,7 +10,9 @@ use tiny_skia::{
 };
 
 use crate::outline::PathSink;
-use crate::renderer::{AllocError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, sealed::Canvas};
+use crate::renderer::{
+    AllocError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
+};
 use crate::scene::{
     ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, SpreadMode, Stop, Text,
 };
@@ -242,16 +244,20 @@ fn mask_mul(a: u8, b: u8) -> u8 {
     ((prod + (prod >> 8)) >> 8) as u8
 }
 
-/// A frame's size in whole output pixels.
-fn frame_px(width: f32, height: f32) -> (u32, u32) {
-    (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32)
+/// A frame's size in whole output pixels. The window asks for it too, to
+/// size itself for a scene.
+pub(crate) fn frame_px(width: f32, height: f32) -> (u32, u32) {
+    (
+        frame_side(width.ceil()) as u32,
+        frame_side(height.ceil()) as u32,
+    )
 }
 
 /// The size in output pixels of a frame at `scale`.
 fn out_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
     let (w, h) = frame_px(width, height);
-    let out_w = ((w as f32) * scale).ceil().max(1.0) as u32;
-    let out_h = ((h as f32) * scale).ceil().max(1.0) as u32;
+    let out_w = frame_side(((w as f32) * scale).ceil()) as u32;
+    let out_h = frame_side(((h as f32) * scale).ceil()) as u32;
     (out_w, out_h)
 }
 

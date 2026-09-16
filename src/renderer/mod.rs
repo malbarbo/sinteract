@@ -131,6 +131,14 @@ pub(crate) mod sealed {
 /// the pdf backend leaves unset.
 pub(crate) const TEXT_MITER_LIMIT: f32 = 10.0;
 
+/// A side of a frame in the units a backend draws in, never below 1. A
+/// surface of no pixels, a page of no points and a viewBox of no width take
+/// no drawing, so the empty frame, which is one of no width or no height,
+/// still gets one unit.
+pub(crate) fn frame_side(size: f32) -> f32 {
+    size.max(1.0)
+}
+
 /// Runs `restore` on `canvas` when dropped, so the `with_clip` of a backend
 /// undoes its clip even when `inside` unwinds.
 pub(crate) struct RestoreOnDrop<'a, C> {

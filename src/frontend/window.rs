@@ -266,10 +266,7 @@ pub fn closed() -> bool {
 /// or a DPI change applies to this frame, and opens the window on the first
 /// call.
 pub fn show_image(scene: &crate::scene::Scene) {
-    let dl_size = (
-        scene.width().ceil().max(1.0) as u32,
-        scene.height().ceil().max(1.0) as u32,
-    );
+    let dl_size = crate::renderer::pixmap::frame_px(scene.width(), scene.height());
     STATE.with(|cell| {
         if let Some(state) = cell.borrow_mut().as_mut()
             && state.app.pending_size.is_none()
