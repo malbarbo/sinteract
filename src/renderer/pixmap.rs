@@ -82,6 +82,13 @@ impl PixmapRenderer {
     }
 }
 
+impl Default for PixmapRenderer {
+    /// A surface at scale 1.0 that takes its size at the first render.
+    fn default() -> Self {
+        Self::new(1.0, 1.0, 1.0).expect("a 1x1 pixmap always allocates")
+    }
+}
+
 impl Canvas for PixmapRenderer {
     /// Clears the surface, and reallocates it when the scaled size changed.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
