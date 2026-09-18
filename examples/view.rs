@@ -85,6 +85,10 @@ fn main() -> ExitCode {
         }
     }
     drop(to_engine);
+    // The reader thread may wait on a full channel. Without the receiver
+    // its send fails and it lets go of the pipe, so an engine that still
+    // writes gets an error instead of blocking, and `child.wait` returns.
+    drop(from_reader);
     fr.close();
     drop(fr);
     let _ = child.wait();
