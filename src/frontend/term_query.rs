@@ -25,11 +25,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
-const KITTY_QUERY_ID: &str = "31";
 
-fn build_query() -> String {
-    format!("\x1b_Gi={KITTY_QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c\x1b[16t\x1b[6n")
-}
+/// The Kitty query, DA1, `CSI 16 t` and CPR, in the order of the module doc.
+const QUERY: &str = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c\x1b[16t\x1b[6n";
+
+/// The reply of a terminal that speaks Kitty to the query of id 31.
+const KITTY_OK: &[u8] = b"\x1b_Gi=31;OK";
 
 #[derive(Default, Copy, Clone)]
 pub struct GraphicsCaps {
@@ -63,95 +64,60 @@ fn probe() -> GraphicsCaps {
 }
 
 // -----------------------------------------------------------------------------
-// Parsers, shared by both platforms.
+// The replies, shared by both platforms.
 // -----------------------------------------------------------------------------
 
-/// Returns `true` if `buf` holds a Cursor Position Report, ESC `[` digits
-/// `;` digits `R`, `false` otherwise.
-fn has_cpr_response(buf: &[u8]) -> bool {
-    let mut i = 0;
-    while i + 1 < buf.len() {
-        if buf[i] == 0x1b && buf[i + 1] == b'[' {
-            let mut j = i + 2;
-            while j < buf.len() {
-                let b = buf[j];
-                if b == b'R' {
-                    return true;
-                }
-                // A final byte (0x40..=0x7E) other than R ends another sequence.
-                if !(b.is_ascii_digit() || b == b';' || b == b':') && (0x40..=0x7E).contains(&b) {
-                    break;
-                }
-                j += 1;
-            }
-        }
-        i += 1;
-    }
-    false
+/// What the terminal answered so far.
+#[derive(Default)]
+struct Replies {
+    parser: vte::Parser,
+    /// Every byte, for the Kitty reply. vte drops an APC string unseen.
+    bytes: Vec<u8>,
+    found: Found,
 }
 
-/// Returns `true` if `buf` holds `\x1b_Gi=<id>;OK`, `false` otherwise.
-fn parse_kitty_ok(buf: &[u8]) -> bool {
-    let needle = format!("\x1b_Gi={KITTY_QUERY_ID};OK");
-    buf.windows(needle.len()).any(|w| w == needle.as_bytes())
+impl Replies {
+    /// Take `chunk`. Returns `true` if the terminal is done answering, at
+    /// the CPR reply or once too many bytes came, `false` otherwise.
+    fn feed(&mut self, chunk: &[u8]) -> bool {
+        self.bytes.extend_from_slice(chunk);
+        self.parser.advance(&mut self.found, chunk);
+        self.found.cpr || self.bytes.len() > 4096
+    }
+
+    fn caps(&self) -> GraphicsCaps {
+        GraphicsCaps {
+            kitty: self.bytes.windows(KITTY_OK.len()).any(|w| w == KITTY_OK),
+            sixel: self.found.sixel,
+            cell_px: self.found.cell_px,
+        }
+    }
 }
 
-/// Parse the `CSI 16 t` reply, `\x1b[6;<height>;<width>t`, into
-/// `(width, height)` pixels per cell.
-fn parse_cell_pixels(buf: &[u8]) -> Option<(u32, u32)> {
-    let mut i = 0;
-    while i + 4 < buf.len() {
-        if buf[i] == 0x1b && buf[i + 1] == b'[' && buf[i + 2] == b'6' && buf[i + 3] == b';' {
-            let mut j = i + 4;
-            while j < buf.len() && buf[j] != b't' {
-                j += 1;
-            }
-            if j < buf.len() {
-                let body = &buf[i + 4..j];
-                let parts: Vec<&[u8]> = body.split(|&b| b == b';').collect();
-                if parts.len() == 2
-                    && let (Ok(hs), Ok(ws)) =
-                        (std::str::from_utf8(parts[0]), std::str::from_utf8(parts[1]))
-                    && let (Ok(h), Ok(w)) = (hs.trim().parse::<u32>(), ws.trim().parse::<u32>())
-                    && w > 0
-                    && h > 0
-                {
-                    return Some((w, h));
-                }
-                i = j + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    None
+/// The CSI replies.
+#[derive(Default)]
+struct Found {
+    sixel: bool,
+    cell_px: Option<(u32, u32)>,
+    cpr: bool,
 }
 
-/// Returns `true` if the DA1 reply `\x1b[?<list>c` lists `4`, the Sixel
-/// attribute, `false` otherwise.
-fn parse_da1_has_sixel(buf: &[u8]) -> bool {
-    let mut i = 0;
-    while i + 2 < buf.len() {
-        if buf[i] == 0x1b && buf[i + 1] == b'[' && buf[i + 2] == b'?' {
-            let mut j = i + 3;
-            while j < buf.len() && buf[j] != b'c' {
-                j += 1;
+impl vte::Perform for Found {
+    fn csi_dispatch(&mut self, params: &vte::Params, intermediates: &[u8], _: bool, action: char) {
+        let params: Vec<u16> = params.iter().map(|p| p[0]).collect();
+        match (intermediates, action, params.as_slice()) {
+            // CPR, `CSI row ; col R`.
+            ([], 'R', [_, _]) => self.cpr = true,
+            // DA1, `CSI ? attr ; ... c`, where 4 means Sixel.
+            ([b'?'], 'c', attrs) => self.sixel |= attrs.contains(&4),
+            // `CSI 6 ; height ; width t`. A terminal that does not know
+            // the size of a cell answers 0.
+            ([], 't', &[6, h, w]) if h > 0 && w > 0 => {
+                self.cell_px = Some((u32::from(w), u32::from(h)));
             }
-            if j < buf.len() {
-                let params = &buf[i + 3..j];
-                if params
-                    .split(|&b| b == b';')
-                    .any(|tok| std::str::from_utf8(tok).is_ok_and(|s| s.trim() == "4"))
-                {
-                    return true;
-                }
-                i = j + 1;
-                continue;
-            }
+            _ => {}
         }
-        i += 1;
     }
-    false
 }
 
 // -----------------------------------------------------------------------------
@@ -201,16 +167,15 @@ mod unix_impl {
     }
 
     fn probe_with_raw(tty: &std::fs::File, fd: RawFd) -> GraphicsCaps {
-        let query = build_query();
         let mut writer = match tty.try_clone() {
             Ok(w) => w,
             Err(_) => return GraphicsCaps::default(),
         };
-        if writer.write_all(query.as_bytes()).is_err() || writer.flush().is_err() {
+        if writer.write_all(QUERY.as_bytes()).is_err() || writer.flush().is_err() {
             return GraphicsCaps::default();
         }
 
-        let mut buf: Vec<u8> = Vec::with_capacity(256);
+        let mut replies = Replies::default();
         let deadline = Instant::now() + QUERY_TIMEOUT;
         loop {
             let now = Instant::now();
@@ -226,17 +191,11 @@ mod unix_impl {
             if n <= 0 {
                 break;
             }
-            buf.extend_from_slice(&chunk[..n as usize]);
-            if has_cpr_response(&buf) || buf.len() > 4096 {
+            if replies.feed(&chunk[..n as usize]) {
                 break;
             }
         }
-
-        GraphicsCaps {
-            kitty: parse_kitty_ok(&buf),
-            sixel: parse_da1_has_sixel(&buf),
-            cell_px: parse_cell_pixels(&buf),
-        }
+        replies.caps()
     }
 
     fn poll_readable(fd: RawFd, timeout_ms: i32) -> bool {
@@ -376,8 +335,7 @@ mod windows_impl {
             return GraphicsCaps::default();
         }
 
-        let query = build_query();
-        let bytes = query.as_bytes();
+        let bytes = QUERY.as_bytes();
         let mut written: u32 = 0;
         let ok = unsafe {
             WriteFile(
@@ -392,7 +350,7 @@ mod windows_impl {
             return GraphicsCaps::default();
         }
 
-        let mut buf: Vec<u8> = Vec::with_capacity(256);
+        let mut replies = Replies::default();
         let deadline = Instant::now() + QUERY_TIMEOUT;
         loop {
             let now = Instant::now();
@@ -418,92 +376,102 @@ mod windows_impl {
             if r == 0 || read == 0 {
                 break;
             }
-            buf.extend_from_slice(&chunk[..read as usize]);
-            if has_cpr_response(&buf) || buf.len() > 4096 {
+            if replies.feed(&chunk[..read as usize]) {
                 break;
             }
         }
-
-        GraphicsCaps {
-            kitty: parse_kitty_ok(&buf),
-            sixel: parse_da1_has_sixel(&buf),
-            cell_px: parse_cell_pixels(&buf),
-        }
+        replies.caps()
     }
 }
 
 // -----------------------------------------------------------------------------
-// Tests cover the parsers. The I/O needs a real tty.
+// Tests cover the replies. The I/O needs a real tty.
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn replies(bytes: &[u8]) -> Replies {
+        let mut r = Replies::default();
+        r.feed(bytes);
+        r
+    }
+
     #[test]
     fn kitty_ok_in_buffer() {
-        let buf = b"junk\x1b_Gi=31;OK\x1b\\more";
-        assert!(parse_kitty_ok(buf));
+        assert!(replies(b"junk\x1b_Gi=31;OK\x1b\\more").caps().kitty);
     }
 
     #[test]
     fn kitty_enotsupported_is_not_ok() {
-        let buf = b"\x1b_Gi=31;ENOTSUPPORTED:no graphics\x1b\\";
-        assert!(!parse_kitty_ok(buf));
+        let r = replies(b"\x1b_Gi=31;ENOTSUPPORTED:no graphics\x1b\\");
+        assert!(!r.caps().kitty);
     }
 
     #[test]
     fn kitty_wrong_id_is_not_ok() {
-        let buf = b"\x1b_Gi=99;OK\x1b\\";
-        assert!(!parse_kitty_ok(buf));
+        assert!(!replies(b"\x1b_Gi=99;OK\x1b\\").caps().kitty);
     }
 
     #[test]
     fn da1_with_sixel_attr_detected() {
-        let buf = b"\x1b[?62;1;4;6;9;15;22c";
-        assert!(parse_da1_has_sixel(buf));
+        assert!(replies(b"\x1b[?62;1;4;6;9;15;22c").caps().sixel);
     }
 
     #[test]
     fn da1_without_sixel_attr() {
-        let buf = b"\x1b[?62;1;6;9;15c";
-        assert!(!parse_da1_has_sixel(buf));
+        assert!(!replies(b"\x1b[?62;1;6;9;15c").caps().sixel);
     }
 
     #[test]
     fn da1_must_match_token_not_substring() {
         // Attribute 14 (NRCS) must not match 4.
-        let buf = b"\x1b[?62;14;22c";
-        assert!(!parse_da1_has_sixel(buf));
+        assert!(!replies(b"\x1b[?62;14;22c").caps().sixel);
     }
 
     #[test]
-    fn cpr_response_recognized() {
-        assert!(has_cpr_response(b"\x1b[12;34R"));
+    fn cpr_ends_the_replies() {
+        assert!(Replies::default().feed(b"\x1b[12;34R"));
     }
 
     #[test]
     fn cpr_not_in_other_csi() {
-        assert!(!has_cpr_response(b"\x1b[?62;1;4c"));
+        assert!(!Replies::default().feed(b"\x1b[?62;1;4c"));
+    }
+
+    #[test]
+    fn a_reply_split_across_chunks_parses() {
+        let mut r = Replies::default();
+        assert!(!r.feed(b"\x1b[6;2"));
+        assert!(!r.feed(b"8;14t\x1b[12;"));
+        assert!(r.feed(b"34R"));
+        assert_eq!(r.caps().cell_px, Some((14, 28)));
     }
 
     #[test]
     fn cell_pixels_parses_csi16t_response() {
         // Ghostty and xterm reply ESC [ 6 ; height ; width t.
-        let buf = b"junk\x1b[6;28;14tmore";
-        assert_eq!(parse_cell_pixels(buf), Some((14, 28)));
+        let r = replies(b"junk\x1b[6;28;14tmore");
+        assert_eq!(r.caps().cell_px, Some((14, 28)));
     }
 
     #[test]
     fn cell_pixels_returns_none_when_absent() {
-        let buf = b"\x1b[?62;1;4c\x1b[12;34R";
-        assert_eq!(parse_cell_pixels(buf), None);
+        let r = replies(b"\x1b[?62;1;4c\x1b[12;34R");
+        assert_eq!(r.caps().cell_px, None);
+    }
+
+    #[test]
+    fn a_cpr_on_row_six_is_not_a_cell_size() {
+        let r = replies(b"\x1b[6;12R");
+        assert!(r.found.cpr);
+        assert_eq!(r.caps().cell_px, None);
     }
 
     #[test]
     fn cell_pixels_skips_zero_dimensions() {
         // A terminal that does not know the cell size replies 0.
-        let buf = b"\x1b[6;0;0t";
-        assert_eq!(parse_cell_pixels(buf), None);
+        assert_eq!(replies(b"\x1b[6;0;0t").caps().cell_px, None);
     }
 }
