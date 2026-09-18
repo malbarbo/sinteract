@@ -45,7 +45,8 @@ pub trait Frontend: sealed::Sealed {
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;
 
-    /// Upload a bitmap for `Bitmap.id`.
+    /// Upload a bitmap for `Bitmap.id`. A frontend that draws without
+    /// bitmaps drops it.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>);
 
     /// End the session. A second call does nothing, and drop calls it.
@@ -76,10 +77,12 @@ pub fn open_native(
 /// Why a frontend did not open.
 #[derive(Debug)]
 pub enum OpenError {
-    /// Another session holds the terminal, or another window the event loop.
+    /// Another session holds the resource of the process: the terminal, the
+    /// event loop of the windows or stdin.
     Busy,
     /// The terminal shows neither Kitty, Sixel nor truecolor.
     NoGraphics,
+    /// A read or a write failed, or a thread did not start.
     Io(io::Error),
     /// The platform has no window for us.
     Platform(String),
@@ -94,7 +97,7 @@ impl fmt::Display for OpenError {
                  a Sixel terminal (Windows Terminal 1.22 or later, mlterm, foot, mintty) \
                  or a truecolor terminal (set COLORTERM=truecolor)",
             ),
-            OpenError::Io(e) => write!(f, "cannot set the terminal up: {e}"),
+            OpenError::Io(e) => write!(f, "cannot open the frontend: {e}"),
             OpenError::Platform(e) => write!(f, "cannot open a window: {e}"),
         }
     }

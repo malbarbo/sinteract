@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Instant;
 
+use super::driver::OpenError;
 use super::inbox::{Inbox, Sender};
 use crate::event::{Event, InputEvent};
 use crate::scene::Scene;
@@ -44,16 +45,14 @@ impl Stdio {
     /// binary, so the host must not write text to stdout. A host rebinds
     /// stdout to stderr for its other output.
     ///
-    /// Fails if a `Stdio` over stdin already exists in the process, or if
-    /// the reader thread does not start.
-    pub fn new() -> io::Result<Self> {
+    /// Fails with [`OpenError::Busy`] if a `Stdio` over stdin already
+    /// exists in the process, and with [`OpenError::Io`] if the reader
+    /// thread does not start.
+    pub fn new() -> Result<Self, OpenError> {
         if STDIN_CLAIMED.swap(true, Ordering::AcqRel) {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "stdin already carries a Stdio frontend",
-            ));
+            return Err(OpenError::Busy);
         }
-        Self::with_streams(BufReader::new(io::stdin()), io::stdout())
+        Self::with_streams(BufReader::new(io::stdin()), io::stdout()).map_err(OpenError::Io)
     }
 
     /// Talk over `reader` and `writer`, as a test does.
