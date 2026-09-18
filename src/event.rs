@@ -1,15 +1,16 @@
-//! The input events a [`crate::frontend::Frontend`] delivers.
+//! The events a [`crate::frontend::Frontend`] delivers.
 //!
 //! Every frontend turns its input into the same [`InputEvent`] stream, and
 //! the host loop blocks on `wait_event` and dispatches:
 //!
 //! ```text
-//! while let Some(ev) = frontend.wait_event(deadline) {
-//!     match ev {
-//!         InputEvent::Vsync          => on_frame(),
-//!         InputEvent::Key(KeyEvent { kind: KeyKind::Press, .. }) => ...,
-//!         InputEvent::Close          => break,
-//!         _ => {}
+//! loop {
+//!     match frontend.wait_event(deadline) {
+//!         Event::Input(InputEvent::Vsync) => on_frame(),
+//!         Event::Input(InputEvent::Key(k)) => on_key(k),
+//!         Event::Input(InputEvent::Close) => break,
+//!         Event::Reply { id, body } => on_reply(id, body),
+//!         Event::Timeout => on_tick(),
 //!     }
 //! }
 //! ```
@@ -17,6 +18,18 @@
 //! The frontend decides when a `Vsync` arrives, with a timer in the
 //! terminal, the swap chain in the window, rAF in the browser and the peer
 //! on stdio. The host derives a simulation tick from the time between two.
+
+/// What `wait_event` returns.
+#[derive(Clone, Debug)]
+pub enum Event {
+    /// From the user, the platform or the peer.
+    Input(InputEvent),
+    /// What a `Sender` of the frontend pushed from any thread. The host
+    /// picks `id` and `body`, and a reply never crosses the wire.
+    Reply { id: u64, body: Vec<u8> },
+    /// The deadline passed with nothing to deliver.
+    Timeout,
+}
 
 #[derive(Clone, Debug)]
 pub enum InputEvent {

@@ -9,9 +9,9 @@
 //! lookup of `text`, which the `native-fonts` feature carries.
 //!
 //! [`frontend`] shows a scene and reads the input back, through the
-//! terminal, a winit window or stdin and stdout. Only the stdio and the
-//! Sixel halves of it build on wasm32. The rest needs a tty, a window or
-//! platform FFI.
+//! terminal, a winit window or stdin and stdout. Only the Sixel encoder of
+//! it builds on wasm32. The rest needs threads, a tty, a window or platform
+//! FFI.
 
 pub mod event;
 pub mod frontend;

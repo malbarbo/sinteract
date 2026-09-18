@@ -8,7 +8,7 @@
 
 use std::io::{self, Write};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -16,9 +16,12 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, event, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
+use super::driver::{period_from_hz, poll_input, sealed, warn_bitmaps_once};
+use super::inbox::{Inbox, Sender};
 use super::sixel;
-use crate::event::{KeyKind, key};
+use crate::event::{InputEvent, KeyKind, key};
 use crate::renderer::pixmap::render_to_pixmap;
+use crate::scene::Scene;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
 const KITTY_ONESHOT_ID_BASE: u32 = 2000;
@@ -26,6 +29,93 @@ const KITTY_ONESHOT_ID_BASE: u32 = 2000;
 // Fallback when the terminal does not answer the `CSI 16 t` probe.
 const CELL_W_DEFAULT: u32 = 8;
 const CELL_H_DEFAULT: u32 = 16;
+
+/// A [`super::Frontend`] over the alt screen of the terminal, in raw mode.
+/// Ctrl-C arrives as [`InputEvent::Close`].
+pub struct Terminal {
+    inbox: Inbox,
+    tx: Sender,
+    close_sent: bool,
+    closed: bool,
+    warned_bitmaps: bool,
+}
+
+impl Terminal {
+    /// There is no hardware refresh in a terminal. 60 Hz is smooth for
+    /// half-block animation and does not flood the pty with escape codes.
+    const VSYNC_PERIOD: Duration = period_from_hz(60);
+
+    /// Enter the alt screen and raw mode.
+    pub fn open() -> Self {
+        enter_animation();
+        let inbox = Inbox::new(Some(Self::VSYNC_PERIOD));
+        let tx = inbox.sender();
+        Self {
+            inbox,
+            tx,
+            close_sent: false,
+            closed: false,
+            warned_bitmaps: false,
+        }
+    }
+}
+
+impl super::Frontend for Terminal {
+    fn present(&mut self, scene: &Scene) {
+        if self.closed {
+            return;
+        }
+        warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
+        show_image(scene);
+    }
+
+    fn wait_event(&mut self, deadline: Option<Instant>) -> crate::event::Event {
+        let Self {
+            inbox,
+            tx,
+            close_sent,
+            ..
+        } = self;
+        poll_input(inbox, deadline, || forward_input(tx, close_sent))
+    }
+
+    fn sender(&self) -> Sender {
+        self.inbox.sender()
+    }
+
+    /// The terminal draws without bitmaps, so it drops the upload.
+    fn push_asset(&mut self, _id: u32, _blob: &[u8], _mime: Option<&str>) {}
+
+    /// Leave the alt screen and raw mode.
+    fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        self.inbox.close();
+        exit_animation();
+    }
+}
+
+impl sealed::Sealed for Terminal {}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        super::Frontend::close(self);
+    }
+}
+
+/// Move the keys and a Ctrl-C into the queue. `close_sent` keeps a second
+/// Close out.
+fn forward_input(tx: &Sender, close_sent: &mut bool) {
+    while let Some(key) = poll_key_event() {
+        let _ = tx.send_input(InputEvent::Key(key));
+    }
+    if !*close_sent && closed() {
+        *close_sent = true;
+        let _ = tx.send_input(InputEvent::Close);
+    }
+}
 
 /// Pixel size of one terminal cell, from the cached probe in
 /// [`super::term_query`]. A terminal under a multiplexer or without a tty

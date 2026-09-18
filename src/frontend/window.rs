@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use softbuffer::{Context, Surface};
 use tiny_skia::Pixmap;
@@ -25,17 +25,108 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use crate::event::{KeyKind, key};
+use super::driver::{period_from_hz, poll_input, sealed, warn_bitmaps_once};
+use super::inbox::{Inbox, Sender};
+use crate::event::{InputEvent, KeyKind, key};
+use crate::scene::Scene;
+
+/// A [`super::Frontend`] over a winit window. Closing the window arrives
+/// as [`InputEvent::Close`].
+pub struct Window {
+    inbox: Inbox,
+    tx: Sender,
+    close_sent: bool,
+    closed: bool,
+    warned_bitmaps: bool,
+}
+
+impl Window {
+    /// The window paints through softbuffer without a swap chain, so its
+    /// cadence is software-timed too.
+    const VSYNC_PERIOD: Duration = period_from_hz(60);
+
+    /// Set the window up. It opens on the first `present`, with the size of
+    /// the scene.
+    pub fn open(title: &str) -> Self {
+        enter_animation(title);
+        let inbox = Inbox::new(Some(Self::VSYNC_PERIOD));
+        let tx = inbox.sender();
+        Self {
+            inbox,
+            tx,
+            close_sent: false,
+            closed: false,
+            warned_bitmaps: false,
+        }
+    }
+}
+
+impl super::Frontend for Window {
+    fn present(&mut self, scene: &Scene) {
+        if self.closed {
+            return;
+        }
+        warn_bitmaps_once(&mut self.warned_bitmaps, scene, "window");
+        show_image(scene);
+    }
+
+    fn wait_event(&mut self, deadline: Option<Instant>) -> crate::event::Event {
+        let Self {
+            inbox,
+            tx,
+            close_sent,
+            ..
+        } = self;
+        poll_input(inbox, deadline, || forward_input(tx, close_sent))
+    }
+
+    fn sender(&self) -> Sender {
+        self.inbox.sender()
+    }
+
+    /// The window draws without bitmaps, so it drops the upload.
+    fn push_asset(&mut self, _id: u32, _blob: &[u8], _mime: Option<&str>) {}
+
+    /// Destroy the window.
+    fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        self.inbox.close();
+        exit_animation();
+    }
+}
+
+impl sealed::Sealed for Window {}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        super::Frontend::close(self);
+    }
+}
+
+/// Move the keys and a closed window into the queue. `close_sent` keeps a
+/// second Close out.
+fn forward_input(tx: &Sender, close_sent: &mut bool) {
+    while let Some(key) = poll_key_event() {
+        let _ = tx.send_input(InputEvent::Key(key));
+    }
+    if !*close_sent && closed() {
+        *close_sent = true;
+        let _ = tx.send_input(InputEvent::Close);
+    }
+}
 
 struct App {
     title: String,
     /// Size of the window to create, from the first `show_image`. `resumed`
     /// reads it.
     pending_size: Option<(u32, u32)>,
-    window: Option<Rc<Window>>,
-    surface: Option<Surface<Rc<Window>, Rc<Window>>>,
+    window: Option<Rc<WinitWindow>>,
+    surface: Option<Surface<Rc<WinitWindow>, Rc<WinitWindow>>>,
     pending: VecDeque<crate::event::KeyEvent>,
     modifiers: ModifiersState,
     closed: bool,
