@@ -31,7 +31,8 @@ use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
 use super::inbox::{Inbox, Sender};
 use crate::event::{Event, InputEvent, KeyKind, key};
-use crate::renderer::pixmap::{fit_scale, frame_px, render_to_pixmap};
+use crate::renderer::Renderer;
+use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
 use crate::scene::Scene;
 
 /// A [`super::Frontend`] over a winit window. Closing the window arrives
@@ -49,6 +50,8 @@ struct Session {
     app: App,
     window: Rc<WinitWindow>,
     surface: Surface<Rc<WinitWindow>, Rc<WinitWindow>>,
+    /// Kept across frames, so a frame reuses the pixmap and the clip masks.
+    renderer: PixmapRenderer,
 }
 
 impl Window {
@@ -72,6 +75,8 @@ impl Window {
                 let _ = proxy.send_event(());
             })),
         );
+        let renderer = PixmapRenderer::new(1.0, width, height)
+            .ok_or_else(|| OpenError::Platform("cannot allocate the frame".into()))?;
         let (w, h) = frame_px(width, height);
         let attrs = WindowAttributes::default()
             .with_title(title)
@@ -93,6 +98,7 @@ impl Window {
                 app,
                 window,
                 surface,
+                renderer,
             }),
             warned_bitmaps: false,
         })
@@ -145,6 +151,7 @@ impl super::Frontend for Window {
             mut app,
             window,
             surface,
+            ..
         }) = self.session.take()
         else {
             return;
@@ -178,14 +185,15 @@ impl Session {
         }
         let target_px = (w.get(), h.get());
         // The scene fills the window, so there is no cap on the scale.
-        let scale = fit_scale(scene.width(), scene.height(), target_px);
-        let Some(pixmap) = render_to_pixmap(scene, scale) else {
+        self.renderer
+            .set_scale(fit_scale(scene.width(), scene.height(), target_px));
+        let Ok(pixmap) = self.renderer.render(scene) else {
             return;
         };
         let Ok(mut buffer) = self.surface.buffer_mut() else {
             return;
         };
-        blit_pixmap(&pixmap, &mut buffer, target_px);
+        blit_pixmap(pixmap, &mut buffer, target_px);
         let _ = buffer.present();
     }
 }
