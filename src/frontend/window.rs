@@ -1,20 +1,21 @@
-//! Window display of a [`crate::scene::Scene`] through winit and softbuffer,
-//! with the lifecycle of [`super::terminal`]. [`enter_animation`] sets the
-//! state up, [`show_image`] rasterizes a scene and presents it,
-//! [`poll_key_event`] returns the next key event, and [`exit_animation`]
-//! destroys the window.
+//! Window display of a [`crate::scene::Scene`] through winit and softbuffer.
 //!
-//! winit needs the event loop on the main thread, so the state lives in a
-//! `thread_local!`. The window opens with the logical size of the scene, and
-//! every present rasterizes at the physical size of the surface, letterboxed,
-//! so HiDPI and a resize keep the aspect ratio. Opening a window succeeds or
-//! fails, so there is no capability query. A host that wants a fallback picks
-//! the backend itself.
+//! The window opens with the logical size of the scene, and every present
+//! rasterizes at the physical size of the surface, letterboxed, so HiDPI and
+//! a resize keep the aspect ratio.
+//!
+//! winit builds one event loop per process, and the loop cannot move to
+//! another thread. So the loop outlives the [`Window`]. A window borrows it
+//! at open and gives it back at close, and every window of the process opens
+//! on the thread of the first one. Open windows from a thread that lives as
+//! long as the process, such as the main thread.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::cell::{Cell, RefCell};
+use std::mem;
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::{Arc, OnceLock};
+use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 use softbuffer::{Context, Surface};
@@ -24,22 +25,30 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::platform::pump_events::EventLoopExtPumpEvents;
+use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{period_from_hz, sealed, warn_bitmaps_once};
+use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
 use super::inbox::{Inbox, Sender};
 use crate::event::{Event, InputEvent, KeyKind, key};
+use crate::renderer::pixmap::{fit_scale, frame_px, render_to_pixmap};
 use crate::scene::Scene;
 
 /// A [`super::Frontend`] over a winit window. Closing the window arrives
-/// as [`InputEvent::Close`].
+/// as [`InputEvent::Close`], and the window stays until
+/// [`super::Frontend::close`].
 pub struct Window {
     inbox: Inbox,
-    tx: Sender,
-    close_sent: bool,
-    closed: bool,
+    /// `None` after [`super::Frontend::close`].
+    session: Option<Session>,
     warned_bitmaps: bool,
+}
+
+struct Session {
+    lent: Lent,
+    app: App,
+    window: Rc<WinitWindow>,
+    surface: Surface<Rc<WinitWindow>, Rc<WinitWindow>>,
 }
 
 impl Window {
@@ -47,39 +56,79 @@ impl Window {
     /// cadence is software-timed too.
     const VSYNC_PERIOD: Duration = period_from_hz(60);
 
-    /// Set the window up. It opens on the first `present`, with the size of
-    /// the scene.
-    pub fn open(title: &str) -> Self {
-        enter_animation(title);
-        let inbox = Inbox::new(Some(Self::VSYNC_PERIOD));
-        let tx = inbox.sender();
-        Self {
+    /// How long [`Window::open`] waits for the platform to create the window.
+    const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Open a window of `width` by `height` logical pixels. Fails with
+    /// [`OpenError::Busy`] while another `Window` exists, and with
+    /// [`OpenError::Platform`] when the platform has no window for us, or on
+    /// a thread other than the one of the first window.
+    pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
+        let mut lent = Lent::take()?;
+        let proxy = lent.event_loop().create_proxy();
+        let inbox = Inbox::with_waker(
+            Some(Self::VSYNC_PERIOD),
+            Some(Arc::new(move || {
+                let _ = proxy.send_event(());
+            })),
+        );
+        let (w, h) = frame_px(width, height);
+        let attrs = WindowAttributes::default()
+            .with_title(title)
+            .with_inner_size(LogicalSize::new(w as f64, h as f64));
+        let mut app = App::new(inbox.sender(), attrs);
+        let window = lent.create_window(&mut app, Self::OPEN_TIMEOUT)?;
+        let surface = match new_surface(&window) {
+            Ok(surface) => surface,
+            Err(e) => {
+                drop(window);
+                lent.pump(&mut app, Some(Duration::ZERO));
+                return Err(e);
+            }
+        };
+        Ok(Self {
             inbox,
-            tx,
-            close_sent: false,
-            closed: false,
+            session: Some(Session {
+                lent,
+                app,
+                window,
+                surface,
+            }),
             warned_bitmaps: false,
-        }
+        })
     }
 }
 
 impl super::Frontend for Window {
     fn present(&mut self, scene: &Scene) {
-        if self.closed {
+        let Some(session) = self.session.as_mut() else {
             return;
-        }
+        };
         warn_bitmaps_once(&mut self.warned_bitmaps, scene, "window");
-        show_image(scene);
+        session.draw(scene);
     }
 
+    /// Block in the event loop of the window, which the [`Sender`]s wake.
     fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
-        let Self {
-            inbox,
-            tx,
-            close_sent,
-            ..
-        } = self;
-        poll_input(inbox, deadline, || forward_input(tx, close_sent))
+        loop {
+            if let Some(event) = self.inbox.poll() {
+                return event;
+            }
+            let now = Instant::now();
+            if deadline.is_some_and(|d| now >= d) {
+                return Event::Timeout;
+            }
+            let timeout = self.inbox.wake_at(deadline).map(|t| t - now);
+            match self.session.as_mut() {
+                Some(s) => {
+                    if !s.lent.pump(&mut s.app, timeout) {
+                        let _ = s.app.tx.send_input(InputEvent::Close);
+                    }
+                }
+                // A closed inbox returns Close from poll.
+                None => return self.inbox.wait(deadline),
+            }
+        }
     }
 
     fn sender(&self) -> Sender {
@@ -89,14 +138,22 @@ impl super::Frontend for Window {
     /// The window draws without bitmaps, so it drops the upload.
     fn push_asset(&mut self, _id: u32, _blob: &[u8], _mime: Option<&str>) {}
 
-    /// Destroy the window.
+    /// Destroy the window and give the event loop back.
     fn close(&mut self) {
-        if self.closed {
+        let Some(Session {
+            mut lent,
+            mut app,
+            window,
+            surface,
+        }) = self.session.take()
+        else {
             return;
-        }
-        self.closed = true;
+        };
         self.inbox.close();
-        exit_animation();
+        drop(surface);
+        drop(window);
+        // Wayland, X11 and Windows destroy a window as the loop runs.
+        lent.pump(&mut app, Some(Duration::ZERO));
     }
 }
 
@@ -108,133 +165,289 @@ impl Drop for Window {
     }
 }
 
-/// Move the keys and a closed window into the queue. `close_sent` keeps a
-/// second Close out.
-fn forward_input(tx: &Sender, close_sent: &mut bool) {
-    while let Some(key) = poll_key_event() {
-        let _ = tx.send_input(InputEvent::Key(key));
-    }
-    if !*close_sent && closed() {
-        *close_sent = true;
-        let _ = tx.send_input(InputEvent::Close);
+impl Session {
+    /// Rasterize `scene` at the size of the surface and present it.
+    fn draw(&mut self, scene: &Scene) {
+        let inner = self.window.inner_size();
+        let (Some(w), Some(h)) = (NonZeroU32::new(inner.width), NonZeroU32::new(inner.height))
+        else {
+            return;
+        };
+        if self.surface.resize(w, h).is_err() {
+            return;
+        }
+        let target_px = (w.get(), h.get());
+        // The scene fills the window, so there is no cap on the scale.
+        let scale = fit_scale(scene.width(), scene.height(), target_px);
+        let Some(pixmap) = render_to_pixmap(scene, scale) else {
+            return;
+        };
+        let Ok(mut buffer) = self.surface.buffer_mut() else {
+            return;
+        };
+        blit_pixmap(&pixmap, &mut buffer, target_px);
+        let _ = buffer.present();
     }
 }
 
-/// How often the window looks for a key. Its input does not wake the
-/// queue, so [`poll_input`] checks this often.
-const INPUT_POLL: Duration = Duration::from_millis(8);
+fn new_surface(
+    window: &Rc<WinitWindow>,
+) -> Result<Surface<Rc<WinitWindow>, Rc<WinitWindow>>, OpenError> {
+    let context = Context::new(window.clone()).map_err(platform_error)?;
+    Surface::new(&context, window.clone()).map_err(platform_error)
+}
 
-/// Wait on `inbox` in steps of [`INPUT_POLL`], and call `forward` before
-/// each step so it moves the input of the platform into the queue.
-fn poll_input(inbox: &mut Inbox, deadline: Option<Instant>, mut forward: impl FnMut()) -> Event {
-    loop {
-        forward();
-        let step = Instant::now() + INPUT_POLL;
-        let until = deadline.map_or(step, |d| d.min(step));
-        match inbox.wait(Some(until)) {
-            Event::Timeout if deadline.is_none_or(|d| Instant::now() < d) => {}
-            event => return event,
+fn platform_error(e: impl std::fmt::Display) -> OpenError {
+    OpenError::Platform(e.to_string())
+}
+
+// -----------------------------------------------------------------------------
+// The event loop of the process
+// -----------------------------------------------------------------------------
+
+/// The thread that built the event loop, or why the build failed. winit
+/// refuses a second build in the process, so the answer holds for good.
+static LOOP_BUILT: OnceLock<Result<ThreadId, String>> = OnceLock::new();
+
+thread_local! {
+    /// The event loop while no window holds it.
+    static PARKED: RefCell<Parked> = const { RefCell::new(Parked(None)) };
+    /// The platform ended the loop, or a pump unwound, and no window opens
+    /// again.
+    static LOOP_DEAD: Cell<bool> = const { Cell::new(false) };
+}
+
+struct Parked(Option<EventLoop<()>>);
+
+impl Drop for Parked {
+    /// The thread ends. Some platforms tear down under a dropped loop at
+    /// that point, and the process ends soon anyway.
+    fn drop(&mut self) {
+        if let Some(event_loop) = self.0.take() {
+            mem::forget(event_loop);
         }
     }
 }
 
+/// The event loop on loan to a [`Window`]. Drop gives it back, unless it
+/// died, in which case it is forgotten.
+struct Lent {
+    event_loop: Option<EventLoop<()>>,
+    dead: bool,
+}
+
+impl Lent {
+    fn take() -> Result<Self, OpenError> {
+        let mut built = None;
+        let owner = LOOP_BUILT.get_or_init(|| match build_loop() {
+            Ok(event_loop) => {
+                built = Some(event_loop);
+                Ok(thread::current().id())
+            }
+            Err(e) => Err(e),
+        });
+        if let Some(event_loop) = built {
+            return Ok(Self::of(event_loop));
+        }
+        match owner {
+            Err(e) => Err(OpenError::Platform(e.clone())),
+            Ok(id) if *id != thread::current().id() => Err(OpenError::Platform(
+                "a window opens only on the thread of the first window".into(),
+            )),
+            Ok(_) if LOOP_DEAD.get() => Err(OpenError::Platform(
+                "the window event loop ended, and it cannot start again".into(),
+            )),
+            Ok(_) => PARKED
+                .with_borrow_mut(|p| p.0.take())
+                .map(Self::of)
+                .ok_or(OpenError::Busy),
+        }
+    }
+
+    fn of(event_loop: EventLoop<()>) -> Self {
+        Self {
+            event_loop: Some(event_loop),
+            dead: false,
+        }
+    }
+
+    fn event_loop(&self) -> &EventLoop<()> {
+        self.event_loop
+            .as_ref()
+            .expect("the loop leaves only on drop")
+    }
+
+    /// Run the loop until an event or `timeout`. Returns `true` if the loop
+    /// still runs, `false` if the platform ended it.
+    ///
+    /// The loop never calls `ActiveEventLoop::exit`, because `pump` does
+    /// not clear the flag and the next window would find it set.
+    fn pump(&mut self, app: &mut App, timeout: Option<Duration>) -> bool {
+        if self.dead {
+            return false;
+        }
+        let event_loop = self
+            .event_loop
+            .as_mut()
+            .expect("the loop leaves only on drop");
+        if let PumpStatus::Exit(_) = event_loop.pump_app_events(timeout, app) {
+            self.dead = true;
+        }
+        !self.dead
+    }
+
+    /// Pump until `app` has its window. The window appears in the callbacks,
+    /// so a failure reaches the caller as an error and not as a late Close.
+    fn create_window(
+        &mut self,
+        app: &mut App,
+        timeout: Duration,
+    ) -> Result<Rc<WinitWindow>, OpenError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if !self.pump(app, Some(Duration::from_millis(16))) {
+                return Err(OpenError::Platform(
+                    "the window event loop ended before the window opened".into(),
+                ));
+            }
+            match app.created.take() {
+                Some(Ok(window)) => return Ok(window),
+                Some(Err(e)) => return Err(OpenError::Platform(e)),
+                None if Instant::now() >= deadline => {
+                    return Err(OpenError::Platform(
+                        "the window did not open in time".into(),
+                    ));
+                }
+                None => {}
+            }
+        }
+    }
+}
+
+impl Drop for Lent {
+    /// A loop that died, or that unwound in a pump, is in no state to run
+    /// again.
+    fn drop(&mut self) {
+        let Some(event_loop) = self.event_loop.take() else {
+            return;
+        };
+        if self.dead || thread::panicking() {
+            mem::forget(event_loop);
+            LOOP_DEAD.set(true);
+        } else {
+            PARKED.with_borrow_mut(|p| p.0 = Some(event_loop));
+        }
+    }
+}
+
+/// Build the loop of the process on this thread. winit panics on a thread
+/// other than the main one unless told otherwise, so Linux and Windows allow
+/// any thread, and macOS, which cannot, gets an error.
+fn build_loop() -> Result<EventLoop<()>, String> {
+    let mut builder = EventLoop::<()>::with_user_event();
+    #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_any_thread(true);
+    }
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        builder.with_any_thread(true);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        if unsafe { libc::pthread_main_np() } != 1 {
+            return Err("on macOS a window opens only on the main thread".into());
+        }
+        // The default menu quits the process on Cmd+Q, and a quit is the
+        // decision of the host.
+        builder.with_default_menu(false);
+    }
+    let event_loop = builder
+        .build()
+        .map_err(|e| format!("the window event loop did not build: {e}"))?;
+    event_loop.set_control_flow(ControlFlow::Wait);
+    Ok(event_loop)
+}
+
+// -----------------------------------------------------------------------------
+// Callbacks of the event loop
+// -----------------------------------------------------------------------------
+
 struct App {
-    title: String,
-    /// Size of the window to create, from the first `show_image`. `resumed`
-    /// reads it.
-    pending_size: Option<(u32, u32)>,
-    window: Option<Rc<WinitWindow>>,
-    surface: Option<Surface<Rc<WinitWindow>, Rc<WinitWindow>>>,
-    pending: VecDeque<crate::event::KeyEvent>,
+    tx: Sender,
+    /// What the next callback creates, until it does.
+    to_create: Option<WindowAttributes>,
+    created: Option<Result<Rc<WinitWindow>, String>>,
+    /// The window of this session. An event of a window of an earlier
+    /// session can still be in the loop.
+    id: Option<WindowId>,
     modifiers: ModifiersState,
-    closed: bool,
 }
 
 impl App {
-    fn new(title: String) -> Self {
+    fn new(tx: Sender, attrs: WindowAttributes) -> Self {
         Self {
-            title,
-            pending_size: None,
-            window: None,
-            surface: None,
-            pending: VecDeque::new(),
+            tx,
+            to_create: Some(attrs),
+            created: None,
+            id: None,
             modifiers: ModifiersState::empty(),
-            closed: false,
         }
     }
 
-    fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
-        }
-        let Some((w, h)) = self.pending_size else {
-            // The size comes with the first show.
+    fn create(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(attrs) = self.to_create.take() else {
             return;
         };
-        let attrs = WindowAttributes::default()
-            .with_title(self.title.clone())
-            .with_inner_size(LogicalSize::new(w as f64, h as f64));
-        let Ok(window) = event_loop.create_window(attrs) else {
-            self.closed = true;
-            return;
-        };
-        let window = Rc::new(window);
-        let context = match Context::new(window.clone()) {
-            Ok(c) => c,
-            Err(_) => {
-                self.closed = true;
-                return;
+        let created = match event_loop.create_window(attrs) {
+            Ok(window) => {
+                self.id = Some(window.id());
+                Ok(Rc::new(window))
             }
+            Err(e) => Err(e.to_string()),
         };
-        let surface = match Surface::new(&context, window.clone()) {
-            Ok(s) => s,
-            Err(_) => {
-                self.closed = true;
-                return;
-            }
-        };
-        self.window = Some(window);
-        self.surface = Some(surface);
+        self.created = Some(created);
     }
 }
 
 impl ApplicationHandler for App {
+    /// Only the first pump of the loop resumes.
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        self.ensure_window(event_loop);
+        self.create(event_loop);
     }
 
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
+    /// Every pump ends here, on every platform, so a window of a later
+    /// session appears here.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.create(event_loop);
+    }
+
+    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self.id != Some(id) {
+            return;
+        }
         match event {
-            WindowEvent::CloseRequested => {
-                // process::exit would kill a server that hosts other sessions,
-                // so the frontend reports a close instead.
-                self.closed = true;
-                event_loop.exit();
+            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                let _ = self.tx.send_input(InputEvent::Close);
             }
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                push_key_events(&mut self.pending, &event, self.modifiers);
+                send_key_events(&self.tx, &event, self.modifiers);
             }
             _ => {}
         }
     }
 }
 
-/// Push the events of a winit key event. A press gives `Down` and `Press`,
+/// Send the events of a winit key event. A press gives `Down` and `Press`,
 /// the first one and each repeat alike, as a browser does, and a release
 /// gives `Up`. `repeat` tells a repeat from the first press.
-fn push_key_events(
-    out: &mut VecDeque<crate::event::KeyEvent>,
-    ev: &KeyEvent,
-    mods: ModifiersState,
-) {
+fn send_key_events(tx: &Sender, ev: &KeyEvent, mods: ModifiersState) {
     let Some(key) = winit_key_to_string(&ev.logical_key) else {
         return;
     };
@@ -250,14 +463,15 @@ fn push_key_events(
         modifiers,
         repeat: ev.repeat,
     };
+    let send = |kind, key| {
+        let _ = tx.send_input(InputEvent::Key(event(kind, key)));
+    };
     match ev.state {
         ElementState::Pressed => {
-            out.push_back(event(KeyKind::Down, key.clone()));
-            out.push_back(event(KeyKind::Press, key));
+            send(KeyKind::Down, key.clone());
+            send(KeyKind::Press, key);
         }
-        ElementState::Released => {
-            out.push_back(event(KeyKind::Up, key));
-        }
+        ElementState::Released => send(KeyKind::Up, key),
     }
 }
 
@@ -300,131 +514,6 @@ fn winit_key_to_string(key: &Key) -> Option<String> {
     })
 }
 
-struct State {
-    event_loop: EventLoop<()>,
-    app: App,
-}
-
-thread_local! {
-    static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
-}
-
-/// Set the window state up. A second call without [`exit_animation`] does
-/// nothing. The window itself opens on the first [`show_image`], with the
-/// size of the scene, so the host does not need the size before its first
-/// frame.
-pub fn enter_animation(title: &str) {
-    STATE.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        if slot.is_some() {
-            return;
-        }
-        let event_loop = match EventLoop::<()>::with_user_event().build() {
-            Ok(el) => el,
-            Err(e) => {
-                eprintln!("[sinteract] failed to create window event loop: {e}");
-                return;
-            }
-        };
-        event_loop.set_control_flow(ControlFlow::Wait);
-        let app = App::new(title.to_string());
-        *slot = Some(State { event_loop, app });
-    });
-}
-
-/// Destroy the window. A second call does nothing.
-pub fn exit_animation() {
-    STATE.with(|cell| {
-        cell.borrow_mut().take();
-    });
-}
-
-fn pump_for(timeout: Duration) {
-    STATE.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        let Some(state) = slot.as_mut() else {
-            return;
-        };
-        let _ = state
-            .event_loop
-            .pump_app_events(Some(timeout), &mut state.app);
-    });
-}
-
-/// Return the next queued key event, or `None`. Pumps the event loop first,
-/// so an event that just arrived is in the queue.
-pub fn poll_key_event() -> Option<crate::event::KeyEvent> {
-    pump_for(Duration::ZERO);
-    STATE.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        let state = slot.as_mut()?;
-        if state.app.closed {
-            return None;
-        }
-        state.app.pending.pop_front()
-    })
-}
-
-/// Returns `true` if the user closed the window since [`enter_animation`],
-/// `false` otherwise.
-pub fn closed() -> bool {
-    STATE.with(|cell| cell.borrow().as_ref().map(|s| s.app.closed).unwrap_or(true))
-}
-
-/// Rasterize `scene` and present it. Pumps the event loop first, so a resize
-/// or a DPI change applies to this frame, and opens the window on the first
-/// call.
-pub fn show_image(scene: &crate::scene::Scene) {
-    let dl_size = crate::renderer::pixmap::frame_px(scene.width(), scene.height());
-    STATE.with(|cell| {
-        if let Some(state) = cell.borrow_mut().as_mut()
-            && state.app.pending_size.is_none()
-        {
-            state.app.pending_size = Some(dl_size);
-        }
-    });
-    // `resumed` reads the size on this pump.
-    pump_for(Duration::ZERO);
-    STATE.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        let Some(state) = slot.as_mut() else {
-            return;
-        };
-        let Some(window) = state.app.window.as_ref() else {
-            return;
-        };
-        let surface = match state.app.surface.as_mut() {
-            Some(s) => s,
-            None => return,
-        };
-
-        let inner = window.inner_size();
-        let (Some(w), Some(h)) = (NonZeroU32::new(inner.width), NonZeroU32::new(inner.height))
-        else {
-            return;
-        };
-
-        if surface.resize(w, h).is_err() {
-            return;
-        }
-
-        let target_px = (w.get(), h.get());
-        // The scene fills the window, so there is no cap on the scale.
-        let scale = crate::renderer::pixmap::fit_scale(scene.width(), scene.height(), target_px);
-        let pixmap = match crate::renderer::pixmap::render_to_pixmap(scene, scale) {
-            Some(p) => p,
-            None => return,
-        };
-
-        let Ok(mut buffer) = surface.buffer_mut() else {
-            return;
-        };
-
-        blit_pixmap(&pixmap, &mut buffer, target_px);
-        let _ = buffer.present();
-    });
-}
-
 /// Copy `pixmap` into a softbuffer `0RGB` buffer, centered. The fit keeps the
 /// aspect ratio, so one axis may leave a band, and the band is black.
 fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
@@ -448,11 +537,6 @@ fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
         }
     }
 }
-
-/// Does nothing. A window has no terminal state to restore after a panic,
-/// and the OS reclaims the window. Exists so a host installs the hook of
-/// either backend the same way.
-pub fn install_panic_hook() {}
 
 #[cfg(test)]
 mod tests {

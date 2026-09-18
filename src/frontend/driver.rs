@@ -15,7 +15,7 @@ use crate::scene::Scene;
 /// [`Frontend::close`] or at drop:
 ///
 /// ```ignore
-/// let mut fr = sinteract::frontend::open_native("My game");
+/// let mut fr = sinteract::frontend::open_native("My game", 400.0, 300.0)?;
 /// loop {
 ///     match fr.wait_event(None) {
 ///         Event::Input(InputEvent::Vsync) => fr.present(&next_scene()),
@@ -55,13 +55,13 @@ pub(super) mod sealed {
     pub trait Sealed {}
 }
 
-/// The terminal when stdout is a tty with graphics, and a window
-/// otherwise. `title` only matters for a window. A terminal keeps the title
-/// of the shell.
-pub fn open_native(title: &str) -> Result<Box<dyn Frontend>, OpenError> {
+/// The terminal when stdout is a tty with graphics, and a window of `width`
+/// by `height` logical pixels otherwise. `title` only matters for a window.
+/// A terminal keeps the title of the shell.
+pub fn open_native(title: &str, width: f32, height: f32) -> Result<Box<dyn Frontend>, OpenError> {
     match Terminal::open() {
         Ok(terminal) => Ok(Box::new(terminal)),
-        Err(OpenError::NoGraphics) => Ok(Box::new(Window::open(title))),
+        Err(OpenError::NoGraphics) => Ok(Box::new(Window::open(title, width, height)?)),
         Err(e) => Err(e),
     }
 }
@@ -69,23 +69,26 @@ pub fn open_native(title: &str) -> Result<Box<dyn Frontend>, OpenError> {
 /// Why a frontend did not open.
 #[derive(Debug)]
 pub enum OpenError {
-    /// Another session holds the terminal.
+    /// Another session holds the terminal, or another window the event loop.
     Busy,
     /// The terminal shows neither Kitty, Sixel nor truecolor.
     NoGraphics,
     Io(io::Error),
+    /// The platform has no window for us.
+    Platform(String),
 }
 
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenError::Busy => f.write_str("another session holds the terminal"),
+            OpenError::Busy => f.write_str("another session is open"),
             OpenError::NoGraphics => f.write_str(
                 "the terminal shows no graphics; try Kitty, Ghostty, WezTerm, Konsole, \
                  a Sixel terminal (Windows Terminal 1.22 or later, mlterm, foot, mintty) \
                  or a truecolor terminal (set COLORTERM=truecolor)",
             ),
             OpenError::Io(e) => write!(f, "cannot set the terminal up: {e}"),
+            OpenError::Platform(e) => write!(f, "cannot open a window: {e}"),
         }
     }
 }

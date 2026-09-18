@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -19,7 +20,12 @@ use crate::event::{Event, InputEvent};
 #[derive(Clone)]
 pub struct Sender {
     tx: mpsc::Sender<Item>,
+    wake: Option<Waker>,
 }
+
+/// Wakes a frontend that blocks somewhere other than the channel, as the
+/// window does in its event loop.
+pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 
 /// The error of a [`Sender`] whose frontend no longer exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +52,11 @@ impl Sender {
             at: Instant::now(),
             event,
         };
-        self.tx.send(item).map_err(|_| Closed)
+        self.tx.send(item).map_err(|_| Closed)?;
+        if let Some(wake) = &self.wake {
+            wake();
+        }
+        Ok(())
     }
 }
 
@@ -62,6 +72,7 @@ impl std::error::Error for Closed {}
 /// [`Inbox::sender`], so the channel never disconnects.
 pub(crate) struct Inbox {
     tx: mpsc::Sender<Item>,
+    wake: Option<Waker>,
     rx: mpsc::Receiver<Item>,
     /// What left the channel and did not go out yet, oldest first.
     pending: VecDeque<Item>,
@@ -83,9 +94,15 @@ impl Inbox {
     /// A queue that makes a Vsync every `vsync_period`, or that takes them
     /// from the channel when it is `None`.
     pub(crate) fn new(vsync_period: Option<Duration>) -> Self {
+        Self::with_waker(vsync_period, None)
+    }
+
+    /// A queue whose [`Sender`]s also call `wake` after they push.
+    pub(crate) fn with_waker(vsync_period: Option<Duration>, wake: Option<Waker>) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             tx,
+            wake,
             rx,
             pending: VecDeque::new(),
             vsync_pending: false,
@@ -97,6 +114,7 @@ impl Inbox {
     pub(crate) fn sender(&self) -> Sender {
         Sender {
             tx: self.tx.clone(),
+            wake: self.wake.clone(),
         }
     }
 
@@ -116,24 +134,14 @@ impl Inbox {
     /// Vsync per call and the input still goes out.
     pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Event {
         loop {
-            if self.closed {
-                return Event::Input(InputEvent::Close);
-            }
-            while let Ok(item) = self.rx.try_recv() {
-                self.push(item);
-            }
-            let now = Instant::now();
-            if let Some(event) = self.pop(now) {
+            if let Some(event) = self.poll() {
                 return event;
             }
+            let now = Instant::now();
             if deadline.is_some_and(|d| now >= d) {
                 return Event::Timeout;
             }
-            let wake = match (deadline, self.clock.as_ref().map(|c| c.due)) {
-                (Some(d), Some(v)) => Some(d.min(v)),
-                (d, v) => d.or(v),
-            };
-            let received = match wake {
+            let received = match self.wake_at(deadline) {
                 Some(t) => match self.rx.recv_timeout(t - now) {
                     Ok(item) => Some(item),
                     Err(RecvTimeoutError::Timeout) => continue,
@@ -146,6 +154,27 @@ impl Inbox {
                 // The inbox holds a sender, so this does not happen.
                 None => self.closed = true,
             }
+        }
+    }
+
+    /// The oldest event that is ready, without blocking.
+    pub(crate) fn poll(&mut self) -> Option<Event> {
+        if self.closed {
+            return Some(Event::Input(InputEvent::Close));
+        }
+        while let Ok(item) = self.rx.try_recv() {
+            self.push(item);
+        }
+        self.pop(Instant::now())
+    }
+
+    /// When a wait until `deadline` has to stop and look again, the earlier
+    /// of `deadline` and the next Vsync of the clock. `None` waits for as
+    /// long as it takes.
+    pub(crate) fn wake_at(&self, deadline: Option<Instant>) -> Option<Instant> {
+        match (deadline, self.clock.as_ref().map(|c| c.due)) {
+            (Some(d), Some(v)) => Some(d.min(v)),
+            (d, v) => d.or(v),
         }
     }
 
