@@ -6,7 +6,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use super::inbox::Sender;
-use super::{Terminal, Window};
+use super::{Terminal, TerminalOptions, Window};
 use crate::event::Event;
 use crate::scene::Scene;
 
@@ -15,7 +15,8 @@ use crate::scene::Scene;
 /// [`Frontend::close`] or at drop:
 ///
 /// ```ignore
-/// let mut fr = sinteract::frontend::open_native("My game", 400.0, 300.0)?;
+/// let options = TerminalOptions::default();
+/// let mut fr = sinteract::frontend::open_native("My game", 400.0, 300.0, options)?;
 /// loop {
 ///     match fr.wait_event(None) {
 ///         Event::Input(InputEvent::Vsync) => fr.present(&next_scene()),
@@ -56,10 +57,16 @@ pub(super) mod sealed {
 }
 
 /// The terminal when stdout is a tty with graphics, and a window of `width`
-/// by `height` logical pixels otherwise. `title` only matters for a window.
-/// A terminal keeps the title of the shell.
-pub fn open_native(title: &str, width: f32, height: f32) -> Result<Box<dyn Frontend>, OpenError> {
-    match Terminal::open() {
+/// by `height` logical pixels otherwise. `title` only matters for a window,
+/// because a terminal keeps the title of the shell, and `options` only for a
+/// terminal.
+pub fn open_native(
+    title: &str,
+    width: f32,
+    height: f32,
+    options: TerminalOptions,
+) -> Result<Box<dyn Frontend>, OpenError> {
+    match Terminal::open_with(options) {
         Ok(terminal) => Ok(Box::new(terminal)),
         Err(OpenError::NoGraphics) => Ok(Box::new(Window::open(title, width, height)?)),
         Err(e) => Err(e),
