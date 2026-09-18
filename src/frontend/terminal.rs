@@ -23,7 +23,8 @@ use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
 use super::inbox::{Inbox, Sender};
 use super::sixel;
 use crate::event::{Event, InputEvent, KeyKind, key};
-use crate::renderer::pixmap::render_to_pixmap;
+use crate::renderer::Renderer;
+use crate::renderer::pixmap::PixmapRenderer;
 use crate::scene::Scene;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
@@ -55,6 +56,8 @@ pub struct Terminal {
     /// The size in pixels of the frame on screen, or `None` before the
     /// first one. Kitty keeps a frame after the session.
     frame_size: Option<(u32, u32)>,
+    /// Kept across frames, so a frame reuses the pixmap and the clip masks.
+    renderer: PixmapRenderer,
     warned_bitmaps: bool,
 }
 
@@ -102,6 +105,7 @@ impl Terminal {
                 _claim: claim,
             }),
             frame_size: None,
+            renderer: PixmapRenderer::default(),
             warned_bitmaps: false,
         })
     }
@@ -113,7 +117,7 @@ impl super::Frontend for Terminal {
             return;
         }
         warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
-        let Some(pixmap) = rasterize(self.backend, scene) else {
+        let Some(pixmap) = rasterize(&mut self.renderer, self.backend, scene) else {
             return;
         };
         let mut stdout = io::stdout().lock();
@@ -126,11 +130,11 @@ impl super::Frontend for Terminal {
         }
         let _ = queue!(stdout, cursor::MoveTo(0, 0));
         let _ = match self.backend {
-            Backend::Kitty => emit_kitty(&mut stdout, &pixmap, Some(KITTY_ANIMATION_ID)),
+            Backend::Kitty => emit_kitty(&mut stdout, pixmap, Some(KITTY_ANIMATION_ID)),
             Backend::Sixel => {
-                sixel::encode(&pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))
+                sixel::encode(pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))
             }
-            Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap),
+            Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap),
         };
         let _ = stdout.flush();
     }
@@ -178,16 +182,17 @@ pub fn show_image(scene: &Scene) {
     let Some(backend) = pick_backend() else {
         return;
     };
-    let Some(pixmap) = rasterize(backend, scene) else {
+    let mut renderer = PixmapRenderer::default();
+    let Some(pixmap) = rasterize(&mut renderer, backend, scene) else {
         return;
     };
     let mut stdout = io::stdout().lock();
     let _ = match backend {
-        Backend::Kitty => emit_kitty(&mut stdout, &pixmap, None).and_then(|()| writeln!(stdout)),
-        Backend::Sixel => sixel::encode(&pixmap, SIXEL_BACKGROUND)
+        Backend::Kitty => emit_kitty(&mut stdout, pixmap, None).and_then(|()| writeln!(stdout)),
+        Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND)
             .and_then(|b| stdout.write_all(&b))
             .and_then(|()| writeln!(stdout)),
-        Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap),
+        Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap),
     };
     let _ = stdout.flush();
 }
@@ -262,9 +267,13 @@ fn pick_backend() -> Option<Backend> {
     }
 }
 
-fn rasterize(backend: Backend, scene: &Scene) -> Option<Pixmap> {
-    let scale = scale_for_backend(backend, scene.width(), scene.height());
-    let pixmap = render_to_pixmap(scene, scale);
+fn rasterize<'r>(
+    renderer: &'r mut PixmapRenderer,
+    backend: Backend,
+    scene: &Scene,
+) -> Option<&'r Pixmap> {
+    renderer.set_scale(scale_for_backend(backend, scene.width(), scene.height()));
+    let pixmap = renderer.render(scene).ok();
     if pixmap.is_none() {
         eprintln!("[sinteract] failed to rasterize draw list");
     }
@@ -616,6 +625,7 @@ fn delete_kitty_image<W: Write>(w: &mut W, id: u32) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::pixmap::render_to_pixmap;
     use crate::renderer::tests::rect;
     use crate::scene::{Paint, PathStyle, Scene};
 
