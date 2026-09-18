@@ -1,4 +1,7 @@
 //! `InputEvent` to and from the Cap'n Proto struct.
+//!
+//! [`InputEvent::Close`] is not an event on the wire. The view sends it as
+//! the close of `ViewMessage`, so [`super::to_engine`] writes and reads it.
 
 use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
 use crate::event_capnp::{KeyKind as WKeyKind, input_event, key_event as wire_key_event};
@@ -21,21 +24,17 @@ fn key_kind_from_wire(k: WKeyKind) -> KeyKind {
     }
 }
 
-pub(super) fn write_input_event(mut b: input_event::Builder<'_>, ev: &InputEvent) {
-    match ev {
-        InputEvent::Key(k) => {
-            let mut kb: wire_key_event::Builder = b.init_key();
-            kb.set_kind(key_kind_to_wire(k.kind));
-            kb.set_key(&*k.key);
-            kb.set_alt(k.modifiers.alt);
-            kb.set_ctrl(k.modifiers.ctrl);
-            kb.set_shift(k.modifiers.shift);
-            kb.set_meta(k.modifiers.meta);
-            kb.set_repeat(k.repeat);
-        }
-        InputEvent::Vsync => b.set_tick(()),
-        InputEvent::Close => b.set_close(()),
-    }
+/// Write the key into `b`. [`InputEvent`] has no writer of its own,
+/// because its close is not an event on the wire but a message of the
+/// view.
+pub(super) fn write_key_event(mut b: wire_key_event::Builder<'_>, k: &KeyEvent) {
+    b.set_kind(key_kind_to_wire(k.kind));
+    b.set_key(&*k.key);
+    b.set_alt(k.modifiers.alt);
+    b.set_ctrl(k.modifiers.ctrl);
+    b.set_shift(k.modifiers.shift);
+    b.set_meta(k.modifiers.meta);
+    b.set_repeat(k.repeat);
 }
 
 /// `None` for an event of an arm from a newer schema, or for one that holds
@@ -64,7 +63,6 @@ fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEv
                 repeat: k.get_repeat(),
             })
         }
-        Which::Tick(()) => InputEvent::Vsync,
-        Which::Close(()) => InputEvent::Close,
+        Which::Tick(_) => InputEvent::Vsync,
     })
 }

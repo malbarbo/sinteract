@@ -645,7 +645,7 @@ mod tests {
     fn render_stream_matches_render_for_flat_path() {
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        let bytes = crate::wire::encode_frame(&scene);
+        let bytes = crate::wire::to_view::encode_frame(&scene);
 
         let mut r_atomic = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
         let pm_atomic = r_atomic.render(&scene).expect("render");
@@ -701,7 +701,7 @@ mod tests {
             let mut p = scene.path(solid(255, 0, 0), 0.0, 12.0);
             p.line_to(20.0, 20.0);
         }
-        let bytes = crate::wire::encode_frame(&scene);
+        let bytes = crate::wire::to_view::encode_frame(&scene);
 
         let mut direct = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
         let expected = direct.render(&scene).expect("render").clone();
@@ -719,7 +719,7 @@ mod tests {
             let mut clip_scope = scene.clip(square_clip(0.0, 0.0, 10.0));
             clip_scope.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
         }
-        let bytes = crate::wire::encode_frame(&scene);
+        let bytes = crate::wire::to_view::encode_frame(&scene);
 
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let pm = r.render_stream(&bytes[..]).expect("decode + render");
@@ -733,9 +733,10 @@ mod tests {
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
         scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
-        let bytes = crate::wire::with_unknown_value(&crate::wire::encode_frame(&scene), |m| {
-            crate::wire::tag_of(crate::wire::frame_of(m).get_elements().unwrap().get(0))
-        });
+        let bytes =
+            crate::wire::with_unknown_value(&crate::wire::to_view::encode_frame(&scene), |m| {
+                crate::wire::tag_of(crate::wire::frame_of(m).get_elements().unwrap().get(0))
+            });
 
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let pm = r.render_stream(&bytes[..]).expect("decode + render");
@@ -748,7 +749,8 @@ mod tests {
         // A red path with a paint arm of a newer schema, a clip with verbs of
         // a newer schema around another red path, and a blue path.
         use crate::scene_capnp::element::Which;
-        use crate::wire::{encode_frame, frame_of, tag_of, with_unknown_value};
+        use crate::wire::to_view::encode_frame;
+        use crate::wire::{frame_of, tag_of, with_unknown_value};
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
         {
@@ -777,7 +779,7 @@ mod tests {
 
     #[test]
     fn render_stream_rejects_non_frame_message() {
-        let bytes = crate::wire::protocol::encode_close();
+        let bytes = crate::wire::to_view::encode_close();
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let err = r.render_stream(&bytes[..]).expect_err("not a frame");
         assert!(matches!(err, crate::wire::StreamError::WrongMessageKind));
@@ -785,7 +787,7 @@ mod tests {
 
     #[test]
     fn render_stream_rejects_a_message_of_an_unknown_arm() {
-        let bytes = crate::wire::with_unknown_value(&crate::wire::protocol::encode_close(), |m| {
+        let bytes = crate::wire::with_unknown_value(&crate::wire::to_view::encode_close(), |m| {
             crate::wire::tag_of(m)
         });
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
@@ -913,7 +915,8 @@ mod tests {
             clip_scope.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
         }
         scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
-        let bytes = crate::wire::with_float(&crate::wire::encode_frame(&scene), mark, f32::NAN);
+        let bytes =
+            crate::wire::with_float(&crate::wire::to_view::encode_frame(&scene), mark, f32::NAN);
 
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let pm = r.render_stream(&bytes[..]).expect("decode + render");

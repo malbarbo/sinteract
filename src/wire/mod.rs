@@ -2,15 +2,17 @@
 //!
 //! [`scene`] and [`event`] convert the values of [`crate::scene`] and
 //! [`crate::event`] to and from the Cap'n Proto structs. Neither knows that
-//! a session exists. [`protocol`] wraps a payload in the `Message` union
-//! and unwraps it again, and owns everything about the session. A private
-//! third module decodes a frame straight onto a renderer, for
+//! a session exists. [`to_view`] and [`to_engine`] wrap the payloads in the
+//! message of their direction and unwrap them again, and own everything
+//! about the session. A private third module decodes a frame straight onto
+//! a renderer, for
 //! [`Renderer::render_stream`](crate::renderer::Renderer::render_stream).
 //!
-//! The generated bindings stay private, and a caller goes through
-//! [`write_frame`], [`write_event`], [`write_asset`], [`write_close`] and
-//! [`read`]. The bytes are the standard `serialize::write_message` format,
-//! so every Cap'n Proto binding reads them.
+//! The engine runs the program and writes with [`to_view`]. The view draws
+//! the frames, sends the input and writes with [`to_engine`]. Each side
+//! reads with the module of the other. The generated bindings stay private,
+//! and the bytes are the standard `serialize::write_message` format, so
+//! every Cap'n Proto binding reads them.
 //!
 //! [`framing`] is below all of them. It wraps an encoded message in the
 //! envelope that a byte stream needs to tell one message from the next.
@@ -20,13 +22,13 @@
 
 pub mod event;
 pub mod framing;
-pub mod protocol;
+mod protocol;
 pub mod scene;
 mod stream;
+pub mod to_engine;
+pub mod to_view;
 
-pub use protocol::{
-    Decoded, ReadError, encode_frame, read, write_asset, write_close, write_event, write_frame,
-};
+pub use protocol::ReadError;
 pub use stream::Error as StreamError;
 pub(crate) use stream::stream_frame;
 
@@ -40,7 +42,7 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
 
 /// A payload is malformed. It says the scene, the event or the message is
 /// unusable, and never that the session is. A server that gets one from
-/// [`read`] drops the message and keeps the peer. A value from a newer
+/// [`to_engine::read`] drops the message and keeps the peer. A value from a newer
 /// schema and a float that is not finite are not errors, since the decoders
 /// skip what holds them.
 #[derive(Debug)]
@@ -133,10 +135,28 @@ fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
 /// does not know, as a peer with a newer schema writes it. `find` points at
 /// the tag of a union, which every union of the schema keeps at offset 0 of
 /// its data section, at an enum field, or at the first two verbs of a path.
+/// `bytes` holds an `EngineMessage`.
 #[cfg(test)]
 pub(crate) fn with_unknown_value(
     bytes: &[u8],
-    find: impl FnOnce(crate::protocol_capnp::message::Reader<'_>) -> *const u8,
+    find: impl FnOnce(crate::protocol_capnp::engine_message::Reader<'_>) -> *const u8,
+) -> Vec<u8> {
+    with_unknown_value_in::<crate::protocol_capnp::engine_message::Owned>(bytes, find)
+}
+
+/// [`with_unknown_value`] for the bytes of a `ViewMessage`.
+#[cfg(test)]
+pub(crate) fn with_unknown_view_value(
+    bytes: &[u8],
+    find: impl FnOnce(crate::protocol_capnp::view_message::Reader<'_>) -> *const u8,
+) -> Vec<u8> {
+    with_unknown_value_in::<crate::protocol_capnp::view_message::Owned>(bytes, find)
+}
+
+#[cfg(test)]
+fn with_unknown_value_in<T: capnp::traits::Owned>(
+    bytes: &[u8],
+    find: impl FnOnce(T::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
     let mut words = capnp::Word::allocate_zeroed_vec(bytes.len() / 8);
     capnp::Word::words_to_bytes_mut(&mut words).copy_from_slice(bytes);
@@ -161,15 +181,15 @@ pub(crate) fn tag_of<'a>(r: impl capnp::traits::IntoInternalStructReader<'a>) ->
     capnp::raw::get_struct_data_section(r).as_ptr()
 }
 
-/// The scene of a `Message::Frame`, for [`with_unknown_value`].
+/// The scene of a frame, for [`with_unknown_value`].
 #[cfg(test)]
 pub(crate) fn frame_of(
-    m: crate::protocol_capnp::message::Reader<'_>,
+    m: crate::protocol_capnp::engine_message::Reader<'_>,
 ) -> crate::scene_capnp::scene::Reader<'_> {
-    match m.which() {
-        Ok(crate::protocol_capnp::message::Frame(f)) => f.expect("frame"),
-        _ => panic!("not a frame"),
-    }
+    let Ok(crate::protocol_capnp::engine_message::Frame(f)) = m.which() else {
+        panic!("not a frame");
+    };
+    f.expect("frame")
 }
 
 /// Replace every float `from` in `bytes` with `to`, as a peer that writes a
@@ -195,11 +215,12 @@ pub(crate) fn with_float(bytes: &[u8], from: f32, to: f32) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::protocol::{encode_asset, encode_close, encode_event};
+    use super::to_engine::encode as encode_event;
+    use super::to_view::{Message, encode_asset, encode_close, encode_frame};
     use super::*;
     use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
     use crate::event_capnp::input_event;
-    use crate::protocol_capnp::message;
+    use crate::protocol_capnp::{engine_message, view_message};
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, LineCap, LineJoin, Paint, Path,
         PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
@@ -279,15 +300,26 @@ mod tests {
         scene
     }
 
-    /// Decode a payload of an arm this schema knows, as [`read`] does
-    /// after the envelope.
-    fn decode(bytes: &[u8]) -> Result<Decoded, Error> {
-        Ok(protocol::decode(&words(bytes))?.expect("an arm this schema knows"))
+    /// Decode a message of the engine of an arm this schema knows, as
+    /// [`to_view::read`] does after the envelope.
+    fn decode(bytes: &[u8]) -> Result<Message, Error> {
+        Ok(to_view::decode(&words(bytes))?.expect("an arm this schema knows"))
     }
 
-    /// Whether [`read`] skips the payload in `bytes`.
+    /// Whether [`to_view::read`] skips the payload in `bytes`.
     fn is_skipped(bytes: &[u8]) -> bool {
-        matches!(protocol::decode(&words(bytes)), Ok(None))
+        matches!(to_view::decode(&words(bytes)), Ok(None))
+    }
+
+    /// Decode a message of the view of an arm this schema knows, as
+    /// [`to_engine::read`] does after the envelope.
+    fn decode_event(bytes: &[u8]) -> Result<InputEvent, Error> {
+        Ok(to_engine::decode(&words(bytes))?.expect("an arm this schema knows"))
+    }
+
+    /// Whether [`to_engine::read`] skips the payload in `bytes`.
+    fn is_event_skipped(bytes: &[u8]) -> bool {
+        matches!(to_engine::decode(&words(bytes)), Ok(None))
     }
 
     /// `bytes` in the words that the decoder reads in place.
@@ -311,7 +343,7 @@ mod tests {
         let scene = sample_scene();
         let bytes = encode_frame(&scene);
         match decode(&bytes).expect("decode") {
-            Decoded::Frame(d) => assert_scene_eq(&scene, &d),
+            Message::Frame(d) => assert_scene_eq(&scene, &d),
             other => panic!("expected Frame, got {other:?}"),
         }
     }
@@ -323,7 +355,7 @@ mod tests {
         assert_scene_eq(&scene::decode(&bytes).expect("decode"), &scene);
         assert!(
             bytes.len() < encode_frame(&scene).len(),
-            "a bare scene should be smaller than the same scene in a Message"
+            "a bare scene should be smaller than the same scene in an EngineMessage"
         );
     }
 
@@ -332,7 +364,7 @@ mod tests {
         let scene = Scene::new(640.0, 480.0);
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
-            Decoded::Frame(d) => {
+            Message::Frame(d) => {
                 assert_eq!(d.width(), 640.0);
                 assert_eq!(d.height(), 480.0);
                 assert!(d.elements().is_empty());
@@ -353,22 +385,24 @@ mod tests {
             },
             repeat: true,
         };
-        match decode(&encode_event(&InputEvent::Key(key.clone()))).unwrap() {
-            Decoded::Event(InputEvent::Key(k)) => assert_eq!(k, key),
+        match decode_event(&encode_event(&InputEvent::Key(key.clone()))).unwrap() {
+            InputEvent::Key(k) => assert_eq!(k, key),
             other => panic!("got {other:?}"),
         }
     }
 
     #[test]
     fn vsync_and_close_events_round_trip() {
-        match decode(&encode_event(&InputEvent::Vsync)).unwrap() {
-            Decoded::Event(ev) => assert!(ev.is_vsync()),
-            _ => panic!(),
-        }
-        match decode(&encode_event(&InputEvent::Close)).unwrap() {
-            Decoded::Event(ev) => assert!(ev.is_close()),
-            _ => panic!(),
-        }
+        assert!(
+            decode_event(&encode_event(&InputEvent::Vsync))
+                .unwrap()
+                .is_vsync()
+        );
+        assert!(
+            decode_event(&encode_event(&InputEvent::Close))
+                .unwrap()
+                .is_close()
+        );
     }
 
     #[test]
@@ -376,7 +410,7 @@ mod tests {
         let blob: Vec<u8> = (0u8..=255).collect();
         let bytes = encode_asset(42, &blob, Some("image/png"));
         match decode(&bytes).unwrap() {
-            Decoded::Asset {
+            Message::Asset {
                 id,
                 blob: out,
                 mime,
@@ -385,14 +419,14 @@ mod tests {
                 assert_eq!(out, blob);
                 assert_eq!(mime.as_deref(), Some("image/png"));
             }
-            _ => panic!(),
+            other => panic!("got {other:?}"),
         }
     }
 
     #[test]
     fn close_message_round_trips() {
         let bytes = encode_close();
-        assert!(matches!(decode(&bytes).unwrap(), Decoded::Close));
+        assert!(matches!(decode(&bytes).unwrap(), Message::Close));
     }
 
     #[test]
@@ -406,7 +440,7 @@ mod tests {
         // One Move claims 2 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<message::Builder>();
+            let msg = builder.init_root::<engine_message::Builder>();
             let frame = msg.init_frame();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -436,7 +470,7 @@ mod tests {
     fn a_path_with_no_initial_move_begins_at_the_origin() {
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<message::Builder>();
+            let msg = builder.init_root::<engine_message::Builder>();
             let frame = msg.init_frame();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -448,7 +482,7 @@ mod tests {
                 coords.set(i as u32, v);
             }
         }
-        let Decoded::Frame(d) = decode(&finish(builder)).unwrap() else {
+        let Message::Frame(d) = decode(&finish(builder)).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Path(p)] = d.elements() else {
@@ -478,7 +512,7 @@ mod tests {
         ];
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<message::Builder>();
+            let msg = builder.init_root::<engine_message::Builder>();
             let frame = msg.init_frame();
             let mut nodes = frame.init_elements(paths.len() as u32);
             for (i, (verbs, xs)) in paths.iter().enumerate() {
@@ -493,7 +527,7 @@ mod tests {
                 }
             }
         }
-        let Decoded::Frame(d) = decode(&finish(builder)).unwrap() else {
+        let Message::Frame(d) = decode(&finish(builder)).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Path(p), Element::Path(lone)] = d.elements() else {
@@ -511,7 +545,7 @@ mod tests {
         // One Cubic claims 6 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<message::Builder>();
+            let msg = builder.init_root::<engine_message::Builder>();
             let frame = msg.init_frame();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -575,7 +609,7 @@ mod tests {
             };
             tag_of(c.unwrap().get_elements().unwrap().get(1))
         });
-        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+        let Message::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Clipped { elements, .. }] = d.elements() else {
@@ -585,28 +619,30 @@ mod tests {
     }
 
     #[test]
-    fn a_message_of_an_unknown_arm_decodes_as_unknown() {
+    fn a_message_of_an_unknown_arm_is_skipped() {
         let bytes = with_unknown_value(&encode_close(), |m| tag_of(m));
         assert!(is_skipped(&bytes));
     }
 
     #[test]
-    fn an_event_of_an_unknown_arm_decodes_as_unknown() {
-        let bytes = with_unknown_value(&encode_event(&InputEvent::Vsync), |m| match m.which() {
-            Ok(message::Event(e)) => tag_of(e.unwrap()),
-            _ => panic!("not an event"),
+    fn an_event_of_an_unknown_arm_is_skipped() {
+        let bytes = with_unknown_view_value(&encode_event(&InputEvent::Vsync), |m| {
+            let Ok(view_message::Event(e)) = m.which() else {
+                panic!("not an event");
+            };
+            tag_of(e.unwrap())
         });
-        assert!(is_skipped(&bytes));
+        assert!(is_event_skipped(&bytes));
     }
 
-    fn element_at(m: message::Reader<'_>, i: u32) -> element::WhichReader<'_> {
+    fn element_at(m: engine_message::Reader<'_>, i: u32) -> element::WhichReader<'_> {
         let Ok(which) = frame_of(m).get_elements().unwrap().get(i).which() else {
             panic!("element {i} of an unknown arm");
         };
         which
     }
 
-    fn path_at(m: message::Reader<'_>, i: u32) -> crate::scene_capnp::path::Reader<'_> {
+    fn path_at(m: engine_message::Reader<'_>, i: u32) -> crate::scene_capnp::path::Reader<'_> {
         let element::Which::Path(p) = element_at(m, i) else {
             panic!("element {i} is not a Path");
         };
@@ -653,7 +689,7 @@ mod tests {
             c.unwrap().get_clip().unwrap().get_verbs().unwrap().as_ptr()
         });
 
-        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+        let Message::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Path(p)] = d.elements() else {
@@ -669,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn an_event_that_holds_an_unknown_value_decodes_as_unknown() {
+    fn an_event_that_holds_an_unknown_value_is_skipped() {
         let key = InputEvent::Key(KeyEvent {
             kind: KeyKind::Press,
             key: "a".into(),
@@ -677,8 +713,8 @@ mod tests {
             repeat: false,
         });
         // The kind is the u16 at byte 0 of the data of a KeyEvent.
-        let bytes = with_unknown_value(&encode_event(&key), |m| {
-            let Ok(message::Event(e)) = m.which() else {
+        let bytes = with_unknown_view_value(&encode_event(&key), |m| {
+            let Ok(view_message::Event(e)) = m.which() else {
                 panic!("not an event");
             };
             let Ok(input_event::Which::Key(k)) = e.unwrap().which() else {
@@ -686,7 +722,7 @@ mod tests {
             };
             tag_of(k.unwrap())
         });
-        assert!(is_skipped(&bytes));
+        assert!(is_event_skipped(&bytes));
     }
 
     #[test]
@@ -695,7 +731,7 @@ mod tests {
         // never writes, so the path is built by hand.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<message::Builder>();
+            let msg = builder.init_root::<engine_message::Builder>();
             let frame = msg.init_frame();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -713,7 +749,7 @@ mod tests {
             tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
         });
 
-        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+        let Message::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Path(p)] = d.elements() else {
@@ -747,7 +783,7 @@ mod tests {
         }
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
-            Decoded::Frame(d) => {
+            Message::Frame(d) => {
                 let node = d.elements().first().expect("one node");
                 let Element::Path(p) = node else {
                     panic!("expected path");
@@ -813,7 +849,7 @@ mod tests {
         }
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
-            Decoded::Frame(d) => {
+            Message::Frame(d) => {
                 let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
@@ -864,7 +900,7 @@ mod tests {
         }
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
-            Decoded::Frame(d) => {
+            Message::Frame(d) => {
                 let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
@@ -949,7 +985,7 @@ mod tests {
         }
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
-            Decoded::Frame(d) => {
+            Message::Frame(d) => {
                 let Element::Path(p0) = &d.elements()[0] else {
                     panic!();
                 };
@@ -981,7 +1017,7 @@ mod tests {
         }
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
-            Decoded::Frame(d) => {
+            Message::Frame(d) => {
                 let Element::Clipped { clip, elements } = &d.elements()[0] else {
                     panic!("expected Clipped, got {:?}", d.elements()[0]);
                 };
@@ -1013,7 +1049,7 @@ mod tests {
         // One Cubic claims 6 floats and 2 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<message::Builder>();
+            let msg = builder.init_root::<engine_message::Builder>();
             let frame = msg.init_frame();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -1064,7 +1100,7 @@ mod tests {
         }
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
-            Decoded::Frame(d) => {
+            Message::Frame(d) => {
                 assert_eq!(d.elements().len(), 1);
                 let Element::Clipped {
                     clip: _,
@@ -1095,7 +1131,7 @@ mod tests {
         scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
-            Decoded::Frame(d) => {
+            Message::Frame(d) => {
                 let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
@@ -1159,7 +1195,7 @@ mod tests {
         );
 
         let bytes = with_float(&encode_frame(&scene), mark, f32::NAN);
-        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+        let Message::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Clipped { elements, .. }, Element::Path(p)] = d.elements() else {
@@ -1190,7 +1226,7 @@ mod tests {
         scene.add_path(Path::builder(style, 0.0, 0.0).line_to(10.0, 10.0).build());
         let bytes = with_float(&encode_frame(&scene), 0.75, 0.125);
 
-        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+        let Message::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Path(p)] = d.elements() else {
@@ -1217,7 +1253,7 @@ mod tests {
         scene.add_path(Path::builder(style, 0.0, 0.0).line_to(10.0, 10.0).build());
         let bytes = with_float(&encode_frame(&scene), 8.0, 0.25);
 
-        let Decoded::Frame(d) = decode(&bytes).unwrap() else {
+        let Message::Frame(d) = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Path(p)] = d.elements() else {

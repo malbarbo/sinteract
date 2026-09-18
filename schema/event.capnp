@@ -15,7 +15,7 @@ enum KeyKind {
     up    @2;  # the key came up
 }
 
-# ----- Input events (client → server) -----
+# ----- Input events (view → engine) -----
 
 struct KeyEvent {
     kind   @0 :KeyKind;
@@ -34,8 +34,11 @@ struct KeyEvent {
 # a value it does not know, such as a key kind.
 struct InputEvent {
     union {
-        key   @0 :KeyEvent;
-        tick  @1 :Void;
-        close @2 :Void;
+        key  @0 :KeyEvent;
+        tick @1 :Tick;
     }
 }
+
+# The view is ready for the next frame. A struct and not a Void, so that a
+# sequence number can join it as a field.
+struct Tick {}

@@ -3,7 +3,7 @@
 use capnp::message::ReaderOptions;
 use capnp::serialize;
 
-use crate::protocol_capnp::message;
+use crate::protocol_capnp::engine_message;
 use crate::renderer::sealed::Canvas;
 use crate::scene::{Path, frame_size};
 use crate::scene_capnp::element;
@@ -20,8 +20,9 @@ use super::skip_unusable;
 pub enum Error {
     /// The frame itself is malformed.
     Payload(PayloadError),
-    /// The message decoded, but it is not a `Frame`, or it is an arm from a
-    /// newer schema. Use [`read`](super::read) for the other arms.
+    /// The message decoded, but it is not a frame, or it is an arm from a
+    /// newer schema. Use [`to_view::read`](super::to_view::read) for the
+    /// other arms.
     WrongMessageKind,
     /// The renderer could not size its surface for the frame.
     Surface(AllocError),
@@ -32,7 +33,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::Payload(e) => e.fmt(f),
             Error::WrongMessageKind => {
-                write!(f, "expected Message::Frame, got a different union arm")
+                write!(f, "expected a frame, got a different union arm")
             }
             Error::Surface(e) => e.fmt(f),
         }
@@ -59,27 +60,27 @@ impl From<AllocError> for Error {
     }
 }
 
-/// Decode one `Message::Frame` from `reader` and paint it onto `paint`. The
-/// reader is walked lazily, so the element list never becomes a
-/// `Vec<Element>`, and a `Clipped` subtree recurses through
+/// Decode one frame of an `EngineMessage` from `reader` and paint it onto
+/// `paint`. The reader is walked lazily, so the element list never becomes
+/// a `Vec<Element>`, and a `Clipped` subtree recurses through
 /// [`Paint::with_clip`]. Every path decodes into one scratch [`Path`] that
 /// the whole frame reuses, so decoding allocates about as much as the
 /// longest path.
 ///
 /// The surface is sized once, after the dimensions are known and before any
 /// element is painted. Any other message returns [`Error::WrongMessageKind`].
-/// Use [`read`](super::read) for those.
+/// Use [`to_view::read`](super::to_view::read) for those.
 pub(crate) fn stream_frame<P: Canvas, R: std::io::Read>(
     paint: &mut P,
     reader: R,
 ) -> Result<(), Error> {
     let msg = serialize::read_message(reader, ReaderOptions::new())?;
-    let m: message::Reader = msg.get_root()?;
+    let m: engine_message::Reader = msg.get_root()?;
     let Ok(which) = m.which() else {
         return Err(Error::WrongMessageKind);
     };
     match which {
-        message::Frame(f) => {
+        engine_message::Frame(f) => {
             let frame = f?;
             paint.ensure_size(
                 frame_size(frame.get_width()),
@@ -91,9 +92,7 @@ pub(crate) fn stream_frame<P: Canvas, R: std::io::Read>(
             }
             Ok(())
         }
-        message::Asset(_) | message::Event(_) | message::SessionClose(()) => {
-            Err(Error::WrongMessageKind)
-        }
+        engine_message::Asset(_) | engine_message::Close(_) => Err(Error::WrongMessageKind),
     }
 }
 
@@ -106,8 +105,8 @@ fn stream_elements<P: Canvas>(
 ) -> Result<(), Error> {
     use element::Which;
     for node in list.iter() {
-        // An element of an arm from a newer schema is skipped, as `read`
-        // skips it, and so is one that holds a value from a newer schema or
+        // An element of an arm from a newer schema is skipped, as
+        // `to_view::read` skips it, and so is one that holds a value from a newer schema or
         // a float that is not finite.
         let Ok(which) = node.which() else {
             continue;

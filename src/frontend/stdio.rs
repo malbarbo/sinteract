@@ -3,8 +3,9 @@
 //! subprocess, writes [`InputEvent`]s to its stdin and reads [`Scene`]
 //! frames from its stdout.
 //!
-//! Each message is a Cap'n Proto `Message` inside the envelope of
-//! [`crate::wire::framing`].
+//! The frontend is the engine side of the session. It writes with
+//! [`crate::wire::to_view`] and reads with [`crate::wire::to_engine`], and
+//! each message goes inside the envelope of [`crate::wire::framing`].
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use super::driver::OpenError;
 use super::inbox::{Inbox, Sender};
 use crate::event::{Event, InputEvent};
 use crate::scene::Scene;
-use crate::wire::{self, Decoded, ReadError};
+use crate::wire::{ReadError, to_engine, to_view};
 
 /// A frontend without a display. The peer sends the Vsync events, and this
 /// frontend only carries the protocol.
@@ -97,7 +98,7 @@ impl Stdio {
 impl super::Frontend for Stdio {
     /// Send a frame and flush, so the peer sees it at once.
     fn present(&mut self, scene: &Scene) {
-        self.send(|w| wire::write_frame(w, scene));
+        self.send(|w| to_view::write_frame(w, scene));
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
@@ -114,7 +115,7 @@ impl super::Frontend for Stdio {
     /// references `id`, because the peer may process the stream as it
     /// arrives.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) {
-        self.send(|w| wire::write_asset(w, id, blob, mime));
+        self.send(|w| to_view::write_asset(w, id, blob, mime));
     }
 
     /// Tell the peer that the session ended, unless the peer ended it.
@@ -122,7 +123,7 @@ impl super::Frontend for Stdio {
         if self.closed {
             return;
         }
-        self.send(wire::write_close);
+        self.send(to_view::write_close);
         self.closed = true;
         self.inbox.close();
     }
@@ -137,25 +138,14 @@ impl Drop for Stdio {
 }
 
 /// Read the messages of the peer into the queue until the stream or the
-/// session ends. Only the host sends an `Asset` or a `Frame`, so one from
-/// the peer means that the two ends swapped roles, and it ends the session.
-/// [`wire::read`] skips a message or an event of an arm from a newer
-/// schema. A payload that does not decode is logged and skipped, since the
-/// framing already found where the next message starts.
+/// session ends. [`to_engine::read`] skips a message or an event of an arm
+/// from a newer schema. A payload that does not decode is logged and
+/// skipped, since the framing already found where the next message starts.
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
-        let ev = match wire::read(&mut reader) {
-            Ok(None) => break,
-            Ok(Some(Decoded::Event(ev))) => ev,
-            Ok(Some(Decoded::Close)) => break,
-            Ok(Some(Decoded::Frame(_))) => {
-                wrong_direction("a frame");
-                break;
-            }
-            Ok(Some(Decoded::Asset { .. })) => {
-                wrong_direction("an asset");
-                break;
-            }
+        let ev = match to_engine::read(&mut reader) {
+            Ok(None | Some(InputEvent::Close)) => break,
+            Ok(Some(ev)) => ev,
             Err(ReadError::Payload(e)) => {
                 eprintln!("[sinteract::stdio] skipping a message that does not decode: {e}");
                 continue;
@@ -174,18 +164,17 @@ fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>)
     let _ = tx.send_input(InputEvent::Close);
 }
 
-fn wrong_direction(what: &str) {
-    eprintln!("[sinteract::stdio] the peer sent {what}, which only the host sends; closing");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::event::{KeyEvent as IrKeyEvent, KeyKind, Modifiers};
     use crate::frontend::Frontend;
+    use crate::protocol_capnp::view_message;
     use crate::scene::{Paint, PathStyle};
     use crate::wire::framing::FILE_IDENTIFIER;
-    use crate::wire::protocol::{encode_asset, encode_close, encode_event};
+    use crate::wire::to_engine::encode;
+    use crate::wire::to_view::Message;
+    use crate::wire::{self, to_view};
     use std::io::{Cursor, PipeWriter};
     use std::sync::Mutex;
     use std::time::Duration;
@@ -239,9 +228,9 @@ mod tests {
         }
     }
 
-    fn decode_messages(mut buf: &[u8]) -> Vec<Decoded> {
+    fn decode_messages(mut buf: &[u8]) -> Vec<Message> {
         let mut out = Vec::new();
-        while let Some(m) = wire::read(&mut buf).expect("decode") {
+        while let Some(m) = to_view::read(&mut buf).expect("decode") {
             out.push(m);
         }
         out
@@ -264,7 +253,7 @@ mod tests {
         }
         fr.present(&scene);
         match &decode_messages(&written.bytes())[..] {
-            [Decoded::Frame(d)] => {
+            [Message::Frame(d)] => {
                 assert_eq!(d.width(), 10.0);
                 assert!(!d.elements().is_empty());
             }
@@ -274,7 +263,7 @@ mod tests {
 
     #[test]
     fn wait_event_reads_key_event() {
-        let payload = encode_event(&InputEvent::Key(IrKeyEvent {
+        let payload = encode(&InputEvent::Key(IrKeyEvent {
             kind: KeyKind::Press,
             key: "ArrowDown".into(),
             modifiers: Modifiers::default(),
@@ -320,33 +309,19 @@ mod tests {
     }
 
     #[test]
-    fn an_asset_from_the_peer_ends_the_session() {
-        let mut stream = Vec::new();
-        stream.extend_from_slice(&frame(&encode_asset(1, b"png", Some("image/png"))));
-        stream.extend_from_slice(&frame(&encode_event(&InputEvent::Vsync)));
-        assert!(input(&mut reading(stream)).is_close());
-    }
-
-    #[test]
-    fn a_frame_from_the_peer_ends_the_session() {
-        let mut stream = Vec::new();
-        stream.extend_from_slice(&frame(&wire::encode_frame(&Scene::new(8.0, 8.0))));
-        stream.extend_from_slice(&frame(&encode_event(&InputEvent::Vsync)));
-        assert!(input(&mut reading(stream)).is_close());
-    }
-
-    #[test]
     fn wait_event_skips_a_message_and_an_event_of_an_unknown_arm() {
-        let unknown_message = wire::with_unknown_value(&encode_close(), |m| wire::tag_of(m));
-        let unknown_event =
-            wire::with_unknown_value(&encode_event(&InputEvent::Close), |m| match m.which() {
-                Ok(crate::protocol_capnp::message::Event(e)) => wire::tag_of(e.unwrap()),
-                _ => panic!("not an event"),
-            });
+        let unknown_message =
+            wire::with_unknown_view_value(&encode(&InputEvent::Close), |m| wire::tag_of(m));
+        let unknown_event = wire::with_unknown_view_value(&encode(&InputEvent::Vsync), |m| {
+            let Ok(view_message::Event(e)) = m.which() else {
+                panic!("not an event");
+            };
+            wire::tag_of(e.unwrap())
+        });
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&unknown_message));
         stream.extend_from_slice(&frame(&unknown_event));
-        stream.extend_from_slice(&frame(&encode_event(&InputEvent::Vsync)));
+        stream.extend_from_slice(&frame(&encode(&InputEvent::Vsync)));
         assert!(input(&mut reading(stream)).is_vsync());
     }
 
@@ -354,13 +329,13 @@ mod tests {
     fn wait_event_skips_a_payload_that_does_not_decode() {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&[0xff; 8]));
-        stream.extend_from_slice(&frame(&encode_event(&InputEvent::Vsync)));
+        stream.extend_from_slice(&frame(&encode(&InputEvent::Vsync)));
         assert!(input(&mut reading(stream)).is_vsync());
     }
 
     #[test]
     fn close_message_surfaces_as_close_event() {
-        let mut fr = reading(frame(&encode_close()));
+        let mut fr = reading(frame(&encode(&InputEvent::Close)));
         assert!(input(&mut fr).is_close());
     }
 
@@ -378,7 +353,7 @@ mod tests {
         fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"));
         fr.present(&Scene::new(8.0, 8.0));
         match &decode_messages(&written.bytes())[..] {
-            [Decoded::Asset { .. }, Decoded::Frame(_)] => {}
+            [Message::Asset { .. }, Message::Frame(_)] => {}
             other => panic!("expected an Asset and a Frame, got {other:?}"),
         }
     }
@@ -391,7 +366,7 @@ mod tests {
         fr.present(&Scene::new(8.0, 8.0));
         assert!(matches!(
             &decode_messages(&written.bytes())[..],
-            [Decoded::Close]
+            [Message::Close]
         ));
         assert!(input(&mut fr).is_close());
     }

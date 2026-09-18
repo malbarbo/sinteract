@@ -1,7 +1,7 @@
 //! `Scene` and the values it holds, to and from the Cap'n Proto structs.
 //!
-//! Nothing here knows about the `Message` envelope. A caller hands in a
-//! builder or a reader for the `Scene` struct of the schema, so the same
+//! Nothing here knows about the `EngineMessage` envelope. A caller hands in
+//! a builder or a reader for the `Scene` struct of the schema, so the same
 //! functions serve a frame inside a session and a scene on its own.
 
 use crate::scene::{
@@ -29,7 +29,7 @@ pub fn encode(scene: &Scene) -> Vec<u8> {
 }
 
 /// Decode a message that [`encode`] produced. A frame that arrived inside a
-/// session goes through [`super::read`] instead.
+/// session goes through [`super::to_view::read`] instead.
 pub fn decode(bytes: &[u8]) -> Result<Scene, Error> {
     let reader = capnp::serialize::read_message(
         std::io::Cursor::new(bytes),
