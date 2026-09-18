@@ -192,11 +192,6 @@ pub fn show_image(scene: &Scene) {
     let _ = stdout.flush();
 }
 
-/// Print the SVG source. A host uses it when the terminal has no graphics.
-pub fn show_svg(svg: &str) {
-    println!("{svg}");
-}
-
 /// Returns `true` if the terminal reports 24-bit color, `false` otherwise.
 /// The half-blocks fallback needs it.
 pub fn text_blocks_supported() -> bool {
