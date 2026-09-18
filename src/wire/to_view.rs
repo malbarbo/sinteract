@@ -13,7 +13,7 @@ use capnp::serialize;
 use crate::protocol_capnp::engine_message;
 use crate::scene::Scene;
 
-use super::framing::write_framed;
+use super::framing::{Player, Side, write_framed};
 use super::protocol::{ReadError, read_next};
 use super::scene::{read_scene, write_scene};
 use super::{Error, finish};
@@ -30,26 +30,32 @@ pub enum Message {
     Close,
 }
 
-/// Read the next message of the engine. Returns `None` at the end of the
-/// stream. A message of an arm from a newer schema is skipped, and the next
-/// one comes out.
-pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
-    read_next(r, decode)
+/// Read the next message of the engine, with the player it goes to.
+/// Returns `None` at the end of the stream. A message of an arm from a
+/// newer schema is skipped, and the next one comes out.
+pub fn read(r: &mut impl Read) -> Result<Option<(Player, Message)>, ReadError> {
+    read_next(r, Side::Engine, decode)
 }
 
-/// Write a scene as a frame.
-pub fn write_frame(w: &mut impl Write, scene: &Scene) -> io::Result<()> {
-    write_framed(w, &frame_message(scene))
+/// Write a scene as a frame for `player`.
+pub fn write_frame(w: &mut impl Write, player: Player, scene: &Scene) -> io::Result<()> {
+    write_framed(w, Side::Engine, player, &frame_message(scene))
 }
 
-/// Write a bitmap upload as an asset.
-pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8], mime: Option<&str>) -> io::Result<()> {
-    write_framed(w, &asset_message(id, blob, mime))
+/// Write a bitmap upload as an asset for `player`.
+pub fn write_asset(
+    w: &mut impl Write,
+    player: Player,
+    id: u32,
+    blob: &[u8],
+    mime: Option<&str>,
+) -> io::Result<()> {
+    write_framed(w, Side::Engine, player, &asset_message(id, blob, mime))
 }
 
-/// Write the close of the session.
-pub fn write_close(w: &mut impl Write) -> io::Result<()> {
-    write_framed(w, &close_message())
+/// Write the close of the session of `player`.
+pub fn write_close(w: &mut impl Write, player: Player) -> io::Result<()> {
+    write_framed(w, Side::Engine, player, &close_message())
 }
 
 /// Encode a scene as a frame, with no envelope, for a caller that keeps the

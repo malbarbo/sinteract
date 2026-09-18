@@ -11,7 +11,7 @@ use std::io::{self, Read};
 use capnp::Word;
 
 use super::Error;
-use super::framing::read_framed;
+use super::framing::{Player, Side, read_framed};
 
 /// Reading a message fails in two ways, and only the second leaves the
 /// session usable.
@@ -36,19 +36,21 @@ impl std::fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-/// Read messages until `decode` returns one. `decode` returns `None` for a
-/// message of an arm from a newer schema, which is skipped. `None` at the
-/// end of the stream.
+/// Read the messages that `side` wrote until `decode` returns one, and
+/// return it with its player. `decode` returns `None` for a message of an
+/// arm from a newer schema, which is skipped. `None` at the end of the
+/// stream.
 pub(super) fn read_next<T>(
     r: &mut impl Read,
+    side: Side,
     decode: impl Fn(&[Word]) -> Result<Option<T>, Error>,
-) -> Result<Option<T>, ReadError> {
+) -> Result<Option<(Player, T)>, ReadError> {
     loop {
-        let Some(words) = read_framed(r).map_err(ReadError::Broken)? else {
+        let Some((player, words)) = read_framed(r, side).map_err(ReadError::Broken)? else {
             return Ok(None);
         };
         if let Some(message) = decode(&words).map_err(ReadError::Payload)? {
-            return Ok(Some(message));
+            return Ok(Some((player, message)));
         }
     }
 }

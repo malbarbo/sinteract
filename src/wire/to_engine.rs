@@ -14,19 +14,21 @@ use crate::protocol_capnp::view_message;
 
 use super::Error;
 use super::event::{read_input_event, write_key_event};
-use super::framing::write_framed;
+use super::framing::{Player, Side, write_framed};
 use super::protocol::{ReadError, read_next};
 
-/// Read the next message of the view. Returns `None` at the end of the
-/// stream, and [`InputEvent::Close`] for its close. A message or an event of
-/// an arm from a newer schema is skipped, and the next one comes out.
-pub fn read(r: &mut impl Read) -> Result<Option<InputEvent>, ReadError> {
-    read_next(r, decode)
+/// Read the next message of the view, with the player it comes from.
+/// Returns `None` at the end of the stream, and [`InputEvent::Close`] for
+/// its close. A message or an event of an arm from a newer schema is
+/// skipped, and the next one comes out.
+pub fn read(r: &mut impl Read) -> Result<Option<(Player, InputEvent)>, ReadError> {
+    read_next(r, Side::View, decode)
 }
 
-/// Write `ev`, where [`InputEvent::Close`] is the close of the session.
-pub fn write(w: &mut impl Write, ev: &InputEvent) -> io::Result<()> {
-    write_framed(w, &message(ev))
+/// Write `ev` of `player`, where [`InputEvent::Close`] is the close of the
+/// session.
+pub fn write(w: &mut impl Write, player: Player, ev: &InputEvent) -> io::Result<()> {
+    write_framed(w, Side::View, player, &message(ev))
 }
 
 /// Decode the payload in `words` in place. `None` for a message or an event

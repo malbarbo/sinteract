@@ -5,7 +5,9 @@
 //!
 //! The frontend is the engine side of the session. It writes with
 //! [`crate::wire::to_view`] and reads with [`crate::wire::to_engine`], and
-//! each message goes inside the envelope of [`crate::wire::framing`].
+//! each message goes inside the envelope of [`crate::wire::framing`]. It
+//! serves one view, so its messages go to
+//! [`UNROUTED`].
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::sync::Arc;
@@ -17,6 +19,7 @@ use super::driver::OpenError;
 use super::inbox::{Inbox, Sender};
 use crate::event::{Event, InputEvent};
 use crate::scene::Scene;
+use crate::wire::framing::UNROUTED;
 use crate::wire::{ReadError, to_engine, to_view};
 
 /// A frontend without a display. The peer sends the Vsync events, and this
@@ -98,7 +101,7 @@ impl Stdio {
 impl super::Frontend for Stdio {
     /// Send a frame and flush, so the peer sees it at once.
     fn present(&mut self, scene: &Scene) {
-        self.send(|w| to_view::write_frame(w, scene));
+        self.send(|w| to_view::write_frame(w, UNROUTED, scene));
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
@@ -115,7 +118,7 @@ impl super::Frontend for Stdio {
     /// references `id`, because the peer may process the stream as it
     /// arrives.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) {
-        self.send(|w| to_view::write_asset(w, id, blob, mime));
+        self.send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime));
     }
 
     /// Tell the peer that the session ended, unless the peer ended it.
@@ -123,7 +126,7 @@ impl super::Frontend for Stdio {
         if self.closed {
             return;
         }
-        self.send(to_view::write_close);
+        self.send(|w| to_view::write_close(w, UNROUTED));
         self.closed = true;
         self.inbox.close();
     }
@@ -138,14 +141,15 @@ impl Drop for Stdio {
 }
 
 /// Read the messages of the peer into the queue until the stream or the
-/// session ends. [`to_engine::read`] skips a message or an event of an arm
+/// session ends. The frontend serves one view, so it takes the input of
+/// every player as its own. [`to_engine::read`] skips a message or an event of an arm
 /// from a newer schema. A payload that does not decode is logged and
 /// skipped, since the framing already found where the next message starts.
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
         let ev = match to_engine::read(&mut reader) {
-            Ok(None | Some(InputEvent::Close)) => break,
-            Ok(Some(ev)) => ev,
+            Ok(None | Some((_, InputEvent::Close))) => break,
+            Ok(Some((_, ev))) => ev,
             Err(ReadError::Payload(e)) => {
                 eprintln!("[sinteract::stdio] skipping a message that does not decode: {e}");
                 continue;
@@ -171,7 +175,7 @@ mod tests {
     use crate::frontend::Frontend;
     use crate::protocol_capnp::view_message;
     use crate::scene::{Paint, PathStyle};
-    use crate::wire::framing::FILE_IDENTIFIER;
+    use crate::wire::framing::{HEADER_BYTES, Side};
     use crate::wire::to_engine::encode;
     use crate::wire::to_view::Message;
     use crate::wire::{self, to_view};
@@ -201,8 +205,9 @@ mod tests {
     }
 
     fn frame(payload: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(payload.len() + 8);
-        out.extend_from_slice(&FILE_IDENTIFIER);
+        let mut out = Vec::with_capacity(HEADER_BYTES + payload.len());
+        out.extend_from_slice(&Side::View.magic());
+        out.extend_from_slice(&UNROUTED.to_le_bytes());
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.extend_from_slice(payload);
         out
@@ -230,7 +235,8 @@ mod tests {
 
     fn decode_messages(mut buf: &[u8]) -> Vec<Message> {
         let mut out = Vec::new();
-        while let Some(m) = to_view::read(&mut buf).expect("decode") {
+        while let Some((player, m)) = to_view::read(&mut buf).expect("decode") {
+            assert_eq!(player, UNROUTED);
             out.push(m);
         }
         out
@@ -343,8 +349,16 @@ mod tests {
     fn missing_magic_is_an_error_not_a_panic() {
         let mut bad = Vec::new();
         bad.extend_from_slice(b"junk");
-        bad.extend_from_slice(&[0u8; 4]);
+        bad.extend_from_slice(&[0u8; 8]);
         assert!(input(&mut reading(bad)).is_close());
+    }
+
+    #[test]
+    fn a_message_of_another_engine_ends_the_session() {
+        let mut stream = Vec::new();
+        to_view::write_close(&mut stream, UNROUTED).unwrap();
+        stream.extend_from_slice(&frame(&encode(&InputEvent::Vsync)));
+        assert!(input(&mut reading(stream)).is_close());
     }
 
     #[test]
