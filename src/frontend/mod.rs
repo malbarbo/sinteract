@@ -5,7 +5,7 @@
 //! whichever it opened.
 //!
 //! [`terminal`] shows a pixmap through Kitty, Sixel or half-blocks,
-//! [`term_query`] probes what the terminal supports, [`sixel`] encodes a
+//! `term_query` probes what the terminal supports, [`sixel`] encodes a
 //! pixmap for the terminals that take Sixel and not Kitty, and [`window`]
 //! shows a pixmap in a winit window. [`stdio`] has no display at all. It
 //! writes the frames and reads the events as Cap'n Proto messages, for a
@@ -24,7 +24,7 @@ mod inbox;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stdio;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod term_query;
+mod term_query;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod terminal;
 #[cfg(not(target_arch = "wasm32"))]
