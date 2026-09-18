@@ -21,8 +21,6 @@ mod driver;
 #[cfg(not(target_arch = "wasm32"))]
 mod inbox;
 #[cfg(not(target_arch = "wasm32"))]
-mod pixel;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod stdio;
 #[cfg(not(target_arch = "wasm32"))]
 mod term_query;

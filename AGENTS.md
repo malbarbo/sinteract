@@ -17,7 +17,7 @@ stream needs.
 `frontend/` shows a scene and reads the input back. `driver.rs` holds the
 sealed `Frontend` trait, `inbox.rs` the queue and the `Sender` behind
 `wait_event`, `terminal.rs`, `window.rs` and `stdio.rs` are the three
-frontends, and `sixel.rs`, `term_query.rs` and `pixel.rs` support them.
+frontends, and `sixel.rs` and `term_query.rs` support them.
 Only `sixel.rs` builds on wasm32, so the `cfg` sits on each submodule in
 `frontend/mod.rs` and not on the whole directory.
 
