@@ -41,8 +41,8 @@ pub fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
 /// changes.
 pub struct PixmapRenderer {
     pixmap: Pixmap,
-    /// The scale as a transform, applied to every path. The caller sets the
-    /// scale once, and decides with it whether a frame may grow.
+    /// The scale as a transform, applied to every path. The caller decides
+    /// with it whether a frame may grow.
     base: Transform,
     /// What each clip in effect leaves of the canvas.
     clip_stack: Vec<Clip>,
@@ -59,12 +59,11 @@ impl PixmapRenderer {
     /// sized first for a `width × height` frame. `None` when the surface
     /// cannot be allocated.
     pub fn new(scale: f32, width: f32, height: f32) -> Option<Self> {
-        // A zero or negative scale would allocate nothing to draw into.
-        let scale = scale.max(1e-3);
-        let (out_w, out_h) = out_size(width, height, scale);
+        let base = base(scale);
+        let (out_w, out_h) = out_size(width, height, base.sx);
         Some(Self {
             pixmap: Pixmap::new(out_w, out_h)?,
-            base: Transform::from_scale(scale, scale),
+            base,
             clip_stack: Vec::new(),
             mask_pool: Vec::new(),
             builder: PathBuilder::new(),
@@ -74,8 +73,7 @@ impl PixmapRenderer {
     /// Render the next frames at `scale`. The surface grows or shrinks at
     /// the next render.
     pub fn set_scale(&mut self, scale: f32) {
-        let scale = scale.max(1e-3);
-        self.base = Transform::from_scale(scale, scale);
+        self.base = base(scale);
     }
 
     /// The pixmap of the last render.
@@ -298,6 +296,13 @@ pub(crate) fn frame_px(width: f32, height: f32) -> (u32, u32) {
 }
 
 /// The size in output pixels of a frame at `scale`.
+/// The transform of `scale`. A zero or negative scale would allocate nothing
+/// to draw into.
+fn base(scale: f32) -> Transform {
+    let scale = scale.max(1e-3);
+    Transform::from_scale(scale, scale)
+}
+
 fn out_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
     let (w, h) = frame_px(width, height);
     let out_w = frame_side(((w as f32) * scale).ceil()) as u32;
