@@ -71,6 +71,13 @@ impl PixmapRenderer {
         })
     }
 
+    /// Render the next frames at `scale`. The surface grows or shrinks at
+    /// the next render.
+    pub fn set_scale(&mut self, scale: f32) {
+        let scale = scale.max(1e-3);
+        self.base = Transform::from_scale(scale, scale);
+    }
+
     /// The pixmap of the last render.
     pub fn into_pixmap(self) -> Pixmap {
         self.pixmap
@@ -637,6 +644,19 @@ mod tests {
 
         assert_same_pixels(pm_atomic, pm_streamed);
         assert_eq!(pixel_rgba(pm_streamed, 5, 5), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn set_scale_resizes_the_next_render() {
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 5.0, 5.0));
+        let mut r = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
+        r.render(&scene).expect("render");
+        r.set_scale(2.0);
+        let pm = r.render(&scene).expect("render");
+        assert_eq!((pm.width(), pm.height()), (20, 20));
+        assert_eq!(pixel_rgba(pm, 9, 9), (255, 0, 0, 255));
+        assert_eq!(pixel_rgba(pm, 11, 11).3, 0);
     }
 
     #[test]
