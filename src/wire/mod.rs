@@ -131,26 +131,13 @@ fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
     }
 }
 
-/// Overwrite the two bytes that `find` points at with a value this crate
-/// does not know, as a peer with a newer schema writes it. `find` points at
-/// the tag of a union, which every union of the schema keeps at offset 0 of
-/// its data section, at an enum field, or at the first two verbs of a path.
-/// `bytes` holds an `EngineMessage`.
+/// [`with_unknown_value`] for the bytes of an `EngineMessage`.
 #[cfg(test)]
-pub(crate) fn with_unknown_value(
+pub(crate) fn with_unknown_engine_value(
     bytes: &[u8],
     find: impl FnOnce(crate::protocol_capnp::engine_message::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
-    with_unknown_value_in::<crate::protocol_capnp::engine_message::Owned>(bytes, find)
-}
-
-/// [`with_unknown_value`] for the bytes of a bare `Scene`.
-#[cfg(test)]
-pub(crate) fn with_unknown_scene_value(
-    bytes: &[u8],
-    find: impl FnOnce(crate::scene_capnp::scene::Reader<'_>) -> *const u8,
-) -> Vec<u8> {
-    with_unknown_value_in::<crate::scene_capnp::scene::Owned>(bytes, find)
+    with_unknown_value::<crate::protocol_capnp::engine_message::Owned>(bytes, find)
 }
 
 /// [`with_unknown_value`] for the bytes of a `ViewMessage`.
@@ -159,26 +146,40 @@ pub(crate) fn with_unknown_view_value(
     bytes: &[u8],
     find: impl FnOnce(crate::protocol_capnp::view_message::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
-    with_unknown_value_in::<crate::protocol_capnp::view_message::Owned>(bytes, find)
+    with_unknown_value::<crate::protocol_capnp::view_message::Owned>(bytes, find)
 }
 
+/// [`with_unknown_value`] for the bytes of a bare `Scene`.
 #[cfg(test)]
-fn with_unknown_value_in<T: capnp::traits::Owned>(
+pub(crate) fn with_unknown_scene_value(
+    bytes: &[u8],
+    find: impl FnOnce(crate::scene_capnp::scene::Reader<'_>) -> *const u8,
+) -> Vec<u8> {
+    with_unknown_value::<crate::scene_capnp::scene::Owned>(bytes, find)
+}
+
+/// Overwrite the two bytes that `find` points at with a value this crate
+/// does not know, as a peer with a newer schema writes it. `find` points at
+/// the tag of a union, which every union of the schema keeps at offset 0 of
+/// its data section, at an enum field, or at the first two verbs of a path.
+/// `bytes` holds a message whose root is `T`, and the compiler cannot infer
+/// `T` from `find`, so each root has a wrapper.
+#[cfg(test)]
+fn with_unknown_value<T: capnp::traits::Owned>(
     bytes: &[u8],
     find: impl FnOnce(T::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
+    // The reader needs the bytes aligned to words.
     let mut words = capnp::Word::allocate_zeroed_vec(bytes.len() / 8);
     capnp::Word::words_to_bytes_mut(&mut words).copy_from_slice(bytes);
-    let mut out = capnp::Word::words_to_bytes(&words).to_vec();
-    let at = {
-        let buf = capnp::Word::words_to_bytes(&words);
-        let msg = capnp::serialize::read_message_from_flat_slice_no_alloc(
-            &mut &buf[..],
-            capnp::message::ReaderOptions::new(),
-        )
-        .expect("parse");
-        find(msg.get_root().expect("root")) as usize - buf.as_ptr() as usize
-    };
+    let buf = capnp::Word::words_to_bytes(&words);
+    let msg = capnp::serialize::read_message_from_flat_slice_no_alloc(
+        &mut &buf[..],
+        capnp::message::ReaderOptions::new(),
+    )
+    .expect("parse");
+    let at = find(msg.get_root().expect("root")) as usize - buf.as_ptr() as usize;
+    let mut out = bytes.to_vec();
     out[at..at + 2].copy_from_slice(&0xfff0u16.to_le_bytes());
     out
 }
@@ -190,7 +191,7 @@ pub(crate) fn tag_of<'a>(r: impl capnp::traits::IntoInternalStructReader<'a>) ->
     capnp::raw::get_struct_data_section(r).as_ptr()
 }
 
-/// The scene of a frame, for [`with_unknown_value`].
+/// The scene of a frame, for [`with_unknown_engine_value`].
 #[cfg(test)]
 pub(crate) fn frame_of(
     m: crate::protocol_capnp::engine_message::Reader<'_>,
@@ -608,10 +609,10 @@ mod tests {
                 },
             ));
         }
-        let bytes = with_unknown_value(&encode_frame(&scene), |m| {
+        let bytes = with_unknown_engine_value(&encode_frame(&scene), |m| {
             tag_of(frame_of(m).get_elements().unwrap().get(0))
         });
-        let bytes = with_unknown_value(&bytes, |m| {
+        let bytes = with_unknown_engine_value(&bytes, |m| {
             let Ok(element::Which::Clipped(c)) = frame_of(m).get_elements().unwrap().get(1).which()
             else {
                 panic!("expected Clipped");
@@ -629,7 +630,7 @@ mod tests {
 
     #[test]
     fn a_message_of_an_unknown_arm_is_skipped() {
-        let bytes = with_unknown_value(&encode_close(), |m| tag_of(m));
+        let bytes = with_unknown_engine_value(&encode_close(), |m| tag_of(m));
         assert!(is_skipped(&bytes));
     }
 
@@ -683,15 +684,16 @@ mod tests {
                 .build(),
         );
 
-        let bytes = with_unknown_value(&encode_frame(&scene), |m| {
+        let bytes = with_unknown_engine_value(&encode_frame(&scene), |m| {
             tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
         });
         // The line cap is the u16 at byte 4 of the data of a PathStyle.
-        let bytes = with_unknown_value(&bytes, |m| {
+        let bytes = with_unknown_engine_value(&bytes, |m| {
             tag_of(path_at(m, 1).get_style().unwrap()).wrapping_add(4)
         });
-        let bytes = with_unknown_value(&bytes, |m| path_at(m, 2).get_verbs().unwrap().as_ptr());
-        let bytes = with_unknown_value(&bytes, |m| {
+        let bytes =
+            with_unknown_engine_value(&bytes, |m| path_at(m, 2).get_verbs().unwrap().as_ptr());
+        let bytes = with_unknown_engine_value(&bytes, |m| {
             let element::Which::Clipped(c) = element_at(m, 3) else {
                 panic!("expected Clipped");
             };
@@ -754,7 +756,7 @@ mod tests {
             coords.set(0, 1.0);
             coords.set(1, 1.0);
         }
-        let bytes = with_unknown_value(&finish(builder), |m| {
+        let bytes = with_unknown_engine_value(&finish(builder), |m| {
             tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
         });
 
