@@ -77,8 +77,6 @@ impl Window {
                 let _ = proxy.send_event(());
             })),
         );
-        let renderer = PixmapRenderer::new(1.0, width, height)
-            .ok_or_else(|| OpenError::Platform("cannot allocate the frame".into()))?;
         let (w, h) = frame_px(width, height);
         let attrs = WindowAttributes::default()
             .with_title(title)
@@ -100,7 +98,7 @@ impl Window {
                 app,
                 window,
                 surface,
-                renderer,
+                renderer: PixmapRenderer::default(),
                 last: None,
             }),
             warned_bitmaps: false,
