@@ -75,12 +75,10 @@ pub(crate) struct Inbox {
     tx: mpsc::Sender<Item>,
     wake: Option<Waker>,
     rx: mpsc::Receiver<Item>,
-    /// What left the channel and did not go out yet, oldest first.
+    /// What left the channel and did not go out yet, oldest first, except
+    /// for a Vsync, which waits in `vsync`.
     pending: VecDeque<Item>,
-    /// `pending` holds a Vsync.
-    vsync_pending: bool,
-    /// `None` when the Vsync events come through the channel, as on stdio.
-    clock: Option<VsyncClock>,
+    vsync: Vsync,
     /// Set by the first Close out or by [`Inbox::close`]. Every wait
     /// returns Close from then on.
     closed: bool,
@@ -106,8 +104,13 @@ impl Inbox {
             wake,
             rx,
             pending: VecDeque::new(),
-            vsync_pending: false,
-            clock: vsync_period.map(VsyncClock::new),
+            vsync: match vsync_period {
+                Some(period) => Vsync::Clock {
+                    period,
+                    due: Instant::now(),
+                },
+                None => Vsync::Channel { arrived: None },
+            },
             closed: false,
         }
     }
@@ -125,7 +128,6 @@ impl Inbox {
         self.closed = true;
         self.rx = mpsc::channel().1;
         self.pending.clear();
-        self.vsync_pending = false;
     }
 
     /// The oldest event, or [`Event::Timeout`] once `deadline` passes. A
@@ -172,72 +174,75 @@ impl Inbox {
     }
 
     /// When a wait until `deadline` has to stop and look again, the earlier
-    /// of `deadline` and the next Vsync of the clock. `None` waits for as
-    /// long as it takes.
+    /// of `deadline` and the next Vsync. `None` waits for as long as it
+    /// takes.
     pub(crate) fn wake_at(&self, deadline: Option<Instant>) -> Option<Instant> {
-        match (deadline, self.clock.as_ref().map(|c| c.due)) {
+        match (deadline, self.vsync.at()) {
             (Some(d), Some(v)) => Some(d.min(v)),
             (d, v) => d.or(v),
         }
     }
 
-    /// Queue `item`, unless it is a Vsync and one already waits. A host
-    /// that falls behind gets one Vsync, not a burst.
+    /// Queue `item`. A Vsync from the channel waits in `vsync`, unless one
+    /// already waits, so a host that falls behind gets one Vsync, not a
+    /// burst. A clock makes every Vsync, so it drops one from the channel.
     fn push(&mut self, item: Item) {
         if matches!(item.event, Event::Input(InputEvent::Vsync)) {
-            if self.vsync_pending {
-                return;
+            if let Vsync::Channel { arrived } = &mut self.vsync {
+                arrived.get_or_insert(item.at);
             }
-            self.vsync_pending = true;
+            return;
         }
         self.pending.push_back(item);
     }
 
-    /// The oldest of the front of `pending` and a Vsync of the clock due by
+    /// The older of the front of `pending` and a Vsync that arrived by
     /// `now`, or `None` when neither exists.
     fn pop(&mut self, now: Instant) -> Option<Event> {
-        let vsync_due = self.clock.as_ref().map(|c| c.due).filter(|&due| due <= now);
-        let front_at = self.pending.front().map(|item| item.at);
-        match (front_at, vsync_due) {
-            (Some(at), Some(due)) if due < at => Some(self.fire(now)),
-            (Some(_), _) => {
-                let item = self.pending.pop_front()?;
-                Some(self.deliver(item.event))
-            }
-            (None, Some(_)) => Some(self.fire(now)),
-            (None, None) => None,
+        let front = self.pending.front().map(|item| item.at);
+        let vsync = self.vsync.at().filter(|&at| at <= now);
+        if vsync.is_some_and(|v| front.is_none_or(|f| v < f)) {
+            self.vsync.deliver(now);
+            return Some(Event::Input(InputEvent::Vsync));
         }
-    }
-
-    fn fire(&mut self, now: Instant) -> Event {
-        if let Some(clock) = self.clock.as_mut() {
-            clock.due = now + clock.period;
+        let event = self.pending.pop_front()?.event;
+        if matches!(event, Event::Input(InputEvent::Close)) {
+            self.close();
         }
-        Event::Input(InputEvent::Vsync)
-    }
-
-    fn deliver(&mut self, event: Event) -> Event {
-        match &event {
-            Event::Input(InputEvent::Vsync) => self.vsync_pending = false,
-            Event::Input(InputEvent::Close) => self.close(),
-            _ => {}
-        }
-        event
+        Some(event)
     }
 }
 
-/// A software Vsync, for a frontend without a platform one.
-struct VsyncClock {
-    period: Duration,
-    /// When the next Vsync falls due. The first one is due at once.
-    due: Instant,
+/// Where the Vsync events come from.
+enum Vsync {
+    /// A software clock, for a frontend without a platform Vsync.
+    Clock {
+        period: Duration,
+        /// When the next Vsync falls due. The first one is due at once.
+        due: Instant,
+    },
+    /// The channel, as on stdio.
+    Channel {
+        /// When the Vsync that waits arrived.
+        arrived: Option<Instant>,
+    },
 }
 
-impl VsyncClock {
-    fn new(period: Duration) -> Self {
-        Self {
-            period,
-            due: Instant::now(),
+impl Vsync {
+    /// When the next Vsync counts as arrived, or `None` when none waits.
+    fn at(&self) -> Option<Instant> {
+        match *self {
+            Vsync::Clock { due, .. } => Some(due),
+            Vsync::Channel { arrived } => arrived,
+        }
+    }
+
+    /// The Vsync went out at `now`. The clock counts the next period from
+    /// the delivery, so a host slower than the period still gets its input.
+    fn deliver(&mut self, now: Instant) {
+        match self {
+            Vsync::Clock { period, due } => *due = now + *period,
+            Vsync::Channel { arrived } => *arrived = None,
         }
     }
 }
@@ -391,6 +396,16 @@ mod tests {
         assert_eq!(key_name(&inbox.pop(late).unwrap()), Some("a"));
         assert!(is_vsync(&inbox.pop(late).unwrap()));
         assert!(inbox.pop(late).is_none());
+    }
+
+    #[test]
+    fn the_clock_drops_a_vsync_from_the_channel() {
+        let period = Duration::from_millis(16);
+        let mut inbox = Inbox::new(Some(period));
+        let t0 = Instant::now();
+        assert!(is_vsync(&inbox.pop(t0).unwrap()));
+        inbox.push(item(t0, InputEvent::Vsync));
+        assert!(inbox.pop(t0).is_none());
     }
 
     #[test]
