@@ -4,7 +4,7 @@
 //! [`crate::event`] to and from the Cap'n Proto structs. Neither knows that
 //! a session exists. [`to_view`] and [`to_engine`] wrap the payloads in the
 //! message of their direction and unwrap them again, and own everything
-//! about the session. A private third module decodes a frame straight onto
+//! about the session. A private third module decodes a scene straight onto
 //! a renderer, for
 //! [`Renderer::render_stream`](crate::renderer::Renderer::render_stream).
 //!
@@ -142,6 +142,15 @@ pub(crate) fn with_unknown_value(
     find: impl FnOnce(crate::protocol_capnp::engine_message::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
     with_unknown_value_in::<crate::protocol_capnp::engine_message::Owned>(bytes, find)
+}
+
+/// [`with_unknown_value`] for the bytes of a bare `Scene`.
+#[cfg(test)]
+pub(crate) fn with_unknown_scene_value(
+    bytes: &[u8],
+    find: impl FnOnce(crate::scene_capnp::scene::Reader<'_>) -> *const u8,
+) -> Vec<u8> {
+    with_unknown_value_in::<crate::scene_capnp::scene::Owned>(bytes, find)
 }
 
 /// [`with_unknown_value`] for the bytes of a `ViewMessage`.

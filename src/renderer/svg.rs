@@ -680,7 +680,7 @@ mod tests {
             clipped.add_path(rect(red_fill(0.5), 0.0, 0.0, 40.0, 40.0));
             clipped.text(text("Hi"));
         }
-        let bytes = crate::wire::to_view::encode_frame(&scene);
+        let bytes = crate::wire::scene::encode(&scene);
         let mut r = SvgRenderer::new();
         let streamed = r.render_stream(&bytes[..]).expect("decode + render");
         assert_eq!(streamed, render_to_svg(&scene));
@@ -744,7 +744,7 @@ mod tests {
         let zero = render_to_svg(&Scene::new(0.0, 0.0));
         assert_eq!(render_to_svg(&Scene::new(f32::INFINITY, f32::NAN)), zero);
         let (width, height) = (777.0, 778.0);
-        let bytes = crate::wire::to_view::encode_frame(&Scene::new(width, height));
+        let bytes = crate::wire::scene::encode(&Scene::new(width, height));
         let bytes = crate::wire::with_float(&bytes, width, f32::INFINITY);
         let bytes = crate::wire::with_float(&bytes, height, f32::NAN);
         let mut r = SvgRenderer::new();

@@ -3,10 +3,9 @@
 use capnp::message::ReaderOptions;
 use capnp::serialize;
 
-use crate::protocol_capnp::engine_message;
 use crate::renderer::sealed::Canvas;
 use crate::scene::{Path, frame_size};
-use crate::scene_capnp::element;
+use crate::scene_capnp::{element, scene as wire_scene};
 
 use crate::renderer::AllocError;
 
@@ -14,16 +13,11 @@ use super::Error as PayloadError;
 use super::scene::{read_bitmap, read_clip_path, read_path_into, read_text_node};
 use super::skip_unusable;
 
-/// Decoding a frame and painting it fail in three ways, and only the first
-/// leaves the session usable.
+/// Decoding a scene and painting it fail in two ways.
 #[derive(Debug)]
 pub enum Error {
-    /// The frame itself is malformed.
+    /// The scene itself is malformed.
     Payload(PayloadError),
-    /// The message decoded, but it is not a frame, or it is an arm from a
-    /// newer schema. Use [`to_view::read`](super::to_view::read) for the
-    /// other arms.
-    WrongMessageKind,
     /// The renderer could not size its surface for the frame.
     Surface(AllocError),
 }
@@ -32,9 +26,6 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Payload(e) => e.fmt(f),
-            Error::WrongMessageKind => {
-                write!(f, "expected a frame, got a different union arm")
-            }
             Error::Surface(e) => e.fmt(f),
         }
     }
@@ -60,40 +51,30 @@ impl From<AllocError> for Error {
     }
 }
 
-/// Decode one frame of an `EngineMessage` from `reader` and paint it onto
-/// `paint`. The reader is walked lazily, so the element list never becomes
+/// Decode one scene that [`super::scene::encode`] wrote from `reader` and
+/// paint it onto `paint`. The reader is walked lazily, so the element list never becomes
 /// a `Vec<Element>`, and a `Clipped` subtree recurses through
 /// [`Paint::with_clip`]. Every path decodes into one scratch [`Path`] that
 /// the whole frame reuses, so decoding allocates about as much as the
 /// longest path.
 ///
 /// The surface is sized once, after the dimensions are known and before any
-/// element is painted. Any other message returns [`Error::WrongMessageKind`].
-/// Use [`to_view::read`](super::to_view::read) for those.
+/// element is painted.
 pub(crate) fn stream_frame<P: Canvas, R: std::io::Read>(
     paint: &mut P,
     reader: R,
 ) -> Result<(), Error> {
     let msg = serialize::read_message(reader, ReaderOptions::new())?;
-    let m: engine_message::Reader = msg.get_root()?;
-    let Ok(which) = m.which() else {
-        return Err(Error::WrongMessageKind);
-    };
-    match which {
-        engine_message::Frame(f) => {
-            let frame = f?;
-            paint.ensure_size(
-                frame_size(frame.get_width()),
-                frame_size(frame.get_height()),
-            )?;
-            if frame.has_elements() {
-                let mut scratch = Path::default();
-                stream_elements(paint, frame.get_elements()?, &mut scratch)?;
-            }
-            Ok(())
-        }
-        engine_message::Asset(_) | engine_message::Close(_) => Err(Error::WrongMessageKind),
+    let scene: wire_scene::Reader = msg.get_root()?;
+    paint.ensure_size(
+        frame_size(scene.get_width()),
+        frame_size(scene.get_height()),
+    )?;
+    if scene.has_elements() {
+        let mut scratch = Path::default();
+        stream_elements(paint, scene.get_elements()?, &mut scratch)?;
     }
+    Ok(())
 }
 
 /// `scratch` is the one [`Path`] of the frame. A clip gets its own, because
@@ -106,8 +87,8 @@ fn stream_elements<P: Canvas>(
     use element::Which;
     for node in list.iter() {
         // An element of an arm from a newer schema is skipped, as
-        // `to_view::read` skips it, and so is one that holds a value from a newer schema or
-        // a float that is not finite.
+        // `read_scene` skips it, and so is one that holds a value from a
+        // newer schema or a float that is not finite.
         let Ok(which) = node.which() else {
             continue;
         };

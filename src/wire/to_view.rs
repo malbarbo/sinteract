@@ -12,10 +12,10 @@ use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 use crate::protocol_capnp::engine_message;
 use crate::scene::Scene;
 
+use super::Error;
 use super::framing::{Player, Side, write_framed};
 use super::protocol::{ReadError, decode_root, read_next};
 use super::scene::{read_scene, write_scene};
-use super::{Error, finish};
 
 /// One message of the engine, one variant per arm of `EngineMessage`.
 #[derive(Clone, Debug)]
@@ -55,13 +55,6 @@ pub fn write_asset(
 /// Write the close of the session of `player`.
 pub fn write_close(w: &mut impl Write, player: Player) -> io::Result<()> {
     write_framed(w, Side::Engine, player, &close_message())
-}
-
-/// Encode a scene as a frame, with no envelope, for a caller that keeps the
-/// payload in memory, such as
-/// [`Renderer::render_stream`](crate::renderer::Renderer::render_stream).
-pub fn encode_frame(scene: &Scene) -> Vec<u8> {
-    finish(frame_message(scene))
 }
 
 /// Decode the payload in `words` in place. `None` for a message of an arm
@@ -122,14 +115,20 @@ fn close_message() -> MessageBuilder<HeapAllocator> {
     builder
 }
 
+/// Encode a scene as a frame, with no envelope.
+#[cfg(test)]
+pub(crate) fn encode_frame(scene: &Scene) -> Vec<u8> {
+    super::finish(frame_message(scene))
+}
+
 /// Encode a bitmap upload as an asset, with no envelope.
 #[cfg(test)]
 pub(crate) fn encode_asset(id: u32, blob: &[u8], mime: Option<&str>) -> Vec<u8> {
-    finish(asset_message(id, blob, mime))
+    super::finish(asset_message(id, blob, mime))
 }
 
 /// Encode the close of the session, with no envelope.
 #[cfg(test)]
 pub(crate) fn encode_close() -> Vec<u8> {
-    finish(close_message())
+    super::finish(close_message())
 }

@@ -46,10 +46,9 @@ pub trait Renderer: sealed::Canvas {
         Ok(self.output())
     }
 
-    /// Decode one `Frame` from `reader` and render it without building the
-    /// [`Element`](crate::scene::Element) tree. A message that is not a
-    /// `Frame` returns
-    /// [`StreamError::WrongMessageKind`](crate::wire::StreamError::WrongMessageKind).
+    /// Decode one scene that [`wire::scene::encode`](crate::wire::scene::encode)
+    /// wrote from `reader` and render it without building the
+    /// [`Element`](crate::scene::Element) tree.
     fn render_stream(
         &mut self,
         reader: impl Read,
