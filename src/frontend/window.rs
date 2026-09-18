@@ -52,6 +52,8 @@ struct Session {
     surface: Surface<Rc<WinitWindow>, Rc<WinitWindow>>,
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
     renderer: PixmapRenderer,
+    /// The scene of the last present, drawn again when the platform asks.
+    last: Option<Scene>,
 }
 
 impl Window {
@@ -99,6 +101,7 @@ impl Window {
                 window,
                 surface,
                 renderer,
+                last: None,
             }),
             warned_bitmaps: false,
         })
@@ -112,6 +115,7 @@ impl super::Frontend for Window {
         };
         warn_bitmaps_once(&mut self.warned_bitmaps, scene, "window");
         session.draw(scene);
+        session.last = Some(scene.clone());
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
@@ -129,6 +133,9 @@ impl super::Frontend for Window {
                 Some(s) => {
                     if !s.lent.pump(&mut s.app, timeout) {
                         let _ = s.app.tx.send_input(InputEvent::Close);
+                    }
+                    if mem::take(&mut s.app.damaged) {
+                        s.redraw();
                     }
                 }
                 // A closed inbox returns Close from poll.
@@ -195,6 +202,14 @@ impl Session {
         };
         blit_pixmap(pixmap, &mut buffer, target_px);
         let _ = buffer.present();
+    }
+
+    /// Draw the last scene again, at the current size of the window.
+    fn redraw(&mut self) {
+        if let Some(scene) = self.last.take() {
+            self.draw(&scene);
+            self.last = Some(scene);
+        }
     }
 }
 
@@ -393,6 +408,8 @@ struct App {
     /// session can still be in the loop.
     id: Option<WindowId>,
     modifiers: ModifiersState,
+    /// The platform lost the pixels of the window, or its size changed.
+    damaged: bool,
 }
 
 impl App {
@@ -403,6 +420,7 @@ impl App {
             created: None,
             id: None,
             modifiers: ModifiersState::empty(),
+            damaged: false,
         }
     }
 
@@ -440,6 +458,11 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                 let _ = self.tx.send_input(InputEvent::Close);
+            }
+            WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. }
+            | WindowEvent::RedrawRequested => {
+                self.damaged = true;
             }
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
