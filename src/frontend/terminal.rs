@@ -118,16 +118,14 @@ impl super::Frontend for Terminal {
         };
         let mut stdout = io::stdout().lock();
         // A smaller frame leaves the edges of the one before. The same Kitty
-        // id replaces the whole image, and a clear on every frame flickers.
+        // id replaces the whole image in place, and a clear, or a delete
+        // before the transmit, shows the cleared cells for one refresh.
         let size = (pixmap.width(), pixmap.height());
         if self.frame_size.replace(size) != Some(size) && self.backend != Backend::Kitty {
             let _ = queue!(stdout, terminal::Clear(terminal::ClearType::All));
         }
         let _ = queue!(stdout, cursor::MoveTo(0, 0));
         let _ = match self.backend {
-            // The same image id replaces the frame in place. A delete
-            // followed by a transmit shows the cleared cells for one refresh
-            // and flickers.
             Backend::Kitty => emit_kitty(&mut stdout, &pixmap, Some(KITTY_ANIMATION_ID)),
             Backend::Sixel => {
                 sixel::encode(&pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))

@@ -69,8 +69,7 @@ impl fmt::Display for Closed {
 
 impl std::error::Error for Closed {}
 
-/// The receiving end. It holds a sender of its own for
-/// [`Inbox::sender`], so the channel never disconnects.
+/// The receiving end. It holds a sender of its own for [`Inbox::sender`].
 pub(crate) struct Inbox {
     tx: mpsc::Sender<Item>,
     wake: Option<Waker>,
@@ -134,9 +133,7 @@ impl Inbox {
     /// `deadline` of `None` waits for as long as it takes.
     ///
     /// A Vsync of the clock counts as arrived when it falls due, so input
-    /// that arrived before it goes out first. The clock counts the next
-    /// period from the delivery, so a host slower than the period gets one
-    /// Vsync per call and the input still goes out.
+    /// that arrived before it goes out first.
     pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Event {
         loop {
             if let Some(event) = self.poll() {
