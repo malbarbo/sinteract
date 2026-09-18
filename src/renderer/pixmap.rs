@@ -507,7 +507,7 @@ impl PathSink for PathBuilder {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, PathStyle, Scene, Stop, TextSpec};
+    use crate::scene::{Dash, PathStyle, Rgba, RotatedRect, Scene, Stop, Text, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -932,5 +932,293 @@ mod tests {
         // The square sits at the middle of the axis, so it takes the middle
         // of the ramp, which is where the svg and the pdf put it too.
         assert_eq!(pixel_rgba(&pm, 10, 10), (0, 0, 100, 255));
+    }
+
+    fn rasterize(scene: &Scene) -> Pixmap {
+        render_to_pixmap(scene, 1.0).expect("pixmap")
+    }
+
+    fn text_node(cx: f32, cy: f32, bw: f32, bh: f32, size: f32, text: &str) -> Text {
+        Text {
+            fill: Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            ..TextSpec {
+                size,
+                text: text.to_owned(),
+                ..TextSpec::default()
+            }
+            .fit(RotatedRect {
+                cx,
+                cy,
+                w: bw,
+                h: bh,
+                angle_deg: 0.0,
+            })
+            .expect("text fits")
+        }
+    }
+
+    #[test]
+    fn rasterize_filled_circle_center_is_red() {
+        let mut scene = Scene::new(40.0, 40.0);
+        {
+            let mut p = scene.path(solid(255, 0, 0), 40.0, 20.0);
+            p.arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0);
+            p.arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0);
+        }
+        let pm = rasterize(&scene);
+        let (r, g, b, _) = pixel_rgba(&pm, 20, 20);
+        assert_eq!((r, g, b), (255, 0, 0));
+    }
+
+    #[test]
+    fn rasterize_default_background_is_transparent() {
+        // An empty scene leaves the pixmap transparent.
+        let scene = Scene::new(5.0, 5.0);
+        let pm = rasterize(&scene);
+        assert_eq!(pixel_rgba(&pm, 2, 2).3, 0);
+    }
+
+    fn count_opaque_pixels(pm: &Pixmap) -> u32 {
+        let mut count: u32 = 0;
+        for y in 0..pm.height() {
+            for x in 0..pm.width() {
+                if pixel_rgba(pm, x, y).3 > 0 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn rasterize_text_draws_some_pixels() {
+        let mut scene = Scene::new(100.0, 40.0);
+        scene.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
+        let pm = rasterize(&scene);
+        assert!(count_opaque_pixels(&pm) > 50, "expected text pixels");
+    }
+
+    #[test]
+    fn rasterize_text_corners_remain_transparent() {
+        let mut scene = Scene::new(200.0, 60.0);
+        scene.text(text_node(100.0, 30.0, 200.0, 60.0, 24.0, "Hi"));
+        let pm = rasterize(&scene);
+        assert_eq!(pixel_rgba(&pm, 0, 0).3, 0);
+        assert_eq!(pixel_rgba(&pm, 199, 59).3, 0);
+    }
+
+    #[test]
+    fn rasterize_text_handles_multibyte_utf8() {
+        // A multi-byte UTF-8 string.
+        let mut scene = Scene::new(100.0, 40.0);
+        scene.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Olá"));
+        let pm = rasterize(&scene);
+        assert!(count_opaque_pixels(&pm) > 30, "expected text pixels");
+    }
+
+    #[test]
+    fn rasterize_text_underline_adds_pixels() {
+        // The same text with and without underline.
+        let mut without = Scene::new(100.0, 40.0);
+        without.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
+        let mut with = Scene::new(100.0, 40.0);
+        let mut node = text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi");
+        node.underline = true;
+        with.text(node);
+
+        let n = count_opaque_pixels(&rasterize(&without));
+        let u = count_opaque_pixels(&rasterize(&with));
+        assert!(u > n, "underline should add pixels: {} -> {}", n, u);
+    }
+
+    #[test]
+    fn rasterize_text_empty_renders_nothing() {
+        // TextSpec::fit refuses an empty text, but the wire can still carry
+        // one.
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.text(Text {
+            fill: Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            transform: [1.0, 0.0, 0.0, 1.0, 5.0, 5.0],
+            spec: TextSpec {
+                size: 24.0,
+                ..TextSpec::default()
+            },
+            ..Text::default()
+        });
+        let pm = rasterize(&scene);
+        assert_eq!(count_opaque_pixels(&pm), 0);
+    }
+
+    #[test]
+    fn rasterize_linear_gradient_left_to_right() {
+        // Black at x=0 to white at x=40. The left pixel is near black, the
+        // right near white, and the middle a gray between them.
+        let mut scene = Scene::new(40.0, 10.0);
+        let style = PathStyle {
+            fill: Paint::linear(
+                0.0,
+                0.0,
+                40.0,
+                0.0,
+                vec![
+                    Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 1.0,
+                        },
+                    },
+                    Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                ],
+            ),
+            ..PathStyle::default()
+        };
+        scene.add_path(rect(style, 0.0, 0.0, 40.0, 10.0));
+        let pm = rasterize(&scene);
+        let left = pixel_rgba(&pm, 1, 5).0;
+        let mid = pixel_rgba(&pm, 20, 5).0;
+        let right = pixel_rgba(&pm, 38, 5).0;
+        assert!(left < 32, "left pixel too bright: {left}");
+        assert!(right > 223, "right pixel too dark: {right}");
+        assert!(
+            mid > left + 64 && mid + 64 < right,
+            "mid pixel not between: left={left} mid={mid} right={right}"
+        );
+    }
+
+    #[test]
+    fn rasterize_radial_gradient_center_bright_edge_dark() {
+        // White at the center, transparent at the edge.
+        let mut scene = Scene::new(40.0, 40.0);
+        let style = PathStyle {
+            fill: Paint::radial(
+                20.0,
+                20.0,
+                20.0,
+                vec![
+                    Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                    Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 0.0,
+                        },
+                    },
+                ],
+            ),
+            ..PathStyle::default()
+        };
+        scene.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));
+        let pm = rasterize(&scene);
+        let center_a = pixel_rgba(&pm, 20, 20).3;
+        let edge_a = pixel_rgba(&pm, 0, 20).3;
+        assert!(center_a > 200, "center too dim: {center_a}");
+        assert!(edge_a < 40, "edge too opaque: {edge_a}");
+    }
+
+    #[test]
+    fn rasterize_linear_gradient_reflect_mirrors_past_axis() {
+        // The axis goes from x=0 to x=20. Reflect mirrors the gradient with
+        // period 2, so x=10 (t=0.5) and x=30 (t=1.5) are both gray, where Pad
+        // would clamp x=30 to white.
+        let mut scene = Scene::new(80.0, 10.0);
+        let style = PathStyle {
+            fill: Paint::linear(
+                0.0,
+                0.0,
+                20.0,
+                0.0,
+                vec![
+                    Stop {
+                        offset: 0.0,
+                        color: Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 1.0,
+                        },
+                    },
+                    Stop {
+                        offset: 1.0,
+                        color: Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 1.0,
+                        },
+                    },
+                ],
+            )
+            .with_spread(crate::scene::SpreadMode::Reflect),
+            ..PathStyle::default()
+        };
+        scene.add_path(rect(style, 0.0, 0.0, 80.0, 10.0));
+        let pm = rasterize(&scene);
+        let mid_axis = pixel_rgba(&pm, 10, 5).0; // t = 0.5
+        let pad_zone = pixel_rgba(&pm, 30, 5).0; // t = 1.5
+        let pad_far = pixel_rgba(&pm, 50, 5).0; // t = 2.5
+        assert!(
+            (mid_axis as i32 - pad_zone as i32).abs() < 30,
+            "expected mirror near t=1.5; got mid={mid_axis} reflected={pad_zone}"
+        );
+        assert!(
+            (mid_axis as i32 - pad_far as i32).abs() < 30,
+            "expected period 2; got mid={mid_axis} two-periods-out={pad_far}"
+        );
+    }
+
+    #[test]
+    fn rasterize_dash_stroke_has_gaps() {
+        // A [10, 10] dash on a stroke that starts at x=5. x=10 falls in an on
+        // segment and x=20 in an off segment.
+        let mut scene = Scene::new(100.0, 20.0);
+        {
+            let mut p = scene.path(
+                PathStyle {
+                    stroke: Paint::rgba(255, 0, 0, 1.0),
+                    stroke_width: 3.0,
+                    dash: Dash::new(vec![10.0, 10.0], 0.0).map(Box::new),
+                    ..PathStyle::default()
+                },
+                5.0,
+                10.0,
+            );
+            p.line_to(95.0, 10.0);
+        }
+        let pm = rasterize(&scene);
+        let on = pixel_rgba(&pm, 10, 10).3;
+        let off = pixel_rgba(&pm, 20, 10).3;
+        assert!(on > 200, "on-segment expected opaque: {on}");
+        assert!(off < 40, "off-segment expected transparent: {off}");
     }
 }
