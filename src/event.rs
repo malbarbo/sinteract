@@ -16,8 +16,8 @@
 //! ```
 //!
 //! The frontend decides when a `Vsync` arrives, with a timer in the
-//! terminal, the swap chain in the window, rAF in the browser and the peer
-//! on stdio. The host derives a simulation tick from the time between two.
+//! terminal and in the window, rAF in the browser and the peer on stdio. The
+//! host derives a simulation tick from the time between two.
 
 /// What `wait_event` returns.
 #[derive(Clone, Debug)]
