@@ -7,14 +7,13 @@
 use std::io::{self, Read, Write};
 
 use capnp::Word;
-use capnp::message::{Builder as MessageBuilder, HeapAllocator, ReaderOptions};
-use capnp::serialize;
+use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::protocol_capnp::engine_message;
 use crate::scene::Scene;
 
 use super::framing::{Player, Side, write_framed};
-use super::protocol::{ReadError, read_next};
+use super::protocol::{ReadError, decode_root, read_next};
 use super::scene::{read_scene, write_scene};
 use super::{Error, finish};
 
@@ -68,11 +67,10 @@ pub fn encode_frame(scene: &Scene) -> Vec<u8> {
 /// Decode the payload in `words` in place. `None` for a message of an arm
 /// from a newer schema.
 pub(super) fn decode(words: &[Word]) -> Result<Option<Message>, Error> {
-    let reader = serialize::read_message_from_flat_slice_no_alloc(
-        &mut Word::words_to_bytes(words),
-        ReaderOptions::new(),
-    )?;
-    let msg: engine_message::Reader = reader.get_root()?;
+    decode_root::<engine_message::Owned, _>(words, decode_message)
+}
+
+fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Error> {
     let Ok(which) = msg.which() else {
         return Ok(None);
     };

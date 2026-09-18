@@ -6,8 +6,7 @@
 use std::io::{self, Read, Write};
 
 use capnp::Word;
-use capnp::message::{Builder as MessageBuilder, HeapAllocator, ReaderOptions};
-use capnp::serialize;
+use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::event::InputEvent;
 use crate::protocol_capnp::view_message;
@@ -15,7 +14,7 @@ use crate::protocol_capnp::view_message;
 use super::Error;
 use super::event::{read_input_event, write_key_event};
 use super::framing::{Player, Side, write_framed};
-use super::protocol::{ReadError, read_next};
+use super::protocol::{ReadError, decode_root, read_next};
 
 /// Read the next message of the view, with the player it comes from.
 /// Returns `None` at the end of the stream, and [`InputEvent::Close`] for
@@ -34,11 +33,10 @@ pub fn write(w: &mut impl Write, player: Player, ev: &InputEvent) -> io::Result<
 /// Decode the payload in `words` in place. `None` for a message or an event
 /// of an arm from a newer schema.
 pub(super) fn decode(words: &[Word]) -> Result<Option<InputEvent>, Error> {
-    let reader = serialize::read_message_from_flat_slice_no_alloc(
-        &mut Word::words_to_bytes(words),
-        ReaderOptions::new(),
-    )?;
-    let msg: view_message::Reader = reader.get_root()?;
+    decode_root::<view_message::Owned, _>(words, decode_message)
+}
+
+fn decode_message(msg: view_message::Reader<'_>) -> Result<Option<InputEvent>, Error> {
     let Ok(which) = msg.which() else {
         return Ok(None);
     };

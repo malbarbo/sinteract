@@ -87,11 +87,7 @@ pub fn write_framed<A: Allocator>(
             format!("message of {len} bytes exceeds cap {MAX_FRAME_BYTES}"),
         ));
     }
-    let mut header = [0u8; HEADER_BYTES];
-    header[..4].copy_from_slice(&side.magic());
-    header[4..8].copy_from_slice(&player.to_le_bytes());
-    header[8..].copy_from_slice(&(len as u32).to_le_bytes());
-    w.write_all(&header)?;
+    w.write_all(&header(side, player, len as u32))?;
     // The only errors of `write_message` come from `w`.
     serialize::write_message(&mut *w, message).map_err(io::Error::other)?;
     w.flush()
@@ -119,6 +115,15 @@ pub fn read_framed(r: &mut impl Read, side: Side) -> io::Result<Option<(Player, 
     let mut words = Word::allocate_zeroed_vec(len / size_of::<Word>());
     r.read_exact(Word::words_to_bytes_mut(&mut words))?;
     Ok(Some((u32::from_le_bytes([p0, p1, p2, p3]), words)))
+}
+
+/// The header in front of a payload of `len` bytes.
+pub(crate) fn header(side: Side, player: Player, len: u32) -> [u8; HEADER_BYTES] {
+    let mut header = [0u8; HEADER_BYTES];
+    header[..4].copy_from_slice(&side.magic());
+    header[4..8].copy_from_slice(&player.to_le_bytes());
+    header[8..].copy_from_slice(&len.to_le_bytes());
+    header
 }
 
 /// Fill `buf`, or return `false` if the stream ends before its first byte.
@@ -163,11 +168,10 @@ fn invalid(message: String) -> io::Error {
 mod tests {
     use super::*;
 
-    fn header(magic: [u8; 4], len: u32) -> Vec<u8> {
-        let mut out = magic.to_vec();
-        out.extend_from_slice(&7u32.to_le_bytes());
-        out.extend_from_slice(&len.to_le_bytes());
-        out
+    fn header_with(magic: [u8; 4], len: u32) -> Vec<u8> {
+        let mut out = header(Side::View, 7, len);
+        out[..4].copy_from_slice(&magic);
+        out.to_vec()
     }
 
     fn read(bytes: &[u8]) -> io::Result<Option<(Player, Vec<Word>)>> {
@@ -206,14 +210,14 @@ mod tests {
 
     #[test]
     fn a_stream_that_ends_inside_the_payload_is_an_error() {
-        let mut bytes = header(Side::View.magic(), 16);
+        let mut bytes = header_with(Side::View.magic(), 16);
         bytes.extend_from_slice(&[0; 8]);
         assert_eq!(read_error(&bytes).kind(), io::ErrorKind::UnexpectedEof);
     }
 
     #[test]
     fn a_message_of_the_same_side_is_an_error() {
-        let err = read_framed(&mut &header(Side::View.magic(), 0)[..], Side::Engine)
+        let err = read_framed(&mut &header_with(Side::View.magic(), 0)[..], Side::Engine)
             .expect_err("an error");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("View side"), "{err}");
@@ -221,21 +225,21 @@ mod tests {
 
     #[test]
     fn an_unknown_version_is_an_error() {
-        let err = read_error(&header(*b"SIV2", 0));
+        let err = read_error(&header_with(*b"SIV2", 0));
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("version"), "{err}");
     }
 
     #[test]
     fn a_wrong_magic_is_an_error() {
-        let err = read_error(&header(*b"junk", 0));
+        let err = read_error(&header_with(*b"junk", 0));
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("not a sinteract stream"), "{err}");
     }
 
     #[test]
     fn a_length_that_is_not_whole_words_is_an_error() {
-        let mut bytes = header(Side::View.magic(), 4);
+        let mut bytes = header_with(Side::View.magic(), 4);
         bytes.extend_from_slice(&[0; 4]);
         assert_eq!(read_error(&bytes).kind(), io::ErrorKind::InvalidData);
     }
@@ -243,7 +247,7 @@ mod tests {
     #[test]
     fn a_length_above_the_cap_is_an_error() {
         let len = (MAX_FRAME_BYTES + size_of::<Word>()) as u32;
-        let err = read_error(&header(Side::View.magic(), len));
+        let err = read_error(&header_with(Side::View.magic(), len));
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }

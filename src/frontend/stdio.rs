@@ -31,7 +31,8 @@ use crate::wire::{ReadError, to_engine, to_view};
 /// ends with the stream, at EOF or at a read error.
 pub struct Stdio {
     /// Cap'n Proto writes a message in pieces, so they gather here and go
-    /// out with the flush at the end of each message.
+    /// out with the flush at the end of each message. The buffer holds a
+    /// frame of a few hundred elements, which then goes out in one write.
     writer: Writer,
     inbox: Inbox,
     /// Set when the peer closes the session or stops reading.
@@ -41,6 +42,8 @@ pub struct Stdio {
 }
 
 type Writer = BufWriter<Box<dyn Write + Send>>;
+
+const WRITE_BUFFER_BYTES: usize = 64 * 1024;
 
 /// stdin belongs to the process, and a second reader would steal half of
 /// the frames. It stays claimed after [`Stdio::close`], because the reader
@@ -76,7 +79,7 @@ impl Stdio {
             .name("sinteract-stdio".into())
             .spawn(move || read_loop(reader, tx, flag))?;
         Ok(Self {
-            writer: BufWriter::new(Box::new(writer)),
+            writer: BufWriter::with_capacity(WRITE_BUFFER_BYTES, Box::new(writer)),
             inbox,
             peer_closed,
             closed: false,
@@ -175,7 +178,7 @@ mod tests {
     use crate::frontend::Frontend;
     use crate::protocol_capnp::view_message;
     use crate::scene::{Paint, PathStyle};
-    use crate::wire::framing::{HEADER_BYTES, Side};
+    use crate::wire::framing::{Side, header};
     use crate::wire::to_engine::encode;
     use crate::wire::to_view::Message;
     use crate::wire::{self, to_view};
@@ -204,11 +207,17 @@ mod tests {
         }
     }
 
+    /// `ev` as the view writes it.
+    fn event(ev: &InputEvent) -> Vec<u8> {
+        let mut out = Vec::new();
+        to_engine::write(&mut out, UNROUTED, ev).unwrap();
+        out
+    }
+
+    /// `payload` in the envelope of the view, for a payload that
+    /// [`to_engine::write`] does not write.
     fn frame(payload: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(HEADER_BYTES + payload.len());
-        out.extend_from_slice(&Side::View.magic());
-        out.extend_from_slice(&UNROUTED.to_le_bytes());
-        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        let mut out = header(Side::View, UNROUTED, payload.len() as u32).to_vec();
         out.extend_from_slice(payload);
         out
     }
@@ -269,13 +278,12 @@ mod tests {
 
     #[test]
     fn wait_event_reads_key_event() {
-        let payload = encode(&InputEvent::Key(IrKeyEvent {
+        let mut fr = reading(event(&InputEvent::Key(IrKeyEvent {
             kind: KeyKind::Press,
             key: "ArrowDown".into(),
             modifiers: Modifiers::default(),
             repeat: false,
-        }));
-        let mut fr = reading(frame(&payload));
+        })));
         match input(&mut fr) {
             InputEvent::Key(k) => {
                 assert_eq!(k.key, "ArrowDown");
@@ -327,7 +335,7 @@ mod tests {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&unknown_message));
         stream.extend_from_slice(&frame(&unknown_event));
-        stream.extend_from_slice(&frame(&encode(&InputEvent::Vsync)));
+        stream.extend_from_slice(&event(&InputEvent::Vsync));
         assert!(input(&mut reading(stream)).is_vsync());
     }
 
@@ -335,29 +343,28 @@ mod tests {
     fn wait_event_skips_a_payload_that_does_not_decode() {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&[0xff; 8]));
-        stream.extend_from_slice(&frame(&encode(&InputEvent::Vsync)));
+        stream.extend_from_slice(&event(&InputEvent::Vsync));
         assert!(input(&mut reading(stream)).is_vsync());
     }
 
     #[test]
     fn close_message_surfaces_as_close_event() {
-        let mut fr = reading(frame(&encode(&InputEvent::Close)));
+        let mut fr = reading(event(&InputEvent::Close));
         assert!(input(&mut fr).is_close());
     }
 
     #[test]
     fn missing_magic_is_an_error_not_a_panic() {
-        let mut bad = Vec::new();
-        bad.extend_from_slice(b"junk");
-        bad.extend_from_slice(&[0u8; 8]);
-        assert!(input(&mut reading(bad)).is_close());
+        let mut bad = header(Side::View, UNROUTED, 0);
+        bad[..4].copy_from_slice(b"junk");
+        assert!(input(&mut reading(bad.to_vec())).is_close());
     }
 
     #[test]
     fn a_message_of_another_engine_ends_the_session() {
         let mut stream = Vec::new();
         to_view::write_close(&mut stream, UNROUTED).unwrap();
-        stream.extend_from_slice(&frame(&encode(&InputEvent::Vsync)));
+        stream.extend_from_slice(&event(&InputEvent::Vsync));
         assert!(input(&mut reading(stream)).is_close());
     }
 

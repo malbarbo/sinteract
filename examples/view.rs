@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sinteract::event::{Event, InputEvent};
+use sinteract::event::Event;
 use sinteract::frontend::{Frontend, Sender, TerminalOptions, open_native};
 use sinteract::scene::Scene;
 use sinteract::wire::framing::UNROUTED;
@@ -64,12 +64,10 @@ fn main() -> ExitCode {
     let mut stats = Stats::default();
     loop {
         match fr.wait_event(None) {
-            Event::Input(InputEvent::Close) => {
-                let _ = to_engine::write(&mut to_engine, UNROUTED, &InputEvent::Close);
-                break;
-            }
+            // The close of the view goes to the engine like any input.
             Event::Input(ev) => {
-                if to_engine::write(&mut to_engine, UNROUTED, &ev).is_err() {
+                let failed = to_engine::write(&mut to_engine, UNROUTED, &ev).is_err();
+                if failed || ev.is_close() {
                     break;
                 }
             }

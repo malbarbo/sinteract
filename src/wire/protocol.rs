@@ -9,6 +9,9 @@
 use std::io::{self, Read};
 
 use capnp::Word;
+use capnp::message::ReaderOptions;
+use capnp::serialize;
+use capnp::traits::Owned;
 
 use super::Error;
 use super::framing::{Player, Side, read_framed};
@@ -53,4 +56,17 @@ pub(super) fn read_next<T>(
             return Ok(Some((player, message)));
         }
     }
+}
+
+/// Open the payload in `words` in place as a message whose root is `T`, and
+/// hand the root to `decode`.
+pub(super) fn decode_root<T: Owned, M>(
+    words: &[Word],
+    decode: impl FnOnce(T::Reader<'_>) -> Result<Option<M>, Error>,
+) -> Result<Option<M>, Error> {
+    let reader = serialize::read_message_from_flat_slice_no_alloc(
+        &mut Word::words_to_bytes(words),
+        ReaderOptions::new(),
+    )?;
+    decode(reader.get_root()?)
 }
