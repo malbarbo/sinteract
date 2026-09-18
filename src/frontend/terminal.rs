@@ -20,7 +20,7 @@ use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
 use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
-use super::inbox::{Inbox, Sender};
+use super::inbox::{Inbox, Sender, Wait};
 use super::sixel;
 use crate::event::{Event, InputEvent, KeyKind, key};
 use crate::renderer::Renderer;
@@ -58,6 +58,8 @@ pub struct Terminal {
     frame_size: Option<(u32, u32)>,
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
     renderer: PixmapRenderer,
+    /// The scene of the last present, drawn again after a resize.
+    last: Option<Scene>,
     warned_bitmaps: bool,
 }
 
@@ -106,17 +108,12 @@ impl Terminal {
             }),
             frame_size: None,
             renderer: PixmapRenderer::default(),
+            last: None,
             warned_bitmaps: false,
         })
     }
-}
 
-impl super::Frontend for Terminal {
-    fn present(&mut self, scene: &Scene) {
-        if self.live.is_none() {
-            return;
-        }
-        warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
+    fn draw(&mut self, scene: &Scene) {
         let Some(pixmap) = rasterize(&mut self.renderer, self.backend, scene) else {
             return;
         };
@@ -139,8 +136,34 @@ impl super::Frontend for Terminal {
         let _ = stdout.flush();
     }
 
+    /// Draw the last scene again, after a resize. The terminal may have
+    /// moved or wrapped the cells of the old frame, so the screen clears.
+    fn redraw(&mut self) {
+        if let Some(scene) = self.last.take() {
+            self.frame_size = None;
+            self.draw(&scene);
+            self.last = Some(scene);
+        }
+    }
+}
+
+impl super::Frontend for Terminal {
+    fn present(&mut self, scene: &Scene) {
+        if self.live.is_none() {
+            return;
+        }
+        warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
+        self.draw(scene);
+        self.last = Some(scene.clone());
+    }
+
     fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
-        self.inbox.wait(deadline)
+        loop {
+            match self.inbox.wait_with(deadline, Inbox::receive) {
+                Wait::Event(event) => return event,
+                Wait::Redraw => self.redraw(),
+            }
+        }
     }
 
     fn sender(&self) -> Sender {
@@ -389,8 +412,15 @@ fn read_keys(tx: &Sender, stop: &AtomicBool, mut on_interrupt: Option<Box<dyn Fn
                 return;
             }
         };
-        let ct_event::Event::Key(key) = ev else {
-            continue;
+        let key = match ev {
+            ct_event::Event::Key(key) => key,
+            ct_event::Event::Resize(..) => {
+                if tx.request_redraw().is_err() {
+                    return;
+                }
+                continue;
+            }
+            _ => continue,
         };
         if is_ctrl_c(&key) {
             let _ = tx.send_input(InputEvent::Close);
