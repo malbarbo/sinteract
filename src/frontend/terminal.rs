@@ -478,7 +478,7 @@ fn cell_pixels() -> (u32, u32) {
 
 /// Pixel box available for the image, from the terminal size. `None` when
 /// crossterm cannot read the size, as when stdout is a file.
-fn target_pixels_for_backend(backend: Backend) -> Option<(u32, u32)> {
+fn target_pixels_for_backend(backend: Backend, cell: (u32, u32)) -> Option<(u32, u32)> {
     let (cols, rows) = terminal::size().ok()?;
     if cols == 0 || rows == 0 {
         return None;
@@ -487,7 +487,7 @@ fn target_pixels_for_backend(backend: Backend) -> Option<(u32, u32)> {
     // image. In the alt screen, it keeps a Sixel in the last row from
     // scrolling the screen.
     let rows_avail = rows.saturating_sub(1).max(1);
-    let (cw, ch) = cell_pixels();
+    let (cw, ch) = cell;
     Some(match backend {
         Backend::Kitty | Backend::Sixel => (cols as u32 * cw, rows_avail as u32 * ch),
         // Half-blocks pack two image-pixel rows into one cell row, and one
@@ -501,13 +501,10 @@ fn target_pixels_for_backend(backend: Backend) -> Option<(u32, u32)> {
 /// at native size or smaller. In half-blocks a pixmap pixel covers a cell
 /// width by half a cell height, so the cap is the inverse of the larger of
 /// the two, and a logical pixel never grows past a screen pixel.
-fn max_scale_for_backend(backend: Backend) -> f32 {
+fn max_scale_for_backend(backend: Backend, (cw, ch): (u32, u32)) -> f32 {
     match backend {
         Backend::Kitty | Backend::Sixel => 1.0,
-        Backend::TextBlocks => {
-            let (cw, ch) = cell_pixels();
-            1.0 / (cw as f32).max(ch as f32 / 2.0)
-        }
+        Backend::TextBlocks => 1.0 / (cw as f32).max(ch as f32 / 2.0),
     }
 }
 
@@ -516,8 +513,15 @@ fn max_scale_for_backend(backend: Backend) -> f32 {
 /// applies either way, because half-blocks pack two rows per cell even
 /// without a known grid.
 fn scale_for_backend(backend: Backend, width: f32, height: f32) -> f32 {
-    let cap = max_scale_for_backend(backend);
-    match target_pixels_for_backend(backend) {
+    let cell = cell_pixels();
+    let target = target_pixels_for_backend(backend, cell);
+    capped_scale(width, height, target, max_scale_for_backend(backend, cell))
+}
+
+/// The scale that fits a `width` by `height` frame into `target`, and never
+/// more than `cap`.
+fn capped_scale(width: f32, height: f32, target: Option<(u32, u32)>, cap: f32) -> f32 {
+    match target {
         Some(target) => crate::renderer::pixmap::fit_scale(width, height, target).min(cap),
         None => cap,
     }
@@ -609,12 +613,6 @@ mod tests {
     use crate::renderer::tests::rect;
     use crate::scene::{Paint, PathStyle, Scene};
 
-    fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
-        let p = pixmap.pixel(x, y).expect("pixel in range");
-        let p = p.demultiply();
-        (p.red(), p.green(), p.blue(), p.alpha())
-    }
-
     fn solid(r: u8, g: u8, b: u8) -> PathStyle {
         PathStyle {
             fill: Paint::rgba(r, g, b, 1.0),
@@ -626,53 +624,26 @@ mod tests {
         render_to_pixmap(scene, 1.0).expect("pixmap")
     }
 
-    /// Fit into `target`, then apply `cap`, as `scale_for_backend` does when
-    /// the grid is known.
-    fn fit_capped(scene: &Scene, target: (u32, u32), cap: f32) -> f32 {
-        crate::renderer::pixmap::fit_scale(scene.width(), scene.height(), target).min(cap)
+    #[test]
+    fn capped_scale_fits_the_width_or_the_height() {
+        assert_eq!(capped_scale(200.0, 100.0, Some((50, 50)), 1.0), 0.25);
+        assert_eq!(capped_scale(100.0, 200.0, Some((200, 50)), 1.0), 0.25);
     }
 
     #[test]
-    fn scale_to_fit_preserves_aspect() {
-        // 200×100 into 50×50 fits the width, scale 0.25, output 50×25.
-        let mut scene = Scene::new(200.0, 100.0);
-        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 200.0, 100.0));
-        let pm = render_to_pixmap(&scene, fit_capped(&scene, (50, 50), 1.0)).expect("pixmap");
-        assert_eq!(pm.width(), 50);
-        assert_eq!(pm.height(), 25);
-        assert_eq!(pixel_rgba(&pm, 25, 12), (0, 0, 255, 255));
+    fn capped_scale_stops_at_the_cap() {
+        assert_eq!(capped_scale(10.0, 10.0, Some((1000, 1000)), 1.0), 1.0);
+        assert_eq!(capped_scale(10.0, 10.0, None, 0.5), 0.5);
     }
 
     #[test]
-    fn scale_to_fit_does_not_upscale() {
-        // A 10×10 image keeps its size in a 1000×1000 target.
-        let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(rect(solid(0, 255, 0), 0.0, 0.0, 10.0, 10.0));
-        let pm = render_to_pixmap(&scene, fit_capped(&scene, (1000, 1000), 1.0)).expect("pixmap");
-        assert_eq!(pm.width(), 10);
-        assert_eq!(pm.height(), 10);
-    }
-
-    #[test]
-    fn scale_to_fit_height_constrained() {
-        // 100×200 into 200×50 fits the height, scale 0.25, output 25×50.
-        let mut scene = Scene::new(100.0, 200.0);
-        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 100.0, 200.0));
-        let pm = render_to_pixmap(&scene, fit_capped(&scene, (200, 50), 1.0)).expect("pixmap");
-        assert_eq!(pm.width(), 25);
-        assert_eq!(pm.height(), 50);
-    }
-
-    #[test]
-    fn text_blocks_max_scale_caps_below_native() {
-        // A 100×100 image for half-blocks with 8×16 cells shrinks to about
-        // 100 / 8 pixels wide.
-        let mut scene = Scene::new(100.0, 100.0);
-        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0));
-        // The target is the half-blocks box of an 80×24 terminal.
-        let pm = render_to_pixmap(&scene, fit_capped(&scene, (80, 48), 1.0 / 8.0)).expect("pixmap");
-        assert!(pm.width() <= 13, "got width {}", pm.width());
-        assert!(pm.height() <= 13, "got height {}", pm.height());
+    fn half_blocks_cap_a_logical_pixel_at_a_screen_pixel() {
+        // An 8 by 16 cell holds one pixmap pixel of 8 by 8 screen pixels.
+        assert_eq!(
+            max_scale_for_backend(Backend::TextBlocks, (8, 16)),
+            1.0 / 8.0
+        );
+        assert_eq!(max_scale_for_backend(Backend::Kitty, (8, 16)), 1.0);
     }
 
     #[test]
