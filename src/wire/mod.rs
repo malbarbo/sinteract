@@ -8,9 +8,9 @@
 //! [`Renderer::render_stream`](crate::renderer::Renderer::render_stream).
 //!
 //! The generated bindings stay private, and a caller goes through
-//! [`encode_frame`], [`encode_event`], [`encode_asset`], [`encode_close`]
-//! and [`decode`]. The bytes are the standard `serialize::write_message`
-//! format, so every Cap'n Proto binding reads them.
+//! [`write_frame`], [`write_event`], [`write_asset`], [`write_close`] and
+//! [`read`]. The bytes are the standard `serialize::write_message` format,
+//! so every Cap'n Proto binding reads them.
 //!
 //! [`framing`] is below all of them. It wraps an encoded message in the
 //! envelope that a byte stream needs to tell one message from the next.
@@ -24,7 +24,9 @@ pub mod protocol;
 pub mod scene;
 mod stream;
 
-pub use protocol::{Decoded, decode, encode_asset, encode_close, encode_event, encode_frame};
+pub use protocol::{
+    Decoded, ReadError, encode_frame, read, write_asset, write_close, write_event, write_frame,
+};
 pub use stream::Error as StreamError;
 pub(crate) use stream::stream_frame;
 
@@ -38,7 +40,7 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
 
 /// A payload is malformed. It says the scene, the event or the message is
 /// unusable, and never that the session is. A server that gets one from
-/// [`decode`] drops the message and keeps the peer. A value from a newer
+/// [`read`] drops the message and keeps the peer. A value from a newer
 /// schema and a float that is not finite are not errors, since the decoders
 /// skip what holds them.
 #[derive(Debug)]
@@ -81,7 +83,7 @@ impl From<std::str::Utf8Error> for Error {
 
 /// How reading the values inside an element or an event fails. Only
 /// `skip_unusable` looks inside, so no decoder returns it.
-enum ReadError {
+enum ValueError {
     /// The bytes are damaged, and the whole payload is unusable.
     Malformed(Error),
     /// A paint arm, an enum value or a verb byte from a newer schema. The
@@ -92,38 +94,38 @@ enum ReadError {
     NotFinite,
 }
 
-impl From<Error> for ReadError {
+impl From<Error> for ValueError {
     fn from(e: Error) -> Self {
-        ReadError::Malformed(e)
+        ValueError::Malformed(e)
     }
 }
 
-impl From<capnp::Error> for ReadError {
+impl From<capnp::Error> for ValueError {
     fn from(e: capnp::Error) -> Self {
-        ReadError::Malformed(e.into())
+        ValueError::Malformed(e.into())
     }
 }
 
-impl From<capnp::NotInSchema> for ReadError {
+impl From<capnp::NotInSchema> for ValueError {
     fn from(_: capnp::NotInSchema) -> Self {
-        ReadError::Newer
+        ValueError::Newer
     }
 }
 
-impl From<std::str::Utf8Error> for ReadError {
+impl From<std::str::Utf8Error> for ValueError {
     fn from(e: std::str::Utf8Error) -> Self {
-        ReadError::Malformed(e.into())
+        ValueError::Malformed(e.into())
     }
 }
 
 /// `None` when reading an element or an event met a value from a newer
 /// schema or a float that is not finite, so the reader skips what holds it.
 /// Damage stays an error.
-fn skip_unusable<T>(read: Result<T, ReadError>) -> Result<Option<T>, Error> {
+fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
     match read {
         Ok(v) => Ok(Some(v)),
-        Err(ReadError::Newer | ReadError::NotFinite) => Ok(None),
-        Err(ReadError::Malformed(e)) => Err(e),
+        Err(ValueError::Newer | ValueError::NotFinite) => Ok(None),
+        Err(ValueError::Malformed(e)) => Err(e),
     }
 }
 
@@ -193,6 +195,7 @@ pub(crate) fn with_float(bytes: &[u8], from: f32, to: f32) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use super::protocol::{encode_asset, encode_close, encode_event};
     use super::*;
     use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
     use crate::event_capnp::input_event;
@@ -274,6 +277,24 @@ mod tests {
             ));
         }
         scene
+    }
+
+    /// Decode a payload of an arm this schema knows, as [`read`] does
+    /// after the envelope.
+    fn decode(bytes: &[u8]) -> Result<Decoded, Error> {
+        Ok(protocol::decode(&words(bytes))?.expect("an arm this schema knows"))
+    }
+
+    /// Whether [`read`] skips the payload in `bytes`.
+    fn is_skipped(bytes: &[u8]) -> bool {
+        matches!(protocol::decode(&words(bytes)), Ok(None))
+    }
+
+    /// `bytes` in the words that the decoder reads in place.
+    fn words(bytes: &[u8]) -> Vec<capnp::Word> {
+        let mut words = capnp::Word::allocate_zeroed_vec(bytes.len().div_ceil(8));
+        capnp::Word::words_to_bytes_mut(&mut words)[..bytes.len()].copy_from_slice(bytes);
+        words
     }
 
     fn assert_scene_eq(a: &Scene, b: &Scene) {
@@ -376,7 +397,7 @@ mod tests {
 
     #[test]
     fn garbage_bytes_fail_to_decode() {
-        let r = decode(&[0u8; 4]);
+        let r = decode(&[0xff; 8]);
         assert!(r.is_err(), "expected decode error, got {r:?}");
     }
 
@@ -566,7 +587,7 @@ mod tests {
     #[test]
     fn a_message_of_an_unknown_arm_decodes_as_unknown() {
         let bytes = with_unknown_value(&encode_close(), |m| tag_of(m));
-        assert!(matches!(decode(&bytes).unwrap(), Decoded::Unknown));
+        assert!(is_skipped(&bytes));
     }
 
     #[test]
@@ -575,7 +596,7 @@ mod tests {
             Ok(message::Event(e)) => tag_of(e.unwrap()),
             _ => panic!("not an event"),
         });
-        assert!(matches!(decode(&bytes).unwrap(), Decoded::Unknown));
+        assert!(is_skipped(&bytes));
     }
 
     fn element_at(m: message::Reader<'_>, i: u32) -> element::WhichReader<'_> {
@@ -665,7 +686,7 @@ mod tests {
             };
             tag_of(k.unwrap())
         });
-        assert!(matches!(decode(&bytes).unwrap(), Decoded::Unknown));
+        assert!(is_skipped(&bytes));
     }
 
     #[test]

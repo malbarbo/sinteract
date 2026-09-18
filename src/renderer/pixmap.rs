@@ -777,7 +777,7 @@ mod tests {
 
     #[test]
     fn render_stream_rejects_non_frame_message() {
-        let bytes = crate::wire::encode_close();
+        let bytes = crate::wire::protocol::encode_close();
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
         let err = r.render_stream(&bytes[..]).expect_err("not a frame");
         assert!(matches!(err, crate::wire::StreamError::WrongMessageKind));
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn render_stream_rejects_a_message_of_an_unknown_arm() {
-        let bytes = crate::wire::with_unknown_value(&crate::wire::encode_close(), |m| {
+        let bytes = crate::wire::with_unknown_value(&crate::wire::protocol::encode_close(), |m| {
             crate::wire::tag_of(m)
         });
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");

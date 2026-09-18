@@ -16,7 +16,7 @@ use crate::scene_capnp::{
     rgba as wire_rgba, scene as wire_scene, stop as wire_stop, text_node,
 };
 
-use super::{Error, ReadError, finish, skip_unusable};
+use super::{Error, ValueError, finish, skip_unusable};
 
 /// Encode a scene as a message whose root is the `Scene` struct of
 /// `schema/scene.capnp`, with no session envelope around it. A host that
@@ -29,7 +29,7 @@ pub fn encode(scene: &Scene) -> Vec<u8> {
 }
 
 /// Decode a message that [`encode`] produced. A frame that arrived inside a
-/// session goes through [`super::decode`] instead.
+/// session goes through [`super::read`] instead.
 pub fn decode(bytes: &[u8]) -> Result<Scene, Error> {
     let reader = capnp::serialize::read_message(
         std::io::Cursor::new(bytes),
@@ -152,7 +152,7 @@ fn write_stop(mut b: wire_stop::Builder<'_>, s: Stop) {
     write_rgba(b.reborrow().init_color(), s.color);
 }
 
-fn read_stop(r: wire_stop::Reader<'_>) -> Result<Stop, ReadError> {
+fn read_stop(r: wire_stop::Reader<'_>) -> Result<Stop, ValueError> {
     Ok(Stop {
         offset: r.get_offset(),
         color: read_rgba(r.get_color()?),
@@ -165,7 +165,9 @@ fn write_stops(mut b: capnp::struct_list::Builder<'_, wire_stop::Owned>, stops: 
     }
 }
 
-fn read_stops(r: capnp::struct_list::Reader<'_, wire_stop::Owned>) -> Result<Vec<Stop>, ReadError> {
+fn read_stops(
+    r: capnp::struct_list::Reader<'_, wire_stop::Owned>,
+) -> Result<Vec<Stop>, ValueError> {
     r.iter().map(read_stop).collect()
 }
 
@@ -194,7 +196,7 @@ fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
     }
 }
 
-fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ReadError> {
+fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
     use wire_paint::Which;
     let which = match r.which() {
         Ok(which) => which,
@@ -254,7 +256,7 @@ fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
     }
 }
 
-fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ReadError> {
+fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ValueError> {
     // Dash::new returns None for an array that draws a solid stroke, such as
     // an empty one, and drops any stray offset.
     let dash = Dash::new(
@@ -284,9 +286,9 @@ fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
     write_coords(&mut b.init_coords(coord_count(c.segments())), c.segments());
 }
 
-/// A clip that is not finite is [`ReadError::NotFinite`], before its
+/// A clip that is not finite is [`ValueError::NotFinite`], before its
 /// children are read, so the decoder and the stream skip them alike.
-pub(super) fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ReadError> {
+pub(super) fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ValueError> {
     let mut clip = ClipPath::default();
     clip.fill_rule = fill_rule_from_wire(r.get_fill_rule()?);
     read_segments(clip.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
@@ -304,7 +306,7 @@ fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap) {
     b.set_m5(n.transform[5]);
 }
 
-pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ReadError> {
+pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ValueError> {
     let bitmap = Bitmap {
         id: r.get_id(),
         transform: [
@@ -338,7 +340,7 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     b.set_text(&*n.spec.text);
 }
 
-pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ReadError> {
+pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
     let text = Text {
         fill: read_rgba(r.get_fill()?),
         stroke: read_rgba(r.get_stroke()?),
@@ -364,13 +366,13 @@ pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ReadError
     Ok(text)
 }
 
-/// [`ReadError::NotFinite`] unless `is_finite`, the rule of
+/// [`ValueError::NotFinite`] unless `is_finite`, the rule of
 /// [`Scene`] for an element.
-fn finite(is_finite: bool) -> Result<(), ReadError> {
+fn finite(is_finite: bool) -> Result<(), ValueError> {
     if is_finite {
         Ok(())
     } else {
-        Err(ReadError::NotFinite)
+        Err(ValueError::NotFinite)
     }
 }
 
@@ -416,9 +418,9 @@ fn read_segments(
     out: &mut Vec<Segment>,
     verbs: &[u8],
     coords: capnp::primitive_list::Reader<'_, f32>,
-) -> Result<(), ReadError> {
+) -> Result<(), ValueError> {
     let mismatch = || {
-        ReadError::Malformed(Error::PathLengthMismatch {
+        ValueError::Malformed(Error::PathLengthMismatch {
             verbs: verbs.len(),
             coords: coords.len() as usize,
         })
@@ -429,7 +431,7 @@ fn read_segments(
     out.push(Segment::Move { x: 0.0, y: 0.0 });
     let mut i = 0;
     for &b in verbs {
-        let kind = SegmentKind::from_u8(b).ok_or(ReadError::Newer)?;
+        let kind = SegmentKind::from_u8(b).ok_or(ValueError::Newer)?;
         if i + kind.coords() as u32 > coords.len() {
             return Err(mismatch());
         }
@@ -474,7 +476,7 @@ fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
 
 /// Decode into `path`, reusing its allocations. The streaming decoder keeps
 /// one for a whole frame.
-pub(super) fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Result<(), ReadError> {
+pub(super) fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Result<(), ValueError> {
     path.style = read_path_style(r.get_style()?)?;
     read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
     finite(path.is_finite())?;
@@ -482,7 +484,7 @@ pub(super) fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Resul
     Ok(())
 }
 
-fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ReadError> {
+fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ValueError> {
     let mut path = Path::default();
     read_path_into(r, &mut path)?;
     Ok(path)
@@ -530,7 +532,7 @@ fn read_element(node: element::Reader<'_>) -> Result<Option<Element>, Error> {
     skip_unusable(read_known_element(which))
 }
 
-fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, ReadError> {
+fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, ValueError> {
     use element::Which;
     Ok(match which {
         Which::Path(p) => Element::Path(read_path(p?)?),

@@ -6,7 +6,7 @@
 //! Each message is a Cap'n Proto `Message` inside the envelope of
 //! [`crate::wire::framing`].
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -16,8 +16,7 @@ use super::driver::OpenError;
 use super::inbox::{Inbox, Sender};
 use crate::event::{Event, InputEvent};
 use crate::scene::Scene;
-use crate::wire::framing::{read_framed, write_framed};
-use crate::wire::{self, Decoded};
+use crate::wire::{self, Decoded, ReadError};
 
 /// A frontend without a display. The peer sends the Vsync events, and this
 /// frontend only carries the protocol.
@@ -27,13 +26,17 @@ use crate::wire::{self, Decoded};
 /// holds. The thread blocks on the read and nothing interrupts it, so it
 /// ends with the stream, at EOF or at a read error.
 pub struct Stdio {
-    writer: Box<dyn Write + Send>,
+    /// Cap'n Proto writes a message in pieces, so they gather here and go
+    /// out with the flush at the end of each message.
+    writer: Writer,
     inbox: Inbox,
     /// Set when the peer closes the session or stops reading.
     peer_closed: Arc<AtomicBool>,
     /// Set by [`Frontend::close`](super::Frontend::close).
     closed: bool,
 }
+
+type Writer = BufWriter<Box<dyn Write + Send>>;
 
 /// stdin belongs to the process, and a second reader would steal half of
 /// the frames. It stays claimed after [`Stdio::close`], because the reader
@@ -69,18 +72,19 @@ impl Stdio {
             .name("sinteract-stdio".into())
             .spawn(move || read_loop(reader, tx, flag))?;
         Ok(Self {
-            writer: Box::new(writer),
+            writer: BufWriter::new(Box::new(writer)),
             inbox,
             peer_closed,
             closed: false,
         })
     }
 
-    fn write_framed(&mut self, payload: &[u8]) {
+    /// Write one message with `write`, unless the session ended.
+    fn send(&mut self, write: impl FnOnce(&mut Writer) -> io::Result<()>) {
         if self.closed || self.peer_closed.load(Ordering::Acquire) {
             return;
         }
-        if let Err(e) = write_framed(&mut self.writer, payload) {
+        if let Err(e) = write(&mut self.writer) {
             // The peer may keep stdin open after it stops reading, so the
             // reader thread does not see the end.
             eprintln!("[sinteract::stdio] write failed, closing the session: {e}");
@@ -93,8 +97,7 @@ impl Stdio {
 impl super::Frontend for Stdio {
     /// Send a frame and flush, so the peer sees it at once.
     fn present(&mut self, scene: &Scene) {
-        let bytes = wire::encode_frame(scene);
-        self.write_framed(&bytes);
+        self.send(|w| wire::write_frame(w, scene));
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
@@ -111,8 +114,7 @@ impl super::Frontend for Stdio {
     /// references `id`, because the peer may process the stream as it
     /// arrives.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) {
-        let bytes = wire::encode_asset(id, blob, mime);
-        self.write_framed(&bytes);
+        self.send(|w| wire::write_asset(w, id, blob, mime));
     }
 
     /// Tell the peer that the session ended, unless the peer ended it.
@@ -120,8 +122,7 @@ impl super::Frontend for Stdio {
         if self.closed {
             return;
         }
-        let bytes = wire::encode_close();
-        self.write_framed(&bytes);
+        self.send(wire::write_close);
         self.closed = true;
         self.inbox.close();
     }
@@ -138,31 +139,28 @@ impl Drop for Stdio {
 /// Read the messages of the peer into the queue until the stream or the
 /// session ends. Only the host sends an `Asset` or a `Frame`, so one from
 /// the peer means that the two ends swapped roles, and it ends the session.
-/// A message or an event of an arm from a newer schema is skipped without a
-/// log. A payload that does not decode is logged and skipped, since the
+/// [`wire::read`] skips a message or an event of an arm from a newer
+/// schema. A payload that does not decode is logged and skipped, since the
 /// framing already found where the next message starts.
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
-        let ev = match read_framed(&mut reader) {
+        let ev = match wire::read(&mut reader) {
             Ok(None) => break,
-            Ok(Some(bytes)) => match wire::decode(&bytes) {
-                Ok(Decoded::Event(ev)) => ev,
-                Ok(Decoded::Close) => break,
-                Ok(Decoded::Unknown) => continue,
-                Ok(Decoded::Frame(_)) => {
-                    wrong_direction("a frame");
-                    break;
-                }
-                Ok(Decoded::Asset { .. }) => {
-                    wrong_direction("an asset");
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("[sinteract::stdio] skipping a message that does not decode: {e}");
-                    continue;
-                }
-            },
-            Err(e) => {
+            Ok(Some(Decoded::Event(ev))) => ev,
+            Ok(Some(Decoded::Close)) => break,
+            Ok(Some(Decoded::Frame(_))) => {
+                wrong_direction("a frame");
+                break;
+            }
+            Ok(Some(Decoded::Asset { .. })) => {
+                wrong_direction("an asset");
+                break;
+            }
+            Err(ReadError::Payload(e)) => {
+                eprintln!("[sinteract::stdio] skipping a message that does not decode: {e}");
+                continue;
+            }
+            Err(ReadError::Broken(e)) => {
                 eprintln!("[sinteract::stdio] read error: {e}");
                 break;
             }
@@ -187,6 +185,7 @@ mod tests {
     use crate::frontend::Frontend;
     use crate::scene::{Paint, PathStyle};
     use crate::wire::framing::FILE_IDENTIFIER;
+    use crate::wire::protocol::{encode_asset, encode_close, encode_event};
     use std::io::{Cursor, PipeWriter};
     use std::sync::Mutex;
     use std::time::Duration;
@@ -240,14 +239,10 @@ mod tests {
         }
     }
 
-    fn decode_messages(buf: &[u8]) -> Vec<Decoded> {
+    fn decode_messages(mut buf: &[u8]) -> Vec<Decoded> {
         let mut out = Vec::new();
-        let mut rest = buf;
-        while !rest.is_empty() {
-            assert_eq!(&rest[0..4], &FILE_IDENTIFIER);
-            let len = u32::from_le_bytes(rest[4..8].try_into().unwrap()) as usize;
-            out.push(wire::decode(&rest[8..8 + len]).expect("decode"));
-            rest = &rest[8 + len..];
+        while let Some(m) = wire::read(&mut buf).expect("decode") {
+            out.push(m);
         }
         out
     }
@@ -279,7 +274,7 @@ mod tests {
 
     #[test]
     fn wait_event_reads_key_event() {
-        let payload = wire::encode_event(&InputEvent::Key(IrKeyEvent {
+        let payload = encode_event(&InputEvent::Key(IrKeyEvent {
             kind: KeyKind::Press,
             key: "ArrowDown".into(),
             modifiers: Modifiers::default(),
@@ -327,8 +322,8 @@ mod tests {
     #[test]
     fn an_asset_from_the_peer_ends_the_session() {
         let mut stream = Vec::new();
-        stream.extend_from_slice(&frame(&wire::encode_asset(1, b"png", Some("image/png"))));
-        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
+        stream.extend_from_slice(&frame(&encode_asset(1, b"png", Some("image/png"))));
+        stream.extend_from_slice(&frame(&encode_event(&InputEvent::Vsync)));
         assert!(input(&mut reading(stream)).is_close());
     }
 
@@ -336,38 +331,36 @@ mod tests {
     fn a_frame_from_the_peer_ends_the_session() {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&wire::encode_frame(&Scene::new(8.0, 8.0))));
-        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
+        stream.extend_from_slice(&frame(&encode_event(&InputEvent::Vsync)));
         assert!(input(&mut reading(stream)).is_close());
     }
 
     #[test]
     fn wait_event_skips_a_message_and_an_event_of_an_unknown_arm() {
-        let unknown_message = wire::with_unknown_value(&wire::encode_close(), |m| wire::tag_of(m));
+        let unknown_message = wire::with_unknown_value(&encode_close(), |m| wire::tag_of(m));
         let unknown_event =
-            wire::with_unknown_value(&wire::encode_event(&InputEvent::Close), |m| {
-                match m.which() {
-                    Ok(crate::protocol_capnp::message::Event(e)) => wire::tag_of(e.unwrap()),
-                    _ => panic!("not an event"),
-                }
+            wire::with_unknown_value(&encode_event(&InputEvent::Close), |m| match m.which() {
+                Ok(crate::protocol_capnp::message::Event(e)) => wire::tag_of(e.unwrap()),
+                _ => panic!("not an event"),
             });
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&unknown_message));
         stream.extend_from_slice(&frame(&unknown_event));
-        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
+        stream.extend_from_slice(&frame(&encode_event(&InputEvent::Vsync)));
         assert!(input(&mut reading(stream)).is_vsync());
     }
 
     #[test]
     fn wait_event_skips_a_payload_that_does_not_decode() {
         let mut stream = Vec::new();
-        stream.extend_from_slice(&frame(&[0u8; 4]));
-        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
+        stream.extend_from_slice(&frame(&[0xff; 8]));
+        stream.extend_from_slice(&frame(&encode_event(&InputEvent::Vsync)));
         assert!(input(&mut reading(stream)).is_vsync());
     }
 
     #[test]
     fn close_message_surfaces_as_close_event() {
-        let mut fr = reading(frame(&wire::encode_close()));
+        let mut fr = reading(frame(&encode_close()));
         assert!(input(&mut fr).is_close());
     }
 

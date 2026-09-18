@@ -21,7 +21,7 @@ pub enum Error {
     /// The frame itself is malformed.
     Payload(PayloadError),
     /// The message decoded, but it is not a `Frame`, or it is an arm from a
-    /// newer schema. Use [`decode`](super::decode) for the other arms.
+    /// newer schema. Use [`read`](super::read) for the other arms.
     WrongMessageKind,
     /// The renderer could not size its surface for the frame.
     Surface(AllocError),
@@ -68,7 +68,7 @@ impl From<AllocError> for Error {
 ///
 /// The surface is sized once, after the dimensions are known and before any
 /// element is painted. Any other message returns [`Error::WrongMessageKind`].
-/// Use [`decode`] for those.
+/// Use [`read`](super::read) for those.
 pub(crate) fn stream_frame<P: Canvas, R: std::io::Read>(
     paint: &mut P,
     reader: R,
@@ -106,7 +106,7 @@ fn stream_elements<P: Canvas>(
 ) -> Result<(), Error> {
     use element::Which;
     for node in list.iter() {
-        // An element of an arm from a newer schema is skipped, as `decode`
+        // An element of an arm from a newer schema is skipped, as `read`
         // skips it, and so is one that holds a value from a newer schema or
         // a float that is not finite.
         let Ok(which) = node.which() else {
