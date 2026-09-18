@@ -129,7 +129,9 @@ impl super::Frontend for Terminal {
             // followed by a transmit shows the cleared cells for one refresh
             // and flickers.
             Backend::Kitty => emit_kitty(&mut stdout, &pixmap, Some(KITTY_ANIMATION_ID)),
-            Backend::Sixel => stdout.write_all(&sixel::encode(&pixmap, SIXEL_BACKGROUND)),
+            Backend::Sixel => {
+                sixel::encode(&pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))
+            }
             Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap),
         };
         let _ = stdout.flush();
@@ -184,8 +186,8 @@ pub fn show_image(scene: &Scene) {
     let mut stdout = io::stdout().lock();
     let _ = match backend {
         Backend::Kitty => emit_kitty(&mut stdout, &pixmap, None).and_then(|()| writeln!(stdout)),
-        Backend::Sixel => stdout
-            .write_all(&sixel::encode(&pixmap, SIXEL_BACKGROUND))
+        Backend::Sixel => sixel::encode(&pixmap, SIXEL_BACKGROUND)
+            .and_then(|b| stdout.write_all(&b))
             .and_then(|()| writeln!(stdout)),
         Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap),
     };

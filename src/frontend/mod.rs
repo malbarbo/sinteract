@@ -14,13 +14,14 @@
 //! Only `sixel` builds on wasm32. The rest needs threads, a tty, a window
 //! or platform FFI. In a browser the host implements `wait_event` itself.
 
-mod pixel;
 pub mod sixel;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod driver;
 #[cfg(not(target_arch = "wasm32"))]
 mod inbox;
+#[cfg(not(target_arch = "wasm32"))]
+mod pixel;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stdio;
 #[cfg(not(target_arch = "wasm32"))]
