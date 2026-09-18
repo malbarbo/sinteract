@@ -52,8 +52,9 @@ pub struct Terminal {
     backend: Backend,
     /// `None` after [`super::Frontend::close`].
     live: Option<Live>,
-    /// The alt screen shows a frame, which Kitty keeps after the session.
-    frame_shown: bool,
+    /// The size in pixels of the frame on screen, or `None` before the
+    /// first one. Kitty keeps a frame after the session.
+    frame_size: Option<(u32, u32)>,
     warned_bitmaps: bool,
 }
 
@@ -100,7 +101,7 @@ impl Terminal {
                 reader,
                 _claim: claim,
             }),
-            frame_shown: false,
+            frame_size: None,
             warned_bitmaps: false,
         })
     }
@@ -116,6 +117,12 @@ impl super::Frontend for Terminal {
             return;
         };
         let mut stdout = io::stdout().lock();
+        // A smaller frame leaves the edges of the one before. The same Kitty
+        // id replaces the whole image, and a clear on every frame flickers.
+        let size = (pixmap.width(), pixmap.height());
+        if self.frame_size.replace(size) != Some(size) && self.backend != Backend::Kitty {
+            let _ = queue!(stdout, terminal::Clear(terminal::ClearType::All));
+        }
         let _ = queue!(stdout, cursor::MoveTo(0, 0));
         let _ = match self.backend {
             // The same image id replaces the frame in place. A delete
@@ -123,10 +130,9 @@ impl super::Frontend for Terminal {
             // and flickers.
             Backend::Kitty => emit_kitty(&mut stdout, &pixmap, Some(KITTY_ANIMATION_ID)),
             Backend::Sixel => stdout.write_all(&sixel::encode(&pixmap, SIXEL_BACKGROUND)),
-            Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap).map(drop),
+            Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap),
         };
         let _ = stdout.flush();
-        self.frame_shown = true;
     }
 
     fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
@@ -149,7 +155,7 @@ impl super::Frontend for Terminal {
         live.reader.stop();
         // Keys typed after the reader stopped would go to the shell.
         drain_input();
-        leave(self.backend, self.frame_shown);
+        leave(self.backend, self.frame_size.is_some());
     }
 }
 
@@ -181,7 +187,7 @@ pub fn show_image(scene: &Scene) {
         Backend::Sixel => stdout
             .write_all(&sixel::encode(&pixmap, SIXEL_BACKGROUND))
             .and_then(|()| writeln!(stdout)),
-        Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap).map(drop),
+        Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap),
     };
     let _ = stdout.flush();
 }
@@ -482,7 +488,9 @@ fn target_pixels_for_backend(backend: Backend) -> Option<(u32, u32)> {
     if cols == 0 || rows == 0 {
         return None;
     }
-    // One row stays free for the prompt that follows the image.
+    // One row stays free. Inline, it holds the prompt that follows the
+    // image. In the alt screen, it keeps a Sixel in the last row from
+    // scrolling the screen.
     let rows_avail = rows.saturating_sub(1).max(1);
     let (cw, ch) = cell_pixels();
     Some(match backend {
@@ -523,15 +531,11 @@ fn scale_for_backend(backend: Backend, width: f32, height: f32) -> f32 {
 /// Write `pixmap` as truecolor half-blocks (`▀`). Each pair of rows becomes
 /// one cell row, with the upper pixel in the foreground and the lower one in
 /// the background, both composited over black.
-fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<u16> {
+fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<()> {
     let w = pixmap.width() as usize;
     let h = pixmap.height() as usize;
-    if w == 0 || h == 0 {
-        return Ok(0);
-    }
     let pixels = pixmap.pixels();
     let mut y = 0;
-    let mut lines: u16 = 0;
     while y < h {
         let top = &pixels[y * w..(y + 1) * w];
         let bot: Option<&[_]> = if y + 1 < h {
@@ -555,10 +559,9 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<u16>
         }
         // In raw mode a bare LF does not return the cursor to column 0.
         out.write_all(b"\x1b[0m\r\n")?;
-        lines = lines.saturating_add(1);
         y += 2;
     }
-    Ok(lines)
+    Ok(())
 }
 
 fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
@@ -846,8 +849,8 @@ mod tests {
         scene.add_path(rect_path(solid(255, 0, 0), 0.0, 0.0, 4.0, 4.0));
         let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
-        let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
-        assert_eq!(lines, 2);
+        render_text_blocks(&mut buf, &pm).expect("write ok");
+        assert_eq!(rows(&buf), 2);
         // U+2580 in UTF-8.
         assert!(buf.windows(3).any(|w| w == [0xE2, 0x96, 0x80]));
     }
@@ -872,18 +875,21 @@ mod tests {
         scene.add_path(rect_path(solid(255, 255, 255), 0.0, 0.0, 3.0, 3.0));
         let pm = rasterize(&scene);
         let mut buf: Vec<u8> = Vec::new();
-        let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
+        render_text_blocks(&mut buf, &pm).expect("write ok");
         // ceil(3 / 2) rows.
-        assert_eq!(lines, 2);
+        assert_eq!(rows(&buf), 2);
     }
 
     #[test]
-    fn text_blocks_empty_pixmap_is_noop() {
-        // A 1×1 pixmap gives one row.
+    fn text_blocks_writes_one_row_for_one_pixel() {
         let pm = Pixmap::new(1, 1).unwrap();
         let mut buf: Vec<u8> = Vec::new();
-        let lines = render_text_blocks(&mut buf, &pm).expect("write ok");
-        assert_eq!(lines, 1);
+        render_text_blocks(&mut buf, &pm).expect("write ok");
+        assert_eq!(rows(&buf), 1);
+    }
+
+    fn rows(buf: &[u8]) -> usize {
+        buf.windows(2).filter(|w| w == b"\r\n").count()
     }
 
     // -----------------------------------------------------------------------
