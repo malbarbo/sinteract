@@ -135,6 +135,17 @@ impl Inbox {
     /// A Vsync of the clock counts as arrived when it falls due, so input
     /// that arrived before it goes out first.
     pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Event {
+        self.wait_with(deadline, Self::receive)
+    }
+
+    /// [`Inbox::wait`] for a frontend that blocks somewhere other than the
+    /// channel. `block` waits for at most its timeout, or for as long as it
+    /// takes when the timeout is `None`, and a [`Sender`] wakes it.
+    pub(crate) fn wait_with(
+        &mut self,
+        deadline: Option<Instant>,
+        mut block: impl FnMut(&mut Self, Option<Duration>),
+    ) -> Event {
         loop {
             if let Some(event) = self.poll() {
                 return event;
@@ -143,24 +154,30 @@ impl Inbox {
             if deadline.is_some_and(|d| now >= d) {
                 return Event::Timeout;
             }
-            let received = match self.wake_at(deadline) {
-                Some(t) => match self.rx.recv_timeout(t - now) {
-                    Ok(item) => Some(item),
-                    Err(RecvTimeoutError::Timeout) => continue,
-                    Err(RecvTimeoutError::Disconnected) => None,
-                },
-                None => self.rx.recv().ok(),
-            };
-            match received {
-                Some(item) => self.push(item),
-                // Only the receiver of a closed inbox disconnects.
-                None => self.closed = true,
-            }
+            let timeout = self.wake_at(deadline).map(|t| t - now);
+            block(self, timeout);
+        }
+    }
+
+    /// Queue the next item of the channel, or wait until `timeout` passes.
+    fn receive(&mut self, timeout: Option<Duration>) {
+        let received = match timeout {
+            Some(t) => match self.rx.recv_timeout(t) {
+                Ok(item) => Some(item),
+                Err(RecvTimeoutError::Timeout) => return,
+                Err(RecvTimeoutError::Disconnected) => None,
+            },
+            None => self.rx.recv().ok(),
+        };
+        match received {
+            Some(item) => self.push(item),
+            // Only the receiver of a closed inbox disconnects.
+            None => self.closed = true,
         }
     }
 
     /// The oldest event that is ready, without blocking.
-    pub(crate) fn poll(&mut self) -> Option<Event> {
+    fn poll(&mut self) -> Option<Event> {
         if self.closed {
             return Some(Event::Input(InputEvent::Close));
         }
@@ -173,7 +190,7 @@ impl Inbox {
     /// When a wait until `deadline` has to stop and look again, the earlier
     /// of `deadline` and the next Vsync. `None` waits for as long as it
     /// takes.
-    pub(crate) fn wake_at(&self, deadline: Option<Instant>) -> Option<Instant> {
+    fn wake_at(&self, deadline: Option<Instant>) -> Option<Instant> {
         match (deadline, self.vsync.at()) {
             (Some(d), Some(v)) => Some(d.min(v)),
             (d, v) => d.or(v),

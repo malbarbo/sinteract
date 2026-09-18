@@ -118,28 +118,20 @@ impl super::Frontend for Window {
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
     fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
-        loop {
-            if let Some(event) = self.inbox.poll() {
-                return event;
+        let mut session = self.session.as_mut();
+        self.inbox.wait_with(deadline, |_, timeout| {
+            // A closed session has a closed inbox, which returns Close
+            // before it blocks.
+            let Some(s) = session.as_mut() else {
+                return;
+            };
+            if !s.lent.pump(&mut s.app, timeout) {
+                let _ = s.app.tx.send_input(InputEvent::Close);
             }
-            let now = Instant::now();
-            if deadline.is_some_and(|d| now >= d) {
-                return Event::Timeout;
+            if mem::take(&mut s.app.damaged) {
+                s.redraw();
             }
-            let timeout = self.inbox.wake_at(deadline).map(|t| t - now);
-            match self.session.as_mut() {
-                Some(s) => {
-                    if !s.lent.pump(&mut s.app, timeout) {
-                        let _ = s.app.tx.send_input(InputEvent::Close);
-                    }
-                    if mem::take(&mut s.app.damaged) {
-                        s.redraw();
-                    }
-                }
-                // A closed inbox returns Close from poll.
-                None => return self.inbox.wait(deadline),
-            }
-        }
+        })
     }
 
     fn sender(&self) -> Sender {
