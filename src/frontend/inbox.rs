@@ -15,8 +15,9 @@ use crate::event::{Event, InputEvent};
 /// `wait_event` that blocks on it. Get one from
 /// [`super::Frontend::sender`].
 ///
-/// The queue has no bound. After the frontend delivers a
-/// [`InputEvent::Close`], a message that arrives is lost.
+/// The queue has no bound. Once the frontend closes or delivers an
+/// [`InputEvent::Close`], every send returns [`Closed`]. A message sent
+/// after a Close that has not gone out yet is lost.
 #[derive(Clone)]
 pub struct Sender {
     tx: mpsc::Sender<Item>,
@@ -27,7 +28,7 @@ pub struct Sender {
 /// window does in its event loop.
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 
-/// The error of a [`Sender`] whose frontend no longer exists.
+/// The error of a [`Sender`] whose frontend was closed or dropped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closed;
 
@@ -62,7 +63,7 @@ impl Sender {
 
 impl fmt::Display for Closed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the frontend no longer exists")
+        f.write_str("the frontend is closed")
     }
 }
 
@@ -118,9 +119,11 @@ impl Inbox {
         }
     }
 
-    /// Deliver Close from now on and drop what is queued.
+    /// Deliver Close from now on and drop what is queued. A new receiver
+    /// replaces the channel, so every [`Sender`] fails from now on.
     pub(crate) fn close(&mut self) {
         self.closed = true;
+        self.rx = mpsc::channel().1;
         self.pending.clear();
         self.vsync_pending = false;
     }
@@ -151,7 +154,7 @@ impl Inbox {
             };
             match received {
                 Some(item) => self.push(item),
-                // The inbox holds a sender, so this does not happen.
+                // Only the receiver of a closed inbox disconnects.
                 None => self.closed = true,
             }
         }
@@ -315,6 +318,25 @@ mod tests {
         tx.send_reply(1, Vec::new()).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(is_close(&inbox.wait(None)));
+        assert!(is_close(&inbox.wait(None)));
+    }
+
+    #[test]
+    fn a_sender_fails_once_close_goes_out() {
+        let mut inbox = Inbox::new(None);
+        let tx = inbox.sender();
+        tx.send_close().unwrap();
+        assert!(is_close(&inbox.wait(None)));
+        assert_eq!(tx.send_reply(1, Vec::new()), Err(Closed));
+    }
+
+    #[test]
+    fn a_sender_fails_once_the_inbox_closes() {
+        let mut inbox = Inbox::new(None);
+        let tx = inbox.sender();
+        inbox.close();
+        assert_eq!(tx.send_close(), Err(Closed));
+        assert_eq!(inbox.sender().send_close(), Err(Closed));
         assert!(is_close(&inbox.wait(None)));
     }
 

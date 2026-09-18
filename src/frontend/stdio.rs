@@ -165,7 +165,7 @@ fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>)
             }
         };
         if tx.send_input(ev).is_err() {
-            // The frontend is gone, and nobody reads the queue.
+            // The frontend is closed, and nobody reads the queue.
             return;
         }
     }
