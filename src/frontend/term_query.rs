@@ -22,7 +22,7 @@
 //! probe runs once per process.
 
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -94,6 +94,28 @@ impl Replies {
     }
 }
 
+/// Read the replies until the terminal is done or [`QUERY_TIMEOUT`] passes.
+/// `read` waits at most the given time for input and reads it into the
+/// buffer. It returns `None` when nothing came in time or the read failed.
+fn read_replies(mut read: impl FnMut(Duration, &mut [u8]) -> Option<usize>) -> GraphicsCaps {
+    let mut replies = Replies::default();
+    let deadline = Instant::now() + QUERY_TIMEOUT;
+    let mut chunk = [0u8; 256];
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let Some(n) = read(left, &mut chunk).filter(|&n| n > 0) else {
+            break;
+        };
+        if replies.feed(&chunk[..n]) {
+            break;
+        }
+    }
+    replies.caps()
+}
+
 /// The CSI replies.
 #[derive(Default)]
 struct Found {
@@ -127,75 +149,64 @@ impl vte::Perform for Found {
 #[cfg(unix)]
 mod unix_impl {
     use super::*;
-    use std::io::Write;
+    use std::io::{IsTerminal, Write};
     use std::os::fd::{AsRawFd, RawFd};
-    use std::time::Instant;
 
     pub fn probe() -> GraphicsCaps {
-        use std::io::IsTerminal;
         if !std::io::stdout().is_terminal() {
             return GraphicsCaps::default();
         }
-        let tty = match std::fs::OpenOptions::new()
+        let Ok(mut tty) = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open("/dev/tty")
-        {
-            Ok(f) => f,
-            Err(_) => return GraphicsCaps::default(),
+        else {
+            return GraphicsCaps::default();
         };
         let fd = tty.as_raw_fd();
-
-        let saved = match get_termios(fd) {
-            Some(t) => t,
-            None => return GraphicsCaps::default(),
+        let Some(_raw) = TermiosGuard::raw(fd) else {
+            return GraphicsCaps::default();
         };
-        let mut raw = saved;
-        unsafe {
-            libc::cfmakeraw(&mut raw);
-        }
-        if !set_termios(fd, &raw) {
+        if tty
+            .write_all(QUERY.as_bytes())
+            .and_then(|()| tty.flush())
+            .is_err()
+        {
             return GraphicsCaps::default();
         }
-
-        let result = probe_with_raw(&tty, fd);
-
-        // Nothing to do if the restore fails.
-        set_termios(fd, &saved);
-
-        result
+        read_replies(|wait, buf| {
+            let timeout_ms = wait.as_millis().min(i32::MAX as u128) as i32;
+            if !poll_readable(fd, timeout_ms) {
+                return None;
+            }
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            usize::try_from(n).ok()
+        })
     }
 
-    fn probe_with_raw(tty: &std::fs::File, fd: RawFd) -> GraphicsCaps {
-        let mut writer = match tty.try_clone() {
-            Ok(w) => w,
-            Err(_) => return GraphicsCaps::default(),
-        };
-        if writer.write_all(QUERY.as_bytes()).is_err() || writer.flush().is_err() {
-            return GraphicsCaps::default();
-        }
+    /// Puts the tty in raw mode, so the replies arrive as bytes, and
+    /// restores the saved mode on drop.
+    struct TermiosGuard {
+        fd: RawFd,
+        saved: libc::termios,
+    }
 
-        let mut replies = Replies::default();
-        let deadline = Instant::now() + QUERY_TIMEOUT;
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                break;
+    impl TermiosGuard {
+        fn raw(fd: RawFd) -> Option<Self> {
+            let mut saved: libc::termios = unsafe { std::mem::zeroed() };
+            if unsafe { libc::tcgetattr(fd, &mut saved) } != 0 {
+                return None;
             }
-            let remaining_ms = (deadline - now).as_millis().min(i32::MAX as u128) as i32;
-            if !poll_readable(fd, remaining_ms) {
-                break;
-            }
-            let mut chunk = [0u8; 256];
-            let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut _, chunk.len()) };
-            if n <= 0 {
-                break;
-            }
-            if replies.feed(&chunk[..n as usize]) {
-                break;
-            }
+            let mut raw = saved;
+            unsafe { libc::cfmakeraw(&mut raw) };
+            (unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } == 0).then_some(Self { fd, saved })
         }
-        replies.caps()
+    }
+
+    impl Drop for TermiosGuard {
+        fn drop(&mut self) {
+            unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.saved) };
+        }
     }
 
     fn poll_readable(fd: RawFd, timeout_ms: i32) -> bool {
@@ -207,16 +218,6 @@ mod unix_impl {
         let r = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
         r > 0 && (pfd.revents & libc::POLLIN) != 0
     }
-
-    fn get_termios(fd: RawFd) -> Option<libc::termios> {
-        let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        let r = unsafe { libc::tcgetattr(fd, &mut t) };
-        (r == 0).then_some(t)
-    }
-
-    fn set_termios(fd: RawFd, t: &libc::termios) -> bool {
-        unsafe { libc::tcsetattr(fd, libc::TCSANOW, t) == 0 }
-    }
 }
 
 // -----------------------------------------------------------------------------
@@ -226,7 +227,6 @@ mod unix_impl {
 #[cfg(windows)]
 mod windows_impl {
     use super::*;
-    use std::time::Instant;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     };
@@ -350,37 +350,23 @@ mod windows_impl {
             return GraphicsCaps::default();
         }
 
-        let mut replies = Replies::default();
-        let deadline = Instant::now() + QUERY_TIMEOUT;
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                break;
+        read_replies(|wait, buf| {
+            let timeout_ms = wait.as_millis().min(u32::MAX as u128) as u32;
+            if unsafe { WaitForSingleObject(conin.0, timeout_ms) } != WAIT_OBJECT_0 {
+                return None;
             }
-            let remaining_ms = (deadline - now).as_millis().min(u32::MAX as u128) as u32;
-            let wait = unsafe { WaitForSingleObject(conin.0, remaining_ms) };
-            if wait != WAIT_OBJECT_0 {
-                break;
-            }
-            let mut chunk = [0u8; 256];
             let mut read: u32 = 0;
-            let r = unsafe {
+            let ok = unsafe {
                 ReadFile(
                     conin.0,
-                    chunk.as_mut_ptr() as *mut _,
-                    chunk.len() as u32,
+                    buf.as_mut_ptr().cast(),
+                    buf.len() as u32,
                     &mut read,
                     std::ptr::null_mut(),
                 )
             };
-            if r == 0 || read == 0 {
-                break;
-            }
-            if replies.feed(&chunk[..read as usize]) {
-                break;
-            }
-        }
-        replies.caps()
+            (ok != 0).then_some(read as usize)
+        })
     }
 }
 
