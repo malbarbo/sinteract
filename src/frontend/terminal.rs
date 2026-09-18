@@ -1,43 +1,66 @@
 //! Terminal display of a [`crate::scene::Scene`] through the Kitty graphics
-//! protocol, DEC Sixel or truecolor half-blocks, and the animation lifecycle
-//! of alt screen and raw mode with key polling. An animation frame replaces
-//! the previous one at (0, 0).
+//! protocol, DEC Sixel or truecolor half-blocks. [`Terminal`] is a session
+//! in the alt screen, where each frame replaces the previous one at (0, 0),
+//! and [`show_image`] prints one image inline.
 //!
-//! A Unix terminal does not tell a key down from a key up, so every key
-//! event is a press.
+//! The tty belongs to the process, so one `Terminal` exists at a time, and
+//! [`show_image`] prints nothing while it does. A Unix terminal does not
+//! tell a key down from a key up, so every key event is a press.
 
 use std::io::{self, Write};
-use std::sync::Mutex;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::{cursor, event, execute, queue, terminal};
+use crossterm::event::{self as ct_event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
-use super::driver::{period_from_hz, poll_input, sealed, warn_bitmaps_once};
+use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
 use super::inbox::{Inbox, Sender};
 use super::sixel;
-use crate::event::{InputEvent, KeyKind, key};
+use crate::event::{Event, InputEvent, KeyKind, key};
 use crate::renderer::pixmap::render_to_pixmap;
 use crate::scene::Scene;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
-const KITTY_ONESHOT_ID_BASE: u32 = 2000;
 
 // Fallback when the terminal does not answer the `CSI 16 t` probe.
 const CELL_W_DEFAULT: u32 = 8;
 const CELL_H_DEFAULT: u32 = 16;
 
+/// Sixel has no transparency that keeps the previous frame, so a frame
+/// paints over this.
+const SIXEL_BACKGROUND: (u8, u8, u8) = (255, 255, 255);
+
+/// What a host adds to [`Terminal::open_with`].
+#[derive(Default)]
+pub struct TerminalOptions {
+    /// Runs on the reader thread when the user presses Ctrl-C, after the
+    /// Close goes into the queue. Raw mode turns off the signal of Ctrl-C,
+    /// so a host stops here the code that never calls `wait_event`.
+    pub on_interrupt: Option<Box<dyn FnMut() + Send>>,
+}
+
 /// A [`super::Frontend`] over the alt screen of the terminal, in raw mode.
 /// Ctrl-C arrives as [`InputEvent::Close`].
 pub struct Terminal {
     inbox: Inbox,
-    tx: Sender,
-    close_sent: bool,
-    closed: bool,
+    backend: Backend,
+    /// `None` after [`super::Frontend::close`].
+    live: Option<Live>,
+    /// The alt screen shows a frame, which Kitty keeps after the session.
+    frame_shown: bool,
     warned_bitmaps: bool,
+}
+
+/// What a session holds until it closes.
+struct Live {
+    reader: Reader,
+    _claim: Claim,
 }
 
 impl Terminal {
@@ -45,38 +68,69 @@ impl Terminal {
     /// half-block animation and does not flood the pty with escape codes.
     const VSYNC_PERIOD: Duration = period_from_hz(60);
 
-    /// Enter the alt screen and raw mode.
-    pub fn open() -> Self {
-        enter_animation();
+    /// Enter the alt screen and raw mode, with [`TerminalOptions::default`].
+    pub fn open() -> Result<Self, OpenError> {
+        Self::open_with(TerminalOptions::default())
+    }
+
+    /// Enter the alt screen and raw mode. Fails with [`OpenError::Busy`]
+    /// while another `Terminal` exists, and with [`OpenError::NoGraphics`]
+    /// when the terminal shows neither Kitty, Sixel nor truecolor.
+    pub fn open_with(options: TerminalOptions) -> Result<Self, OpenError> {
+        let claim = Claim::take()?;
+        // The probe reads the replies from the tty, so it runs under the
+        // claim, where no reader thread takes them.
+        let backend = pick_backend().ok_or(OpenError::NoGraphics)?;
+        terminal::enable_raw_mode().map_err(OpenError::Io)?;
+        install_panic_hook();
+        let entered = execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide);
         let inbox = Inbox::new(Some(Self::VSYNC_PERIOD));
-        let tx = inbox.sender();
-        Self {
+        let reader = entered.and_then(|()| Reader::spawn(inbox.sender(), options.on_interrupt));
+        let reader = match reader {
+            Ok(reader) => reader,
+            Err(e) => {
+                leave(backend, false);
+                return Err(OpenError::Io(e));
+            }
+        };
+        Ok(Self {
             inbox,
-            tx,
-            close_sent: false,
-            closed: false,
+            backend,
+            live: Some(Live {
+                reader,
+                _claim: claim,
+            }),
+            frame_shown: false,
             warned_bitmaps: false,
-        }
+        })
     }
 }
 
 impl super::Frontend for Terminal {
     fn present(&mut self, scene: &Scene) {
-        if self.closed {
+        if self.live.is_none() {
             return;
         }
         warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
-        show_image(scene);
+        let Some(pixmap) = rasterize(self.backend, scene) else {
+            return;
+        };
+        let mut stdout = io::stdout().lock();
+        let _ = queue!(stdout, cursor::MoveTo(0, 0));
+        let _ = match self.backend {
+            // The same image id replaces the frame in place. A delete
+            // followed by a transmit shows the cleared cells for one refresh
+            // and flickers.
+            Backend::Kitty => emit_kitty(&mut stdout, &pixmap, Some(KITTY_ANIMATION_ID)),
+            Backend::Sixel => stdout.write_all(&sixel::encode(&pixmap, SIXEL_BACKGROUND)),
+            Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap).map(drop),
+        };
+        let _ = stdout.flush();
+        self.frame_shown = true;
     }
 
-    fn wait_event(&mut self, deadline: Option<Instant>) -> crate::event::Event {
-        let Self {
-            inbox,
-            tx,
-            close_sent,
-            ..
-        } = self;
-        poll_input(inbox, deadline, || forward_input(tx, close_sent))
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
+        self.inbox.wait(deadline)
     }
 
     fn sender(&self) -> Sender {
@@ -86,14 +140,16 @@ impl super::Frontend for Terminal {
     /// The terminal draws without bitmaps, so it drops the upload.
     fn push_asset(&mut self, _id: u32, _blob: &[u8], _mime: Option<&str>) {}
 
-    /// Leave the alt screen and raw mode.
+    /// Stop the reader thread, and leave the alt screen and raw mode.
     fn close(&mut self) {
-        if self.closed {
+        let Some(live) = self.live.take() else {
             return;
-        }
-        self.closed = true;
+        };
         self.inbox.close();
-        exit_animation();
+        live.reader.stop();
+        // Keys typed after the reader stopped would go to the shell.
+        drain_input();
+        leave(self.backend, self.frame_shown);
     }
 }
 
@@ -105,52 +161,35 @@ impl Drop for Terminal {
     }
 }
 
-/// Move the keys and a Ctrl-C into the queue. `close_sent` keeps a second
-/// Close out.
-fn forward_input(tx: &Sender, close_sent: &mut bool) {
-    while let Some(key) = poll_key_event() {
-        let _ = tx.send_input(InputEvent::Key(key));
+/// Print `scene` at the cursor, through Kitty when the terminal supports
+/// it, else Sixel, else half-blocks. Prints nothing while a [`Terminal`]
+/// holds the tty, or when the terminal has no graphics.
+pub fn show_image(scene: &Scene) {
+    if TTY_CLAIMED.load(Ordering::Acquire) {
+        eprintln!("[sinteract] a terminal session is open; not printing the image");
+        return;
     }
-    if !*close_sent && closed() {
-        *close_sent = true;
-        let _ = tx.send_input(InputEvent::Close);
-    }
+    let Some(backend) = pick_backend() else {
+        return;
+    };
+    let Some(pixmap) = rasterize(backend, scene) else {
+        return;
+    };
+    let mut stdout = io::stdout().lock();
+    let _ = match backend {
+        Backend::Kitty => emit_kitty(&mut stdout, &pixmap, None).and_then(|()| writeln!(stdout)),
+        Backend::Sixel => stdout
+            .write_all(&sixel::encode(&pixmap, SIXEL_BACKGROUND))
+            .and_then(|()| writeln!(stdout)),
+        Backend::TextBlocks => render_text_blocks(&mut stdout, &pixmap).map(drop),
+    };
+    let _ = stdout.flush();
 }
 
-/// Pixel size of one terminal cell, from the cached probe in
-/// [`super::term_query`]. A terminal under a multiplexer or without a tty
-/// does not answer, and gets 8 by 16.
-fn cell_pixels() -> (u32, u32) {
-    super::term_query::graphics_caps()
-        .cell_px
-        .unwrap_or((CELL_W_DEFAULT, CELL_H_DEFAULT))
+/// Print the SVG source. A host uses it when the terminal has no graphics.
+pub fn show_svg(svg: &str) {
+    println!("{svg}");
 }
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum Backend {
-    Kitty,
-    Sixel,
-    TextBlocks,
-}
-
-struct State {
-    in_animation: bool,
-    raw_enabled: bool,
-    image_displayed: bool,
-    next_oneshot_id: u32,
-    text_blocks_lines: u16,
-    /// Set by Ctrl-C during an animation. The frontend reports it as a close.
-    closed: bool,
-}
-
-static STATE: Mutex<State> = Mutex::new(State {
-    in_animation: false,
-    raw_enabled: false,
-    image_displayed: false,
-    next_oneshot_id: KITTY_ONESHOT_ID_BASE,
-    text_blocks_lines: 0,
-    closed: false,
-});
 
 /// Returns `true` if the terminal reports 24-bit color, `false` otherwise.
 /// The half-blocks fallback needs it.
@@ -195,6 +234,241 @@ pub fn text_blocks_supported() -> bool {
 /// The probe runs at most once per process.
 pub fn kitty_supported() -> bool {
     super::term_query::graphics_caps().kitty
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+enum Backend {
+    Kitty,
+    Sixel,
+    TextBlocks,
+}
+
+fn pick_backend() -> Option<Backend> {
+    if kitty_supported() {
+        Some(Backend::Kitty)
+    } else if sixel::sixel_supported() {
+        Some(Backend::Sixel)
+    } else if text_blocks_supported() {
+        Some(Backend::TextBlocks)
+    } else {
+        None
+    }
+}
+
+fn rasterize(backend: Backend, scene: &Scene) -> Option<Pixmap> {
+    let scale = scale_for_backend(backend, scene.width(), scene.height());
+    let pixmap = render_to_pixmap(scene, scale);
+    if pixmap.is_none() {
+        eprintln!("[sinteract] failed to rasterize draw list");
+    }
+    pixmap
+}
+
+// -----------------------------------------------------------------------------
+// The tty of the process
+// -----------------------------------------------------------------------------
+
+/// Set while a [`Terminal`] holds the tty.
+static TTY_CLAIMED: AtomicBool = AtomicBool::new(false);
+
+/// The hold of a [`Terminal`] on the tty, released on drop.
+struct Claim;
+
+impl Claim {
+    fn take() -> Result<Self, OpenError> {
+        if TTY_CLAIMED.swap(true, Ordering::AcqRel) {
+            Err(OpenError::Busy)
+        } else {
+            Ok(Claim)
+        }
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        TTY_CLAIMED.store(false, Ordering::Release);
+    }
+}
+
+/// Leave the alt screen and raw mode. Kitty keeps an image across the flip
+/// of the alt screen, so a frame it shows goes by id. Sixel and half-blocks
+/// output lives in the alt screen and goes with it.
+fn leave(backend: Backend, frame_shown: bool) {
+    let mut stdout = io::stdout().lock();
+    if frame_shown && backend == Backend::Kitty {
+        let _ = delete_kitty_image(&mut stdout, KITTY_ANIMATION_ID);
+    }
+    let _ = execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen);
+    drop(stdout);
+    let _ = terminal::disable_raw_mode();
+}
+
+/// With `panic = "abort"` a panic ends the process and no drop runs, so a
+/// hook puts the tty back, from whichever thread panics. The only lock it
+/// takes is the one of crossterm around the saved mode, which no code holds
+/// across a panic. With unwinding, the drop of the `Terminal` does the job.
+#[cfg(panic = "abort")]
+fn install_panic_hook() {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if TTY_CLAIMED.load(Ordering::Acquire) {
+                let backend = pick_backend().unwrap_or(Backend::TextBlocks);
+                leave(backend, true);
+            }
+            prev(info);
+        }));
+    });
+}
+
+#[cfg(not(panic = "abort"))]
+fn install_panic_hook() {}
+
+// -----------------------------------------------------------------------------
+// Key input
+// -----------------------------------------------------------------------------
+
+/// The thread that moves the keys of the terminal into the queue.
+struct Reader {
+    stop: Arc<AtomicBool>,
+    thread: JoinHandle<()>,
+}
+
+/// How long the reader blocks before it checks `stop`, which bounds how
+/// long [`Reader::stop`] waits.
+const READ_POLL: Duration = Duration::from_millis(50);
+
+impl Reader {
+    fn spawn(tx: Sender, on_interrupt: Option<Box<dyn FnMut() + Send>>) -> io::Result<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = thread::Builder::new()
+            .name("sinteract-terminal".into())
+            .spawn(move || read_keys(&tx, &flag, on_interrupt))?;
+        Ok(Self { stop, thread })
+    }
+
+    fn stop(self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = self.thread.join();
+    }
+}
+
+/// Send the keys until `stop`, Ctrl-C or a read error. A Close goes into the
+/// queue on every way out, so a reader that dies does not leave the host
+/// waiting in raw mode.
+fn read_keys(tx: &Sender, stop: &AtomicBool, mut on_interrupt: Option<Box<dyn FnMut() + Send>>) {
+    let _close = CloseOnExit(tx);
+    while !stop.load(Ordering::Acquire) {
+        let ev = match ct_event::poll(READ_POLL) {
+            Ok(false) => continue,
+            Ok(true) => ct_event::read(),
+            Err(e) => Err(e),
+        };
+        let ev = match ev {
+            Ok(ev) => ev,
+            Err(e) => {
+                eprintln!("[sinteract] terminal read error: {e}");
+                return;
+            }
+        };
+        let ct_event::Event::Key(key) = ev else {
+            continue;
+        };
+        if is_ctrl_c(&key) {
+            let _ = tx.send_input(InputEvent::Close);
+            if let Some(f) = on_interrupt.as_mut() {
+                f();
+            }
+            return;
+        }
+        if let Some(k) = key_event(key)
+            && tx.send_input(InputEvent::Key(k)).is_err()
+        {
+            return;
+        }
+    }
+}
+
+struct CloseOnExit<'a>(&'a Sender);
+
+impl Drop for CloseOnExit<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.send_input(InputEvent::Close);
+    }
+}
+
+fn is_ctrl_c(key: &KeyEvent) -> bool {
+    key.kind != KeyEventKind::Release
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('c'))
+}
+
+/// Drop the events that crossterm read and nobody took.
+fn drain_input() {
+    while ct_event::poll(Duration::ZERO).unwrap_or(false) {
+        if ct_event::read().is_err() {
+            break;
+        }
+    }
+}
+
+/// The key event of a crossterm key, or `None` for a release or a key with no
+/// name. Windows reports every release, and a Unix terminal reports one only
+/// with the kitty keyboard protocol, which is off. A release is dropped, so a
+/// terminal sends a press alone on every platform. A repeat arrives as a
+/// press.
+fn key_event(ev: KeyEvent) -> Option<crate::event::KeyEvent> {
+    if ev.kind == KeyEventKind::Release {
+        return None;
+    }
+    let key = key_code_to_string(ev.code)?;
+    let m = ev.modifiers;
+    Some(crate::event::KeyEvent {
+        kind: KeyKind::Press,
+        key,
+        modifiers: crate::event::Modifiers {
+            alt: m.contains(KeyModifiers::ALT),
+            ctrl: m.contains(KeyModifiers::CONTROL),
+            shift: m.contains(KeyModifiers::SHIFT),
+            meta: m.contains(KeyModifiers::SUPER),
+        },
+        repeat: ev.kind == KeyEventKind::Repeat,
+    })
+}
+
+/// Map a crossterm key code to its name in [`crate::event::key`], or to the
+/// text it types. A function key above F12 has no name, as in the window.
+fn key_code_to_string(code: KeyCode) -> Option<String> {
+    Some(match code {
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Backspace => key::BACKSPACE.into(),
+        KeyCode::Enter => key::ENTER.into(),
+        KeyCode::Left => key::ARROW_LEFT.into(),
+        KeyCode::Right => key::ARROW_RIGHT.into(),
+        KeyCode::Up => key::ARROW_UP.into(),
+        KeyCode::Down => key::ARROW_DOWN.into(),
+        KeyCode::Home => key::HOME.into(),
+        KeyCode::End => key::END.into(),
+        KeyCode::PageUp => key::PAGE_UP.into(),
+        KeyCode::PageDown => key::PAGE_DOWN.into(),
+        KeyCode::Tab | KeyCode::BackTab => key::TAB.into(),
+        KeyCode::Delete => key::DELETE.into(),
+        KeyCode::Insert => key::INSERT.into(),
+        KeyCode::Esc => key::ESCAPE.into(),
+        KeyCode::F(n @ 1..=12) => key::FUNCTION_KEYS[usize::from(n - 1)].into(),
+        _ => return None,
+    })
+}
+
+/// Pixel size of one terminal cell, from the cached probe in
+/// [`super::term_query`]. A terminal under a multiplexer or without a tty
+/// does not answer, and gets 8 by 16.
+fn cell_pixels() -> (u32, u32) {
+    super::term_query::graphics_caps()
+        .cell_px
+        .unwrap_or((CELL_W_DEFAULT, CELL_H_DEFAULT))
 }
 
 // -----------------------------------------------------------------------------
@@ -297,8 +571,9 @@ fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
 // -----------------------------------------------------------------------------
 
 /// Write the Kitty escape sequences that show `pixmap` at the cursor, as raw
-/// RGBA in chunks.
-fn emit_kitty<W: Write>(w: &mut W, pixmap: &Pixmap, id: u32) -> io::Result<()> {
+/// RGBA in chunks. An image with an `id` replaces the image of that id, and
+/// one without stays until the terminal scrolls it away.
+fn emit_kitty<W: Write>(w: &mut W, pixmap: &Pixmap, id: Option<u32>) -> io::Result<()> {
     let encoded = B64.encode(pixmap.data());
     let bytes = encoded.as_bytes();
     let chunk_size = 4096;
@@ -308,12 +583,15 @@ fn emit_kitty<W: Write>(w: &mut W, pixmap: &Pixmap, id: u32) -> io::Result<()> {
         if idx == 0 {
             write!(
                 w,
-                "\x1b_Ga=T,f=32,s={},v={},i={},q=2,m={};",
+                "\x1b_Ga=T,f=32,s={},v={},q=2,m={}",
                 pixmap.width(),
                 pixmap.height(),
-                id,
                 more,
             )?;
+            if let Some(id) = id {
+                write!(w, ",i={id}")?;
+            }
+            w.write_all(b";")?;
         } else {
             write!(w, "\x1b_Gm={},q=2;", more)?;
         }
@@ -325,237 +603,6 @@ fn emit_kitty<W: Write>(w: &mut W, pixmap: &Pixmap, id: u32) -> io::Result<()> {
 
 fn delete_kitty_image<W: Write>(w: &mut W, id: u32) -> io::Result<()> {
     write!(w, "\x1b_Ga=d,d=I,i={},q=2;\x1b\\", id)
-}
-
-// -----------------------------------------------------------------------------
-// Public entry points
-// -----------------------------------------------------------------------------
-
-/// Show `scene` in the terminal, through Kitty when the terminal supports
-/// it, else Sixel, else half-blocks.
-pub fn show_image(scene: &crate::scene::Scene) {
-    let Some(backend) = pick_backend() else {
-        return;
-    };
-    let scale = scale_for_backend(backend, scene.width(), scene.height());
-    let Some(pixmap) = render_to_pixmap(scene, scale) else {
-        eprintln!("[sinteract] failed to rasterize draw list");
-        return;
-    };
-    paint_pixmap(backend, pixmap);
-}
-
-fn pick_backend() -> Option<Backend> {
-    if kitty_supported() {
-        Some(Backend::Kitty)
-    } else if sixel::sixel_supported() {
-        Some(Backend::Sixel)
-    } else if text_blocks_supported() {
-        Some(Backend::TextBlocks)
-    } else {
-        None
-    }
-}
-
-fn paint_pixmap(backend: Backend, pixmap: Pixmap) {
-    let mut state = STATE.lock().unwrap();
-    let mut stdout = io::stdout().lock();
-
-    match backend {
-        Backend::Kitty => {
-            if state.in_animation {
-                // The same image id replaces the frame in place. A delete
-                // followed by a transmit shows the cleared cells for one
-                // refresh and flickers.
-                let _ = queue!(stdout, cursor::MoveTo(0, 0));
-                let _ = emit_kitty(&mut stdout, &pixmap, KITTY_ANIMATION_ID);
-                state.image_displayed = true;
-            } else {
-                // A new id per image, so successive images do not replace
-                // each other.
-                let id = state.next_oneshot_id;
-                state.next_oneshot_id = state
-                    .next_oneshot_id
-                    .checked_add(1)
-                    .unwrap_or(KITTY_ONESHOT_ID_BASE);
-                let _ = emit_kitty(&mut stdout, &pixmap, id);
-                let _ = writeln!(stdout);
-            }
-        }
-        Backend::Sixel => {
-            // Sixel has no image id, so a frame paints over an opaque
-            // background, or its transparent pixels would show the previous
-            // frame.
-            let bytes = sixel::encode(&pixmap, (255, 255, 255));
-            if state.in_animation {
-                let _ = queue!(stdout, cursor::MoveTo(0, 0));
-                let _ = stdout.write_all(&bytes);
-                state.image_displayed = true;
-            } else {
-                let _ = stdout.write_all(&bytes);
-                let _ = writeln!(stdout);
-            }
-        }
-        Backend::TextBlocks => {
-            if state.in_animation {
-                // Repaint from the top, so a frame overwrites the previous one.
-                let _ = queue!(stdout, cursor::MoveTo(0, 0));
-                let lines =
-                    render_text_blocks(&mut stdout, &pixmap).unwrap_or(state.text_blocks_lines);
-                state.text_blocks_lines = lines;
-                state.image_displayed = true;
-            } else {
-                let _ = render_text_blocks(&mut stdout, &pixmap);
-            }
-        }
-    }
-    let _ = stdout.flush();
-}
-
-/// Print the SVG source. A host uses it when the terminal has no graphics.
-pub fn show_svg(svg: &str) {
-    println!("{svg}");
-}
-
-pub fn enter_animation() {
-    let mut state = STATE.lock().unwrap();
-    if state.in_animation {
-        return;
-    }
-    // Reset before any early return, or the Ctrl-C of a previous session
-    // closes this one.
-    state.closed = false;
-    if !kitty_supported() && !sixel::sixel_supported() && !text_blocks_supported() {
-        eprintln!(
-            "[sinteract] terminal does not advertise graphics support; \
-             World output will fall back to printing SVG. \
-             Try Kitty, Ghostty, WezTerm, Konsole, a Sixel-capable \
-             terminal (Windows Terminal ≥ 1.22, mlterm, foot, mintty), \
-             or a truecolor terminal (set COLORTERM=truecolor)."
-        );
-        return;
-    }
-    let mut stdout = io::stdout().lock();
-    if terminal::enable_raw_mode().is_err() {
-        return;
-    }
-    let _ = execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide);
-    state.in_animation = true;
-    state.raw_enabled = true;
-    state.image_displayed = false;
-    state.text_blocks_lines = 0;
-}
-
-pub fn exit_animation() {
-    let mut state = STATE.lock().unwrap();
-    if !state.in_animation {
-        return;
-    }
-    let mut stdout = io::stdout().lock();
-    // Kitty keeps the image across the alt screen flip, so delete it by id.
-    // Sixel and half-blocks output lives in the alt screen and goes with it.
-    if state.image_displayed && kitty_supported() {
-        let _ = delete_kitty_image(&mut stdout, KITTY_ANIMATION_ID);
-    }
-    let _ = execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen);
-    let _ = stdout.flush();
-    drop(stdout);
-    if state.raw_enabled {
-        let _ = terminal::disable_raw_mode();
-    }
-    state.in_animation = false;
-    state.raw_enabled = false;
-    state.image_displayed = false;
-    state.text_blocks_lines = 0;
-}
-
-/// Return the next key event without blocking.
-pub fn poll_key_event() -> Option<crate::event::KeyEvent> {
-    {
-        let state = STATE.lock().unwrap();
-        if !state.raw_enabled {
-            return None;
-        }
-    }
-
-    if !event::poll(Duration::ZERO).ok()? {
-        return None;
-    }
-    let Event::Key(key) = event::read().ok()? else {
-        return None;
-    };
-
-    // process::exit would kill a server that hosts other sessions, so the
-    // frontend reports a close instead.
-    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-        STATE.lock().unwrap().closed = true;
-        return None;
-    }
-    key_event(key)
-}
-
-/// The key event of a crossterm key, or `None` for a release or a key with no
-/// name. Windows reports every release, and a Unix terminal reports one only
-/// with the kitty keyboard protocol, which is off. A release is dropped, so a
-/// terminal sends a press alone on every platform. A repeat arrives as a
-/// press.
-fn key_event(ev: KeyEvent) -> Option<crate::event::KeyEvent> {
-    if ev.kind == KeyEventKind::Release {
-        return None;
-    }
-    let key = key_code_to_string(ev.code)?;
-    let m = ev.modifiers;
-    Some(crate::event::KeyEvent {
-        kind: KeyKind::Press,
-        key,
-        modifiers: crate::event::Modifiers {
-            alt: m.contains(KeyModifiers::ALT),
-            ctrl: m.contains(KeyModifiers::CONTROL),
-            shift: m.contains(KeyModifiers::SHIFT),
-            meta: m.contains(KeyModifiers::SUPER),
-        },
-        repeat: ev.kind == KeyEventKind::Repeat,
-    })
-}
-
-/// Map a crossterm key code to its name in [`crate::event::key`], or to the
-/// text it types. A function key above F12 has no name, as in the window.
-fn key_code_to_string(code: KeyCode) -> Option<String> {
-    Some(match code {
-        KeyCode::Char(c) => c.to_string(),
-        KeyCode::Backspace => key::BACKSPACE.into(),
-        KeyCode::Enter => key::ENTER.into(),
-        KeyCode::Left => key::ARROW_LEFT.into(),
-        KeyCode::Right => key::ARROW_RIGHT.into(),
-        KeyCode::Up => key::ARROW_UP.into(),
-        KeyCode::Down => key::ARROW_DOWN.into(),
-        KeyCode::Home => key::HOME.into(),
-        KeyCode::End => key::END.into(),
-        KeyCode::PageUp => key::PAGE_UP.into(),
-        KeyCode::PageDown => key::PAGE_DOWN.into(),
-        KeyCode::Tab | KeyCode::BackTab => key::TAB.into(),
-        KeyCode::Delete => key::DELETE.into(),
-        KeyCode::Insert => key::INSERT.into(),
-        KeyCode::Esc => key::ESCAPE.into(),
-        KeyCode::F(n @ 1..=12) => key::FUNCTION_KEYS[usize::from(n - 1)].into(),
-        _ => return None,
-    })
-}
-
-/// Returns `true` if the user pressed Ctrl-C since [`enter_animation`],
-/// `false` otherwise.
-pub fn closed() -> bool {
-    STATE.lock().unwrap().closed
-}
-
-/// Install a panic hook that takes the terminal out of raw mode after a
-/// crash. A second call chains the hooks.
-pub fn install_panic_hook() {
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        exit_animation();
-        prev(info);
-    }));
 }
 
 #[cfg(test)]
@@ -1048,5 +1095,48 @@ mod tests {
     fn a_function_key_above_f12_sends_nothing() {
         assert_eq!(key_code_to_string(KeyCode::F(12)).as_deref(), Some("F12"));
         assert!(key_code_to_string(KeyCode::F(13)).is_none());
+    }
+
+    #[test]
+    fn a_second_claim_is_busy_until_the_first_drops() {
+        let first = Claim::take().expect("free");
+        assert!(matches!(Claim::take(), Err(OpenError::Busy)));
+        drop(first);
+        assert!(Claim::take().is_ok());
+    }
+
+    #[test]
+    fn kitty_names_the_frame_and_not_an_inline_image() {
+        let pm = Pixmap::new(1, 1).unwrap();
+        let mut framed = Vec::new();
+        emit_kitty(&mut framed, &pm, Some(KITTY_ANIMATION_ID)).unwrap();
+        assert!(
+            String::from_utf8(framed)
+                .unwrap()
+                .starts_with("\x1b_Ga=T,f=32,s=1,v=1,q=2,m=0,i=1042;")
+        );
+        let mut inline = Vec::new();
+        emit_kitty(&mut inline, &pm, None).unwrap();
+        assert!(
+            String::from_utf8(inline)
+                .unwrap()
+                .starts_with("\x1b_Ga=T,f=32,s=1,v=1,q=2,m=0;")
+        );
+    }
+
+    #[test]
+    fn ctrl_c_is_a_press_of_c_with_control() {
+        let press = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(is_ctrl_c(&press));
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Release,
+        );
+        assert!(!is_ctrl_c(&release));
+        assert!(!is_ctrl_c(&KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::NONE
+        )));
     }
 }

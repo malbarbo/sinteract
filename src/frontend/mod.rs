@@ -31,12 +31,12 @@ pub mod terminal;
 pub mod window;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use driver::{Frontend, open_native};
+pub use driver::{Frontend, OpenError, open_native};
 #[cfg(not(target_arch = "wasm32"))]
 pub use inbox::{Closed, Sender};
 #[cfg(not(target_arch = "wasm32"))]
 pub use stdio::Stdio;
 #[cfg(not(target_arch = "wasm32"))]
-pub use terminal::Terminal;
+pub use terminal::{Terminal, TerminalOptions};
 #[cfg(not(target_arch = "wasm32"))]
 pub use window::Window;

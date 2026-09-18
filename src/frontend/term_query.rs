@@ -13,16 +13,18 @@
 //!
 //! The probe opens the tty itself, so it works with stdin and stdout
 //! redirected, and puts the tty in raw mode so the replies arrive as bytes.
-//! It waits at most 150 ms. A local terminal answers in a few milliseconds
-//! and ssh in well under 100 ms, and a terminal that does not answer in time
-//! counts as unsupported. Under a multiplexer without passthrough the
-//! queries never reach the outer terminal, and the probe reports no support.
-//! The result is cached, so the probe runs once per process.
+//! It stops at the CPR reply, which a local terminal sends in a few
+//! milliseconds, and waits at most a second for it. A reply that came after
+//! a shorter wait would reach the program as keys, as over a slow ssh link.
+//! A terminal that does not answer in time counts as unsupported. Under a
+//! multiplexer without passthrough the queries never reach the outer
+//! terminal, and the probe reports no support. The result is cached, so the
+//! probe runs once per process.
 
 use std::sync::OnceLock;
 use std::time::Duration;
 
-const QUERY_TIMEOUT: Duration = Duration::from_millis(150);
+const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
 const KITTY_QUERY_ID: &str = "31";
 
 fn build_query() -> String {

@@ -27,9 +27,9 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{period_from_hz, poll_input, sealed, warn_bitmaps_once};
+use super::driver::{period_from_hz, sealed, warn_bitmaps_once};
 use super::inbox::{Inbox, Sender};
-use crate::event::{InputEvent, KeyKind, key};
+use crate::event::{Event, InputEvent, KeyKind, key};
 use crate::scene::Scene;
 
 /// A [`super::Frontend`] over a winit window. Closing the window arrives
@@ -72,7 +72,7 @@ impl super::Frontend for Window {
         show_image(scene);
     }
 
-    fn wait_event(&mut self, deadline: Option<Instant>) -> crate::event::Event {
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
         let Self {
             inbox,
             tx,
@@ -117,6 +117,24 @@ fn forward_input(tx: &Sender, close_sent: &mut bool) {
     if !*close_sent && closed() {
         *close_sent = true;
         let _ = tx.send_input(InputEvent::Close);
+    }
+}
+
+/// How often the window looks for a key. Its input does not wake the
+/// queue, so [`poll_input`] checks this often.
+const INPUT_POLL: Duration = Duration::from_millis(8);
+
+/// Wait on `inbox` in steps of [`INPUT_POLL`], and call `forward` before
+/// each step so it moves the input of the platform into the queue.
+fn poll_input(inbox: &mut Inbox, deadline: Option<Instant>, mut forward: impl FnMut()) -> Event {
+    loop {
+        forward();
+        let step = Instant::now() + INPUT_POLL;
+        let until = deadline.map_or(step, |d| d.min(step));
+        match inbox.wait(Some(until)) {
+            Event::Timeout if deadline.is_none_or(|d| Instant::now() < d) => {}
+            event => return event,
+        }
     }
 }
 

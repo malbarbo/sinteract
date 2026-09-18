@@ -1,6 +1,8 @@
 //! [`Frontend`], the trait a host drives, and [`open_native`]. The module
 //! is private, and [`super`] re-exports both.
 
+use std::fmt;
+use std::io;
 use std::time::{Duration, Instant};
 
 use super::inbox::Sender;
@@ -56,41 +58,49 @@ pub(super) mod sealed {
 /// The terminal when stdout is a tty with graphics, and a window
 /// otherwise. `title` only matters for a window. A terminal keeps the title
 /// of the shell.
-pub fn open_native(title: &str) -> Box<dyn Frontend> {
-    if super::terminal::kitty_supported()
-        || super::sixel::sixel_supported()
-        || super::terminal::text_blocks_supported()
-    {
-        Box::new(Terminal::open())
-    } else {
-        Box::new(Window::open(title))
+pub fn open_native(title: &str) -> Result<Box<dyn Frontend>, OpenError> {
+    match Terminal::open() {
+        Ok(terminal) => Ok(Box::new(terminal)),
+        Err(OpenError::NoGraphics) => Ok(Box::new(Window::open(title))),
+        Err(e) => Err(e),
+    }
+}
+
+/// Why a frontend did not open.
+#[derive(Debug)]
+pub enum OpenError {
+    /// Another session holds the terminal.
+    Busy,
+    /// The terminal shows neither Kitty, Sixel nor truecolor.
+    NoGraphics,
+    Io(io::Error),
+}
+
+impl fmt::Display for OpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpenError::Busy => f.write_str("another session holds the terminal"),
+            OpenError::NoGraphics => f.write_str(
+                "the terminal shows no graphics; try Kitty, Ghostty, WezTerm, Konsole, \
+                 a Sixel terminal (Windows Terminal 1.22 or later, mlterm, foot, mintty) \
+                 or a truecolor terminal (set COLORTERM=truecolor)",
+            ),
+            OpenError::Io(e) => write!(f, "cannot set the terminal up: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for OpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            OpenError::Io(e) => Some(e),
+            _ => None,
+        }
     }
 }
 
 pub(super) const fn period_from_hz(hz: u32) -> Duration {
     Duration::from_nanos(1_000_000_000 / hz as u64)
-}
-
-/// How often the terminal and the window look for a key. Their input does
-/// not wake the queue, so [`poll_input`] checks this often.
-pub(super) const INPUT_POLL: Duration = Duration::from_millis(8);
-
-/// Wait on `inbox` in steps of [`INPUT_POLL`], and call `forward` before
-/// each step so it moves the input of the platform into the queue.
-pub(super) fn poll_input(
-    inbox: &mut super::inbox::Inbox,
-    deadline: Option<Instant>,
-    mut forward: impl FnMut(),
-) -> Event {
-    loop {
-        forward();
-        let step = Instant::now() + INPUT_POLL;
-        let until = deadline.map_or(step, |d| d.min(step));
-        match inbox.wait(Some(until)) {
-            Event::Timeout if deadline.is_none_or(|d| Instant::now() < d) => {}
-            event => return event,
-        }
-    }
 }
 
 /// Say once per frontend that this backend drops the bitmaps of the frame. A
