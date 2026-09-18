@@ -625,19 +625,12 @@ fn delete_kitty_image<W: Write>(w: &mut W, id: u32) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::pixmap::render_to_pixmap;
-    use crate::renderer::tests::rect;
-    use crate::scene::{Paint, PathStyle, Scene};
 
-    fn solid(r: u8, g: u8, b: u8) -> PathStyle {
-        PathStyle {
-            fill: Paint::rgba(r, g, b, 1.0),
-            ..PathStyle::default()
-        }
-    }
-
-    fn rasterize(scene: &Scene) -> Pixmap {
-        render_to_pixmap(scene, 1.0).expect("pixmap")
+    fn solid(w: u32, h: u32, r: u8, g: u8, b: u8) -> Pixmap {
+        let mut pm = Pixmap::new(w, h).unwrap();
+        let color = tiny_skia::ColorU8::from_rgba(r, g, b, 255).premultiply();
+        pm.pixels_mut().fill(color);
+        pm
     }
 
     #[test]
@@ -664,9 +657,7 @@ mod tests {
 
     #[test]
     fn text_blocks_renders_some_pixels() {
-        let mut scene = Scene::new(4.0, 4.0);
-        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 4.0, 4.0));
-        let pm = rasterize(&scene);
+        let pm = solid(4, 4, 255, 0, 0);
         let mut buf: Vec<u8> = Vec::new();
         render_text_blocks(&mut buf, &pm).expect("write ok");
         assert_eq!(rows(&buf), 2);
@@ -676,9 +667,7 @@ mod tests {
 
     #[test]
     fn text_blocks_uses_truecolor_codes() {
-        let mut scene = Scene::new(2.0, 2.0);
-        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 2.0, 2.0));
-        let pm = rasterize(&scene);
+        let pm = solid(2, 2, 0, 0, 255);
         let mut buf: Vec<u8> = Vec::new();
         render_text_blocks(&mut buf, &pm).expect("write ok");
         let s = String::from_utf8_lossy(&buf);
@@ -690,9 +679,7 @@ mod tests {
     #[test]
     fn text_blocks_handles_odd_height() {
         // The last cell row has no bottom pixel and takes black.
-        let mut scene = Scene::new(3.0, 3.0);
-        scene.add_path(rect(solid(255, 255, 255), 0.0, 0.0, 3.0, 3.0));
-        let pm = rasterize(&scene);
+        let pm = solid(3, 3, 255, 255, 255);
         let mut buf: Vec<u8> = Vec::new();
         render_text_blocks(&mut buf, &pm).expect("write ok");
         // ceil(3 / 2) rows.
