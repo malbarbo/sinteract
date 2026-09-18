@@ -136,11 +136,11 @@ impl Drop for Stdio {
 }
 
 /// Read the messages of the peer into the queue until the stream or the
-/// session ends. An `Asset` or a `Frame` is a protocol error from the
-/// peer, logged and skipped. A message or an event of an arm from a newer
-/// schema is skipped without a log. A payload that does not decode is
-/// logged and skipped, since the framing already found where the next
-/// message starts.
+/// session ends. Only the host sends an `Asset` or a `Frame`, so one from
+/// the peer means that the two ends swapped roles, and it ends the session.
+/// A message or an event of an arm from a newer schema is skipped without a
+/// log. A payload that does not decode is logged and skipped, since the
+/// framing already found where the next message starts.
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
         let ev = match read_framed(&mut reader) {
@@ -149,11 +149,13 @@ fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>)
                 Ok(Decoded::Event(ev)) => ev,
                 Ok(Decoded::Close) => break,
                 Ok(Decoded::Unknown) => continue,
-                Ok(other) => {
-                    eprintln!(
-                        "[sinteract::stdio] ignoring unexpected message from peer: {other:?}"
-                    );
-                    continue;
+                Ok(Decoded::Frame(_)) => {
+                    wrong_direction("a frame");
+                    break;
+                }
+                Ok(Decoded::Asset { .. }) => {
+                    wrong_direction("an asset");
+                    break;
                 }
                 Err(e) => {
                     eprintln!("[sinteract::stdio] skipping a message that does not decode: {e}");
@@ -172,6 +174,10 @@ fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>)
     }
     peer_closed.store(true, Ordering::Release);
     let _ = tx.send_input(InputEvent::Close);
+}
+
+fn wrong_direction(what: &str) {
+    eprintln!("[sinteract::stdio] the peer sent {what}, which only the host sends; closing");
 }
 
 #[cfg(test)]
@@ -319,11 +325,19 @@ mod tests {
     }
 
     #[test]
-    fn wait_event_skips_unexpected_messages() {
+    fn an_asset_from_the_peer_ends_the_session() {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&wire::encode_asset(1, b"png", Some("image/png"))));
         stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
-        assert!(input(&mut reading(stream)).is_vsync());
+        assert!(input(&mut reading(stream)).is_close());
+    }
+
+    #[test]
+    fn a_frame_from_the_peer_ends_the_session() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&frame(&wire::encode_frame(&Scene::new(8.0, 8.0))));
+        stream.extend_from_slice(&frame(&wire::encode_event(&InputEvent::Vsync)));
+        assert!(input(&mut reading(stream)).is_close());
     }
 
     #[test]
