@@ -29,7 +29,7 @@ use crate::wire::{self, Decoded};
 pub struct Stdio {
     writer: Box<dyn Write + Send>,
     inbox: Inbox,
-    /// Set by the reader thread when the peer closes the session.
+    /// Set when the peer closes the session or stops reading.
     peer_closed: Arc<AtomicBool>,
     /// Set by [`Frontend::close`](super::Frontend::close).
     closed: bool,
@@ -80,10 +80,12 @@ impl Stdio {
         if self.closed || self.peer_closed.load(Ordering::Acquire) {
             return;
         }
-        if write_framed(&mut self.writer, payload).is_err() {
-            // The peer is gone. The reader thread sees the EOF and closes
-            // the queue.
-            eprintln!("[sinteract::stdio] write to stdout failed; peer may have closed");
+        if let Err(e) = write_framed(&mut self.writer, payload) {
+            // The peer may keep stdin open after it stops reading, so the
+            // reader thread does not see the end.
+            eprintln!("[sinteract::stdio] write failed, closing the session: {e}");
+            self.peer_closed.store(true, Ordering::Release);
+            let _ = self.inbox.sender().send_input(InputEvent::Close);
         }
     }
 }
@@ -385,6 +387,34 @@ mod tests {
             [Decoded::Close]
         ));
         assert!(input(&mut fr).is_close());
+    }
+
+    /// A writer whose peer stopped reading. It counts the attempts.
+    #[derive(Clone, Default)]
+    struct BrokenWriter(Arc<Mutex<usize>>);
+
+    impl Write for BrokenWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            *self.0.lock().unwrap() += 1;
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failed_write_closes_the_session() {
+        // The input stays open, so only the write can end the session.
+        let (r, _input) = io::pipe().unwrap();
+        let broken = BrokenWriter::default();
+        let mut fr = Stdio::with_streams(BufReader::new(r), broken.clone()).unwrap();
+        fr.present(&Scene::new(8.0, 8.0));
+        assert!(input(&mut fr).is_close());
+        fr.present(&Scene::new(8.0, 8.0));
+        fr.close();
+        assert_eq!(*broken.0.lock().unwrap(), 1);
     }
 
     #[test]
