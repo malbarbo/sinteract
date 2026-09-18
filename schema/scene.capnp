@@ -1,8 +1,8 @@
 @0xe6fe272699b1f2b7;
 
 # The drawing vocabulary of sinteract. A `Scene` is the draw list that a
-# renderer replays. Nothing here knows that a session exists, so a host that
-# paints locally reads this file alone.
+# renderer replays. Nothing here knows that a session exists, so an engine
+# that paints locally reads this file alone.
 #
 # This file is the source of truth for the drawing format. Evolve it by
 # appending fields with defaults. Never reorder or renumber, and let a union
@@ -239,7 +239,7 @@ struct Scene {
     elements @2 :List(Element);
 }
 
-# The verb bytes, for a host that is not Rust. Rust uses
+# The verb bytes, for a reader that is not Rust. Rust uses
 # sinteract::scene::SegmentKind.
 const verbMove  :UInt8 = 0;
 const verbLine  :UInt8 = 1;

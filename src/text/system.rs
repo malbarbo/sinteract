@@ -75,7 +75,7 @@ fn query_system_font(
         let static_bytes: &'static [u8] = bytes.to_vec().leak();
         let face = Face::parse(static_bytes, index).ok()?;
         let face_static: &'static Face<'static> = Box::leak(Box::new(face));
-        // The name fontdb reports, so a client resolves the same face.
+        // The name fontdb reports, so a view resolves the same face.
         let canonical = db
             .face(id)
             .and_then(|info| info.families.first())

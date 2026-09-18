@@ -1,5 +1,5 @@
 //! The queue behind every [`super::Frontend`]. A frontend owns an [`Inbox`]
-//! and hands out [`Sender`]s. Its input threads, the host and any other
+//! and hands out [`Sender`]s. Its input threads, the engine and any other
 //! thread push through a `Sender`, and `wait_event` pops from the `Inbox`,
 //! in the order of arrival.
 
@@ -39,7 +39,7 @@ impl Sender {
         self.send(Event::Reply { id, body })
     }
 
-    /// Queue an [`InputEvent::Close`]. A Ctrl-C handler of the host calls
+    /// Queue an [`InputEvent::Close`]. A Ctrl-C handler of the engine calls
     /// it to end a `wait_event` that blocks.
     pub fn send_close(&self) -> Result<(), Closed> {
         self.send_input(InputEvent::Close)
@@ -50,7 +50,7 @@ impl Sender {
     }
 
     /// Ask the frontend to draw the last scene again, as after a resize.
-    /// The request never reaches the host.
+    /// The request never reaches the engine.
     pub(crate) fn request_redraw(&self) -> Result<(), Closed> {
         self.put(Msg::Redraw)
     }
@@ -168,7 +168,7 @@ impl Inbox {
 
     /// The oldest event, or [`Event::Timeout`] once `deadline` passes. A
     /// `deadline` of `None` waits for as long as it takes. A redraw goes
-    /// out when no event is ready, so a host that presents anyway skips it.
+    /// out when no event is ready, so an engine that presents anyway skips it.
     ///
     /// `block` waits for at most its timeout, or for as long as it takes
     /// when the timeout is `None`, and a [`Sender`] wakes it. A frontend
@@ -244,7 +244,7 @@ impl Inbox {
     }
 
     /// Queue `item`. A Vsync from the channel waits in `vsync`, unless one
-    /// already waits, so a host that falls behind gets one Vsync, not a
+    /// already waits, so an engine that falls behind gets one Vsync, not a
     /// burst. A clock makes every Vsync, so it drops one from the channel.
     fn push(&mut self, item: Item) {
         if matches!(item.event, Event::Input(InputEvent::Vsync)) {
@@ -298,7 +298,7 @@ impl Vsync {
     }
 
     /// The Vsync went out at `now`. The clock counts the next period from
-    /// the delivery, so a host slower than the period still gets its input.
+    /// the delivery, so an engine slower than the period still gets its input.
     fn deliver(&mut self, now: Instant) {
         match self {
             Vsync::Clock { period, due } => *due = now + *period,
@@ -465,12 +465,12 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_host_still_gets_the_input() {
+    fn a_slow_engine_still_gets_the_input() {
         let period = Duration::from_millis(16);
         let mut inbox = Inbox::new(Some(period));
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
-        // A key arrives, and the host comes back ten periods later.
+        // A key arrives, and the engine comes back ten periods later.
         inbox.push(item(t0 + period / 2, key("a")));
         let late = t0 + period * 10;
         assert_eq!(key_name(&inbox.pop(late).unwrap()), Some("a"));

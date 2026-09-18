@@ -23,7 +23,7 @@ pub mod wire;
 
 // The generated bindings, one module per schema file. The generated code
 // names them from the crate root, so they are mounted here and not inside
-// `wire`. The VERB_* constants exist for the JS and Python hosts.
+// `wire`. The VERB_* constants exist for the readers that are not Rust.
 #[path = "wire/event_capnp.rs"]
 #[allow(dead_code)]
 mod event_capnp;

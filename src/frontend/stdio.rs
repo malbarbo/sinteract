@@ -1,5 +1,5 @@
 //! [`Stdio`] talks the wire protocol over stdin and stdout. A game server
-//! runs the engine host (`spython --server`, `sgleam --server`) as a
+//! runs the engine (`spython --server`, `sgleam --server`) as a
 //! subprocess, writes [`InputEvent`]s to its stdin and reads [`Scene`]
 //! frames from its stdout.
 //!
@@ -49,7 +49,7 @@ static STDIN_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 impl Stdio {
     /// Talk over the stdin and the stdout of the process. The framing is
-    /// binary, so the host must not write text to stdout. A host rebinds
+    /// binary, so the engine must not write text to stdout. An engine rebinds
     /// stdout to stderr for its other output.
     ///
     /// Fails with [`OpenError::Busy`] if a `Stdio` over stdin already

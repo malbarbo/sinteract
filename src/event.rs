@@ -1,7 +1,7 @@
 //! The events a [`crate::frontend::Frontend`] delivers.
 //!
 //! Every frontend turns its input into the same [`InputEvent`] stream, and
-//! the host loop blocks on `wait_event` and dispatches:
+//! the engine loop blocks on `wait_event` and dispatches:
 //!
 //! ```text
 //! loop {
@@ -16,15 +16,15 @@
 //! ```
 //!
 //! The frontend decides when a `Vsync` arrives, with a timer in the
-//! terminal and in the window, rAF in the browser and the peer on stdio. The
-//! host derives a simulation tick from the time between two.
+//! terminal and in the window, rAF in the browser and the view on stdio. The
+//! engine derives a simulation tick from the time between two.
 
 /// What `wait_event` returns.
 #[derive(Clone, Debug)]
 pub enum Event {
     /// From the user, the platform or the peer.
     Input(InputEvent),
-    /// What a `Sender` of the frontend pushed from any thread. The host
+    /// What a `Sender` of the frontend pushed from any thread. The engine
     /// picks `id` and `body`, and a reply never crosses the wire.
     Reply { id: u64, body: Vec<u8> },
     /// The deadline passed with nothing to deliver.

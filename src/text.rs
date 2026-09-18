@@ -63,7 +63,7 @@ pub struct TextMetrics {
 }
 
 impl TextMetrics {
-    /// The family after fallback. A [`TextSpec`] carries it, so a client
+    /// The family after fallback. A [`TextSpec`] carries it, so a view
     /// measures with the same face.
     pub fn family(&self) -> &'static str {
         self.family
@@ -297,8 +297,8 @@ impl ttf_parser::OutlineBuilder for OutlineAdapter<'_> {
 // ---------------------------------------------------------------------------
 
 /// The result of resolving a request. [`TextMetrics::family`] hands `family`
-/// to a producer, which sends it on the wire, so a client measures with the
-/// same face as the server.
+/// to the engine, which sends it on the wire, so a view measures with the
+/// same face as the engine.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResolvedFont {
     /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or

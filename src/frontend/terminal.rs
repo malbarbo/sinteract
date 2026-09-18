@@ -37,12 +37,12 @@ const CELL_H_DEFAULT: u32 = 16;
 /// paints over this.
 const SIXEL_BACKGROUND: (u8, u8, u8) = (255, 255, 255);
 
-/// What a host adds to [`Terminal::open_with`].
+/// What an engine adds to [`Terminal::open_with`].
 #[derive(Default)]
 pub struct TerminalOptions {
     /// Runs on the reader thread when the user presses Ctrl-C, after the
     /// Close goes into the queue. Raw mode turns off the signal of Ctrl-C,
-    /// so a host stops here the code that never calls `wait_event`.
+    /// so an engine stops here the code that never calls `wait_event`.
     pub on_interrupt: Option<Box<dyn FnMut() + Send>>,
 }
 
@@ -395,7 +395,7 @@ impl Reader {
 }
 
 /// Send the keys until `stop`, Ctrl-C or a read error. A Close goes into the
-/// queue on every way out, so a reader that dies does not leave the host
+/// queue on every way out, so a reader that dies does not leave the engine
 /// waiting in raw mode.
 fn read_keys(tx: &Sender, stop: &AtomicBool, mut on_interrupt: Option<Box<dyn FnMut() + Send>>) {
     let _close = CloseOnExit(tx);

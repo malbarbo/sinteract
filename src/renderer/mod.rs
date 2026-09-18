@@ -93,7 +93,7 @@ pub(crate) mod sealed {
         fn draw_text(&mut self, text: &Text);
 
         /// Draw the asset with id `bitmap.id`. No backend does, so the default
-        /// skips it, and the host reports it once with
+        /// skips it, and the engine reports it once with
         /// [`Scene::has_bitmaps`](crate::scene::Scene::has_bitmaps).
         fn draw_bitmap(&mut self, bitmap: &Bitmap) {
             let _ = bitmap;

@@ -19,7 +19,7 @@ use crate::scene_capnp::{
 use super::{Error, ValueError, finish, skip_unusable};
 
 /// Encode a scene as a message whose root is the `Scene` struct of
-/// `schema/scene.capnp`, with no session envelope around it. A host that
+/// `schema/scene.capnp`, with no session envelope around it. An engine that
 /// paints its own frames, such as the wasm worker that writes into shared
 /// memory, reads these bytes with the scene schema alone.
 pub fn encode(scene: &Scene) -> Vec<u8> {

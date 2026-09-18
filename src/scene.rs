@@ -499,7 +499,7 @@ impl Default for Text {
 /// not break the line.
 ///
 /// `family` is [`crate::text::TextMetrics::family`], the family after
-/// fallback, so a client lays the text out as the server did. An empty
+/// fallback, so a view lays the text out as the engine did. An empty
 /// family is the default Sans. `weight` is the CSS weight, 400 for Regular
 /// and 700 for Bold.
 #[derive(Clone, Debug)]
@@ -527,8 +527,8 @@ impl Default for TextSpec {
 
 impl TextSpec {
     /// A [`Text`] that draws this text into `rect`. The family becomes the
-    /// family after fallback, so a client measures with the face of the
-    /// producer. The text has no fill and no stroke until the caller sets
+    /// family after fallback, so a view measures with the face of the
+    /// engine. The text has no fill and no stroke until the caller sets
     /// them. Returns `None` when the text draws nothing, because
     /// [`crate::text::measure`] returns `None` or the text measures zero
     /// wide.
@@ -949,7 +949,7 @@ impl Scene {
     }
 
     /// Returns `true` if any element, inside a clip or not, is a bitmap,
-    /// `false` otherwise. A host uses it to tell the user once that the
+    /// `false` otherwise. An engine uses it to tell the user once that the
     /// backend draws the frame without them.
     pub fn has_bitmaps(&self) -> bool {
         fn walk(elements: &[Element]) -> bool {

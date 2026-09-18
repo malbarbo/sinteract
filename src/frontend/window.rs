@@ -382,7 +382,7 @@ fn build_loop() -> Result<EventLoop<()>, String> {
             return Err("on macOS a window opens only on the main thread".into());
         }
         // The default menu quits the process on Cmd+Q, and a quit is the
-        // decision of the host.
+        // decision of the engine.
         builder.with_default_menu(false);
     }
     let event_loop = builder

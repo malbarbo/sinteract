@@ -1,4 +1,4 @@
-//! [`Frontend`], the trait a host drives, and [`open_native`]. The module
+//! [`Frontend`], the trait an engine drives, and [`open_native`]. The module
 //! is private, and [`super`] re-exports both.
 
 use std::fmt;

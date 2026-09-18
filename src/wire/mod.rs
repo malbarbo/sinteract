@@ -41,10 +41,10 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
 }
 
 /// A payload is malformed. It says the scene, the event or the message is
-/// unusable, and never that the session is. A server that gets one from
-/// [`to_engine::read`] drops the message and keeps the peer. A value from a newer
-/// schema and a float that is not finite are not errors, since the decoders
-/// skip what holds them.
+/// unusable, and never that the session is. An engine that gets one from
+/// [`to_engine::read`] drops the message and keeps the view. A value from a
+/// newer schema and a float that is not finite are not errors, since the
+/// decoders skip what holds them.
 #[derive(Debug)]
 pub enum Error {
     /// Cap'n Proto rejected the bytes as malformed, truncated, or of the
