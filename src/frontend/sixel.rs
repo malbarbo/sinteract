@@ -10,15 +10,6 @@ use std::io;
 
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
-/// Returns `true` if the terminal supports DEC Sixel, `false` otherwise. The
-/// answer comes from a DA1 query to the terminal, because the environment
-/// variables are wrong over ssh and under a multiplexer. The probe runs once
-/// per process and needs a tty, so the function is native only.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn sixel_supported() -> bool {
-    super::term_query::graphics_caps().sixel
-}
-
 /// Encode `pixmap` as Sixel, with the DCS introducer and the string
 /// terminator. The encoder composites every pixel over `bg` before it
 /// quantizes. An image over 64 megapixels is an error.

@@ -239,6 +239,12 @@ pub fn kitty_supported() -> bool {
     super::term_query::graphics_caps().kitty
 }
 
+/// Returns `true` if the terminal supports DEC Sixel, `false` otherwise. The
+/// answer comes from the same probe as [`kitty_supported`].
+pub fn sixel_supported() -> bool {
+    super::term_query::graphics_caps().sixel
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum Backend {
     Kitty,
@@ -249,7 +255,7 @@ enum Backend {
 fn pick_backend() -> Option<Backend> {
     if kitty_supported() {
         Some(Backend::Kitty)
-    } else if sixel::sixel_supported() {
+    } else if sixel_supported() {
         Some(Backend::Sixel)
     } else if text_blocks_supported() {
         Some(Backend::TextBlocks)
