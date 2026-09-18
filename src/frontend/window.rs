@@ -29,7 +29,7 @@ use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
 use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
-use super::inbox::{Inbox, Sender};
+use super::inbox::{Inbox, Sender, Wait};
 use crate::event::{Event, InputEvent, KeyKind, key};
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
@@ -118,20 +118,27 @@ impl super::Frontend for Window {
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
     fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
-        let mut session = self.session.as_mut();
-        self.inbox.wait_with(deadline, |_, timeout| {
-            // A closed session has a closed inbox, which returns Close
-            // before it blocks.
-            let Some(s) = session.as_mut() else {
-                return;
-            };
-            if !s.lent.pump(&mut s.app, timeout) {
-                let _ = s.app.tx.send_input(InputEvent::Close);
+        loop {
+            let mut session = self.session.as_mut();
+            let wait = self.inbox.wait_with(deadline, |_, timeout| {
+                // A closed session has a closed inbox, which returns Close
+                // before it blocks.
+                let Some(s) = session.as_mut() else {
+                    return;
+                };
+                if !s.lent.pump(&mut s.app, timeout) {
+                    let _ = s.app.tx.send_input(InputEvent::Close);
+                }
+            });
+            match wait {
+                Wait::Event(event) => return event,
+                Wait::Redraw => {
+                    if let Some(s) = self.session.as_mut() {
+                        s.redraw();
+                    }
+                }
             }
-            if mem::take(&mut s.app.damaged) {
-                s.redraw();
-            }
-        })
+        }
     }
 
     fn sender(&self) -> Sender {
@@ -398,8 +405,6 @@ struct App {
     /// session can still be in the loop.
     id: Option<WindowId>,
     modifiers: ModifiersState,
-    /// The platform lost the pixels of the window, or its size changed.
-    damaged: bool,
 }
 
 impl App {
@@ -410,7 +415,6 @@ impl App {
             created: None,
             id: None,
             modifiers: ModifiersState::empty(),
-            damaged: false,
         }
     }
 
@@ -452,7 +456,7 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(_)
             | WindowEvent::ScaleFactorChanged { .. }
             | WindowEvent::RedrawRequested => {
-                self.damaged = true;
+                let _ = self.tx.request_redraw();
             }
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();

@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::mem;
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -20,7 +21,7 @@ use crate::event::{Event, InputEvent};
 /// after a Close that has not gone out yet is lost.
 #[derive(Clone)]
 pub struct Sender {
-    tx: mpsc::Sender<Item>,
+    tx: mpsc::Sender<Msg>,
     wake: Option<Waker>,
 }
 
@@ -48,12 +49,21 @@ impl Sender {
         self.send(Event::Input(ev))
     }
 
+    /// Ask the frontend to draw the last scene again, as after a resize.
+    /// The request never reaches the host.
+    pub(crate) fn request_redraw(&self) -> Result<(), Closed> {
+        self.put(Msg::Redraw)
+    }
+
     fn send(&self, event: Event) -> Result<(), Closed> {
-        let item = Item {
+        self.put(Msg::Item(Item {
             at: Instant::now(),
             event,
-        };
-        self.tx.send(item).map_err(|_| Closed)?;
+        }))
+    }
+
+    fn put(&self, msg: Msg) -> Result<(), Closed> {
+        self.tx.send(msg).map_err(|_| Closed)?;
         if let Some(wake) = &self.wake {
             wake();
         }
@@ -71,21 +81,36 @@ impl std::error::Error for Closed {}
 
 /// The receiving end. It holds a sender of its own for [`Inbox::sender`].
 pub(crate) struct Inbox {
-    tx: mpsc::Sender<Item>,
+    tx: mpsc::Sender<Msg>,
     wake: Option<Waker>,
-    rx: mpsc::Receiver<Item>,
+    rx: mpsc::Receiver<Msg>,
     /// What left the channel and did not go out yet, oldest first, except
     /// for a Vsync, which waits in `vsync`.
     pending: VecDeque<Item>,
     vsync: Vsync,
+    /// A redraw was requested and did not go out yet. Many requests make
+    /// one redraw.
+    redraw: bool,
     /// Set by the first Close out or by [`Inbox::close`]. Every wait
     /// returns Close from then on.
     closed: bool,
 }
 
+enum Msg {
+    Item(Item),
+    Redraw,
+}
+
 struct Item {
     at: Instant,
     event: Event,
+}
+
+/// What [`Inbox::wait_with`] hands to the frontend.
+pub(crate) enum Wait {
+    Event(Event),
+    /// Draw the last scene again, and wait again.
+    Redraw,
 }
 
 impl Inbox {
@@ -110,6 +135,7 @@ impl Inbox {
                 },
                 None => Vsync::Channel { arrived: None },
             },
+            redraw: false,
             closed: false,
         }
     }
@@ -127,50 +153,63 @@ impl Inbox {
         self.closed = true;
         self.rx = mpsc::channel().1;
         self.pending.clear();
+        self.redraw = false;
+    }
+
+    /// [`Inbox::wait_with`] on the channel, for a frontend that has nothing
+    /// to redraw.
+    pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Event {
+        loop {
+            if let Wait::Event(event) = self.wait_with(deadline, Self::receive) {
+                return event;
+            }
+        }
     }
 
     /// The oldest event, or [`Event::Timeout`] once `deadline` passes. A
-    /// `deadline` of `None` waits for as long as it takes.
+    /// `deadline` of `None` waits for as long as it takes. A redraw goes
+    /// out when no event is ready, so a host that presents anyway skips it.
+    ///
+    /// `block` waits for at most its timeout, or for as long as it takes
+    /// when the timeout is `None`, and a [`Sender`] wakes it. A frontend
+    /// that blocks on the channel passes [`Inbox::receive`].
     ///
     /// A Vsync of the clock counts as arrived when it falls due, so input
     /// that arrived before it goes out first.
-    pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Event {
-        self.wait_with(deadline, Self::receive)
-    }
-
-    /// [`Inbox::wait`] for a frontend that blocks somewhere other than the
-    /// channel. `block` waits for at most its timeout, or for as long as it
-    /// takes when the timeout is `None`, and a [`Sender`] wakes it.
     pub(crate) fn wait_with(
         &mut self,
         deadline: Option<Instant>,
         mut block: impl FnMut(&mut Self, Option<Duration>),
-    ) -> Event {
+    ) -> Wait {
         loop {
             if let Some(event) = self.poll() {
-                return event;
+                return Wait::Event(event);
+            }
+            if mem::take(&mut self.redraw) {
+                return Wait::Redraw;
             }
             let now = Instant::now();
             if deadline.is_some_and(|d| now >= d) {
-                return Event::Timeout;
+                return Wait::Event(Event::Timeout);
             }
             let timeout = self.wake_at(deadline).map(|t| t - now);
             block(self, timeout);
         }
     }
 
-    /// Queue the next item of the channel, or wait until `timeout` passes.
-    fn receive(&mut self, timeout: Option<Duration>) {
+    /// Take the next message of the channel, or wait until `timeout`
+    /// passes.
+    pub(crate) fn receive(&mut self, timeout: Option<Duration>) {
         let received = match timeout {
             Some(t) => match self.rx.recv_timeout(t) {
-                Ok(item) => Some(item),
+                Ok(msg) => Some(msg),
                 Err(RecvTimeoutError::Timeout) => return,
                 Err(RecvTimeoutError::Disconnected) => None,
             },
             None => self.rx.recv().ok(),
         };
         match received {
-            Some(item) => self.push(item),
+            Some(msg) => self.take(msg),
             // Only the receiver of a closed inbox disconnects.
             None => self.closed = true,
         }
@@ -181,8 +220,8 @@ impl Inbox {
         if self.closed {
             return Some(Event::Input(InputEvent::Close));
         }
-        while let Ok(item) = self.rx.try_recv() {
-            self.push(item);
+        while let Ok(msg) = self.rx.try_recv() {
+            self.take(msg);
         }
         self.pop(Instant::now())
     }
@@ -194,6 +233,13 @@ impl Inbox {
         match (deadline, self.vsync.at()) {
             (Some(d), Some(v)) => Some(d.min(v)),
             (d, v) => d.or(v),
+        }
+    }
+
+    fn take(&mut self, msg: Msg) {
+        match msg {
+            Msg::Item(item) => self.push(item),
+            Msg::Redraw => self.redraw = true,
         }
     }
 
@@ -357,6 +403,26 @@ mod tests {
         assert_eq!(tx.send_close(), Err(Closed));
         assert_eq!(inbox.sender().send_close(), Err(Closed));
         assert!(is_close(&inbox.wait(None)));
+    }
+
+    #[test]
+    fn a_redraw_goes_out_once_after_the_events() {
+        let mut inbox = Inbox::new(None);
+        let tx = inbox.sender();
+        tx.request_redraw().unwrap();
+        tx.send_input(key("a")).unwrap();
+        tx.request_redraw().unwrap();
+        let mut next = || inbox.wait_with(soon(), Inbox::receive);
+        assert!(matches!(next(), Wait::Event(e) if key_name(&e) == Some("a")));
+        assert!(matches!(next(), Wait::Redraw));
+        assert!(matches!(next(), Wait::Event(Event::Timeout)));
+    }
+
+    #[test]
+    fn wait_skips_a_redraw() {
+        let mut inbox = Inbox::new(None);
+        inbox.sender().request_redraw().unwrap();
+        assert!(matches!(inbox.wait(soon()), Event::Timeout));
     }
 
     #[test]
