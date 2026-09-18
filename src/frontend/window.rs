@@ -531,10 +531,11 @@ fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
         let src_row_start = (y as usize) * (pw as usize);
         let row_w = pw.min(bw - off_x.min(bw)) as usize;
         for x in 0..row_w {
-            // softbuffer takes 0RGB, and the window has no transparency.
-            let c = src[src_row_start + x].demultiply();
+            // softbuffer takes 0RGB. A premultiplied pixel is already the
+            // pixel over black, the color of the band.
+            let p = src[src_row_start + x];
             buffer[dst_row_start + x] =
-                (u32::from(c.red()) << 16) | (u32::from(c.green()) << 8) | u32::from(c.blue());
+                (u32::from(p.red()) << 16) | (u32::from(p.green()) << 8) | u32::from(p.blue());
         }
     }
 }
@@ -577,5 +578,22 @@ mod tests {
             let name = winit_key_to_string(&Key::Named(k)).expect("named");
             assert!(key::ALL.contains(&name.as_str()), "{name}");
         }
+    }
+
+    #[test]
+    fn blit_centers_the_pixmap_over_black() {
+        let mut pixmap = Pixmap::new(2, 1).unwrap();
+        let opaque = tiny_skia::ColorU8::from_rgba(255, 0, 0, 255).premultiply();
+        let half = tiny_skia::ColorU8::from_rgba(0, 255, 0, 128).premultiply();
+        pixmap.pixels_mut().copy_from_slice(&[opaque, half]);
+        let mut buffer = [0xFFFF_FFFF; 4 * 3];
+        blit_pixmap(&pixmap, &mut buffer, (4, 3));
+        #[rustfmt::skip]
+        let expected = [
+            0, 0, 0, 0,
+            0, 0xFF_0000, 0x00_8000, 0,
+            0, 0, 0, 0,
+        ];
+        assert_eq!(buffer, expected);
     }
 }
