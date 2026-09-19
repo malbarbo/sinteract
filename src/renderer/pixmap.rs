@@ -302,7 +302,6 @@ pub(crate) fn frame_px(width: f32, height: f32) -> (u32, u32) {
     )
 }
 
-/// The size in output pixels of a frame at `scale`.
 /// The transform of `scale`. A zero or negative scale would allocate nothing
 /// to draw into.
 fn base(scale: f32) -> Transform {
@@ -310,6 +309,7 @@ fn base(scale: f32) -> Transform {
     Transform::from_scale(scale, scale)
 }
 
+/// The size in output pixels of a frame at `scale`.
 fn out_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
     let (w, h) = frame_px(width, height);
     let out_w = frame_side(((w as f32) * scale).ceil()) as u32;
