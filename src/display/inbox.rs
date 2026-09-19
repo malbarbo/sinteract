@@ -161,6 +161,19 @@ impl Inbox {
         }
     }
 
+    /// Queue `ev` ahead of every event, the first Vsync included, for what
+    /// a display tells the engine as it opens.
+    #[cfg(feature = "window")]
+    pub(crate) fn send_first(&mut self, ev: InputEvent) {
+        let now = Instant::now();
+        // A Vsync goes out first only when it is strictly older.
+        let at = self.vsync.at().map_or(now, |v| v.min(now));
+        self.pending.push_front(Item {
+            at,
+            event: Event::Input(ev),
+        });
+    }
+
     /// Deliver Close from now on and drop what is queued. A new receiver
     /// replaces the channel, so every [`Sender`] fails from now on.
     pub(crate) fn close(&mut self) {
@@ -386,6 +399,17 @@ mod tests {
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(is_vsync(&inbox.wait(None)));
         assert!(matches!(inbox.wait(soon()), Event::Timeout));
+    }
+
+    #[test]
+    #[cfg(feature = "window")]
+    fn an_event_sent_first_goes_out_before_the_first_vsync() {
+        let mut inbox = Inbox::new(Some(Duration::from_secs(60)));
+        inbox.sender().send_input(key("a")).unwrap();
+        inbox.send_first(key("first"));
+        assert_eq!(key_name(&inbox.wait(None)), Some("first"));
+        assert!(is_vsync(&inbox.wait(None)));
+        assert_eq!(key_name(&inbox.wait(None)), Some("a"));
     }
 
     #[test]

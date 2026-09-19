@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use softbuffer::{Context, Surface};
 use tiny_skia::Pixmap;
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -39,7 +39,9 @@ use crate::scene::Scene;
 
 /// A [`super::Display`] over a winit window. Closing the window arrives
 /// as [`InputEvent::Close`], and the window stays until
-/// [`super::Display::close`].
+/// [`super::Display::close`]. The size of the window arrives as an
+/// [`InputEvent::Resize`] ahead of the first Vsync, and again after each
+/// change.
 pub struct Window {
     inbox: Inbox,
     /// `None` after [`super::Display::close`].
@@ -73,7 +75,7 @@ impl Window {
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
         let mut lent = Lent::take()?;
         let proxy = lent.event_loop().create_proxy();
-        let inbox = Inbox::with_waker(
+        let mut inbox = Inbox::with_waker(
             Some(Self::VSYNC_PERIOD),
             Some(Arc::new(move || {
                 let _ = proxy.send_event(());
@@ -85,6 +87,8 @@ impl Window {
             .with_inner_size(LogicalSize::new(w as f64, h as f64));
         let mut app = App::new(inbox.sender_in_loop(), attrs);
         let window = lent.create_window(&mut app, Self::OPEN_TIMEOUT)?;
+        let (width, height) = app.reported_size;
+        inbox.send_first(InputEvent::Resize { width, height });
         let surface = match new_surface(&window) {
             Ok(surface) => surface,
             Err(e) => {
@@ -416,6 +420,9 @@ struct App {
     buttons: MouseButtons,
     /// Device pixels per logical pixel.
     scale_factor: f64,
+    size: PhysicalSize<u32>,
+    /// The size in the last Resize, in logical pixels.
+    reported_size: (f32, f32),
 }
 
 impl App {
@@ -430,6 +437,8 @@ impl App {
             cursor: PhysicalPosition::default(),
             buttons: MouseButtons::default(),
             scale_factor: 1.0,
+            size: PhysicalSize::default(),
+            reported_size: (0.0, 0.0),
         }
     }
 
@@ -441,6 +450,9 @@ impl App {
             Ok(window) => {
                 self.id = Some(window.id());
                 self.scale_factor = window.scale_factor();
+                self.size = window.inner_size();
+                // Window::open sends this size ahead of the first Vsync.
+                self.reported_size = self.logical_size();
                 // Until the first frame, the pointer maps to logical pixels.
                 self.placement = Placement {
                     scale: self.scale_factor as f32,
@@ -451,6 +463,20 @@ impl App {
             Err(e) => Err(e.to_string()),
         };
         self.created = Some(created);
+    }
+
+    fn logical_size(&self) -> (f32, f32) {
+        let logical = self.size.to_logical::<f32>(self.scale_factor);
+        (logical.width, logical.height)
+    }
+
+    /// Send a Resize when the logical size changed since the last one.
+    fn send_resize(&mut self) {
+        let (width, height) = self.logical_size();
+        if (width, height) != self.reported_size {
+            self.reported_size = (width, height);
+            let _ = self.tx.send_input(InputEvent::Resize { width, height });
+        }
     }
 
     fn send_mouse(&self, action: MouseAction) {
@@ -487,9 +513,15 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = scale_factor;
+                self.send_resize();
                 let _ = self.tx.request_redraw();
             }
-            WindowEvent::Resized(_) | WindowEvent::RedrawRequested => {
+            WindowEvent::Resized(size) => {
+                self.size = size;
+                self.send_resize();
+                let _ = self.tx.request_redraw();
+            }
+            WindowEvent::RedrawRequested => {
                 let _ = self.tx.request_redraw();
             }
             WindowEvent::ModifiersChanged(mods) => {
