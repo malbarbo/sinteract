@@ -33,8 +33,8 @@ No browser via simplecode:
 | Multiplayer browser | **Sem engine.** WebSocket | JS canvas renderer (lê WS) |
 
 **O JS canvas renderer é o mesmo módulo** nos dois casos browser. Decoder FB
-único, paint code único. Mesma simetria nativa: TerminalFrontend recebe
-DrawList de engine local OU de WebSocket — não sabe a diferença.
+único, paint code único. Mesma simetria nativa: o `Terminal` recebe a cena
+de um engine local ou de um WebSocket e não sabe a diferença.
 
 ## Decisões consolidadas
 
@@ -51,8 +51,8 @@ DrawList de engine local OU de WebSocket — não sabe a diferença.
 ### B. Loop e timing
 
 - **Tick é evento na fila**, não timer interno do engine.
-- `Frontend::wait_event(deadline) -> Option<InputEvent>` — bloqueia até evento
-  chegar ou timeout.
+- `Display::wait_event(deadline) -> Event` bloqueia até chegar um evento ou
+  até o prazo, e devolve `Event::Timeout` no prazo.
 - Em wasm: `Atomics.wait` no shared buffer (já é o padrão usado pra `sleep`
   hoje em simplecode).
 - rAF da main thread empurra Tick + `Atomics.notify` no ritmo de `tick_rate`.
@@ -112,14 +112,11 @@ DrawList de engine local OU de WebSocket — não sabe a diferença.
 
 - spython/sgleam: 3 modos via flag (`--server`, `--client URL`, default).
 - sinteract hospeda toda lib genérica.
-- **Frontend é enum** (sem `Box<dyn>`, sem custo de vtable):
-  ```rust
-  pub enum Frontend {
-      Terminal(TerminalFrontend),
-      Window(WindowFrontend),
-      Stdio(StdioFrontend),
-  }
-  ```
+- **`Display` é um trait selado** em `sinteract::display`, implementado por
+  `Terminal`, `Window` e `Stdio`. `open_native` devolve `Box<dyn Display>`,
+  o terminal quando há gráficos e a janela senão. A vtable custa uma chamada
+  por quadro, e o trait deixa as features `terminal` e `window` tirarem um
+  display sem mudar o tipo que o engine recebe.
 - Servidor de jogos é processo separado (não em sinteract). Pode crescer no
   `simplecode/server` ou ser binário novo. Recebe WebSocket, spawna
   `spython --server` subprocess, liga stdio.
@@ -132,14 +129,11 @@ sinteract/src/
 ├── ir.rs          (existe, alterar) — DrawList, TextNode com family/weight
 ├── sink.rs        (existe)          — DrawSink trait
 ├── pdf.rs         (existe, alterar) — fontes reais por variante
-├── terminal.rs    (existe, alterar) — TerminalFrontend struct
-├── window.rs      (existe, alterar) — WindowFrontend struct
 ├── text.rs        (alterar)         — fontdb + sans/serif/mono + variantes
 ├── event.rs       (NOVO)            — InputEvent, KeyEvent, EventType (TICK etc)
 ├── wire.rs        (NOVO)            — bindings FlatBuffers + ser/de
-├── frontend.rs    (NOVO)            — enum Frontend + métodos
-├── stdio.rs       (NOVO)            — StdioFrontend
-└── client.rs      (NOVO, parcial)   — Transport trait + run<T>(t, frontend)
+├── display/       (NOVO)            — trait Display, Terminal, Window, Stdio
+└── client.rs      (NOVO, parcial)   — Transport trait + run<T>(t, display)
                                        (WebSocket impl deferred)
 
 sinteract/schema/
@@ -157,8 +151,8 @@ sinteract/fonts/
 ### spython
 
 - `cli/src/main.rs`: parsing de `--server` / `--client URL`.
-- `engine/src/lib.rs`: aceitar `Frontend` em vez de chamar `host::*`.
-- `engine/src/host/native.rs`: virar `pick_native()` em sinteract, deletar daqui.
+- `engine/src/lib.rs`: aceitar um `Display` em vez de chamar `host::*`.
+- `engine/src/host/native.rs`: virar `open_native()` em sinteract, deletar daqui.
 - `engine/src/host/wasm.rs`: ajustar pra escrever FB no shared buffer (em vez
   de SVG via env).
 - `lib/spython/image.py`: passar `style` em vez de `italic`, adicionar `font` +
@@ -193,20 +187,20 @@ Replicar mesma estrutura.
 4. Escrever `sinteract/schema/frame.fbs` (DrawList, Asset, Event, Message).
 5. Adicionar `sinteract::wire` com encode/decode FB + testes round-trip.
 
-### Fase 2 — Frontend enum (refator interno sinteract)
+### Fase 2 — Trait `Display` (refator interno sinteract)
 
-6. Definir `sinteract::frontend::Frontend` enum.
-7. Refatorar `terminal.rs` pra implementar TerminalFrontend (state em struct,
+6. Definir o trait selado `sinteract::display::Display`.
+7. Refatorar `terminal.rs` pra implementar `Terminal` (state em struct,
    não global).
-8. Refatorar `window.rs` pra implementar WindowFrontend.
+8. Refatorar `window.rs` pra implementar `Window`.
 9. Adicionar métodos: `wait_event(deadline)`, `set_tick_rate(hz)`,
    `push_asset(asset)`, `present(dl)`, `enter()`, `exit()`.
 10. Manter funções livres existentes (`show_image_dl`, `enter_animation` etc)
     como wrappers pra não quebrar spython entre fases.
 
-### Fase 3 — StdioFrontend
+### Fase 3 — `Stdio`
 
-11. `sinteract::stdio::StdioFrontend` — bloqueia em stdin com FB framing.
+11. `sinteract::display::Stdio` — bloqueia em stdin com framing.
 12. Suporte: FRAME → stdout, EVENT → lê via stdin, ASSET → upload via stdin.
 13. Testes de integração (mock stdin/stdout).
 
@@ -221,8 +215,8 @@ Replicar mesma estrutura.
 
 ### Fase 5 — Integração spython
 
-18. `engine/src/host/native.rs` → mudar pra sinteract `pick_native()`.
-19. `engine/src/lib.rs` aceita `Frontend`.
+18. `engine/src/host/native.rs` → mudar pra sinteract `open_native()`.
+19. `engine/src/lib.rs` aceita um `Display`.
 20. CLI ganha `--server` / `--client`.
 21. `lib/spython/world.py` muda pra wait_event loop.
 22. `lib/spython/image.py` passa style/font/weight.
@@ -326,6 +320,10 @@ Replicar mesma estrutura.
     `InputEvent::Close`.
   - Suite de testes com `Cursor`/`SharedWriter` cobre present/asset/close
     + corrupção de magic.
+- Depois das fases 2 e 3 (D5 no REVIEW.md, e `56d260c` em 2026-09-18), o
+  enum virou o trait selado `sinteract::display::Display`, e
+  `TerminalFrontend`, `WindowFrontend` e `StdioFrontend` viraram `Terminal`,
+  `Window` e `Stdio`, com o estado da sessão fora dos globais.
 - ✅ **Fase 4 completa.**
   - 12 fontes Liberation embutidas (Sans/Serif/Mono × Regular/Bold/Italic/
     BoldItalic) em `sinteract/fonts/`.
@@ -339,7 +337,7 @@ Replicar mesma estrutura.
     métricas reais (`face.units_per_em()`, `face.underline_metrics()`).
     Synth de italic-shear + bold-as-regular foram removidos.
 - 🟡 **Próximo passo: Fase 5** — integração spython (CLI `--server`/
-  `--client`, `world.run` usando `Frontend`, Python passa `family/weight/
+  `--client`, `world.run` usando `Display`, Python passa `family/weight/
   font_style` ao `_drawlist`). **Diferida pelo usuário** — só executar
   quando ele pedir.
 
