@@ -81,7 +81,7 @@ impl Window {
         let attrs = WindowAttributes::default()
             .with_title(title)
             .with_inner_size(LogicalSize::new(w as f64, h as f64));
-        let mut app = App::new(inbox.sender(), attrs);
+        let mut app = App::new(inbox.sender_in_loop(), attrs);
         let window = lent.create_window(&mut app, Self::OPEN_TIMEOUT)?;
         let surface = match new_surface(&window) {
             Ok(surface) => surface,

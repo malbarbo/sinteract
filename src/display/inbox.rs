@@ -150,6 +150,16 @@ impl Inbox {
         }
     }
 
+    /// A [`Sender`] without the waker, for the callbacks of the loop that
+    /// the waker wakes. A wake from inside the loop only adds a turn with
+    /// nothing to do.
+    pub(crate) fn sender_in_loop(&self) -> Sender {
+        Sender {
+            tx: self.tx.clone(),
+            wake: None,
+        }
+    }
+
     /// Deliver Close from now on and drop what is queued. A new receiver
     /// replaces the channel, so every [`Sender`] fails from now on.
     pub(crate) fn close(&mut self) {
