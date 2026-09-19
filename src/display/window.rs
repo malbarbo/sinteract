@@ -461,7 +461,13 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
             }
-            WindowEvent::KeyboardInput { event, .. } => {
+            // On X11 and Windows, winit makes up a press for each key held
+            // when the window gains focus. The user did not press it here.
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } if !(is_synthetic && event.state == ElementState::Pressed) => {
                 send_key_events(&self.tx, &event, self.modifiers);
             }
             _ => {}
