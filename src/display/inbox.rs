@@ -163,7 +163,7 @@ impl Inbox {
 
     /// Queue `ev` ahead of every event, the first Vsync included, for what
     /// a display tells the engine as it opens.
-    #[cfg(feature = "window")]
+    #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
     pub(crate) fn send_first(&mut self, ev: InputEvent) {
         let now = Instant::now();
         // A Vsync goes out first only when it is strictly older.
@@ -428,7 +428,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "window")]
     fn an_event_sent_first_goes_out_before_the_first_vsync() {
         let mut inbox = Inbox::new(Some(Duration::from_secs(60)));
         inbox.sender().send_input(key("a")).unwrap();
