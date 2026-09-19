@@ -24,7 +24,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
@@ -423,6 +423,7 @@ struct App {
     size: PhysicalSize<u32>,
     /// The size in the last Resize, in logical pixels.
     reported_size: (f32, f32),
+    held: HeldKeys,
 }
 
 impl App {
@@ -439,6 +440,7 @@ impl App {
             scale_factor: 1.0,
             size: PhysicalSize::default(),
             reported_size: (0.0, 0.0),
+            held: HeldKeys::default(),
         }
     }
 
@@ -477,6 +479,36 @@ impl App {
             self.reported_size = (width, height);
             let _ = self.tx.send_input(InputEvent::Resize { width, height });
         }
+    }
+
+    /// Send the events of a winit key event. A press gives `Down` and
+    /// `Press`, the first one and each repeat alike, as a browser does, and
+    /// the release of a held key gives `Up`, with the name from its `Down`.
+    fn send_key_events(&mut self, ev: &KeyEvent) {
+        match ev.state {
+            ElementState::Pressed => {
+                let Some(key) = winit_key_to_string(&ev.logical_key) else {
+                    return;
+                };
+                self.held.press(ev.physical_key, key.clone());
+                self.send_key(KeyKind::Down, key.clone(), ev.repeat);
+                self.send_key(KeyKind::Press, key, ev.repeat);
+            }
+            ElementState::Released => {
+                if let Some(key) = self.held.release(ev.physical_key) {
+                    self.send_key(KeyKind::Up, key, false);
+                }
+            }
+        }
+    }
+
+    fn send_key(&self, kind: KeyKind, key: String, repeat: bool) {
+        let _ = self.tx.send_input(InputEvent::Key(crate::event::KeyEvent {
+            kind,
+            key,
+            modifiers: modifiers(self.modifiers),
+            repeat,
+        }));
     }
 
     fn send_mouse(&self, action: MouseAction) {
@@ -559,36 +591,42 @@ impl ApplicationHandler for App {
                 is_synthetic,
                 ..
             } if !(is_synthetic && event.state == ElementState::Pressed) => {
-                send_key_events(&self.tx, &event, self.modifiers);
+                self.send_key_events(&event);
+            }
+            // Wayland sends no release for the keys held when the window
+            // loses focus, and takes them as released.
+            WindowEvent::Focused(false) => {
+                for key in self.held.release_all() {
+                    self.send_key(KeyKind::Up, key, false);
+                }
             }
             _ => {}
         }
     }
 }
 
-/// Send the events of a winit key event. A press gives `Down` and `Press`,
-/// the first one and each repeat alike, as a browser does, and a release
-/// gives `Up`. `repeat` tells a repeat from the first press.
-fn send_key_events(tx: &Sender, ev: &KeyEvent, mods: ModifiersState) {
-    let Some(key) = winit_key_to_string(&ev.logical_key) else {
-        return;
-    };
-    let modifiers = modifiers(mods);
-    let event = |kind, key| crate::event::KeyEvent {
-        kind,
-        key,
-        modifiers,
-        repeat: ev.repeat,
-    };
-    let send = |kind, key| {
-        let _ = tx.send_input(InputEvent::Key(event(kind, key)));
-    };
-    match ev.state {
-        ElementState::Pressed => {
-            send(KeyKind::Down, key.clone());
-            send(KeyKind::Press, key);
+/// The keys down in the window, each with the name from its `Down`. The
+/// name of a key can change while it is down, as when Shift goes down, so
+/// a release finds its key by the physical key.
+#[derive(Default)]
+struct HeldKeys(Vec<(PhysicalKey, String)>);
+
+impl HeldKeys {
+    fn press(&mut self, code: PhysicalKey, key: String) {
+        if !self.0.iter().any(|(c, _)| *c == code) {
+            self.0.push((code, key));
         }
-        ElementState::Released => send(KeyKind::Up, key),
+    }
+
+    /// The name of `code` if it was down, which drops a release that has no
+    /// press, such as the late one that macOS sends after a focus loss.
+    fn release(&mut self, code: PhysicalKey) -> Option<String> {
+        let i = self.0.iter().position(|(c, _)| *c == code)?;
+        Some(self.0.remove(i).1)
+    }
+
+    fn release_all(&mut self) -> Vec<String> {
+        self.0.drain(..).map(|(_, key)| key).collect()
     }
 }
 
@@ -770,6 +808,22 @@ mod tests {
             let name = winit_key_to_string(&Key::Named(k)).expect("named");
             assert!(key::ALL.contains(&name.as_str()), "{name}");
         }
+    }
+
+    #[test]
+    fn a_held_key_is_released_once_by_its_physical_key() {
+        use winit::keyboard::KeyCode;
+        let a = PhysicalKey::Code(KeyCode::KeyA);
+        let b = PhysicalKey::Code(KeyCode::KeyB);
+        let mut held = HeldKeys::default();
+        held.press(a, "a".into());
+        // A repeat keeps the first name.
+        held.press(a, "A".into());
+        held.press(b, "b".into());
+        assert_eq!(held.release(a), Some("a".into()));
+        assert_eq!(held.release(a), None);
+        assert_eq!(held.release_all(), ["b"]);
+        assert_eq!(held.release(b), None);
     }
 
     #[test]
