@@ -640,7 +640,10 @@ fn key_code_to_string(code: KeyCode) -> Option<String> {
         KeyCode::Delete => key::DELETE.into(),
         KeyCode::Insert => key::INSERT.into(),
         KeyCode::Esc => key::ESCAPE.into(),
-        KeyCode::F(n @ 1..=12) => key::FUNCTION_KEYS[usize::from(n - 1)].into(),
+        KeyCode::F(n) => key::FUNCTION_KEYS
+            .get(usize::from(n).checked_sub(1)?)
+            .copied()?
+            .into(),
         _ => return None,
     })
 }

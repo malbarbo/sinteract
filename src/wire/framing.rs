@@ -132,7 +132,10 @@ fn read_start(r: &mut impl Read, buf: &mut [u8]) -> io::Result<bool> {
         match r.read(buf) {
             Ok(0) => return Ok(false),
             Ok(n) => {
-                r.read_exact(&mut buf[n..])?;
+                let rest = buf
+                    .get_mut(n..)
+                    .ok_or_else(|| io::Error::other("a read returned more than its buffer"))?;
+                r.read_exact(rest)?;
                 return Ok(true);
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}

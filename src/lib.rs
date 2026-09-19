@@ -13,6 +13,9 @@
 //! it builds on wasm32. The rest needs threads, a tty, a window or platform
 //! FFI.
 
+// A test that fails on an unwrap reports the failure well enough.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::indexing_slicing))]
+
 pub mod display;
 pub mod event;
 mod outline;
@@ -25,13 +28,13 @@ pub mod wire;
 // names them from the crate root, so they are mounted here and not inside
 // `wire`. The VERB_* constants exist for the readers that are not Rust.
 #[path = "wire/event_capnp.rs"]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::unwrap_used)]
 mod event_capnp;
 #[path = "wire/protocol_capnp.rs"]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::unwrap_used)]
 mod protocol_capnp;
 #[path = "wire/scene_capnp.rs"]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::unwrap_used)]
 mod scene_capnp;
 
 // A wrong path in the example of the README fails the doctests. The example

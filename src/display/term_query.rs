@@ -106,10 +106,13 @@ fn read_replies(mut read: impl FnMut(Duration, &mut [u8]) -> Option<usize>) -> G
         if left.is_zero() {
             break;
         }
-        let Some(n) = read(left, &mut chunk).filter(|&n| n > 0) else {
+        let Some(bytes) = read(left, &mut chunk)
+            .filter(|&n| n > 0)
+            .map(|n| chunk.get(..n).expect("a read fills at most its buffer"))
+        else {
             break;
         };
-        if replies.feed(&chunk[..n]) {
+        if replies.feed(bytes) {
             break;
         }
     }
@@ -126,7 +129,10 @@ struct Found {
 
 impl vte::Perform for Found {
     fn csi_dispatch(&mut self, params: &vte::Params, intermediates: &[u8], _: bool, action: char) {
-        let params: Vec<u16> = params.iter().map(|p| p[0]).collect();
+        let params: Vec<u16> = params
+            .iter()
+            .map(|p| *p.first().expect("vte gives every parameter a value"))
+            .collect();
         match (intermediates, action, params.as_slice()) {
             // CPR, `CSI row ; col R`.
             ([], 'R', [_, _]) => self.cpr = true,

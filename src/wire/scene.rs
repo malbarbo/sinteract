@@ -402,7 +402,11 @@ fn write_verbs(out: capnp::data::Builder<'_>, segs: Segments<'_>) {
 fn write_coords(out: &mut capnp::primitive_list::Builder<'_, f32>, segs: Segments<'_>) {
     let mut i = 0;
     for seg in segs {
-        for &c in &seg.wire_coords()[..seg.kind().coords()] {
+        let coords = seg.wire_coords();
+        let used = coords
+            .get(..seg.kind().coords())
+            .expect("a segment has at most six coordinates");
+        for &c in used {
             out.set(i, c);
             i += 1;
         }
