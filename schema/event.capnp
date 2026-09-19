@@ -17,17 +17,22 @@ enum KeyKind {
 
 # ----- Input events (view → engine) -----
 
-struct KeyEvent {
-    kind   @0 :KeyKind;
-    # The W3C KeyboardEvent.key value, such as "ArrowLeft", "a" or " ".
-    key    @1 :Text;
-    alt    @2 :Bool;
-    ctrl   @3 :Bool;
-    shift  @4 :Bool;
+# The modifier keys held during an event.
+struct Modifiers {
+    alt   @0 :Bool;
+    ctrl  @1 :Bool;
+    shift @2 :Bool;
     # The Windows, Command or Super key.
-    meta   @5 :Bool;
+    meta  @3 :Bool;
+}
+
+struct KeyEvent {
+    kind      @0 :KeyKind;
+    # The W3C KeyboardEvent.key value, such as "ArrowLeft", "a" or " ".
+    key       @1 :Text;
+    modifiers @2 :Modifiers;
     # The key is held and the system repeats it.
-    repeat @6 :Bool;
+    repeat    @3 :Bool;
 }
 
 # A reader skips an event whose arm it does not know, and an event that holds

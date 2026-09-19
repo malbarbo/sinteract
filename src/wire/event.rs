@@ -4,7 +4,9 @@
 //! the close of `ViewMessage`, so [`super::to_engine`] writes and reads it.
 
 use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
-use crate::event_capnp::{KeyKind as WKeyKind, input_event, key_event as wire_key_event};
+use crate::event_capnp::{
+    KeyKind as WKeyKind, input_event, key_event as wire_key_event, modifiers as wire_modifiers,
+};
 
 use super::{Error, ValueError, skip_unusable};
 
@@ -30,11 +32,15 @@ fn key_kind_from_wire(k: WKeyKind) -> KeyKind {
 pub(super) fn write_key_event(mut b: wire_key_event::Builder<'_>, k: &KeyEvent) {
     b.set_kind(key_kind_to_wire(k.kind));
     b.set_key(&*k.key);
-    b.set_alt(k.modifiers.alt);
-    b.set_ctrl(k.modifiers.ctrl);
-    b.set_shift(k.modifiers.shift);
-    b.set_meta(k.modifiers.meta);
+    write_modifiers(b.reborrow().init_modifiers(), k.modifiers);
     b.set_repeat(k.repeat);
+}
+
+fn write_modifiers(mut b: wire_modifiers::Builder<'_>, m: Modifiers) {
+    b.set_alt(m.alt);
+    b.set_ctrl(m.ctrl);
+    b.set_shift(m.shift);
+    b.set_meta(m.meta);
 }
 
 /// `None` for an event of an arm from a newer schema, or for one that holds
@@ -54,15 +60,19 @@ fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEv
             InputEvent::Key(KeyEvent {
                 kind: key_kind_from_wire(k.get_kind()?),
                 key: k.get_key()?.to_str()?.to_owned(),
-                modifiers: Modifiers {
-                    alt: k.get_alt(),
-                    ctrl: k.get_ctrl(),
-                    shift: k.get_shift(),
-                    meta: k.get_meta(),
-                },
+                modifiers: read_modifiers(k.get_modifiers()?),
                 repeat: k.get_repeat(),
             })
         }
         Which::Tick(_) => InputEvent::Vsync,
     })
+}
+
+fn read_modifiers(r: wire_modifiers::Reader<'_>) -> Modifiers {
+    Modifiers {
+        alt: r.get_alt(),
+        ctrl: r.get_ctrl(),
+        shift: r.get_shift(),
+        meta: r.get_meta(),
+    }
 }
