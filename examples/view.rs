@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use sinteract::display::{Display, Sender, TerminalOptions, open_native};
-use sinteract::event::Event;
+use sinteract::event::{Event, NoEvent};
 use sinteract::scene::Scene;
 use sinteract::wire::framing::UNROUTED;
 use sinteract::wire::to_view::{self, Message};
@@ -64,22 +64,24 @@ fn main() -> ExitCode {
     let mut stats = Stats::default();
     loop {
         match fr.wait_event(None) {
-            // The close of the view goes to the engine like any input.
-            Event::Input(ev) => {
-                let failed = to_engine::write(&mut to_engine, UNROUTED, &ev).is_err();
-                if failed || ev.is_close() {
+            Ok(Event::Input(ev)) => {
+                if to_engine::write_input(&mut to_engine, UNROUTED, &ev).is_err() {
                     break;
                 }
             }
             // The Sender of the display only carries replies, so the reader
             // thread sends an empty one to wake the loop, and the messages
             // come through the channel.
-            Event::Reply { .. } => match drain(fr.as_mut(), &from_reader, &mut stats) {
+            Ok(Event::Reply { .. }) => match drain(fr.as_mut(), &from_reader, &mut stats) {
                 Session::Open => {}
                 // The engine ended the session, so the view sends no close.
                 Session::Closed => break,
             },
-            Event::Timeout => {}
+            Err(NoEvent::Close) => {
+                let _ = to_engine::write_close(&mut to_engine, UNROUTED);
+                break;
+            }
+            Err(NoEvent::Timeout) => {}
         }
     }
     drop(to_engine);

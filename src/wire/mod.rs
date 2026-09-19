@@ -225,7 +225,7 @@ pub(crate) fn with_float(bytes: &[u8], from: f32, to: f32) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::to_engine::encode as encode_event;
+    use super::to_engine::encode_input as encode_event;
     use super::to_view::{Message, encode_asset, encode_close, encode_frame};
     use super::*;
     use crate::event::{
@@ -327,7 +327,10 @@ mod tests {
     /// Decode a message of the view of an arm this schema knows, as
     /// [`to_engine::read`] does after the envelope.
     fn decode_event(bytes: &[u8]) -> Result<InputEvent, Error> {
-        Ok(to_engine::decode(&words(bytes))?.expect("an arm this schema knows"))
+        match to_engine::decode(&words(bytes))?.expect("an arm this schema knows") {
+            to_engine::Message::Input(ev) => Ok(ev),
+            to_engine::Message::Close => panic!("got a close"),
+        }
     }
 
     /// Whether [`to_engine::read`] skips the payload in `bytes`.
@@ -446,17 +449,16 @@ mod tests {
     }
 
     #[test]
-    fn vsync_and_close_events_round_trip() {
+    fn a_vsync_and_a_close_of_the_view_round_trip() {
         assert!(
             decode_event(&encode_event(&InputEvent::Vsync))
                 .unwrap()
                 .is_vsync()
         );
-        assert!(
-            decode_event(&encode_event(&InputEvent::Close))
-                .unwrap()
-                .is_close()
-        );
+        assert!(matches!(
+            to_engine::decode(&words(&to_engine::encode_close())),
+            Ok(Some(to_engine::Message::Close))
+        ));
     }
 
     #[test]

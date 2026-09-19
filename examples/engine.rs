@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use sinteract::display::{Display, Stdio};
-use sinteract::event::{Event, InputEvent, KeyKind, key};
+use sinteract::event::{Event, InputEvent, KeyKind, NoEvent, key};
 use sinteract::scene::{Paint, PathStyle, Scene};
 
 const WIDTH: f32 = 400.0;
@@ -33,7 +33,7 @@ fn main() -> ExitCode {
     let mut last = None;
     loop {
         match fr.wait_event(None) {
-            Event::Input(InputEvent::Vsync) => {
+            Ok(Event::Input(InputEvent::Vsync)) => {
                 let now = Instant::now();
                 let dt = last.map_or(0.0, |t: Instant| (now - t).as_secs_f32());
                 last = Some(now);
@@ -41,15 +41,15 @@ fn main() -> ExitCode {
                 game.step(dt.min(0.1));
                 fr.present(&game.scene());
             }
-            Event::Input(InputEvent::Key(k)) => match k.kind {
+            Ok(Event::Input(InputEvent::Key(k))) => match k.kind {
                 KeyKind::Press if k.key == "q" => break,
                 KeyKind::Press => game.key(&k.key),
                 KeyKind::Down | KeyKind::Up => {}
             },
-            Event::Input(InputEvent::Close) => break,
-            Event::Input(InputEvent::Mouse(_) | InputEvent::Resize { .. })
-            | Event::Reply { .. }
-            | Event::Timeout => {}
+            Err(NoEvent::Close) => break,
+            Ok(Event::Input(InputEvent::Mouse(_) | InputEvent::Resize { .. }))
+            | Ok(Event::Reply { .. })
+            | Err(NoEvent::Timeout) => {}
         }
     }
     fr.close();

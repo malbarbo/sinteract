@@ -10,15 +10,15 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, InputEvent, MouseAction, MouseEvent};
+use crate::event::{Event, InputEvent, MouseAction, MouseEvent, NoEvent};
 
 /// Pushes into the queue of a display from any thread, and wakes a
 /// `wait_event` that blocks on it. Get one from
 /// [`super::Display::sender`].
 ///
-/// The queue has no bound. Once the display closes or delivers an
-/// [`InputEvent::Close`], every send returns [`Closed`]. A message sent
-/// after a Close that has not gone out yet is lost.
+/// The queue has no bound. Once the display closes or delivers
+/// [`NoEvent::Close`], every send returns [`Closed`]. A message sent after
+/// a Close that has not gone out yet is lost.
 #[derive(Clone)]
 pub struct Sender {
     tx: mpsc::Sender<Msg>,
@@ -36,17 +36,17 @@ pub struct Closed;
 impl Sender {
     /// Queue an [`Event::Reply`]. `id` and `body` mean nothing to sinteract.
     pub fn send_reply(&self, id: u64, body: Vec<u8>) -> Result<(), Closed> {
-        self.send(Event::Reply { id, body })
+        self.send(Entry::Reply { id, body })
     }
 
-    /// Queue an [`InputEvent::Close`]. A Ctrl-C handler of the engine calls
-    /// it to end a `wait_event` that blocks.
+    /// Queue [`NoEvent::Close`], in order with the events. A Ctrl-C handler
+    /// of the engine calls it to end a `wait_event` that blocks.
     pub fn send_close(&self) -> Result<(), Closed> {
-        self.send_input(InputEvent::Close)
+        self.send(Entry::Close)
     }
 
     pub(crate) fn send_input(&self, ev: InputEvent) -> Result<(), Closed> {
-        self.send(Event::Input(ev))
+        self.send(Entry::Input(ev))
     }
 
     /// Ask the display to draw the last scene again, as after a resize.
@@ -57,10 +57,10 @@ impl Sender {
         self.put(Msg::Redraw)
     }
 
-    fn send(&self, event: Event) -> Result<(), Closed> {
+    fn send(&self, entry: Entry) -> Result<(), Closed> {
         self.put(Msg::Item(Item {
             at: Instant::now(),
-            event,
+            entry,
         }))
     }
 
@@ -106,12 +106,20 @@ enum Msg {
 
 struct Item {
     at: Instant,
-    event: Event,
+    entry: Entry,
+}
+
+/// What waits in the queue for `wait_event`.
+enum Entry {
+    Input(InputEvent),
+    Reply { id: u64, body: Vec<u8> },
+    Close,
 }
 
 /// What [`Inbox::wait_with`] hands to the display.
-pub(crate) enum Wait {
-    Event(Event),
+pub(crate) enum Next {
+    /// What `wait_event` returns.
+    Ready(Result<Event, NoEvent>),
     /// Draw the last scene again, and wait again.
     Redraw,
 }
@@ -170,7 +178,7 @@ impl Inbox {
         let at = self.vsync.at().map_or(now, |v| v.min(now));
         self.pending.push_front(Item {
             at,
-            event: Event::Input(ev),
+            entry: Entry::Input(ev),
         });
     }
 
@@ -185,15 +193,15 @@ impl Inbox {
 
     /// [`Inbox::wait_with`] on the channel, for a display that has nothing
     /// to redraw.
-    pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Event {
+    pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
         loop {
-            if let Wait::Event(event) = self.wait_with(deadline, Self::receive) {
-                return event;
+            if let Next::Ready(ready) = self.wait_with(deadline, Self::receive) {
+                return ready;
             }
         }
     }
 
-    /// The oldest event, or [`Event::Timeout`] once `deadline` passes. A
+    /// The oldest event, or [`NoEvent::Timeout`] once `deadline` passes. A
     /// `deadline` of `None` waits for as long as it takes. A redraw goes
     /// out when no event is ready, so an engine that presents anyway skips it.
     ///
@@ -207,17 +215,17 @@ impl Inbox {
         &mut self,
         deadline: Option<Instant>,
         mut block: impl FnMut(&mut Self, Option<Duration>),
-    ) -> Wait {
+    ) -> Next {
         loop {
-            if let Some(event) = self.poll() {
-                return Wait::Event(event);
+            if let Some(ready) = self.poll() {
+                return Next::Ready(ready);
             }
             if mem::take(&mut self.redraw) {
-                return Wait::Redraw;
+                return Next::Redraw;
             }
             let now = Instant::now();
             if deadline.is_some_and(|d| now >= d) {
-                return Wait::Event(Event::Timeout);
+                return Next::Ready(Err(NoEvent::Timeout));
             }
             let timeout = self.wake_at(deadline).map(|t| t - now);
             block(self, timeout);
@@ -242,10 +250,10 @@ impl Inbox {
         }
     }
 
-    /// The oldest event that is ready, without blocking.
-    fn poll(&mut self) -> Option<Event> {
+    /// The oldest entry that is ready, without blocking.
+    fn poll(&mut self) -> Option<Result<Event, NoEvent>> {
         if self.closed {
-            return Some(Event::Input(InputEvent::Close));
+            return Some(Err(NoEvent::Close));
         }
         while let Ok(msg) = self.rx.try_recv() {
             self.take(msg);
@@ -278,17 +286,17 @@ impl Inbox {
     /// of the queue, since only the latest one counts. A mouse at 1000 Hz
     /// would flood an engine that runs at 60 Hz.
     fn push(&mut self, item: Item) {
-        if matches!(item.event, Event::Input(InputEvent::Vsync)) {
+        if matches!(item.entry, Entry::Input(InputEvent::Vsync)) {
             if let Vsync::Channel { arrived } = &mut self.vsync {
                 arrived.get_or_insert(item.at);
             }
             return;
         }
         if let Some(back) = self.pending.back_mut()
-            && supersedes(&item.event, &back.event)
+            && supersedes(&item.entry, &back.entry)
         {
             // The older time keeps its place before a Vsync.
-            back.event = item.event;
+            back.entry = item.entry;
             return;
         }
         self.pending.push_back(item);
@@ -296,33 +304,36 @@ impl Inbox {
 
     /// The older of the front of `pending` and a Vsync that arrived by
     /// `now`, or `None` when neither exists.
-    fn pop(&mut self, now: Instant) -> Option<Event> {
+    fn pop(&mut self, now: Instant) -> Option<Result<Event, NoEvent>> {
         let front = self.pending.front().map(|item| item.at);
         let vsync = self.vsync.at().filter(|&at| at <= now);
         if vsync.is_some_and(|v| front.is_none_or(|f| v < f)) {
             self.vsync.deliver(now);
-            return Some(Event::Input(InputEvent::Vsync));
+            return Some(Ok(Event::Input(InputEvent::Vsync)));
         }
-        let event = self.pending.pop_front()?.event;
-        if matches!(event, Event::Input(InputEvent::Close)) {
-            self.close();
-        }
-        Some(event)
+        Some(match self.pending.pop_front()?.entry {
+            Entry::Input(ev) => Ok(Event::Input(ev)),
+            Entry::Reply { id, body } => Ok(Event::Reply { id, body }),
+            Entry::Close => {
+                self.close();
+                Err(NoEvent::Close)
+            }
+        })
     }
 }
 
 /// Returns `true` if `new` makes `old` worthless, `false` otherwise.
-fn supersedes(new: &Event, old: &Event) -> bool {
-    let is_move = |e: &Event| {
+fn supersedes(new: &Entry, old: &Entry) -> bool {
+    let is_move = |e: &Entry| {
         matches!(
             e,
-            Event::Input(InputEvent::Mouse(MouseEvent {
+            Entry::Input(InputEvent::Mouse(MouseEvent {
                 action: MouseAction::Move,
                 ..
             }))
         )
     };
-    let is_resize = |e: &Event| matches!(e, Event::Input(InputEvent::Resize { .. }));
+    let is_resize = |e: &Entry| matches!(e, Entry::Input(InputEvent::Resize { .. }));
     (is_move(new) && is_move(old)) || (is_resize(new) && is_resize(old))
 }
 
@@ -375,19 +386,23 @@ mod tests {
         })
     }
 
-    fn key_name(event: &Event) -> Option<&str> {
-        match event {
-            Event::Input(InputEvent::Key(k)) => Some(&k.key),
+    fn key_name(ready: &Result<Event, NoEvent>) -> Option<&str> {
+        match ready {
+            Ok(Event::Input(InputEvent::Key(k))) => Some(&k.key),
             _ => None,
         }
     }
 
-    fn is_vsync(event: &Event) -> bool {
-        matches!(event, Event::Input(InputEvent::Vsync))
+    fn is_vsync(ready: &Result<Event, NoEvent>) -> bool {
+        matches!(ready, Ok(Event::Input(InputEvent::Vsync)))
     }
 
-    fn is_close(event: &Event) -> bool {
-        matches!(event, Event::Input(InputEvent::Close))
+    fn is_close(ready: &Result<Event, NoEvent>) -> bool {
+        matches!(ready, Err(NoEvent::Close))
+    }
+
+    fn is_timeout(ready: &Result<Event, NoEvent>) -> bool {
+        matches!(ready, Err(NoEvent::Timeout))
     }
 
     fn soon() -> Option<Instant> {
@@ -402,14 +417,14 @@ mod tests {
         tx.send_reply(7, b"x".to_vec()).unwrap();
         tx.send_input(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Event::Reply { id: 7, .. }));
+        assert!(matches!(inbox.wait(None), Ok(Event::Reply { id: 7, .. })));
         assert_eq!(key_name(&inbox.wait(None)), Some("b"));
     }
 
     #[test]
     fn times_out_when_nothing_arrives() {
         let mut inbox = Inbox::new(None);
-        assert!(matches!(inbox.wait(soon()), Event::Timeout));
+        assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
@@ -424,7 +439,7 @@ mod tests {
         tx.send_input(InputEvent::Vsync).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(is_vsync(&inbox.wait(None)));
-        assert!(matches!(inbox.wait(soon()), Event::Timeout));
+        assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
@@ -462,7 +477,7 @@ mod tests {
             tx.send_input(ev).unwrap();
         }
         let x = |e| match e {
-            Event::Input(InputEvent::Mouse(m)) => m.x,
+            Ok(Event::Input(InputEvent::Mouse(m))) => m.x,
             other => panic!("got {other:?}"),
         };
         assert_eq!(x(inbox.wait(None)), 2.0);
@@ -470,9 +485,9 @@ mod tests {
         assert_eq!(x(inbox.wait(None)), 3.0);
         assert!(matches!(
             inbox.wait(None),
-            Event::Input(InputEvent::Resize { width: 2.0, .. })
+            Ok(Event::Input(InputEvent::Resize { width: 2.0, .. }))
         ));
-        assert!(matches!(inbox.wait(soon()), Event::Timeout));
+        assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
@@ -514,16 +529,16 @@ mod tests {
         tx.send_input(key("a")).unwrap();
         tx.request_redraw().unwrap();
         let mut next = || inbox.wait_with(soon(), Inbox::receive);
-        assert!(matches!(next(), Wait::Event(e) if key_name(&e) == Some("a")));
-        assert!(matches!(next(), Wait::Redraw));
-        assert!(matches!(next(), Wait::Event(Event::Timeout)));
+        assert!(matches!(next(), Next::Ready(r) if key_name(&r) == Some("a")));
+        assert!(matches!(next(), Next::Redraw));
+        assert!(matches!(next(), Next::Ready(Err(NoEvent::Timeout))));
     }
 
     #[test]
     fn wait_skips_a_redraw() {
         let mut inbox = Inbox::new(None);
         inbox.sender().request_redraw().unwrap();
-        assert!(matches!(inbox.wait(soon()), Event::Timeout));
+        assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
@@ -535,7 +550,7 @@ mod tests {
             tx.send_reply(3, b"done".to_vec()).unwrap();
         });
         match inbox.wait(None) {
-            Event::Reply { id, body } => assert_eq!((id, body.as_slice()), (3, &b"done"[..])),
+            Ok(Event::Reply { id, body }) => assert_eq!((id, body.as_slice()), (3, &b"done"[..])),
             other => panic!("got {other:?}"),
         }
         t.join().unwrap();
@@ -553,7 +568,7 @@ mod tests {
         let mut inbox = Inbox::new(Some(period));
         let start = Instant::now();
         assert!(is_vsync(&inbox.wait(None)));
-        assert!(matches!(inbox.wait(Some(Instant::now())), Event::Timeout));
+        assert!(is_timeout(&inbox.wait(Some(Instant::now()))));
         assert!(is_vsync(&inbox.wait(None)));
         assert!(start.elapsed() >= period);
     }
@@ -561,7 +576,7 @@ mod tests {
     fn item(at: Instant, ev: InputEvent) -> Item {
         Item {
             at,
-            event: Event::Input(ev),
+            entry: Entry::Input(ev),
         }
     }
 

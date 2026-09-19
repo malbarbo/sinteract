@@ -29,16 +29,17 @@ use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
 use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
-use super::inbox::{Inbox, Sender, Wait};
+use super::inbox::{Inbox, Next, Sender};
 use crate::event::{
-    Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
+    Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
+    NoEvent, key,
 };
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
 use crate::scene::Scene;
 
 /// A [`super::Display`] over a winit window. Closing the window arrives
-/// as [`InputEvent::Close`], and the window stays until
+/// as [`NoEvent::Close`], and the window stays until
 /// [`super::Display::close`]. The size of the window arrives as an
 /// [`InputEvent::Resize`] ahead of the first Vsync, and again after each
 /// change.
@@ -123,7 +124,7 @@ impl super::Display for Window {
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
         loop {
             let mut session = self.session.as_mut();
             let wait = self.inbox.wait_with(deadline, |_, timeout| {
@@ -133,12 +134,12 @@ impl super::Display for Window {
                     return;
                 };
                 if !s.lent.pump(&mut s.app, timeout) {
-                    let _ = s.app.tx.send_input(InputEvent::Close);
+                    let _ = s.app.tx.send_close();
                 }
             });
             match wait {
-                Wait::Event(event) => return event,
-                Wait::Redraw => {
+                Next::Ready(ready) => return ready,
+                Next::Redraw => {
                     if let Some(s) = self.session.as_mut() {
                         s.redraw();
                     }
@@ -541,7 +542,7 @@ impl ApplicationHandler for App {
         }
         match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
-                let _ = self.tx.send_input(InputEvent::Close);
+                let _ = self.tx.send_close();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = scale_factor;

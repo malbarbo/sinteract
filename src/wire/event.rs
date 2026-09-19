@@ -1,7 +1,4 @@
 //! `InputEvent` to and from the Cap'n Proto struct.
-//!
-//! [`InputEvent::Close`] is not an event on the wire. The view sends it as
-//! the close of `ViewMessage`, so [`super::to_engine`] writes and reads it.
 
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
@@ -31,9 +28,7 @@ fn key_kind_from_wire(k: WKeyKind) -> KeyKind {
     }
 }
 
-/// Write the key into `b`. [`InputEvent`] has no writer of its own,
-/// because its close is not an event on the wire but a message of the
-/// view.
+/// Write the key into `b`.
 pub(super) fn write_key_event(mut b: wire_key_event::Builder<'_>, k: &KeyEvent) {
     b.set_kind(key_kind_to_wire(k.kind));
     b.set_key(&*k.key);

@@ -6,13 +6,13 @@
 //! ```text
 //! loop {
 //!     match display.wait_event(deadline) {
-//!         Event::Input(InputEvent::Vsync) => on_frame(),
-//!         Event::Input(InputEvent::Key(k)) => on_key(k),
-//!         Event::Input(InputEvent::Mouse(m)) => on_mouse(m),
-//!         Event::Input(InputEvent::Resize { width, height }) => on_resize(width, height),
-//!         Event::Input(InputEvent::Close) => break,
-//!         Event::Reply { id, body } => on_reply(id, body),
-//!         Event::Timeout => on_tick(),
+//!         Ok(Event::Input(InputEvent::Vsync)) => on_frame(),
+//!         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
+//!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
+//!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
+//!         Ok(Event::Reply { id, body }) => on_reply(id, body),
+//!         Err(NoEvent::Timeout) => on_tick(),
+//!         Err(NoEvent::Close) => break,
 //!     }
 //! }
 //! ```
@@ -21,7 +21,9 @@
 //! terminal and in the window, rAF in the browser and the view on stdio. The
 //! engine derives a simulation tick from the time between two.
 
-/// What `wait_event` returns.
+use std::fmt;
+
+/// What happened, as `wait_event` delivers it.
 #[derive(Clone, Debug)]
 pub enum Event {
     /// From the user, the platform or the peer.
@@ -29,9 +31,28 @@ pub enum Event {
     /// What a `Sender` of the display pushed from any thread. The engine
     /// picks `id` and `body`, and a reply never crosses the wire.
     Reply { id: u64, body: Vec<u8> },
+}
+
+/// Why `wait_event` returned no event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoEvent {
     /// The deadline passed with nothing to deliver.
     Timeout,
+    /// The user, the platform or the peer ended the session, or the display
+    /// closed. Every wait from now on returns it.
+    Close,
 }
+
+impl fmt::Display for NoEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            NoEvent::Timeout => "the deadline passed with no event",
+            NoEvent::Close => "the session ended",
+        })
+    }
+}
+
+impl std::error::Error for NoEvent {}
 
 #[derive(Clone, Debug)]
 pub enum InputEvent {
@@ -46,16 +67,11 @@ pub enum InputEvent {
     },
     /// The surface can be repainted now.
     Vsync,
-    /// The window or the terminal closed, or the transport shut down.
-    Close,
 }
 
 impl InputEvent {
     pub fn is_vsync(&self) -> bool {
         matches!(self, InputEvent::Vsync)
-    }
-    pub fn is_close(&self) -> bool {
-        matches!(self, InputEvent::Close)
     }
     pub fn as_key(&self) -> Option<&KeyEvent> {
         match self {
@@ -251,8 +267,6 @@ mod tests {
     #[test]
     fn input_event_classifiers() {
         assert!(InputEvent::Vsync.is_vsync());
-        assert!(!InputEvent::Vsync.is_close());
-        assert!(InputEvent::Close.is_close());
         let k = InputEvent::Key(KeyEvent {
             kind: KeyKind::Press,
             key: "a".into(),

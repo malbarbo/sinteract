@@ -22,10 +22,11 @@ use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
 use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
-use super::inbox::{Inbox, Sender, Wait};
+use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use crate::event::{
-    Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
+    Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
+    NoEvent, key,
 };
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::PixmapRenderer;
@@ -51,7 +52,7 @@ pub struct TerminalOptions {
 }
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
-/// Ctrl-C arrives as [`InputEvent::Close`]. The size of the terminal
+/// Ctrl-C arrives as [`NoEvent::Close`]. The size of the terminal
 /// arrives as an [`InputEvent::Resize`] ahead of the first Vsync, and again
 /// after each change. A mouse event gives the center of its cell.
 pub struct Terminal {
@@ -178,11 +179,11 @@ impl super::Display for Terminal {
         self.last = Some(scene.clone());
     }
 
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
         loop {
             match self.inbox.wait_with(deadline, Inbox::receive) {
-                Wait::Event(event) => return event,
-                Wait::Redraw => self.redraw(),
+                Next::Ready(ready) => return ready,
+                Next::Redraw => self.redraw(),
             }
         }
     }
@@ -515,7 +516,7 @@ fn read_input(
             | ct_event::Event::Paste(_) => continue,
         };
         if is_ctrl_c(&key) {
-            let _ = tx.send_input(InputEvent::Close);
+            let _ = tx.send_close();
             if let Some(f) = on_interrupt.as_mut() {
                 f();
             }
@@ -533,7 +534,7 @@ struct CloseOnExit<'a>(&'a Sender);
 
 impl Drop for CloseOnExit<'_> {
     fn drop(&mut self) {
-        let _ = self.0.send_input(InputEvent::Close);
+        let _ = self.0.send_close();
     }
 }
 

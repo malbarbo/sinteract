@@ -1,7 +1,7 @@
 //! [`Stdio`] talks the wire protocol over stdin and stdout. A game server
 //! runs the engine (`spython --server`, `sgleam --server`) as a
-//! subprocess, writes [`InputEvent`]s to its stdin and reads [`Scene`]
-//! frames from its stdout.
+//! subprocess, writes the input of the view to its stdin and reads
+//! [`Scene`] frames from its stdout.
 //!
 //! The display is the engine side of the session. It writes with
 //! [`crate::wire::to_view`] and reads with [`crate::wire::to_engine`], and
@@ -17,10 +17,11 @@ use std::time::Instant;
 
 use super::driver::OpenError;
 use super::inbox::{Inbox, Sender};
-use crate::event::{Event, InputEvent};
+use crate::event::{Event, NoEvent};
 use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
-use crate::wire::{ReadError, to_engine, to_view};
+use crate::wire::to_engine::{self, Message};
+use crate::wire::{ReadError, to_view};
 
 /// A display that shows nothing. The peer sends the Vsync events, and this
 /// display only carries the protocol.
@@ -96,7 +97,7 @@ impl Stdio {
             // reader thread does not see the end.
             eprintln!("[sinteract::stdio] write failed, closing the session: {e}");
             self.peer_closed.store(true, Ordering::Release);
-            let _ = self.inbox.sender().send_input(InputEvent::Close);
+            let _ = self.inbox.sender().send_close();
         }
     }
 }
@@ -108,8 +109,8 @@ impl super::Display for Stdio {
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
-    /// arrival. A read error or EOF arrives as [`InputEvent::Close`].
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Event {
+    /// arrival. A read error or EOF arrives as [`NoEvent::Close`].
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
         self.inbox.wait(deadline)
     }
 
@@ -151,8 +152,8 @@ impl Drop for Stdio {
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
         let ev = match to_engine::read(&mut reader) {
-            Ok(None | Some((_, InputEvent::Close))) => break,
-            Ok(Some((_, ev))) => ev,
+            Ok(None | Some((_, Message::Close))) => break,
+            Ok(Some((_, Message::Input(ev)))) => ev,
             Err(ReadError::Payload(e)) => {
                 eprintln!("[sinteract::stdio] skipping a message that does not decode: {e}");
                 continue;
@@ -168,19 +169,18 @@ fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>)
         }
     }
     peer_closed.store(true, Ordering::Release);
-    let _ = tx.send_input(InputEvent::Close);
+    let _ = tx.send_close();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::display::Display;
-    use crate::event::{KeyEvent as IrKeyEvent, KeyKind, Modifiers};
+    use crate::event::{InputEvent, KeyEvent as IrKeyEvent, KeyKind, Modifiers};
     use crate::protocol_capnp::view_message;
     use crate::scene::{Paint, PathStyle};
     use crate::wire::framing::{Side, header};
-    use crate::wire::to_engine::encode;
-    use crate::wire::to_view::Message;
+    use crate::wire::to_engine::{encode_close, encode_input};
     use crate::wire::{self, to_view};
     use std::io::{Cursor, PipeWriter};
     use std::sync::Mutex;
@@ -210,12 +210,12 @@ mod tests {
     /// `ev` as the view writes it.
     fn event(ev: &InputEvent) -> Vec<u8> {
         let mut out = Vec::new();
-        to_engine::write(&mut out, UNROUTED, ev).unwrap();
+        to_engine::write_input(&mut out, UNROUTED, ev).unwrap();
         out
     }
 
     /// `payload` in the envelope of the view, for a payload that
-    /// [`to_engine::write`] does not write.
+    /// [`to_engine`] does not write.
     fn frame(payload: &[u8]) -> Vec<u8> {
         let mut out = header(Side::View, UNROUTED, payload.len() as u32).to_vec();
         out.extend_from_slice(payload);
@@ -237,12 +237,18 @@ mod tests {
 
     fn input(fr: &mut Stdio) -> InputEvent {
         match fr.wait_event(None) {
-            Event::Input(ev) => ev,
+            Ok(Event::Input(ev)) => ev,
             other => panic!("got {other:?}"),
         }
     }
 
-    fn decode_messages(mut buf: &[u8]) -> Vec<Message> {
+    /// Returns `true` if the next wait of `fr` gives Close, `false`
+    /// otherwise.
+    fn closes(fr: &mut Stdio) -> bool {
+        matches!(fr.wait_event(None), Err(NoEvent::Close))
+    }
+
+    fn decode_messages(mut buf: &[u8]) -> Vec<to_view::Message> {
         let mut out = Vec::new();
         while let Some((player, m)) = to_view::read(&mut buf).expect("decode") {
             assert_eq!(player, UNROUTED);
@@ -268,7 +274,7 @@ mod tests {
         }
         fr.present(&scene);
         match &decode_messages(&written.bytes())[..] {
-            [Message::Frame(d)] => {
+            [to_view::Message::Frame(d)] => {
                 assert_eq!(d.width(), 10.0);
                 assert!(!d.elements().is_empty());
             }
@@ -296,15 +302,18 @@ mod tests {
     #[test]
     fn eof_closes_for_good() {
         let mut fr = reading(Vec::new());
-        assert!(input(&mut fr).is_close());
-        assert!(input(&mut fr).is_close());
+        assert!(closes(&mut fr));
+        assert!(closes(&mut fr));
     }
 
     #[test]
     fn wait_event_times_out_while_the_peer_is_silent() {
         let (mut fr, _input, _) = open_session();
         let deadline = Instant::now() + Duration::from_millis(20);
-        assert!(matches!(fr.wait_event(Some(deadline)), Event::Timeout));
+        assert!(matches!(
+            fr.wait_event(Some(deadline)),
+            Err(NoEvent::Timeout)
+        ));
     }
 
     #[test]
@@ -316,7 +325,7 @@ mod tests {
             tx.send_reply(9, b"ok".to_vec()).unwrap();
         });
         match fr.wait_event(None) {
-            Event::Reply { id, body } => assert_eq!((id, body.as_slice()), (9, &b"ok"[..])),
+            Ok(Event::Reply { id, body }) => assert_eq!((id, body.as_slice()), (9, &b"ok"[..])),
             other => panic!("got {other:?}"),
         }
         t.join().unwrap();
@@ -324,9 +333,8 @@ mod tests {
 
     #[test]
     fn wait_event_skips_a_message_and_an_event_of_an_unknown_arm() {
-        let unknown_message =
-            wire::with_unknown_view_value(&encode(&InputEvent::Close), |m| wire::tag_of(m));
-        let unknown_event = wire::with_unknown_view_value(&encode(&InputEvent::Vsync), |m| {
+        let unknown_message = wire::with_unknown_view_value(&encode_close(), |m| wire::tag_of(m));
+        let unknown_event = wire::with_unknown_view_value(&encode_input(&InputEvent::Vsync), |m| {
             let Ok(view_message::Event(e)) = m.which() else {
                 panic!("not an event");
             };
@@ -348,16 +356,18 @@ mod tests {
     }
 
     #[test]
-    fn close_message_surfaces_as_close_event() {
-        let mut fr = reading(event(&InputEvent::Close));
-        assert!(input(&mut fr).is_close());
+    fn a_close_of_the_peer_surfaces_as_close() {
+        let mut stream = Vec::new();
+        to_engine::write_close(&mut stream, UNROUTED).unwrap();
+        let mut fr = reading(stream);
+        assert!(closes(&mut fr));
     }
 
     #[test]
     fn missing_magic_is_an_error_not_a_panic() {
         let mut bad = header(Side::View, UNROUTED, 0);
         bad[..4].copy_from_slice(b"junk");
-        assert!(input(&mut reading(bad.to_vec())).is_close());
+        assert!(closes(&mut reading(bad.to_vec())));
     }
 
     #[test]
@@ -365,7 +375,7 @@ mod tests {
         let mut stream = Vec::new();
         to_view::write_close(&mut stream, UNROUTED).unwrap();
         stream.extend_from_slice(&event(&InputEvent::Vsync));
-        assert!(input(&mut reading(stream)).is_close());
+        assert!(closes(&mut reading(stream)));
     }
 
     #[test]
@@ -374,7 +384,7 @@ mod tests {
         fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"));
         fr.present(&Scene::new(8.0, 8.0));
         match &decode_messages(&written.bytes())[..] {
-            [Message::Asset { .. }, Message::Frame(_)] => {}
+            [to_view::Message::Asset { .. }, to_view::Message::Frame(_)] => {}
             other => panic!("expected an Asset and a Frame, got {other:?}"),
         }
     }
@@ -387,9 +397,9 @@ mod tests {
         fr.present(&Scene::new(8.0, 8.0));
         assert!(matches!(
             &decode_messages(&written.bytes())[..],
-            [Message::Close]
+            [to_view::Message::Close]
         ));
-        assert!(input(&mut fr).is_close());
+        assert!(closes(&mut fr));
     }
 
     /// A writer whose peer stopped reading. It counts the attempts.
@@ -414,7 +424,7 @@ mod tests {
         let broken = BrokenWriter::default();
         let mut fr = Stdio::with_streams(BufReader::new(r), broken.clone()).unwrap();
         fr.present(&Scene::new(8.0, 8.0));
-        assert!(input(&mut fr).is_close());
+        assert!(closes(&mut fr));
         fr.present(&Scene::new(8.0, 8.0));
         fr.close();
         assert_eq!(*broken.0.lock().unwrap(), 1);
@@ -424,7 +434,7 @@ mod tests {
     fn close_after_the_peer_closed_writes_nothing() {
         let written = SharedWriter::default();
         let mut fr = Stdio::with_streams(Cursor::new(Vec::new()), written.clone()).unwrap();
-        assert!(input(&mut fr).is_close());
+        assert!(closes(&mut fr));
         fr.close();
         assert!(written.bytes().is_empty());
     }

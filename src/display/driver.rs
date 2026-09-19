@@ -6,7 +6,7 @@ use std::io;
 use std::time::Instant;
 
 use super::inbox::Sender;
-use crate::event::Event;
+use crate::event::{Event, NoEvent};
 use crate::scene::Scene;
 
 /// A session that shows scenes and delivers events. Opening is the
@@ -18,13 +18,13 @@ use crate::scene::Scene;
 /// let mut fr = sinteract::display::open_native("My game", 400.0, 300.0, options)?;
 /// loop {
 ///     match fr.wait_event(None) {
-///         Event::Input(InputEvent::Vsync) => fr.present(&next_scene()),
-///         Event::Input(InputEvent::Key(k)) => on_key(k),
-///         Event::Input(InputEvent::Mouse(m)) => on_mouse(m),
-///         Event::Input(InputEvent::Resize { .. }) => {}
-///         Event::Input(InputEvent::Close) => break,
-///         Event::Reply { id, body } => on_reply(id, body),
-///         Event::Timeout => {}
+///         Ok(Event::Input(InputEvent::Vsync)) => fr.present(&next_scene()),
+///         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
+///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
+///         Ok(Event::Input(InputEvent::Resize { .. })) => {}
+///         Ok(Event::Reply { id, body }) => on_reply(id, body),
+///         Err(NoEvent::Timeout) => {}
+///         Err(NoEvent::Close) => break,
 ///     }
 /// }
 /// fr.close();
@@ -38,10 +38,12 @@ pub trait Display: sealed::Sealed {
     /// Show `scene`. After [`Display::close`] it does nothing.
     fn present(&mut self, scene: &Scene);
 
-    /// Block until the next event or until `deadline`, or with no limit
-    /// when it is `None`. The events go out in the order of arrival. After
-    /// a Close, every call returns Close.
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Event;
+    /// Block until the next event, or until `deadline` and then return
+    /// [`NoEvent::Timeout`], or with no limit when it is `None`. The events
+    /// go out in the order of arrival. After a Close, every call returns
+    /// [`NoEvent::Close`]. A `while let Ok(ev)` over it also stops at the
+    /// first Timeout.
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent>;
 
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;
