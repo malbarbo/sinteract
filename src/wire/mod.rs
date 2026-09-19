@@ -450,11 +450,10 @@ mod tests {
 
     #[test]
     fn a_vsync_and_a_close_of_the_view_round_trip() {
-        assert!(
-            decode_event(&encode_event(&InputEvent::Vsync))
-                .unwrap()
-                .is_vsync()
-        );
+        assert!(matches!(
+            decode_event(&encode_event(&InputEvent::Vsync)),
+            Ok(InputEvent::Vsync)
+        ));
         assert!(matches!(
             to_engine::decode(&words(&to_engine::encode_close())),
             Ok(Some(to_engine::Message::Close))

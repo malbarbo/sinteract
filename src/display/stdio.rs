@@ -341,7 +341,7 @@ mod tests {
         stream.extend_from_slice(&frame(&unknown_message));
         stream.extend_from_slice(&frame(&unknown_event));
         stream.extend_from_slice(&event(&InputEvent::Vsync));
-        assert!(input(&mut reading(stream)).is_vsync());
+        assert!(matches!(input(&mut reading(stream)), InputEvent::Vsync));
     }
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&[0xff; 8]));
         stream.extend_from_slice(&event(&InputEvent::Vsync));
-        assert!(input(&mut reading(stream)).is_vsync());
+        assert!(matches!(input(&mut reading(stream)), InputEvent::Vsync));
     }
 
     #[test]

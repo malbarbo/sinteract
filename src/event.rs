@@ -69,18 +69,6 @@ pub enum InputEvent {
     Vsync,
 }
 
-impl InputEvent {
-    pub fn is_vsync(&self) -> bool {
-        matches!(self, InputEvent::Vsync)
-    }
-    pub fn as_key(&self) -> Option<&KeyEvent> {
-        match self {
-            InputEvent::Key(k) => Some(k),
-            _ => None,
-        }
-    }
-}
-
 /// A key that went down, repeats or came up.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyEvent {
@@ -263,19 +251,6 @@ pub struct Modifiers {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn input_event_classifiers() {
-        assert!(InputEvent::Vsync.is_vsync());
-        let k = InputEvent::Key(KeyEvent {
-            kind: KeyKind::Press,
-            key: "a".into(),
-            modifiers: Modifiers::default(),
-            repeat: false,
-        });
-        assert!(!k.is_vsync());
-        assert!(k.as_key().is_some());
-    }
 
     #[test]
     fn mouse_buttons_keep_the_known_bits() {
