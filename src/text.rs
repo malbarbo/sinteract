@@ -311,8 +311,6 @@ impl ResolvedFont {
     /// Resolve a family, a weight and a style to a face, by the rules that
     /// [`measure`] documents.
     pub(crate) fn resolve(family: &str, weight: u16, style: FontStyle) -> Self {
-        let v = variant_index(weight, style);
-
         // This runs once per text node per frame, so the comparison allocates
         // nothing.
         let key = family.trim();
@@ -326,15 +324,15 @@ impl ResolvedFont {
         } else {
             None
         };
-        if let Some(family_arr) = alias {
-            return family_arr[v].resolved();
+        if let Some(family) = alias {
+            return family.variant(weight, style).resolved();
         }
 
         if let Some(font) = system::font(key, weight, style) {
             return font;
         }
 
-        SANS[v].resolved()
+        SANS.variant(weight, style).resolved()
     }
 
     fn measure(self, size: f32, text: &str) -> Option<TextMetrics> {
@@ -444,8 +442,29 @@ impl EmbeddedFont {
     }
 }
 
-/// The four variants of a family in `fonts/`, in the order of
-/// [`variant_index`].
+/// The four variants of a family in `fonts/`.
+struct Family {
+    regular: EmbeddedFont,
+    bold: EmbeddedFont,
+    italic: EmbeddedFont,
+    bold_italic: EmbeddedFont,
+}
+
+impl Family {
+    /// The variant for `weight` and `style`. An oblique style takes the
+    /// italic face.
+    fn variant(&'static self, weight: u16, style: FontStyle) -> &'static EmbeddedFont {
+        let bold = weight >= BOLD_THRESHOLD;
+        let italic = !matches!(style, FontStyle::Normal);
+        match (bold, italic) {
+            (false, false) => &self.regular,
+            (true, false) => &self.bold,
+            (false, true) => &self.italic,
+            (true, true) => &self.bold_italic,
+        }
+    }
+}
+
 macro_rules! embed_family {
     (@variant $name:literal, $file:literal, $variant:literal) => {
         EmbeddedFont {
@@ -455,32 +474,21 @@ macro_rules! embed_family {
         }
     };
     ($name:literal, $file:literal) => {
-        [
-            embed_family!(@variant $name, $file, "Regular"),
-            embed_family!(@variant $name, $file, "Bold"),
-            embed_family!(@variant $name, $file, "Italic"),
-            embed_family!(@variant $name, $file, "BoldItalic"),
-        ]
+        Family {
+            regular: embed_family!(@variant $name, $file, "Regular"),
+            bold: embed_family!(@variant $name, $file, "Bold"),
+            italic: embed_family!(@variant $name, $file, "Italic"),
+            bold_italic: embed_family!(@variant $name, $file, "BoldItalic"),
+        }
     };
 }
 
-static SANS: [EmbeddedFont; 4] = embed_family!("Liberation Sans", "LiberationSans");
-static SERIF: [EmbeddedFont; 4] = embed_family!("Liberation Serif", "LiberationSerif");
-static MONO: [EmbeddedFont; 4] = embed_family!("Liberation Mono", "LiberationMono");
+static SANS: Family = embed_family!("Liberation Sans", "LiberationSans");
+static SERIF: Family = embed_family!("Liberation Serif", "LiberationSerif");
+static MONO: Family = embed_family!("Liberation Mono", "LiberationMono");
 
 /// A CSS weight at or above this picks the bold face.
 const BOLD_THRESHOLD: u16 = 600;
-
-fn variant_index(weight: u16, style: FontStyle) -> usize {
-    let bold = weight >= BOLD_THRESHOLD;
-    let italic = !matches!(style, FontStyle::Normal);
-    match (bold, italic) {
-        (false, false) => 0,
-        (true, false) => 1,
-        (false, true) => 2,
-        (true, true) => 3,
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -490,7 +498,7 @@ mod tests {
 
     /// Liberation Sans Regular, the face of a node that names no family.
     fn sans() -> &'static Face<'static> {
-        SANS[0].face()
+        SANS.regular.face()
     }
 
     /// The metrics of `text` in `family` at `weight`, in the normal style.
