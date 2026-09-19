@@ -759,21 +759,15 @@ fn capped_scale(width: f32, height: f32, target: Option<(u32, u32)>, cap: f32) -
 /// one cell row, with the upper pixel in the foreground and the lower one in
 /// the background, both composited over black.
 fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<()> {
-    let w = pixmap.width() as usize;
-    let h = pixmap.height() as usize;
-    let pixels = pixmap.pixels();
-    let mut y = 0;
-    while y < h {
-        let top = &pixels[y * w..(y + 1) * w];
-        let bot: Option<&[_]> = if y + 1 < h {
-            Some(&pixels[(y + 1) * w..(y + 2) * w])
-        } else {
-            None
-        };
-        for x in 0..w {
-            let (tr, tg, tb) = blend_on_black(top[x]);
-            let (br, bg, bb) = match bot {
-                Some(b) => blend_on_black(b[x]),
+    // A pixmap is never 0 pixels wide, so the chunks are never empty.
+    let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
+    while let Some(top) = rows.next() {
+        // An odd height leaves the last cell row with nothing below.
+        let bottom = rows.next().unwrap_or_default();
+        for (x, &t) in top.iter().enumerate() {
+            let (tr, tg, tb) = blend_on_black(t);
+            let (br, bg, bb) = match bottom.get(x) {
+                Some(&b) => blend_on_black(b),
                 None => (0, 0, 0),
             };
             // One SGR for both colors is shorter and leaves no partial state
@@ -786,7 +780,6 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<()> 
         }
         // In raw mode a bare LF does not return the cursor to column 0.
         out.write_all(b"\x1b[0m\r\n")?;
-        y += 2;
     }
     Ok(())
 }

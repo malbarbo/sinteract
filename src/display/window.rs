@@ -205,7 +205,7 @@ impl Session {
             return;
         };
         let placement = Placement::centered(scale, pixmap, target_px);
-        blit_pixmap(pixmap, &mut buffer, target_px, placement.offset);
+        blit_pixmap(pixmap, &mut buffer, (w, h), placement.offset);
         self.app.placement = placement;
         let _ = buffer.present();
     }
@@ -743,30 +743,28 @@ impl Placement {
     }
 }
 
-/// Copy `pixmap` into a softbuffer `0RGB` buffer, with its top-left corner
-/// at `(off_x, off_y)`. The band around it is black.
+/// Copy `pixmap` into a softbuffer `0RGB` buffer of `bw` by `bh` pixels,
+/// with its top-left corner at `(off_x, off_y)`. The band around it is
+/// black.
 fn blit_pixmap(
     pixmap: &Pixmap,
     buffer: &mut [u32],
-    (bw, bh): (u32, u32),
+    (bw, bh): (NonZeroU32, NonZeroU32),
     (off_x, off_y): (u32, u32),
 ) {
-    let pw = pixmap.width();
-    let ph = pixmap.height();
-
+    assert_eq!(
+        buffer.len(),
+        bw.get() as usize * bh.get() as usize,
+        "softbuffer gives a buffer of the size of the surface"
+    );
     buffer.fill(0);
-
-    let src = pixmap.pixels();
-    for y in 0..ph.min(bh - off_y.min(bh)) {
-        let dst_row_start = ((off_y + y) as usize) * (bw as usize) + off_x as usize;
-        let src_row_start = (y as usize) * (pw as usize);
-        let row_w = pw.min(bw - off_x.min(bw)) as usize;
-        for x in 0..row_w {
+    let src_rows = pixmap.pixels().chunks(pixmap.width() as usize);
+    let dst_rows = buffer.chunks_mut(bw.get() as usize).skip(off_y as usize);
+    for (src, dst) in src_rows.zip(dst_rows) {
+        for (d, p) in dst.iter_mut().skip(off_x as usize).zip(src) {
             // softbuffer takes 0RGB. A premultiplied pixel is already the
             // pixel over black, the color of the band.
-            let p = src[src_row_start + x];
-            buffer[dst_row_start + x] =
-                (u32::from(p.red()) << 16) | (u32::from(p.green()) << 8) | u32::from(p.blue());
+            *d = (u32::from(p.red()) << 16) | (u32::from(p.green()) << 8) | u32::from(p.blue());
         }
     }
 }
@@ -835,7 +833,12 @@ mod tests {
         pixmap.pixels_mut().copy_from_slice(&[opaque, half]);
         let mut buffer = [0xFFFF_FFFF; 4 * 3];
         let placement = Placement::centered(1.0, &pixmap, (4, 3));
-        blit_pixmap(&pixmap, &mut buffer, (4, 3), placement.offset);
+        blit_pixmap(
+            &pixmap,
+            &mut buffer,
+            (NonZeroU32::new(4).unwrap(), NonZeroU32::new(3).unwrap()),
+            placement.offset,
+        );
         #[rustfmt::skip]
         let expected = [
             0, 0, 0, 0,
