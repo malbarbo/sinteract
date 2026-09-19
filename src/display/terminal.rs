@@ -282,10 +282,6 @@ enum Backend {
     TextBlocks = 4,
 }
 
-impl Backend {
-    const ALL: [Backend; 3] = [Backend::Kitty, Backend::Sixel, Backend::TextBlocks];
-}
-
 fn pick_backend() -> Option<Backend> {
     if kitty_supported() {
         Some(Backend::Kitty)
@@ -353,7 +349,7 @@ fn held_backend() -> Option<Backend> {
     match TTY.load(Ordering::Acquire) {
         FREE => None,
         tag => Some(
-            Backend::ALL
+            [Backend::Kitty, Backend::Sixel, Backend::TextBlocks]
                 .into_iter()
                 .find(|&b| b as u8 == tag)
                 .unwrap_or(Backend::TextBlocks),
