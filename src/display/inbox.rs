@@ -1,4 +1,4 @@
-//! The queue behind every [`super::Frontend`]. A frontend owns an [`Inbox`]
+//! The queue behind every [`super::Display`]. A display owns an [`Inbox`]
 //! and hands out [`Sender`]s. Its input threads, the engine and any other
 //! thread push through a `Sender`, and `wait_event` pops from the `Inbox`,
 //! in the order of arrival.
@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 
 use crate::event::{Event, InputEvent};
 
-/// Pushes into the queue of a frontend from any thread, and wakes a
+/// Pushes into the queue of a display from any thread, and wakes a
 /// `wait_event` that blocks on it. Get one from
-/// [`super::Frontend::sender`].
+/// [`super::Display::sender`].
 ///
-/// The queue has no bound. Once the frontend closes or delivers an
+/// The queue has no bound. Once the display closes or delivers an
 /// [`InputEvent::Close`], every send returns [`Closed`]. A message sent
 /// after a Close that has not gone out yet is lost.
 #[derive(Clone)]
@@ -25,11 +25,11 @@ pub struct Sender {
     wake: Option<Waker>,
 }
 
-/// Wakes a frontend that blocks somewhere other than the channel, as the
+/// Wakes a display that blocks somewhere other than the channel, as the
 /// window does in its event loop.
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 
-/// The error of a [`Sender`] whose frontend was closed or dropped.
+/// The error of a [`Sender`] whose display was closed or dropped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closed;
 
@@ -49,7 +49,7 @@ impl Sender {
         self.send(Event::Input(ev))
     }
 
-    /// Ask the frontend to draw the last scene again, as after a resize.
+    /// Ask the display to draw the last scene again, as after a resize.
     /// The request never reaches the engine.
     pub(crate) fn request_redraw(&self) -> Result<(), Closed> {
         self.put(Msg::Redraw)
@@ -73,7 +73,7 @@ impl Sender {
 
 impl fmt::Display for Closed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the frontend is closed")
+        f.write_str("the display is closed")
     }
 }
 
@@ -106,7 +106,7 @@ struct Item {
     event: Event,
 }
 
-/// What [`Inbox::wait_with`] hands to the frontend.
+/// What [`Inbox::wait_with`] hands to the display.
 pub(crate) enum Wait {
     Event(Event),
     /// Draw the last scene again, and wait again.
@@ -156,7 +156,7 @@ impl Inbox {
         self.redraw = false;
     }
 
-    /// [`Inbox::wait_with`] on the channel, for a frontend that has nothing
+    /// [`Inbox::wait_with`] on the channel, for a display that has nothing
     /// to redraw.
     pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Event {
         loop {
@@ -171,7 +171,7 @@ impl Inbox {
     /// out when no event is ready, so an engine that presents anyway skips it.
     ///
     /// `block` waits for at most its timeout, or for as long as it takes
-    /// when the timeout is `None`, and a [`Sender`] wakes it. A frontend
+    /// when the timeout is `None`, and a [`Sender`] wakes it. A display
     /// that blocks on the channel passes [`Inbox::receive`].
     ///
     /// A Vsync of the clock counts as arrived when it falls due, so input
@@ -275,7 +275,7 @@ impl Inbox {
 
 /// Where the Vsync events come from.
 enum Vsync {
-    /// A software clock, for a frontend without a platform Vsync.
+    /// A software clock, for a display without a platform Vsync.
     Clock {
         period: Duration,
         /// When the next Vsync falls due. The first one is due at once.

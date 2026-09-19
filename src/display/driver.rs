@@ -1,4 +1,4 @@
-//! [`Frontend`], the trait an engine drives, and [`open_native`]. The module
+//! [`Display`], the trait an engine drives, and [`open_native`]. The module
 //! is private, and [`super`] re-exports both.
 
 use std::fmt;
@@ -12,11 +12,11 @@ use crate::scene::Scene;
 
 /// A session that shows scenes and delivers events. Opening is the
 /// constructor of the implementation, and the session ends at
-/// [`Frontend::close`] or at drop:
+/// [`Display::close`] or at drop:
 ///
 /// ```ignore
 /// let options = TerminalOptions::default();
-/// let mut fr = sinteract::frontend::open_native("My game", 400.0, 300.0, options)?;
+/// let mut fr = sinteract::display::open_native("My game", 400.0, 300.0, options)?;
 /// loop {
 ///     match fr.wait_event(None) {
 ///         Event::Input(InputEvent::Vsync) => fr.present(&next_scene()),
@@ -33,8 +33,8 @@ use crate::scene::Scene;
 /// pending and a Close that stays, does not fit in its types, and an
 /// implementation outside the crate would need a public way to build a
 /// [`Sender`].
-pub trait Frontend: sealed::Sealed {
-    /// Show `scene`. After [`Frontend::close`] it does nothing.
+pub trait Display: sealed::Sealed {
+    /// Show `scene`. After [`Display::close`] it does nothing.
     fn present(&mut self, scene: &Scene);
 
     /// Block until the next event or until `deadline`, or with no limit
@@ -45,7 +45,7 @@ pub trait Frontend: sealed::Sealed {
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;
 
-    /// Upload a bitmap for `Bitmap.id`. A frontend that draws without
+    /// Upload a bitmap for `Bitmap.id`. A display that draws without
     /// bitmaps drops it.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>);
 
@@ -66,7 +66,7 @@ pub fn open_native(
     width: f32,
     height: f32,
     options: TerminalOptions,
-) -> Result<Box<dyn Frontend>, OpenError> {
+) -> Result<Box<dyn Display>, OpenError> {
     match Terminal::open_with(options) {
         Ok(terminal) => Ok(Box::new(terminal)),
         Err(OpenError::NoGraphics) => Ok(Box::new(Window::open(title, width, height)?)),
@@ -74,7 +74,7 @@ pub fn open_native(
     }
 }
 
-/// Why a frontend did not open.
+/// Why a display did not open.
 #[derive(Debug)]
 pub enum OpenError {
     /// Another session holds the resource of the process: the terminal, the
@@ -97,7 +97,7 @@ impl fmt::Display for OpenError {
                  a Sixel terminal (Windows Terminal 1.22 or later, mlterm, foot, mintty) \
                  or a truecolor terminal (set COLORTERM=truecolor)",
             ),
-            OpenError::Io(e) => write!(f, "cannot open the frontend: {e}"),
+            OpenError::Io(e) => write!(f, "cannot open the display: {e}"),
             OpenError::Platform(e) => write!(f, "cannot open a window: {e}"),
         }
     }
@@ -116,7 +116,7 @@ pub(super) const fn period_from_hz(hz: u32) -> Duration {
     Duration::from_nanos(1_000_000_000 / hz as u64)
 }
 
-/// Say once per frontend that this backend drops the bitmaps of the frame. A
+/// Say once per display that this backend drops the bitmaps of the frame. A
 /// process-global flag would stay silent for every session after the first,
 /// and a server hosts many sessions.
 pub(super) fn warn_bitmaps_once(warned: &mut bool, scene: &Scene, backend: &str) {

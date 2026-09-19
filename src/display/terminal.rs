@@ -46,12 +46,12 @@ pub struct TerminalOptions {
     pub on_interrupt: Option<Box<dyn FnMut() + Send>>,
 }
 
-/// A [`super::Frontend`] over the alt screen of the terminal, in raw mode.
+/// A [`super::Display`] over the alt screen of the terminal, in raw mode.
 /// Ctrl-C arrives as [`InputEvent::Close`].
 pub struct Terminal {
     inbox: Inbox,
     backend: Backend,
-    /// `None` after [`super::Frontend::close`].
+    /// `None` after [`super::Display::close`].
     live: Option<Live>,
     /// The size in pixels of the frame on screen, or `None` before the
     /// first one. Kitty keeps a frame after the session.
@@ -147,7 +147,7 @@ impl Terminal {
     }
 }
 
-impl super::Frontend for Terminal {
+impl super::Display for Terminal {
     fn present(&mut self, scene: &Scene) {
         if self.live.is_none() {
             return;
@@ -190,7 +190,7 @@ impl sealed::Sealed for Terminal {}
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        super::Frontend::close(self);
+        super::Display::close(self);
     }
 }
 

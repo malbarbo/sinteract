@@ -14,8 +14,8 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use sinteract::display::{Display, Sender, TerminalOptions, open_native};
 use sinteract::event::Event;
-use sinteract::frontend::{Frontend, Sender, TerminalOptions, open_native};
 use sinteract::scene::Scene;
 use sinteract::wire::framing::UNROUTED;
 use sinteract::wire::to_view::{self, Message};
@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     let from_engine = BufReader::new(child.stdout.take().expect("stdout is piped"));
 
     // The size of the scene is only known at the first frame, and the
-    // engine sends no frame before a Vsync, which needs the frontend open.
+    // engine sends no frame before a Vsync, which needs the display open.
     // So the window opens at a guess and letterboxes.
     let mut fr = match open_native("sinteract view", 400.0, 300.0, TerminalOptions::default()) {
         Ok(fr) => fr,
@@ -71,7 +71,7 @@ fn main() -> ExitCode {
                     break;
                 }
             }
-            // The Sender of the frontend only carries replies, so the reader
+            // The Sender of the display only carries replies, so the reader
             // thread sends an empty one to wake the loop, and the messages
             // come through the channel.
             Event::Reply { .. } => match drain(fr.as_mut(), &from_reader, &mut stats) {
@@ -123,9 +123,9 @@ enum Session {
 }
 
 /// Act on the messages of the engine that arrived. The assets go to the
-/// frontend in order, and only the last frame is shown, since the ones
+/// display in order, and only the last frame is shown, since the ones
 /// before it are already stale.
-fn drain(fr: &mut dyn Frontend, from_reader: &Receiver<Message>, stats: &mut Stats) -> Session {
+fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stats) -> Session {
     let mut last: Option<Scene> = None;
     let mut session = Session::Open;
     for message in from_reader.try_iter() {

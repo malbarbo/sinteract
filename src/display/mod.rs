@@ -1,13 +1,13 @@
 //! Where a scene goes out and where the input comes back.
 //!
-//! [`Frontend`] is what an engine (spython, sgleam) drives. [`Terminal`],
+//! [`Display`] is what an engine (spython, sgleam) drives. [`Terminal`],
 //! [`Window`] and [`Stdio`] implement it, and the engine runs one loop over
 //! whichever it opened.
 //!
 //! [`terminal`] shows a pixmap through Kitty, Sixel or half-blocks,
 //! `term_query` probes what the terminal supports, [`sixel`] encodes a
 //! pixmap for the terminals that take Sixel and not Kitty, and [`window`]
-//! shows a pixmap in a winit window. [`stdio`] has no display at all. It
+//! shows a pixmap in a winit window. [`stdio`] shows nothing. It
 //! writes the frames and reads the events as Cap'n Proto messages, for a
 //! server that runs the engine as a subprocess.
 //!
@@ -31,7 +31,7 @@ pub mod terminal;
 pub mod window;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use driver::{Frontend, OpenError, open_native};
+pub use driver::{Display, OpenError, open_native};
 #[cfg(not(target_arch = "wasm32"))]
 pub use inbox::{Closed, Sender};
 #[cfg(not(target_arch = "wasm32"))]

@@ -14,12 +14,12 @@ the schema structs and know nothing of a session, `wire/protocol.rs` owns
 the `Message` envelope, and `wire/framing.rs` owns the envelope that a byte
 stream needs.
 
-`frontend/` shows a scene and reads the input back. `driver.rs` holds the
-sealed `Frontend` trait, `inbox.rs` the queue and the `Sender` behind
+`display/` shows a scene and reads the input back. `driver.rs` holds the
+sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind
 `wait_event`, `terminal.rs`, `window.rs` and `stdio.rs` are the three
-frontends, and `sixel.rs` and `term_query.rs` support them.
+displays, and `sixel.rs` and `term_query.rs` support them.
 Only `sixel.rs` builds on wasm32, so the `cfg` sits on each submodule in
-`frontend/mod.rs` and not on the whole directory.
+`display/mod.rs` and not on the whole directory.
 
 `PLAN.md` is the plan for the server and client modes.
 
@@ -141,7 +141,7 @@ The subject says what the change does to the code, in one line:
 
 - A prefix for the module, then a lowercase sentence: `scene:`, `renderer:`,
   `wire:`, `pixmap:`, `pdf:`, `terminal:`, `window:`, `text:`,
-  `frontend:`, `docs:`, and `all:` when it crosses them.
+  `display:`, `docs:`, and `all:` when it crosses them.
 - Imperative or present, active voice. `pixmap: keep a pool of clip masks`.
 - Name the concrete thing that changed and what happened to it. A type, a
   function, a field, a message. The reader should know what to look for in

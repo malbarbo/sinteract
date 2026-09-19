@@ -10,8 +10,8 @@
 use std::process::ExitCode;
 use std::time::Instant;
 
+use sinteract::display::{Display, Stdio};
 use sinteract::event::{Event, InputEvent, KeyKind, key};
-use sinteract::frontend::{Frontend, Stdio};
 use sinteract::scene::{Paint, PathStyle, Scene};
 
 const WIDTH: f32 = 400.0;

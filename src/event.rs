@@ -1,11 +1,11 @@
-//! The events a [`crate::frontend::Frontend`] delivers.
+//! The events a [`crate::display::Display`] delivers.
 //!
-//! Every frontend turns its input into the same [`InputEvent`] stream, and
+//! Every display turns its input into the same [`InputEvent`] stream, and
 //! the engine loop blocks on `wait_event` and dispatches:
 //!
 //! ```text
 //! loop {
-//!     match frontend.wait_event(deadline) {
+//!     match display.wait_event(deadline) {
 //!         Event::Input(InputEvent::Vsync) => on_frame(),
 //!         Event::Input(InputEvent::Key(k)) => on_key(k),
 //!         Event::Input(InputEvent::Close) => break,
@@ -15,7 +15,7 @@
 //! }
 //! ```
 //!
-//! The frontend decides when a `Vsync` arrives, with a timer in the
+//! The display decides when a `Vsync` arrives, with a timer in the
 //! terminal and in the window, rAF in the browser and the view on stdio. The
 //! engine derives a simulation tick from the time between two.
 
@@ -24,7 +24,7 @@
 pub enum Event {
     /// From the user, the platform or the peer.
     Input(InputEvent),
-    /// What a `Sender` of the frontend pushed from any thread. The engine
+    /// What a `Sender` of the display pushed from any thread. The engine
     /// picks `id` and `body`, and a reply never crosses the wire.
     Reply { id: u64, body: Vec<u8> },
     /// The deadline passed with nothing to deliver.
@@ -76,7 +76,7 @@ pub struct KeyEvent {
 #[repr(u8)]
 pub enum KeyKind {
     /// The key typed, when it goes down and each time it repeats. Every
-    /// frontend sends it.
+    /// display sends it.
     Press = 0,
     /// The key went down or repeats, just before its `Press`.
     Down = 1,

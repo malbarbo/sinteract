@@ -35,12 +35,12 @@ use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
 use crate::scene::Scene;
 
-/// A [`super::Frontend`] over a winit window. Closing the window arrives
+/// A [`super::Display`] over a winit window. Closing the window arrives
 /// as [`InputEvent::Close`], and the window stays until
-/// [`super::Frontend::close`].
+/// [`super::Display::close`].
 pub struct Window {
     inbox: Inbox,
-    /// `None` after [`super::Frontend::close`].
+    /// `None` after [`super::Display::close`].
     session: Option<Session>,
     warned_bitmaps: bool,
 }
@@ -106,7 +106,7 @@ impl Window {
     }
 }
 
-impl super::Frontend for Window {
+impl super::Display for Window {
     fn present(&mut self, scene: &Scene) {
         let Some(session) = self.session.as_mut() else {
             return;
@@ -172,7 +172,7 @@ impl sealed::Sealed for Window {}
 
 impl Drop for Window {
     fn drop(&mut self) {
-        super::Frontend::close(self);
+        super::Display::close(self);
     }
 }
 

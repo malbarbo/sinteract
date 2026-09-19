@@ -8,13 +8,13 @@
 //! converts a scene and an event to and from Cap'n Proto. These build on wasm32 too, except the system font
 //! lookup of `text`, which the `native-fonts` feature carries.
 //!
-//! [`frontend`] shows a scene and reads the input back, through the
+//! [`display`] shows a scene and reads the input back, through the
 //! terminal, a winit window or stdin and stdout. Only the Sixel encoder of
 //! it builds on wasm32. The rest needs threads, a tty, a window or platform
 //! FFI.
 
+pub mod display;
 pub mod event;
-pub mod frontend;
 mod outline;
 pub mod renderer;
 pub mod scene;

@@ -3,7 +3,7 @@
 //! subprocess, writes [`InputEvent`]s to its stdin and reads [`Scene`]
 //! frames from its stdout.
 //!
-//! The frontend is the engine side of the session. It writes with
+//! The display is the engine side of the session. It writes with
 //! [`crate::wire::to_view`] and reads with [`crate::wire::to_engine`], and
 //! each message goes inside the envelope of [`crate::wire::framing`]. It
 //! serves one view, so its messages go to
@@ -22,11 +22,11 @@ use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
 use crate::wire::{ReadError, to_engine, to_view};
 
-/// A frontend without a display. The peer sends the Vsync events, and this
-/// frontend only carries the protocol.
+/// A display that shows nothing. The peer sends the Vsync events, and this
+/// display only carries the protocol.
 ///
 /// A thread reads the input and feeds the queue, so a [`Sender`] wakes
-/// [`Frontend::wait_event`](super::Frontend::wait_event) and the deadline
+/// [`Display::wait_event`](super::Display::wait_event) and the deadline
 /// holds. The thread blocks on the read and nothing interrupts it, so it
 /// ends with the stream, at EOF or at a read error.
 pub struct Stdio {
@@ -37,7 +37,7 @@ pub struct Stdio {
     inbox: Inbox,
     /// Set when the peer closes the session or stops reading.
     peer_closed: Arc<AtomicBool>,
-    /// Set by [`Frontend::close`](super::Frontend::close).
+    /// Set by [`Display::close`](super::Display::close).
     closed: bool,
 }
 
@@ -101,7 +101,7 @@ impl Stdio {
     }
 }
 
-impl super::Frontend for Stdio {
+impl super::Display for Stdio {
     /// Send a frame and flush, so the peer sees it at once.
     fn present(&mut self, scene: &Scene) {
         self.send(|w| to_view::write_frame(w, UNROUTED, scene));
@@ -139,12 +139,12 @@ impl super::driver::sealed::Sealed for Stdio {}
 
 impl Drop for Stdio {
     fn drop(&mut self) {
-        super::Frontend::close(self);
+        super::Display::close(self);
     }
 }
 
 /// Read the messages of the peer into the queue until the stream or the
-/// session ends. The frontend serves one view, so it takes the input of
+/// session ends. The display serves one view, so it takes the input of
 /// every player as its own. [`to_engine::read`] skips a message or an event of an arm
 /// from a newer schema. A payload that does not decode is logged and
 /// skipped, since the framing already found where the next message starts.
@@ -163,7 +163,7 @@ fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>)
             }
         };
         if tx.send_input(ev).is_err() {
-            // The frontend is closed, and nobody reads the queue.
+            // The display is closed, and nobody reads the queue.
             return;
         }
     }
@@ -174,8 +174,8 @@ fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display::Display;
     use crate::event::{KeyEvent as IrKeyEvent, KeyKind, Modifiers};
-    use crate::frontend::Frontend;
     use crate::protocol_capnp::view_message;
     use crate::scene::{Paint, PathStyle};
     use crate::wire::framing::{Side, header};
@@ -222,12 +222,12 @@ mod tests {
         out
     }
 
-    /// A frontend over `input`, which then ends.
+    /// A display over `input`, which then ends.
     fn reading(input: Vec<u8>) -> Stdio {
         Stdio::with_streams(Cursor::new(input), Vec::<u8>::new()).unwrap()
     }
 
-    /// A frontend whose input stays open while the returned writer lives.
+    /// A display whose input stays open while the returned writer lives.
     fn open_session() -> (Stdio, PipeWriter, SharedWriter) {
         let (r, w) = io::pipe().unwrap();
         let written = SharedWriter::default();

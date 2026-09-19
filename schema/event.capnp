@@ -1,6 +1,6 @@
 @0x910b52243f5e98f9;
 
-# The input vocabulary of sinteract. Every frontend turns terminal, window
+# The input vocabulary of sinteract. Every display turns terminal, window
 # and browser input into these, and they cross the wire unchanged.
 #
 # This file is the source of truth for the input format. The same rules as
