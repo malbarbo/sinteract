@@ -11,6 +11,7 @@
 //!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
 //!         Ok(Event::Reply { id, body }) => on_reply(id, body),
+//!         Err(NoEvent::Wake) => on_wake(),
 //!         Err(NoEvent::Timeout) => on_tick(),
 //!         Err(NoEvent::Close) => break,
 //!     }
@@ -36,6 +37,8 @@ pub enum Event {
 /// Why `wait_event` returned no event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoEvent {
+    /// A `Sender` woke the loop, with no data.
+    Wake,
     /// The deadline passed with nothing to deliver.
     Timeout,
     /// The user, the platform or the peer ended the session, or the display
@@ -46,6 +49,7 @@ pub enum NoEvent {
 impl fmt::Display for NoEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            NoEvent::Wake => "a sender woke the loop",
             NoEvent::Timeout => "the deadline passed with no event",
             NoEvent::Close => "the session ended",
         })

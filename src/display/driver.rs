@@ -23,7 +23,7 @@ use crate::scene::Scene;
 ///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 ///         Ok(Event::Input(InputEvent::Resize { .. })) => {}
 ///         Ok(Event::Reply { id, body }) => on_reply(id, body),
-///         Err(NoEvent::Timeout) => {}
+///         Err(NoEvent::Wake | NoEvent::Timeout) => {}
 ///         Err(NoEvent::Close) => break,
 ///     }
 /// }

@@ -69,10 +69,9 @@ fn main() -> ExitCode {
                     break;
                 }
             }
-            // The Sender of the display only carries replies, so the reader
-            // thread sends an empty one to wake the loop, and the messages
-            // come through the channel.
-            Ok(Event::Reply { .. }) => match drain(fr.as_mut(), &from_reader, &mut stats) {
+            // The messages of the engine come through the channel, and the
+            // reader thread wakes the loop after each one.
+            Err(NoEvent::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
                 Session::Open => {}
                 // The engine ended the session, so the view sends no close.
                 Session::Closed => break,
@@ -81,7 +80,7 @@ fn main() -> ExitCode {
                 let _ = to_engine::write_close(&mut to_engine, UNROUTED);
                 break;
             }
-            Err(NoEvent::Timeout) => {}
+            Ok(Event::Reply { .. }) | Err(NoEvent::Timeout) => {}
         }
     }
     drop(to_engine);
@@ -113,7 +112,7 @@ fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Message>, wake: S
             }
         };
         let last = matches!(message, Message::Close);
-        if to_loop.send(message).is_err() || wake.send_reply(0, Vec::new()).is_err() || last {
+        if to_loop.send(message).is_err() || wake.wake().is_err() || last {
             return;
         }
     }

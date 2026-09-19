@@ -45,6 +45,13 @@ impl Sender {
         self.send(Entry::Close)
     }
 
+    /// Queue [`NoEvent::Wake`], in order with the events. A thread that
+    /// hands its data over a channel of its own calls it, so the loop looks
+    /// at that channel.
+    pub fn wake(&self) -> Result<(), Closed> {
+        self.send(Entry::Wake)
+    }
+
     pub(crate) fn send_input(&self, ev: InputEvent) -> Result<(), Closed> {
         self.send(Entry::Input(ev))
     }
@@ -113,6 +120,7 @@ struct Item {
 enum Entry {
     Input(InputEvent),
     Reply { id: u64, body: Vec<u8> },
+    Wake,
     Close,
 }
 
@@ -314,6 +322,7 @@ impl Inbox {
         Some(match self.pending.pop_front()?.entry {
             Entry::Input(ev) => Ok(Event::Input(ev)),
             Entry::Reply { id, body } => Ok(Event::Reply { id, body }),
+            Entry::Wake => Err(NoEvent::Wake),
             Entry::Close => {
                 self.close();
                 Err(NoEvent::Close)
@@ -500,6 +509,19 @@ mod tests {
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(is_close(&inbox.wait(None)));
         assert!(is_close(&inbox.wait(None)));
+    }
+
+    #[test]
+    fn each_wake_goes_out_in_order() {
+        let mut inbox = Inbox::new(None);
+        let tx = inbox.sender();
+        tx.wake().unwrap();
+        tx.send_input(key("a")).unwrap();
+        tx.wake().unwrap();
+        assert!(matches!(inbox.wait(None), Err(NoEvent::Wake)));
+        assert_eq!(key_name(&inbox.wait(None)), Some("a"));
+        assert!(matches!(inbox.wait(None), Err(NoEvent::Wake)));
+        assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
