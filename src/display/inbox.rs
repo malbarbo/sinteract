@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, InputEvent};
+use crate::event::{Event, InputEvent, MouseAction, MouseEvent};
 
 /// Pushes into the queue of a display from any thread, and wakes a
 /// `wait_event` that blocks on it. Get one from
@@ -273,11 +273,22 @@ impl Inbox {
     /// Queue `item`. A Vsync from the channel waits in `vsync`, unless one
     /// already waits, so an engine that falls behind gets one Vsync, not a
     /// burst. A clock makes every Vsync, so it drops one from the channel.
+    ///
+    /// A move of the mouse or a resize replaces one of its kind at the back
+    /// of the queue, since only the latest one counts. A mouse at 1000 Hz
+    /// would flood an engine that runs at 60 Hz.
     fn push(&mut self, item: Item) {
         if matches!(item.event, Event::Input(InputEvent::Vsync)) {
             if let Vsync::Channel { arrived } = &mut self.vsync {
                 arrived.get_or_insert(item.at);
             }
+            return;
+        }
+        if let Some(back) = self.pending.back_mut()
+            && supersedes(&item.event, &back.event)
+        {
+            // The older time keeps its place before a Vsync.
+            back.event = item.event;
             return;
         }
         self.pending.push_back(item);
@@ -298,6 +309,21 @@ impl Inbox {
         }
         Some(event)
     }
+}
+
+/// Returns `true` if `new` makes `old` worthless, `false` otherwise.
+fn supersedes(new: &Event, old: &Event) -> bool {
+    let is_move = |e: &Event| {
+        matches!(
+            e,
+            Event::Input(InputEvent::Mouse(MouseEvent {
+                action: MouseAction::Move,
+                ..
+            }))
+        )
+    };
+    let is_resize = |e: &Event| matches!(e, Event::Input(InputEvent::Resize { .. }));
+    (is_move(new) && is_move(old)) || (is_resize(new) && is_resize(old))
 }
 
 /// Where the Vsync events come from.
@@ -337,7 +363,7 @@ impl Vsync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{KeyEvent, KeyKind, Modifiers};
+    use crate::event::{KeyEvent, KeyKind, Modifiers, MouseButtons};
     use std::thread;
 
     fn key(name: &str) -> InputEvent {
@@ -410,6 +436,44 @@ mod tests {
         assert_eq!(key_name(&inbox.wait(None)), Some("first"));
         assert!(is_vsync(&inbox.wait(None)));
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
+    }
+
+    #[test]
+    fn a_move_or_a_resize_replaces_one_of_its_kind_at_the_back() {
+        let at = |x| {
+            InputEvent::Mouse(MouseEvent {
+                action: MouseAction::Move,
+                x,
+                y: 0.0,
+                modifiers: Modifiers::default(),
+                buttons: MouseButtons::default(),
+            })
+        };
+        let resize = |width| InputEvent::Resize { width, height: 1.0 };
+        let mut inbox = Inbox::new(None);
+        let tx = inbox.sender();
+        for ev in [
+            at(1.0),
+            at(2.0),
+            key("a"),
+            at(3.0),
+            resize(1.0),
+            resize(2.0),
+        ] {
+            tx.send_input(ev).unwrap();
+        }
+        let x = |e| match e {
+            Event::Input(InputEvent::Mouse(m)) => m.x,
+            other => panic!("got {other:?}"),
+        };
+        assert_eq!(x(inbox.wait(None)), 2.0);
+        assert_eq!(key_name(&inbox.wait(None)), Some("a"));
+        assert_eq!(x(inbox.wait(None)), 3.0);
+        assert!(matches!(
+            inbox.wait(None),
+            Event::Input(InputEvent::Resize { width: 2.0, .. })
+        ));
+        assert!(matches!(inbox.wait(soon()), Event::Timeout));
     }
 
     #[test]
