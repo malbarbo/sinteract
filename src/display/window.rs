@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 use softbuffer::{Context, Surface};
 use tiny_skia::Pixmap;
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::dpi::{LogicalSize, PhysicalPosition};
+use winit::event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
@@ -30,7 +30,9 @@ use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
 use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
 use super::inbox::{Inbox, Sender, Wait};
-use crate::event::{Event, InputEvent, KeyKind, key};
+use crate::event::{
+    Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
+};
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
 use crate::scene::Scene;
@@ -189,15 +191,17 @@ impl Session {
         }
         let target_px = (w.get(), h.get());
         // The scene fills the window, so there is no cap on the scale.
-        self.renderer
-            .set_scale(fit_scale(scene.width(), scene.height(), target_px));
+        let scale = fit_scale(scene.width(), scene.height(), target_px);
+        self.renderer.set_scale(scale);
         let Ok(pixmap) = self.renderer.render(scene) else {
             return;
         };
         let Ok(mut buffer) = self.surface.buffer_mut() else {
             return;
         };
-        blit_pixmap(pixmap, &mut buffer, target_px);
+        let placement = Placement::centered(scale, pixmap, target_px);
+        blit_pixmap(pixmap, &mut buffer, target_px, placement.offset);
+        self.app.placement = placement;
         let _ = buffer.present();
     }
 
@@ -405,6 +409,13 @@ struct App {
     /// session can still be in the loop.
     id: Option<WindowId>,
     modifiers: ModifiersState,
+    /// Where the last frame sits in the window, to map the pointer.
+    placement: Placement,
+    /// The last position of the pointer, in the pixels of the window.
+    cursor: PhysicalPosition<f64>,
+    buttons: MouseButtons,
+    /// Device pixels per logical pixel.
+    scale_factor: f64,
 }
 
 impl App {
@@ -415,6 +426,10 @@ impl App {
             created: None,
             id: None,
             modifiers: ModifiersState::empty(),
+            placement: Placement::default(),
+            cursor: PhysicalPosition::default(),
+            buttons: MouseButtons::default(),
+            scale_factor: 1.0,
         }
     }
 
@@ -425,11 +440,28 @@ impl App {
         let created = match event_loop.create_window(attrs) {
             Ok(window) => {
                 self.id = Some(window.id());
+                self.scale_factor = window.scale_factor();
+                // Until the first frame, the pointer maps to logical pixels.
+                self.placement = Placement {
+                    scale: self.scale_factor as f32,
+                    offset: (0, 0),
+                };
                 Ok(Rc::new(window))
             }
             Err(e) => Err(e.to_string()),
         };
         self.created = Some(created);
+    }
+
+    fn send_mouse(&self, action: MouseAction) {
+        let (x, y) = self.placement.to_scene(self.cursor);
+        let _ = self.tx.send_input(InputEvent::Mouse(MouseEvent {
+            action,
+            x,
+            y,
+            modifiers: modifiers(self.modifiers),
+            buttons: self.buttons,
+        }));
     }
 }
 
@@ -453,13 +485,40 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                 let _ = self.tx.send_input(InputEvent::Close);
             }
-            WindowEvent::Resized(_)
-            | WindowEvent::ScaleFactorChanged { .. }
-            | WindowEvent::RedrawRequested => {
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.scale_factor = scale_factor;
+                let _ = self.tx.request_redraw();
+            }
+            WindowEvent::Resized(_) | WindowEvent::RedrawRequested => {
                 let _ = self.tx.request_redraw();
             }
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = position;
+                self.send_mouse(MouseAction::Move);
+            }
+            WindowEvent::CursorLeft { .. } => self.send_mouse(MouseAction::Leave),
+            WindowEvent::MouseInput { state, button, .. } => {
+                let Some(button) = mouse_button(button) else {
+                    return;
+                };
+                let action = match state {
+                    ElementState::Pressed => {
+                        self.buttons = self.buttons.with(button);
+                        MouseAction::Down(button)
+                    }
+                    ElementState::Released => {
+                        self.buttons = self.buttons.without(button);
+                        MouseAction::Up(button)
+                    }
+                };
+                self.send_mouse(action);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = wheel_notches(delta, self.scale_factor);
+                self.send_mouse(MouseAction::Wheel { dx, dy });
             }
             // On X11 and Windows, winit makes up a press for each key held
             // when the window gains focus. The user did not press it here.
@@ -482,12 +541,7 @@ fn send_key_events(tx: &Sender, ev: &KeyEvent, mods: ModifiersState) {
     let Some(key) = winit_key_to_string(&ev.logical_key) else {
         return;
     };
-    let modifiers = crate::event::Modifiers {
-        alt: mods.alt_key(),
-        ctrl: mods.control_key(),
-        shift: mods.shift_key(),
-        meta: mods.super_key(),
-    };
+    let modifiers = modifiers(mods);
     let event = |kind, key| crate::event::KeyEvent {
         kind,
         key,
@@ -504,6 +558,46 @@ fn send_key_events(tx: &Sender, ev: &KeyEvent, mods: ModifiersState) {
         }
         ElementState::Released => send(KeyKind::Up, key),
     }
+}
+
+fn modifiers(mods: ModifiersState) -> Modifiers {
+    Modifiers {
+        alt: mods.alt_key(),
+        ctrl: mods.control_key(),
+        shift: mods.shift_key(),
+        meta: mods.super_key(),
+    }
+}
+
+/// `None` for a button that has no W3C number.
+fn mouse_button(button: winit::event::MouseButton) -> Option<MouseButton> {
+    use winit::event::MouseButton as B;
+    Some(match button {
+        B::Left => MouseButton::Left,
+        B::Middle => MouseButton::Middle,
+        B::Right => MouseButton::Right,
+        B::Back => MouseButton::Back,
+        B::Forward => MouseButton::Forward,
+        B::Other(_) => return None,
+    })
+}
+
+/// A browser scrolls about this many logical pixels per notch of the
+/// wheel, so a touchpad that reports pixels gives notches at that rate.
+const PIXELS_PER_NOTCH: f64 = 100.0;
+
+/// The wheel in notches, with the W3C sign. winit gives the opposite sign,
+/// the way that the content moves. `0.0 - v` turns a still axis into 0.0,
+/// where `-v` would give -0.0.
+fn wheel_notches(delta: MouseScrollDelta, scale_factor: f64) -> (f32, f32) {
+    let (x, y) = match delta {
+        MouseScrollDelta::LineDelta(x, y) => (x, y),
+        MouseScrollDelta::PixelDelta(p) => {
+            let per_notch = PIXELS_PER_NOTCH * scale_factor;
+            ((p.x / per_notch) as f32, (p.y / per_notch) as f32)
+        }
+    };
+    (0.0 - x, 0.0 - y)
 }
 
 /// Map a winit key to its name in [`crate::event::key`], or to the text it
@@ -545,14 +639,49 @@ fn winit_key_to_string(key: &Key) -> Option<String> {
     })
 }
 
-/// Copy `pixmap` into a softbuffer `0RGB` buffer, centered. The fit keeps the
-/// aspect ratio, so one axis may leave a band, and the band is black.
-fn blit_pixmap(pixmap: &Pixmap, buffer: &mut [u32], (bw, bh): (u32, u32)) {
+/// Where a frame sits in the window.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Placement {
+    /// Device pixels per unit of the scene.
+    scale: f32,
+    /// The top-left corner of the frame, in device pixels.
+    offset: (u32, u32),
+}
+
+impl Placement {
+    /// A frame of `pixmap` at `scale`, centered in `(bw, bh)`. The fit keeps
+    /// the aspect ratio, so one axis may leave a band.
+    fn centered(scale: f32, pixmap: &Pixmap, (bw, bh): (u32, u32)) -> Self {
+        Self {
+            scale,
+            offset: (
+                bw.saturating_sub(pixmap.width()) / 2,
+                bh.saturating_sub(pixmap.height()) / 2,
+            ),
+        }
+    }
+
+    /// The point of the scene under `p`, a point of the window. A point on
+    /// a band falls outside the scene.
+    fn to_scene(self, p: PhysicalPosition<f64>) -> (f32, f32) {
+        let scale = f64::from(self.scale);
+        (
+            ((p.x - f64::from(self.offset.0)) / scale) as f32,
+            ((p.y - f64::from(self.offset.1)) / scale) as f32,
+        )
+    }
+}
+
+/// Copy `pixmap` into a softbuffer `0RGB` buffer, with its top-left corner
+/// at `(off_x, off_y)`. The band around it is black.
+fn blit_pixmap(
+    pixmap: &Pixmap,
+    buffer: &mut [u32],
+    (bw, bh): (u32, u32),
+    (off_x, off_y): (u32, u32),
+) {
     let pw = pixmap.width();
     let ph = pixmap.height();
-
-    let off_x = (bw.saturating_sub(pw)) / 2;
-    let off_y = (bh.saturating_sub(ph)) / 2;
 
     buffer.fill(0);
 
@@ -618,7 +747,8 @@ mod tests {
         let half = tiny_skia::ColorU8::from_rgba(0, 255, 0, 128).premultiply();
         pixmap.pixels_mut().copy_from_slice(&[opaque, half]);
         let mut buffer = [0xFFFF_FFFF; 4 * 3];
-        blit_pixmap(&pixmap, &mut buffer, (4, 3));
+        let placement = Placement::centered(1.0, &pixmap, (4, 3));
+        blit_pixmap(&pixmap, &mut buffer, (4, 3), placement.offset);
         #[rustfmt::skip]
         let expected = [
             0, 0, 0, 0,
@@ -626,5 +756,26 @@ mod tests {
             0, 0, 0, 0,
         ];
         assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn a_point_of_the_window_maps_to_the_scene() {
+        // A 100 by 50 scene at scale 4, centered in a 400 by 400 window.
+        let pixmap = Pixmap::new(400, 200).unwrap();
+        let placement = Placement::centered(4.0, &pixmap, (400, 400));
+        assert_eq!(placement.offset, (0, 100));
+        let at = |x, y| placement.to_scene(PhysicalPosition::new(x, y));
+        assert_eq!(at(200.0, 150.0), (50.0, 12.5));
+        // The band above the frame.
+        assert_eq!(at(0.0, 50.0), (0.0, -12.5));
+    }
+
+    #[test]
+    fn the_wheel_counts_notches_with_the_w3c_sign() {
+        let down = wheel_notches(MouseScrollDelta::LineDelta(0.0, -1.0), 2.0);
+        assert_eq!(down, (0.0, 1.0));
+        assert!(down.0.is_sign_positive());
+        let pixels = MouseScrollDelta::PixelDelta(PhysicalPosition::new(-400.0, 100.0));
+        assert_eq!(wheel_notches(pixels, 2.0), (2.0, -0.5));
     }
 }
