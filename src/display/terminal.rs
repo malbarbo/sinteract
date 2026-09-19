@@ -9,7 +9,7 @@
 
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -87,6 +87,7 @@ impl Terminal {
         // The probe reads the replies from the tty, so it runs under the
         // claim, where no reader thread takes them.
         let backend = pick_backend().ok_or(OpenError::NoGraphics)?;
+        claim.show_through(backend);
         terminal::enable_raw_mode().map_err(OpenError::Io)?;
         install_panic_hook();
         let entered = execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide);
@@ -198,7 +199,7 @@ impl Drop for Terminal {
 /// it, else Sixel, else half-blocks. Prints nothing while a [`Terminal`]
 /// holds the tty, or when the terminal has no graphics.
 pub fn show_image(scene: &Scene) {
-    if TTY_CLAIMED.load(Ordering::Acquire) {
+    if TTY.load(Ordering::Acquire) != FREE {
         eprintln!("[sinteract] a terminal session is open; not printing the image");
         return;
     }
@@ -271,11 +272,18 @@ pub fn sixel_supported() -> bool {
     super::term_query::graphics_caps().sixel
 }
 
+/// The discriminants are the values of [`TTY`] while a [`Terminal`] shows
+/// through the backend.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[repr(u8)]
 enum Backend {
-    Kitty,
-    Sixel,
-    TextBlocks,
+    Kitty = 2,
+    Sixel = 3,
+    TextBlocks = 4,
+}
+
+impl Backend {
+    const ALL: [Backend; 3] = [Backend::Kitty, Backend::Sixel, Backend::TextBlocks];
 }
 
 fn pick_backend() -> Option<Backend> {
@@ -307,25 +315,49 @@ fn rasterize<'r>(
 // The tty of the process
 // -----------------------------------------------------------------------------
 
-/// Set while a [`Terminal`] holds the tty.
-static TTY_CLAIMED: AtomicBool = AtomicBool::new(false);
+/// Who holds the tty: [`FREE`], a [`Terminal`] that still probes it
+/// ([`PROBING`]), or one that shows through a [`Backend`], by its
+/// discriminant. The panic hook reads it, so it is an atomic and not a lock.
+static TTY: AtomicU8 = AtomicU8::new(FREE);
+const FREE: u8 = 0;
+const PROBING: u8 = 1;
 
 /// The hold of a [`Terminal`] on the tty, released on drop.
 struct Claim;
 
 impl Claim {
     fn take() -> Result<Self, OpenError> {
-        if TTY_CLAIMED.swap(true, Ordering::AcqRel) {
-            Err(OpenError::Busy)
-        } else {
-            Ok(Claim)
+        match TTY.compare_exchange(FREE, PROBING, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => Ok(Claim),
+            Err(_) => Err(OpenError::Busy),
         }
+    }
+
+    /// Record the backend that the probe picked, for the panic hook.
+    fn show_through(&self, backend: Backend) {
+        TTY.store(backend as u8, Ordering::Release);
     }
 }
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        TTY_CLAIMED.store(false, Ordering::Release);
+        TTY.store(FREE, Ordering::Release);
+    }
+}
+
+/// The backend of the [`Terminal`] that holds the tty. `None` when nobody
+/// holds it, and half-blocks while the probe runs, since only Kitty needs
+/// more than leaving the alt screen.
+#[cfg(any(panic = "abort", test))]
+fn held_backend() -> Option<Backend> {
+    match TTY.load(Ordering::Acquire) {
+        FREE => None,
+        tag => Some(
+            Backend::ALL
+                .into_iter()
+                .find(|&b| b as u8 == tag)
+                .unwrap_or(Backend::TextBlocks),
+        ),
     }
 }
 
@@ -352,8 +384,7 @@ fn install_panic_hook() {
     HOOK.call_once(|| {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            if TTY_CLAIMED.load(Ordering::Acquire) {
-                let backend = pick_backend().unwrap_or(Backend::TextBlocks);
+            if let Some(backend) = held_backend() {
                 leave(backend, true);
             }
             prev(info);
@@ -774,7 +805,11 @@ mod tests {
     fn a_second_claim_is_busy_until_the_first_drops() {
         let first = Claim::take().expect("free");
         assert!(matches!(Claim::take(), Err(OpenError::Busy)));
+        assert_eq!(held_backend(), Some(Backend::TextBlocks));
+        first.show_through(Backend::Kitty);
+        assert_eq!(held_backend(), Some(Backend::Kitty));
         drop(first);
+        assert_eq!(held_backend(), None);
         assert!(Claim::take().is_ok());
     }
 
