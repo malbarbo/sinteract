@@ -8,6 +8,8 @@
 //!     match display.wait_event(deadline) {
 //!         Event::Input(InputEvent::Vsync) => on_frame(),
 //!         Event::Input(InputEvent::Key(k)) => on_key(k),
+//!         Event::Input(InputEvent::Mouse(m)) => on_mouse(m),
+//!         Event::Input(InputEvent::Resize { width, height }) => on_resize(width, height),
 //!         Event::Input(InputEvent::Close) => break,
 //!         Event::Reply { id, body } => on_reply(id, body),
 //!         Event::Timeout => on_tick(),
@@ -34,6 +36,14 @@ pub enum Event {
 #[derive(Clone, Debug)]
 pub enum InputEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
+    /// The largest scene that the display shows at scale 1 with no margin,
+    /// in logical pixels. A program may ignore it and keep its size, or
+    /// take this size to fill the surface.
+    Resize {
+        width: f32,
+        height: f32,
+    },
     /// The surface can be repainted now.
     Vsync,
     /// The window or the terminal closed, or the transport shut down.
@@ -150,7 +160,81 @@ pub mod key {
     pub const FUNCTION_KEYS: [&str; 12] = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
 }
 
-/// The modifier keys held during a key event.
+/// What the primary pointer did, in the coordinates of the scene on the
+/// screen. A point over the margin of a scaled window falls outside the
+/// scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MouseEvent {
+    pub action: MouseAction,
+    pub x: f32,
+    pub y: f32,
+    pub modifiers: Modifiers,
+    /// The buttons held after this event.
+    pub buttons: MouseButtons,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MouseAction {
+    Move,
+    Down(MouseButton),
+    Up(MouseButton),
+    /// In notches of the wheel. As in W3C, `dx > 0` scrolls right and
+    /// `dy > 0` scrolls down.
+    Wheel {
+        dx: f32,
+        dy: f32,
+    },
+    /// The pointer left the surface, and `x` and `y` hold its last
+    /// position.
+    Leave,
+}
+
+/// A mouse button, numbered as the W3C `MouseEvent.button`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum MouseButton {
+    Left = 0,
+    Middle = 1,
+    Right = 2,
+    Back = 3,
+    Forward = 4,
+}
+
+/// A set of mouse buttons.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct MouseButtons(u8);
+
+impl MouseButtons {
+    /// Returns `true` if `button` is in the set, `false` otherwise.
+    pub fn contains(self, button: MouseButton) -> bool {
+        self.0 & Self::bit(button) != 0
+    }
+
+    pub fn with(self, button: MouseButton) -> Self {
+        MouseButtons(self.0 | Self::bit(button))
+    }
+
+    pub fn without(self, button: MouseButton) -> Self {
+        MouseButtons(self.0 & !Self::bit(button))
+    }
+
+    /// One bit per button, `1 << button`, as on the wire.
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// The set of the known buttons among `bits`. A bit of a button from a
+    /// newer schema drops out.
+    pub fn from_bits(bits: u8) -> Self {
+        MouseButtons(bits & ((1 << (MouseButton::Forward as u8 + 1)) - 1))
+    }
+
+    fn bit(button: MouseButton) -> u8 {
+        1 << button as u8
+    }
+}
+
+/// The modifier keys held during an event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Modifiers {
     pub alt: bool,
@@ -177,5 +261,17 @@ mod tests {
         });
         assert!(!k.is_vsync());
         assert!(k.as_key().is_some());
+    }
+
+    #[test]
+    fn mouse_buttons_keep_the_known_bits() {
+        let held = MouseButtons::default()
+            .with(MouseButton::Left)
+            .with(MouseButton::Forward)
+            .without(MouseButton::Left);
+        assert!(held.contains(MouseButton::Forward));
+        assert!(!held.contains(MouseButton::Left));
+        assert_eq!(held.bits(), 1 << 4);
+        assert_eq!(MouseButtons::from_bits(0xff).bits(), 0b1_1111);
     }
 }

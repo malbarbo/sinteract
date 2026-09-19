@@ -20,6 +20,8 @@ use crate::scene::Scene;
 ///     match fr.wait_event(None) {
 ///         Event::Input(InputEvent::Vsync) => fr.present(&next_scene()),
 ///         Event::Input(InputEvent::Key(k)) => on_key(k),
+///         Event::Input(InputEvent::Mouse(m)) => on_mouse(m),
+///         Event::Input(InputEvent::Resize { .. }) => {}
 ///         Event::Input(InputEvent::Close) => break,
 ///         Event::Reply { id, body } => on_reply(id, body),
 ///         Event::Timeout => {}

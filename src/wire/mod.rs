@@ -91,8 +91,8 @@ enum ValueError {
     /// A paint arm, an enum value or a verb byte from a newer schema. The
     /// reader skips the element or the event that holds it.
     Newer,
-    /// A float that is not finite, which draws nothing. The reader skips the
-    /// element that holds it.
+    /// A float that is not finite. The reader skips the element or the
+    /// event that holds it.
     NotFinite,
 }
 
@@ -160,8 +160,8 @@ pub(crate) fn with_unknown_scene_value(
 
 /// Overwrite the two bytes that `find` points at with a value this crate
 /// does not know, as a peer with a newer schema writes it. `find` points at
-/// the tag of a union, which every union of the schema keeps at offset 0 of
-/// its data section, at an enum field, or at the first two verbs of a path.
+/// the tag of a union, at an enum field, or at the first two verbs of a
+/// path.
 /// `bytes` holds a message whose root is `T`, and the compiler cannot infer
 /// `T` from `find`, so each root has a wrapper.
 #[cfg(test)]
@@ -184,8 +184,8 @@ fn with_unknown_value<T: capnp::traits::Owned>(
     out
 }
 
-/// Where the data section of a struct starts, which is the tag of a union,
-/// for [`with_unknown_value`].
+/// Where the data section of a struct starts, for [`with_unknown_value`].
+/// A union with no field before it keeps its tag there.
 #[cfg(test)]
 pub(crate) fn tag_of<'a>(r: impl capnp::traits::IntoInternalStructReader<'a>) -> *const u8 {
     capnp::raw::get_struct_data_section(r).as_ptr()
@@ -228,7 +228,10 @@ mod tests {
     use super::to_engine::encode as encode_event;
     use super::to_view::{Message, encode_asset, encode_close, encode_frame};
     use super::*;
-    use crate::event::{InputEvent, KeyEvent, KeyKind, Modifiers};
+    use crate::event::{
+        InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons,
+        MouseEvent,
+    };
     use crate::event_capnp::input_event;
     use crate::protocol_capnp::{engine_message, view_message};
     use crate::scene::{
@@ -397,6 +400,47 @@ mod tests {
         };
         match decode_event(&encode_event(&InputEvent::Key(key.clone()))).unwrap() {
             InputEvent::Key(k) => assert_eq!(k, key),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mouse_event_round_trip() {
+        let actions = [
+            MouseAction::Move,
+            MouseAction::Down(MouseButton::Right),
+            MouseAction::Up(MouseButton::Forward),
+            MouseAction::Wheel { dx: -0.5, dy: 2.0 },
+            MouseAction::Leave,
+        ];
+        for action in actions {
+            let mouse = MouseEvent {
+                action,
+                x: -3.5,
+                y: 480.25,
+                modifiers: Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+                buttons: MouseButtons::default()
+                    .with(MouseButton::Left)
+                    .with(MouseButton::Back),
+            };
+            match decode_event(&encode_event(&InputEvent::Mouse(mouse))).unwrap() {
+                InputEvent::Mouse(m) => assert_eq!(m, mouse),
+                other => panic!("got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resize_event_round_trip() {
+        let resize = InputEvent::Resize {
+            width: 800.0,
+            height: 600.5,
+        };
+        match decode_event(&encode_event(&resize)).unwrap() {
+            InputEvent::Resize { width, height } => assert_eq!((width, height), (800.0, 600.5)),
             other => panic!("got {other:?}"),
         }
     }
@@ -734,6 +778,61 @@ mod tests {
             tag_of(k.unwrap())
         });
         assert!(is_event_skipped(&bytes));
+    }
+
+    #[test]
+    fn a_mouse_event_of_an_unknown_action_or_button_is_skipped() {
+        let down = InputEvent::Mouse(MouseEvent {
+            action: MouseAction::Down(MouseButton::Left),
+            x: 1.0,
+            y: 2.0,
+            modifiers: Modifiers::default(),
+            buttons: MouseButtons::default().with(MouseButton::Left),
+        });
+        // The tag of the action is the u16 at byte 10 of the data of a
+        // MouseEvent, and the button of a down is the u16 at byte 12.
+        for offset in [10, 12] {
+            let bytes = with_unknown_view_value(&encode_event(&down), |m| {
+                let Ok(view_message::Event(e)) = m.which() else {
+                    panic!("not an event");
+                };
+                let Ok(input_event::Which::Mouse(m)) = e.unwrap().which() else {
+                    panic!("not a mouse event");
+                };
+                tag_of(m.unwrap()).wrapping_add(offset)
+            });
+            assert!(is_event_skipped(&bytes), "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn an_event_that_holds_a_non_finite_float_is_skipped() {
+        let mouse = |x, action| {
+            InputEvent::Mouse(MouseEvent {
+                action,
+                x,
+                y: 0.0,
+                modifiers: Modifiers::default(),
+                buttons: MouseButtons::default(),
+            })
+        };
+        let events = [
+            mouse(f32::NAN, MouseAction::Move),
+            mouse(
+                0.0,
+                MouseAction::Wheel {
+                    dx: 0.0,
+                    dy: f32::INFINITY,
+                },
+            ),
+            InputEvent::Resize {
+                width: f32::NAN,
+                height: 1.0,
+            },
+        ];
+        for ev in events {
+            assert!(is_event_skipped(&encode_event(&ev)), "{ev:?}");
+        }
     }
 
     #[test]

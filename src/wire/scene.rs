@@ -367,8 +367,8 @@ pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueErro
 }
 
 /// [`ValueError::NotFinite`] unless `is_finite`, the rule of
-/// [`Scene`] for an element.
-fn finite(is_finite: bool) -> Result<(), ValueError> {
+/// [`Scene`] for an element, which the events follow too.
+pub(super) fn finite(is_finite: bool) -> Result<(), ValueError> {
     if is_finite {
         Ok(())
     } else {

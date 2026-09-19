@@ -35,12 +35,54 @@ struct KeyEvent {
     repeat    @3 :Bool;
 }
 
-# A reader skips an event whose arm it does not know, and an event that holds
-# a value it does not know, such as a key kind.
+# The W3C MouseEvent.button numbers.
+enum MouseButton {
+    left    @0;
+    middle  @1;
+    right   @2;
+    back    @3;
+    forward @4;
+}
+
+# The primary pointer, in the coordinates of the scene on the screen. A
+# point over the margin of a scaled window falls outside the scene.
+struct MouseEvent {
+    x         @0 :Float32;
+    y         @1 :Float32;
+    modifiers @2 :Modifiers;
+    # The buttons held after this event, one bit (1 << MouseButton) each.
+    buttons   @3 :UInt8;
+    union {
+        move  @4 :Void;
+        down  @5 :MouseButton;
+        up    @6 :MouseButton;
+        # In notches of the wheel. As in W3C, dx > 0 scrolls right and
+        # dy > 0 scrolls down.
+        wheel :group {
+            dx @7 :Float32;
+            dy @8 :Float32;
+        }
+        # The pointer left the surface, and x and y hold its last position.
+        leave @9 :Void;
+    }
+}
+
+# The largest scene that the display shows at scale 1 with no margin, in
+# logical pixels.
+struct ResizeEvent {
+    width  @0 :Float32;
+    height @1 :Float32;
+}
+
+# A reader skips an event whose arm it does not know, an event that holds a
+# value it does not know, such as a key kind, and an event that holds a
+# float that is not finite.
 struct InputEvent {
     union {
-        key  @0 :KeyEvent;
-        tick @1 :Tick;
+        key    @0 :KeyEvent;
+        tick   @1 :Tick;
+        mouse  @2 :MouseEvent;
+        resize @3 :ResizeEvent;
     }
 }
 

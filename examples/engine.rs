@@ -47,7 +47,9 @@ fn main() -> ExitCode {
                 KeyKind::Down | KeyKind::Up => {}
             },
             Event::Input(InputEvent::Close) => break,
-            Event::Reply { .. } | Event::Timeout => {}
+            Event::Input(InputEvent::Mouse(_) | InputEvent::Resize { .. })
+            | Event::Reply { .. }
+            | Event::Timeout => {}
         }
     }
     fr.close();
