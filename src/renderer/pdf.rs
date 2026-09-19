@@ -511,28 +511,29 @@ impl Shading {
     /// [`Gradient`] already raises and clamps its offsets. No stops give two
     /// transparent ones, a case the visibility check already excludes.
     fn new(g: &Gradient) -> Self {
-        let mut stops: Vec<Stop> = g.stops().to_vec();
-        if stops.len() <= 1 {
-            let color = stops.first().map_or(Rgba::default(), |s| s.color);
-            stops = vec![Stop { offset: 0.0, color }, Stop { offset: 1.0, color }];
-        }
-        let first = stops[0];
-        if first.offset > 0.0 {
-            stops.insert(
-                0,
-                Stop {
-                    offset: 0.0,
-                    color: first.color,
-                },
-            );
-        }
-        let last = *stops.last().unwrap();
-        if last.offset < 1.0 {
-            stops.push(Stop {
-                offset: 1.0,
-                color: last.color,
-            });
-        }
+        let stops = match g.stops() {
+            [first, .., last] => {
+                let mut stops = Vec::with_capacity(g.stops().len() + 2);
+                if first.offset > 0.0 {
+                    stops.push(Stop {
+                        offset: 0.0,
+                        color: first.color,
+                    });
+                }
+                stops.extend_from_slice(g.stops());
+                if last.offset < 1.0 {
+                    stops.push(Stop {
+                        offset: 1.0,
+                        color: last.color,
+                    });
+                }
+                stops
+            }
+            one_or_none => {
+                let color = one_or_none.first().map_or(Rgba::default(), |s| s.color);
+                vec![Stop { offset: 0.0, color }, Stop { offset: 1.0, color }]
+            }
+        };
         Self {
             geom: g.geom(),
             stops,
@@ -553,25 +554,34 @@ impl Shading {
     fn write(&self, pdf: &mut Pdf, refs: &GradientRefs, matrix: [f32; 6]) {
         let stops = &self.stops;
 
-        let intervals = stops.len() - 1;
-        for (pair, &r) in stops.windows(2).zip(&refs.functions) {
+        for (&[from, to], &r) in stops.array_windows().zip(&refs.functions) {
             let mut f = pdf.exponential_function(r);
             f.domain([0.0, 1.0]);
             f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-            f.c0(rgb_components(pair[0].color));
-            f.c1(rgb_components(pair[1].color));
+            f.c0(rgb_components(from.color));
+            f.c1(rgb_components(to.color));
             f.n(1.0);
             f.finish();
         }
-        let main_fn_ref = *refs.functions.last().expect("a gradient has a function");
-        if intervals > 1 {
+        let &[ref subs @ .., main_fn_ref] = refs.functions.as_slice() else {
+            panic!("a gradient has a function");
+        };
+        // With one interval, the only function is the exponential one.
+        if let [_, inner @ .., _] = stops.as_slice()
+            && !inner.is_empty()
+        {
+            assert_eq!(
+                subs.len(),
+                inner.len() + 1,
+                "a stitched gradient has one function per interval"
+            );
             let mut stitch = pdf.stitching_function(main_fn_ref);
             stitch.domain([0.0, 1.0]);
             stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-            stitch.functions(refs.functions[..intervals].iter().copied());
-            stitch.bounds(stops[1..intervals].iter().map(|s| s.offset));
+            stitch.functions(subs.iter().copied());
+            stitch.bounds(inner.iter().map(|s| s.offset));
             // Each sub-function maps its interval back to [0, 1].
-            stitch.encode((0..intervals).flat_map(|_| [0.0, 1.0]));
+            stitch.encode(subs.iter().flat_map(|_| [0.0, 1.0]));
             stitch.finish();
         }
 
