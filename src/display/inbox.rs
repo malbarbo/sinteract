@@ -153,6 +153,7 @@ impl Inbox {
     /// A [`Sender`] without the waker, for the callbacks of the loop that
     /// the waker wakes. A wake from inside the loop only adds a turn with
     /// nothing to do.
+    #[cfg(feature = "window")]
     pub(crate) fn sender_in_loop(&self) -> Sender {
         Sender {
             tx: self.tx.clone(),
