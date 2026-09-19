@@ -74,7 +74,7 @@ pub struct Terminal {
 /// What a session holds until it closes.
 struct Live {
     reader: Reader,
-    _claim: Claim,
+    claim: Claim,
 }
 
 impl Terminal {
@@ -122,10 +122,7 @@ impl Terminal {
         Ok(Self {
             inbox,
             backend,
-            live: Some(Live {
-                reader,
-                _claim: claim,
-            }),
+            live: Some(Live { reader, claim }),
             frame_size: None,
             renderer: PixmapRenderer::default(),
             last: None,
@@ -206,7 +203,9 @@ impl super::Display for Terminal {
         live.reader.stop();
         // Keys typed after the reader stopped would go to the shell.
         drain_input();
-        leave(self.backend, self.frame_size.is_some());
+        if !live.claim.restored() {
+            leave(self.backend, self.frame_size.is_some());
+        }
     }
 }
 
@@ -336,11 +335,13 @@ fn rasterize<'r>(
 // -----------------------------------------------------------------------------
 
 /// Who holds the tty: [`FREE`], a [`Terminal`] that still probes it
-/// ([`PROBING`]), or one that shows through a [`Backend`], by its
-/// discriminant. The panic hook reads it, so it is an atomic and not a lock.
+/// ([`PROBING`]), one that shows through a [`Backend`], by its
+/// discriminant, or one whose tty the panic hook put back ([`RESTORED`]).
+/// The panic hook changes it, so it is an atomic and not a lock.
 static TTY: AtomicU8 = AtomicU8::new(FREE);
 const FREE: u8 = 0;
 const PROBING: u8 = 1;
+const RESTORED: u8 = 5;
 
 /// The hold of a [`Terminal`] on the tty, released on drop.
 struct Claim;
@@ -357,6 +358,14 @@ impl Claim {
     fn show_through(&self, backend: Backend) {
         TTY.store(backend as u8, Ordering::Release);
     }
+
+    /// Returns `true` if the panic hook put the tty back, `false`
+    /// otherwise. A second restore would print after the panic message,
+    /// and some terminals move the cursor back up on leaving the alt screen
+    /// twice.
+    fn restored(&self) -> bool {
+        TTY.load(Ordering::Acquire) == RESTORED
+    }
 }
 
 impl Drop for Claim {
@@ -365,20 +374,22 @@ impl Drop for Claim {
     }
 }
 
-/// The backend of the [`Terminal`] that holds the tty. `None` when nobody
-/// holds it, and half-blocks while the probe runs, since only Kitty needs
-/// more than leaving the alt screen.
-#[cfg(any(panic = "abort", test))]
-fn held_backend() -> Option<Backend> {
-    match TTY.load(Ordering::Acquire) {
-        FREE => None,
-        tag => Some(
-            [Backend::Kitty, Backend::Sixel, Backend::TextBlocks]
-                .into_iter()
-                .find(|&b| b as u8 == tag)
-                .unwrap_or(Backend::TextBlocks),
-        ),
-    }
+/// Mark the tty as put back and return the backend of the [`Terminal`]
+/// that holds it. `None` when nobody holds it or the tty is already back,
+/// and half-blocks while the probe runs, since only Kitty needs more than
+/// leaving the alt screen.
+fn restore_held() -> Option<Backend> {
+    let tag = TTY
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |tag| {
+            (tag != FREE && tag != RESTORED).then_some(RESTORED)
+        })
+        .ok()?;
+    Some(
+        [Backend::Kitty, Backend::Sixel, Backend::TextBlocks]
+            .into_iter()
+            .find(|&b| b as u8 == tag)
+            .unwrap_or(Backend::TextBlocks),
+    )
 }
 
 /// Leave the alt screen and raw mode. Kitty keeps an image across the flip
@@ -399,26 +410,26 @@ fn leave(backend: Backend, frame_shown: bool) {
     let _ = terminal::disable_raw_mode();
 }
 
-/// With `panic = "abort"` a panic ends the process and no drop runs, so a
-/// hook puts the tty back, from whichever thread panics. The only lock it
-/// takes is the one of crossterm around the saved mode, which no code holds
-/// across a panic. With unwinding, the drop of the `Terminal` does the job.
-#[cfg(panic = "abort")]
+/// A hook puts the tty back before the panic message prints, from
+/// whichever thread panics. Otherwise the message goes to the alt screen and
+/// disappears with it. With `panic = "abort"` no drop runs, so the hook is
+/// the only restore. With unwinding the drop of the `Terminal` finds the tty
+/// back and leaves it alone, and a panic that the program catches leaves
+/// the `Terminal` outside the alt screen. The only lock that the hook takes is
+/// the one of crossterm around the saved mode, which no code holds across a
+/// panic.
 fn install_panic_hook() {
     static HOOK: std::sync::Once = std::sync::Once::new();
     HOOK.call_once(|| {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            if let Some(backend) = held_backend() {
+            if let Some(backend) = restore_held() {
                 leave(backend, true);
             }
             prev(info);
         }));
     });
 }
-
-#[cfg(not(panic = "abort"))]
-fn install_panic_hook() {}
 
 // -----------------------------------------------------------------------------
 // Input
@@ -982,15 +993,20 @@ mod tests {
         assert!(key_code_to_string(KeyCode::F(13)).is_none());
     }
 
+    /// One test, since [`TTY`] is global.
     #[test]
-    fn a_second_claim_is_busy_until_the_first_drops() {
-        let first = Claim::take().expect("free");
+    fn a_claim_holds_the_tty_and_the_panic_hook_restores_it_once() {
+        assert_eq!(restore_held(), None);
+        let claim = Claim::take().expect("free");
         assert!(matches!(Claim::take(), Err(OpenError::Busy)));
-        assert_eq!(held_backend(), Some(Backend::TextBlocks));
-        first.show_through(Backend::Kitty);
-        assert_eq!(held_backend(), Some(Backend::Kitty));
-        drop(first);
-        assert_eq!(held_backend(), None);
+        claim.show_through(Backend::Kitty);
+        assert!(!claim.restored());
+        assert_eq!(restore_held(), Some(Backend::Kitty));
+        assert!(claim.restored());
+        assert_eq!(restore_held(), None);
+        assert!(matches!(Claim::take(), Err(OpenError::Busy)));
+        drop(claim);
+        assert_eq!(restore_held(), None);
         assert!(Claim::take().is_ok());
     }
 
