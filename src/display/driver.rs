@@ -3,10 +3,9 @@
 
 use std::fmt;
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::inbox::Sender;
-use super::{Terminal, TerminalOptions, Window};
 use crate::event::Event;
 use crate::scene::Scene;
 
@@ -61,15 +60,16 @@ pub(super) mod sealed {
 /// by `height` logical pixels otherwise. `title` only matters for a window,
 /// because a terminal keeps the title of the shell, and `options` only for a
 /// terminal.
+#[cfg(all(feature = "terminal", feature = "window"))]
 pub fn open_native(
     title: &str,
     width: f32,
     height: f32,
-    options: TerminalOptions,
+    options: super::TerminalOptions,
 ) -> Result<Box<dyn Display>, OpenError> {
-    match Terminal::open_with(options) {
+    match super::Terminal::open_with(options) {
         Ok(terminal) => Ok(Box::new(terminal)),
-        Err(OpenError::NoGraphics) => Ok(Box::new(Window::open(title, width, height)?)),
+        Err(OpenError::NoGraphics) => Ok(Box::new(super::Window::open(title, width, height)?)),
         Err(e) => Err(e),
     }
 }
@@ -112,13 +112,15 @@ impl std::error::Error for OpenError {
     }
 }
 
-pub(super) const fn period_from_hz(hz: u32) -> Duration {
-    Duration::from_nanos(1_000_000_000 / hz as u64)
+#[cfg(any(feature = "terminal", feature = "window"))]
+pub(super) const fn period_from_hz(hz: u32) -> std::time::Duration {
+    std::time::Duration::from_nanos(1_000_000_000 / hz as u64)
 }
 
 /// Say once per display that this backend drops the bitmaps of the frame. A
 /// process-global flag would stay silent for every session after the first,
 /// and a server hosts many sessions.
+#[cfg(any(feature = "terminal", feature = "window"))]
 pub(super) fn warn_bitmaps_once(warned: &mut bool, scene: &Scene, backend: &str) {
     if !*warned && scene.has_bitmaps() {
         *warned = true;

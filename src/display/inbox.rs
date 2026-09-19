@@ -50,7 +50,9 @@ impl Sender {
     }
 
     /// Ask the display to draw the last scene again, as after a resize.
-    /// The request never reaches the engine.
+    /// The request never reaches the engine. Only the terminal and the
+    /// window redraw.
+    #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
     pub(crate) fn request_redraw(&self) -> Result<(), Closed> {
         self.put(Msg::Redraw)
     }
@@ -98,6 +100,7 @@ pub(crate) struct Inbox {
 
 enum Msg {
     Item(Item),
+    #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
     Redraw,
 }
 

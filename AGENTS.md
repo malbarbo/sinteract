@@ -28,6 +28,7 @@ Only `sixel.rs` builds on wasm32, so the `cfg` sits on each submodule in
 ```sh
 cargo fmt
 cargo clippy --all-targets
+cargo clippy --all-targets --no-default-features   # without the displays
 cargo test
 cargo build --target wasm32-unknown-unknown   # the part a browser client uses
 cargo doc --no-deps                           # warning-free

@@ -11,9 +11,16 @@
 //! writes the frames and reads the events as Cap'n Proto messages, for a
 //! server that runs the engine as a subprocess.
 //!
-//! Only `sixel` builds on wasm32. The rest needs threads, a tty, a window
-//! or platform FFI. In a browser the page, which hosts the engine,
-//! implements `wait_event` itself.
+//! The feature `terminal` carries the terminal and the feature `window` the
+//! window, and `open_native` needs both. Only `sixel` builds on wasm32. The
+//! rest needs threads, a tty, a window or platform FFI. In a browser the page, which
+//! hosts the engine, implements `wait_event` itself.
+
+// The links above go to the modules of both features.
+#![cfg_attr(
+    not(all(feature = "terminal", feature = "window")),
+    allow(rustdoc::broken_intra_doc_links)
+)]
 
 pub mod sixel;
 
@@ -23,20 +30,22 @@ mod driver;
 mod inbox;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stdio;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 mod term_query;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 pub mod terminal;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
 pub mod window;
 
+#[cfg(all(feature = "terminal", feature = "window", not(target_arch = "wasm32")))]
+pub use driver::open_native;
 #[cfg(not(target_arch = "wasm32"))]
-pub use driver::{Display, OpenError, open_native};
+pub use driver::{Display, OpenError};
 #[cfg(not(target_arch = "wasm32"))]
 pub use inbox::{Closed, Sender};
 #[cfg(not(target_arch = "wasm32"))]
 pub use stdio::Stdio;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 pub use terminal::{Terminal, TerminalOptions};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
 pub use window::Window;

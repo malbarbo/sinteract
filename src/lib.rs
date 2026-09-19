@@ -34,7 +34,8 @@ mod protocol_capnp;
 #[allow(dead_code)]
 mod scene_capnp;
 
-// A wrong path in the example of the README fails the doctests.
-#[cfg(doctest)]
+// A wrong path in the example of the README fails the doctests. The example
+// shows the scene in the terminal.
+#[cfg(all(doctest, feature = "terminal"))]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
