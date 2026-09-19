@@ -48,7 +48,6 @@ fn main() -> ExitCode {
             },
             Err(NoEvent::Close) => break,
             Ok(Event::Input(InputEvent::Mouse(_) | InputEvent::Resize { .. }))
-            | Ok(Event::Reply { .. })
             | Err(NoEvent::Wake | NoEvent::Timeout) => {}
         }
     }

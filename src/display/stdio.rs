@@ -317,17 +317,14 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_wakes_wait_event_while_the_peer_is_silent() {
+    fn a_sender_wakes_wait_event_while_the_peer_is_silent() {
         let (mut fr, _input, _) = open_session();
         let tx = fr.sender();
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(20));
-            tx.send_reply(9, b"ok".to_vec()).unwrap();
+            tx.wake().unwrap();
         });
-        match fr.wait_event(None) {
-            Ok(Event::Reply { id, body }) => assert_eq!((id, body.as_slice()), (9, &b"ok"[..])),
-            other => panic!("got {other:?}"),
-        }
+        assert!(matches!(fr.wait_event(None), Err(NoEvent::Wake)));
         t.join().unwrap();
     }
 

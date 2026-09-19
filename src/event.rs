@@ -10,7 +10,6 @@
 //!         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 //!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
-//!         Ok(Event::Reply { id, body }) => on_reply(id, body),
 //!         Err(NoEvent::Wake) => on_wake(),
 //!         Err(NoEvent::Timeout) => on_tick(),
 //!         Err(NoEvent::Close) => break,
@@ -29,9 +28,6 @@ use std::fmt;
 pub enum Event {
     /// From the user, the platform or the peer.
     Input(InputEvent),
-    /// What a `Sender` of the display pushed from any thread. The engine
-    /// picks `id` and `body`, and a reply never crosses the wire.
-    Reply { id: u64, body: Vec<u8> },
 }
 
 /// Why `wait_event` returned no event.

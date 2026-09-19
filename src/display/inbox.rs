@@ -34,11 +34,6 @@ pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 pub struct Closed;
 
 impl Sender {
-    /// Queue an [`Event::Reply`]. `id` and `body` mean nothing to sinteract.
-    pub fn send_reply(&self, id: u64, body: Vec<u8>) -> Result<(), Closed> {
-        self.send(Entry::Reply { id, body })
-    }
-
     /// Queue [`NoEvent::Close`], in order with the events. A Ctrl-C handler
     /// of the engine calls it to end a `wait_event` that blocks.
     pub fn send_close(&self) -> Result<(), Closed> {
@@ -119,7 +114,6 @@ struct Item {
 /// What waits in the queue for `wait_event`.
 enum Entry {
     Input(InputEvent),
-    Reply { id: u64, body: Vec<u8> },
     Wake,
     Close,
 }
@@ -321,7 +315,6 @@ impl Inbox {
         }
         Some(match self.pending.pop_front()?.entry {
             Entry::Input(ev) => Ok(Event::Input(ev)),
-            Entry::Reply { id, body } => Ok(Event::Reply { id, body }),
             Entry::Wake => Err(NoEvent::Wake),
             Entry::Close => {
                 self.close();
@@ -423,10 +416,10 @@ mod tests {
         let mut inbox = Inbox::new(None);
         let tx = inbox.sender();
         tx.send_input(key("a")).unwrap();
-        tx.send_reply(7, b"x".to_vec()).unwrap();
+        tx.wake().unwrap();
         tx.send_input(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Ok(Event::Reply { id: 7, .. })));
+        assert!(matches!(inbox.wait(None), Err(NoEvent::Wake)));
         assert_eq!(key_name(&inbox.wait(None)), Some("b"));
     }
 
@@ -505,7 +498,7 @@ mod tests {
         let tx = inbox.sender();
         tx.send_input(key("a")).unwrap();
         tx.send_close().unwrap();
-        tx.send_reply(1, Vec::new()).unwrap();
+        tx.wake().unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(is_close(&inbox.wait(None)));
         assert!(is_close(&inbox.wait(None)));
@@ -530,7 +523,7 @@ mod tests {
         let tx = inbox.sender();
         tx.send_close().unwrap();
         assert!(is_close(&inbox.wait(None)));
-        assert_eq!(tx.send_reply(1, Vec::new()), Err(Closed));
+        assert_eq!(tx.wake(), Err(Closed));
     }
 
     #[test]
@@ -569,12 +562,9 @@ mod tests {
         let tx = inbox.sender();
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(20));
-            tx.send_reply(3, b"done".to_vec()).unwrap();
+            tx.wake().unwrap();
         });
-        match inbox.wait(None) {
-            Ok(Event::Reply { id, body }) => assert_eq!((id, body.as_slice()), (3, &b"done"[..])),
-            other => panic!("got {other:?}"),
-        }
+        assert!(matches!(inbox.wait(None), Err(NoEvent::Wake)));
         t.join().unwrap();
     }
 

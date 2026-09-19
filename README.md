@@ -33,7 +33,7 @@ scope, so a renderer only sees moves, lines, quadratics and cubics.
 
 For an animation, a `Display` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `Event`s. A `Sender`
-wakes it from another thread with a reply, a close or a bare wake. The
+wakes it from another thread with a close or a bare wake. The
 same loop runs over stdio, where the frames go to a view as Cap'n Proto
 messages and the input comes back. The schema is in `schema/`, one file for
 the drawing, one for the input and one for the session, and `PLAN.md`

@@ -80,7 +80,7 @@ fn main() -> ExitCode {
                 let _ = to_engine::write_close(&mut to_engine, UNROUTED);
                 break;
             }
-            Ok(Event::Reply { .. }) | Err(NoEvent::Timeout) => {}
+            Err(NoEvent::Timeout) => {}
         }
     }
     drop(to_engine);
