@@ -744,8 +744,9 @@ impl Placement {
 }
 
 /// Copy `pixmap` into a softbuffer `0RGB` buffer of `bw` by `bh` pixels,
-/// with its top-left corner at `(off_x, off_y)`. The band around it is
-/// black.
+/// with its top-left corner at `(off_x, off_y)`. The band around it turns
+/// black. A scene that fills the window leaves no band, and then nothing
+/// is cleared.
 fn blit_pixmap(
     pixmap: &Pixmap,
     buffer: &mut [u32],
@@ -757,18 +758,31 @@ fn blit_pixmap(
         bw.get() as usize * bh.get() as usize,
         "softbuffer gives a buffer of the size of the surface"
     );
-    buffer.fill(0);
-    let src_rows = pixmap.pixels().chunks(pixmap.width() as usize);
-    let dst_rows = buffer.chunks_mut(bw.get() as usize).skip(off_y as usize);
-    for (src, dst) in src_rows.zip(dst_rows) {
-        let dst = dst
-            .get_mut(off_x as usize..)
-            .expect("the offset leaves the pixmap inside the buffer");
-        for (d, p) in dst.iter_mut().zip(src) {
+    let bw = bw.get() as usize;
+    let off_x = off_x as usize;
+    let mut rows = buffer.chunks_mut(bw);
+    for row in rows.by_ref().take(off_y as usize) {
+        row.fill(0);
+    }
+    // A pixmap can come out a rounding pixel wider than the surface, so the
+    // copy clips at the edge.
+    for (src, dst) in pixmap
+        .pixels()
+        .chunks(pixmap.width() as usize)
+        .zip(rows.by_ref())
+    {
+        let (left, rest) = dst.split_at_mut(off_x.min(dst.len()));
+        let (mid, right) = rest.split_at_mut(src.len().min(rest.len()));
+        left.fill(0);
+        right.fill(0);
+        for (d, p) in mid.iter_mut().zip(src) {
             // softbuffer takes 0RGB. A premultiplied pixel is already the
             // pixel over black, the color of the band.
             *d = (u32::from(p.red()) << 16) | (u32::from(p.green()) << 8) | u32::from(p.blue());
         }
+    }
+    for row in rows {
+        row.fill(0);
     }
 }
 
