@@ -133,7 +133,18 @@ impl Terminal {
         })
     }
 
+    /// Rasterize `scene` and write the frame.
     fn draw(&mut self, scene: &Scene) -> Result<(), PresentError> {
+        let drawn = self.write_frame(scene);
+        if drawn.is_err() {
+            // Part of the frame is on screen, and which part is unknown, so
+            // the next one clears and writes every cell.
+            self.frame_size = None;
+        }
+        drawn
+    }
+
+    fn write_frame(&mut self, scene: &Scene) -> Result<(), PresentError> {
         let scale = scale_for_backend(self.backend, scene.width(), scene.height());
         self.renderer.set_scale(scale);
         let pixmap = self.renderer.render(scene)?;
@@ -173,8 +184,8 @@ impl Terminal {
 
     /// Draw the last scene again, after a resize. The terminal may have
     /// moved or wrapped the cells of the old frame, so the screen clears.
-    /// A failure here reaches the caller at its next `present`, which fails
-    /// the same way.
+    /// A failure reaches the caller at its next `present`, which draws the
+    /// same scene.
     fn redraw(&mut self) {
         if let Some(scene) = self.last.take() {
             self.frame_size = None;
@@ -191,11 +202,6 @@ impl super::Display for Terminal {
         }
         let drawn = self.draw(scene);
         self.last = Some(scene.clone());
-        if drawn.is_err() {
-            // Part of the frame is on screen, and which part is unknown, so
-            // the next one clears and writes every cell.
-            self.frame_size = None;
-        }
         drawn
     }
 
