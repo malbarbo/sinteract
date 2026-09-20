@@ -52,8 +52,6 @@ impl fmt::Display for NoEvent {
     }
 }
 
-impl std::error::Error for NoEvent {}
-
 #[derive(Clone, Debug)]
 pub enum InputEvent {
     Key(KeyEvent),
