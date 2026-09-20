@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sinteract::display::{Display, Sender, TerminalOptions, open_native};
+use sinteract::display::{Display, Sender, TerminalOptions, Upload, open_native};
 use sinteract::event::{Event, NoEvent};
 use sinteract::scene::Scene;
 use sinteract::wire::framing::UNROUTED;
@@ -148,17 +148,19 @@ fn drain(
     let mut session = Session::Open;
     for message in from_reader.try_iter() {
         match message {
-            Message::Asset { id, blob, mime } => {
-                if let Err(e) = fr.push_asset(id, &blob, mime.as_deref()) {
+            Message::Asset { id, blob, mime } => match fr.push_asset(id, &blob, mime.as_deref()) {
+                Ok(Upload::Kept) => {}
+                Ok(Upload::Dropped) if *warned_bitmaps => {}
+                Ok(Upload::Dropped) => {
+                    *warned_bitmaps = true;
+                    eprintln!("view: this display draws no bitmap, so a frame goes without");
+                }
+                Err(e) => {
                     eprintln!("view: {e}");
                     return Session::DisplayFailed;
                 }
-            }
+            },
             Message::Frame(scene) => {
-                if !*warned_bitmaps && scene.has_bitmaps() && !fr.draws_bitmaps() {
-                    *warned_bitmaps = true;
-                    eprintln!("view: this display draws no bitmap, so the frame goes without");
-                }
                 if last.replace(scene).is_some() {
                     stats.skipped += 1;
                 }

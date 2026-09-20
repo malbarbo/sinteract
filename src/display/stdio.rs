@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use super::driver::{OpenError, PresentError};
+use super::driver::{OpenError, PresentError, Upload};
 use super::inbox::{Inbox, Sender};
 use crate::event::{Event, NoEvent};
 use crate::scene::Scene;
@@ -118,16 +118,17 @@ impl super::Display for Stdio {
         self.inbox.sender()
     }
 
-    /// Send a bitmap upload. Call it before the first `present` that
-    /// references `id`, because the peer may process the stream as it
-    /// arrives.
-    fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) -> Result<(), PresentError> {
-        self.send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime))
-    }
-
-    /// The assets go to the view, which draws what it can.
-    fn draws_bitmaps(&self) -> bool {
-        true
+    /// Send the asset to the view. The view draws what it can and answers
+    /// nothing, so [`Upload::Kept`] here says that the asset went out, and
+    /// not that the view drew it.
+    fn push_asset(
+        &mut self,
+        id: u32,
+        blob: &[u8],
+        mime: Option<&str>,
+    ) -> Result<Upload, PresentError> {
+        self.send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime))?;
+        Ok(Upload::Kept)
     }
 
     /// Tell the peer that the session ended, unless the peer ended it.
@@ -394,8 +395,11 @@ mod tests {
     #[test]
     fn push_asset_then_present_share_writer() {
         let (mut fr, _input, written) = open_session();
-        fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"))
-            .expect("the asset goes out");
+        assert_eq!(
+            fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"))
+                .expect("the asset goes out"),
+            Upload::Kept
+        );
         fr.present(Scene::new(8.0, 8.0))
             .expect("the frame goes out");
         match &decode_messages(&written.bytes())[..] {

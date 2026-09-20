@@ -949,8 +949,7 @@ impl Scene {
     }
 
     /// Returns `true` if any element, inside a clip or not, is a bitmap,
-    /// `false` otherwise. An engine uses it to tell the user once that the
-    /// backend draws the frame without them.
+    /// `false` otherwise.
     pub fn has_bitmaps(&self) -> bool {
         fn walk(elements: &[Element]) -> bool {
             elements.iter().any(|e| match e {

@@ -22,7 +22,7 @@ use crossterm::event::{
 use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
-use super::driver::{OpenError, PresentError, period_from_hz, sealed};
+use super::driver::{OpenError, PresentError, Upload, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use crate::event::{
@@ -218,20 +218,14 @@ impl super::Display for Terminal {
         self.inbox.sender()
     }
 
-    /// The terminal draws without bitmaps, so it drops the upload.
+    /// The rasterizer draws no bitmap, so the asset goes nowhere.
     fn push_asset(
         &mut self,
         _id: u32,
         _blob: &[u8],
         _mime: Option<&str>,
-    ) -> Result<(), PresentError> {
-        Ok(())
-    }
-
-    /// No terminal backend draws a bitmap, so a scene shows everything but
-    /// its bitmaps.
-    fn draws_bitmaps(&self) -> bool {
-        false
+    ) -> Result<Upload, PresentError> {
+        Ok(Upload::Dropped)
     }
 
     /// Stop the reader thread, and leave the alt screen and raw mode.

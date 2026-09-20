@@ -28,7 +28,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{OpenError, PresentError, period_from_hz, sealed};
+use super::driver::{OpenError, PresentError, Upload, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use crate::event::{
     Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
@@ -150,20 +150,14 @@ impl super::Display for Window {
         self.inbox.sender()
     }
 
-    /// The window draws without bitmaps, so it drops the upload.
+    /// The rasterizer draws no bitmap, so the asset goes nowhere.
     fn push_asset(
         &mut self,
         _id: u32,
         _blob: &[u8],
         _mime: Option<&str>,
-    ) -> Result<(), PresentError> {
-        Ok(())
-    }
-
-    /// The rasterizer of the window draws no bitmap, so a scene shows
-    /// everything but its bitmaps.
-    fn draws_bitmaps(&self) -> bool {
-        false
+    ) -> Result<Upload, PresentError> {
+        Ok(Upload::Dropped)
     }
 
     /// Destroy the window and give the event loop back.

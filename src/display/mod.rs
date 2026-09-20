@@ -40,7 +40,7 @@ pub mod window;
 #[cfg(all(feature = "terminal", feature = "window", not(target_arch = "wasm32")))]
 pub use driver::open_native;
 #[cfg(not(target_arch = "wasm32"))]
-pub use driver::{Display, OpenError, PresentError};
+pub use driver::{Display, OpenError, PresentError, Upload};
 #[cfg(not(target_arch = "wasm32"))]
 pub use inbox::{Closed, Sender};
 #[cfg(not(target_arch = "wasm32"))]
