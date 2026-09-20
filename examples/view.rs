@@ -62,6 +62,7 @@ fn main() -> ExitCode {
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
     let mut stats = Stats::default();
+    let mut warned_bitmaps = false;
     loop {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
@@ -71,11 +72,13 @@ fn main() -> ExitCode {
             }
             // The messages of the engine come through the channel, and the
             // reader thread wakes the loop after each one.
-            Err(NoEvent::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
-                Session::Open => {}
-                // The engine ended the session, so the view sends no close.
-                Session::Closed => break,
-            },
+            Err(NoEvent::Wake) => {
+                match drain(fr.as_mut(), &from_reader, &mut stats, &mut warned_bitmaps) {
+                    Session::Open => {}
+                    // The engine ended the session, so the view sends no close.
+                    Session::Closed => break,
+                }
+            }
             Err(NoEvent::Close) => {
                 let _ = to_engine::write_close(&mut to_engine, UNROUTED);
                 break;
@@ -126,7 +129,12 @@ enum Session {
 /// Act on the messages of the engine that arrived. The assets go to the
 /// display in order, and only the last frame is shown, since the ones
 /// before it are already stale.
-fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stats) -> Session {
+fn drain(
+    fr: &mut dyn Display,
+    from_reader: &Receiver<Message>,
+    stats: &mut Stats,
+    warned_bitmaps: &mut bool,
+) -> Session {
     let mut last: Option<Scene> = None;
     let mut session = Session::Open;
     for message in from_reader.try_iter() {
@@ -138,6 +146,10 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
                 }
             }
             Message::Frame(scene) => {
+                if !*warned_bitmaps && scene.has_bitmaps() && !fr.draws_bitmaps() {
+                    *warned_bitmaps = true;
+                    eprintln!("view: this display draws no bitmap, so the frame goes without");
+                }
                 if last.replace(scene).is_some() {
                     stats.skipped += 1;
                 }

@@ -54,6 +54,12 @@ pub trait Display: sealed::Sealed {
     /// bitmaps drops it and returns `Ok`.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) -> Result<(), PresentError>;
 
+    /// Returns `true` if a bitmap of the scene reaches the viewer, `false`
+    /// if the display drops it. A program pairs it with
+    /// [`Scene::has_bitmaps`](crate::scene::Scene::has_bitmaps) to tell the
+    /// user that the image will not appear.
+    fn draws_bitmaps(&self) -> bool;
+
     /// End the session. A second call does nothing, and drop calls it.
     fn close(&mut self);
 }
@@ -170,17 +176,4 @@ impl std::error::Error for OpenError {
 #[cfg(any(feature = "terminal", feature = "window"))]
 pub(super) const fn period_from_hz(hz: u32) -> std::time::Duration {
     std::time::Duration::from_nanos(1_000_000_000 / hz as u64)
-}
-
-/// Say once per display that this backend drops the bitmaps of the frame. A
-/// process-global flag would stay silent for every session after the first,
-/// and a server hosts many sessions.
-#[cfg(any(feature = "terminal", feature = "window"))]
-pub(super) fn warn_bitmaps_once(warned: &mut bool, scene: &Scene, backend: &str) {
-    if !*warned && scene.has_bitmaps() {
-        *warned = true;
-        eprintln!(
-            "[sinteract] the {backend} renderer does not support bitmaps; drawing without them."
-        );
-    }
 }

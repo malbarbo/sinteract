@@ -28,7 +28,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{OpenError, PresentError, period_from_hz, sealed, warn_bitmaps_once};
+use super::driver::{OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use crate::event::{
     Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
@@ -47,7 +47,6 @@ pub struct Window {
     inbox: Inbox,
     /// `None` after [`super::Display::close`].
     session: Option<Session>,
-    warned_bitmaps: bool,
 }
 
 struct Session {
@@ -108,7 +107,6 @@ impl Window {
                 renderer: PixmapRenderer::default(),
                 last: None,
             }),
-            warned_bitmaps: false,
         })
     }
 }
@@ -118,7 +116,6 @@ impl super::Display for Window {
         let Some(session) = self.session.as_mut() else {
             return Err(PresentError::Closed);
         };
-        warn_bitmaps_once(&mut self.warned_bitmaps, scene, "window");
         let drawn = session.draw(scene);
         session.last = Some(scene.clone());
         drawn
@@ -161,6 +158,12 @@ impl super::Display for Window {
         _mime: Option<&str>,
     ) -> Result<(), PresentError> {
         Ok(())
+    }
+
+    /// The rasterizer of the window draws no bitmap, so a scene shows
+    /// everything but its bitmaps.
+    fn draws_bitmaps(&self) -> bool {
+        false
     }
 
     /// Destroy the window and give the event loop back.

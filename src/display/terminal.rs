@@ -21,7 +21,7 @@ use crossterm::event::{
 use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
-use super::driver::{OpenError, PresentError, period_from_hz, sealed, warn_bitmaps_once};
+use super::driver::{OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use crate::event::{
@@ -71,7 +71,6 @@ pub struct Terminal {
     last: Option<Scene>,
     /// How the reader maps a cell to the scene on screen.
     cells: Arc<Mutex<CellMap>>,
-    warned_bitmaps: bool,
 }
 
 /// What a session holds until it closes.
@@ -131,7 +130,6 @@ impl Terminal {
             buffers: ImageBuffers::default(),
             last: None,
             cells,
-            warned_bitmaps: false,
         })
     }
 
@@ -191,7 +189,6 @@ impl super::Display for Terminal {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }
-        warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
         let drawn = self.draw(scene);
         self.last = Some(scene.clone());
         if drawn.is_err() {
@@ -223,6 +220,12 @@ impl super::Display for Terminal {
         _mime: Option<&str>,
     ) -> Result<(), PresentError> {
         Ok(())
+    }
+
+    /// No terminal backend draws a bitmap, so a scene shows everything but
+    /// its bitmaps.
+    fn draws_bitmaps(&self) -> bool {
+        false
     }
 
     /// Stop the reader thread, and leave the alt screen and raw mode.

@@ -125,6 +125,11 @@ impl super::Display for Stdio {
         self.send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime))
     }
 
+    /// The assets go to the view, which draws what it can.
+    fn draws_bitmaps(&self) -> bool {
+        true
+    }
+
     /// Tell the peer that the session ended, unless the peer ended it.
     fn close(&mut self) {
         if self.closed {
