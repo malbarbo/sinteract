@@ -233,34 +233,25 @@ impl Drop for Terminal {
     }
 }
 
-/// The bytes a frame of [`show_image_with`] needs. Sixel builds its own
-/// bytes and leaves all three empty.
+/// The bytes a frame needs. Sixel builds its own bytes and leaves all
+/// three empty.
 #[derive(Default)]
-pub struct ImageBuffers {
+struct ImageBuffers {
     /// The PNG that the Kitty protocol carries.
     image: Vec<u8>,
     /// The escapes that go to the terminal.
     escapes: Vec<u8>,
     /// The cells that a half-block frame compares against and replaces.
-    /// [`show_image_with`] writes every cell and leaves this empty.
+    /// [`show_image`] writes every cell and leaves this empty.
     blocks: BlockScreen,
 }
 
 /// Print `scene` at the cursor, through Kitty when the terminal supports
 /// it, else Sixel, else half-blocks. Prints nothing while a [`Terminal`]
-/// holds the tty, or when the terminal has no graphics.
+/// holds the tty, or when the terminal has no graphics. A program that
+/// draws one frame after another opens a [`Terminal`], which keeps the
+/// buffers and writes only what changed.
 pub fn show_image(scene: &Scene) {
-    show_image_with(
-        scene,
-        &mut PixmapRenderer::default(),
-        &mut ImageBuffers::default(),
-    );
-}
-
-/// [`show_image`], with the surface that rasterizes the scene and the
-/// buffers that take its bytes. A program that shows one image after
-/// another passes the same two and allocates once.
-pub fn show_image_with(scene: &Scene, renderer: &mut PixmapRenderer, buffers: &mut ImageBuffers) {
     if TTY.load(Ordering::Acquire) != FREE {
         eprintln!("[sinteract] a terminal session is open; not printing the image");
         return;
@@ -269,9 +260,11 @@ pub fn show_image_with(scene: &Scene, renderer: &mut PixmapRenderer, buffers: &m
         return;
     };
     let scale = scale_for_backend(backend, scene.width(), scene.height());
-    let Some(pixmap) = rasterize(renderer, scale, scene) else {
+    let mut renderer = PixmapRenderer::default();
+    let Some(pixmap) = rasterize(&mut renderer, scale, scene) else {
         return;
     };
+    let mut buffers = ImageBuffers::default();
     let mut stdout = io::stdout().lock();
     let _ = match backend {
         Backend::Kitty => emit_kitty(
