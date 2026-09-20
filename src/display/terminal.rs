@@ -149,6 +149,7 @@ impl Terminal {
         let size = (pixmap.width(), pixmap.height());
         if self.frame_size.replace(size) != Some(size) && self.backend != Backend::Kitty {
             let _ = queue!(stdout, terminal::Clear(terminal::ClearType::All));
+            self.buffers.blocks.forget();
         }
         let _ = queue!(stdout, cursor::MoveTo(0, 0));
         let _ = match self.backend {
@@ -162,9 +163,12 @@ impl Terminal {
             Backend::Sixel => {
                 sixel::encode(pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))
             }
-            Backend::TextBlocks => {
-                render_text_blocks(&mut stdout, pixmap, &mut self.buffers.escapes)
-            }
+            Backend::TextBlocks => update_text_blocks(
+                &mut stdout,
+                pixmap,
+                &mut self.buffers.escapes,
+                &mut self.buffers.blocks,
+            ),
         };
         let _ = stdout.flush();
     }
@@ -230,13 +234,16 @@ impl Drop for Terminal {
 }
 
 /// The bytes a frame of [`show_image_with`] needs. Sixel builds its own
-/// bytes and leaves both empty.
+/// bytes and leaves all three empty.
 #[derive(Default)]
 pub struct ImageBuffers {
     /// The PNG that the Kitty protocol carries.
     image: Vec<u8>,
     /// The escapes that go to the terminal.
     escapes: Vec<u8>,
+    /// The cells that a half-block frame compares against and replaces.
+    /// [`show_image_with`] writes every cell and leaves this empty.
+    blocks: BlockScreen,
 }
 
 /// Print `scene` at the cursor, through Kitty when the terminal supports
@@ -810,16 +817,12 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>)
     // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
     let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
     while let Some(top) = rows.next() {
-        // An odd height leaves the last cell row with nothing below.
         let bottom = rows.next().unwrap_or_default();
         // The reset at the end of a row leaves the terminal with the default
         // colors, which no cell carries, so the first cell sets both.
         let mut shown = None;
         for (x, &t) in top.iter().enumerate() {
-            let cell = Cell {
-                fg: blend_on_black(t),
-                bg: bottom.get(x).map_or(BLACK, |&b| blend_on_black(b)),
-            };
+            let cell = Cell::new(t, bottom.get(x));
             push_cell(buf, cell, shown);
             shown = Some(cell);
         }
@@ -829,12 +832,118 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>)
     out.write_all(buf)
 }
 
+/// The half-block cells of the frame on screen, and of the one being
+/// written.
+#[derive(Default)]
+struct BlockScreen {
+    /// The cells that the terminal shows, row by row. Empty before the
+    /// first frame and after the screen clears.
+    shown: Vec<Cell>,
+    /// The cells of one row of `shown`.
+    cols: usize,
+    /// The cells of the frame being written.
+    next: Vec<Cell>,
+}
+
+impl BlockScreen {
+    /// Forget what the terminal shows, so the next frame writes every cell.
+    /// A clear, or anything else that paints over the frame, happens behind
+    /// the screen.
+    fn forget(&mut self) {
+        self.shown.clear();
+        self.cols = 0;
+    }
+}
+
+/// Write the cells where `pixmap` differs from the frame that `screen`
+/// holds, and keep `pixmap` as that frame. The cells start at (0, 0), so
+/// only a caller that owns the whole screen may call this. `buf` holds the
+/// escapes, and a caller that draws again passes the same one.
+///
+/// A frame of an animation changes a few percent of the cells, and the
+/// cursor jumps over the rest.
+fn update_text_blocks<W: Write>(
+    out: &mut W,
+    pixmap: &Pixmap,
+    buf: &mut Vec<u8>,
+    screen: &mut BlockScreen,
+) -> io::Result<()> {
+    let cols = pixmap.width() as usize;
+    block_cells(pixmap, &mut screen.next);
+    // A frame of another shape shares no cell with the one on screen.
+    let shown = if screen.cols == cols && screen.shown.len() == screen.next.len() {
+        screen.shown.as_slice()
+    } else {
+        &[]
+    };
+    buf.clear();
+    // The reset at the end of a frame leaves the terminal with the default
+    // colors, which no cell carries, so the first cell sets both.
+    let mut state = None;
+    // Where the cursor sits after the cell written last.
+    let mut at = None;
+    for (r, row) in screen.next.chunks(cols).enumerate() {
+        let old = shown.get(r * cols..(r + 1) * cols).unwrap_or_default();
+        for (x, &cell) in row.iter().enumerate() {
+            if old.get(x) == Some(&cell) {
+                continue;
+            }
+            if at != Some((r, x)) {
+                write!(buf, "\x1b[{};{}H", r + 1, x + 1)?;
+            }
+            push_cell(buf, cell, state);
+            state = Some(cell);
+            at = Some((r, x + 1));
+        }
+    }
+    buf.extend_from_slice(b"\x1b[0m");
+    if let Err(e) = out.write_all(buf) {
+        // Part of the frame reached the terminal, and which part is unknown.
+        screen.forget();
+        return Err(e);
+    }
+    std::mem::swap(&mut screen.shown, &mut screen.next);
+    screen.cols = cols;
+    Ok(())
+}
+
+/// The half-block cells of `pixmap`, row by row, in `out`.
+fn block_cells(pixmap: &Pixmap, out: &mut Vec<Cell>) {
+    out.clear();
+    out.reserve(pixmap.width() as usize * pixmap.height().div_ceil(2) as usize);
+    // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
+    let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
+    while let Some(top) = rows.next() {
+        let bottom = rows.next().unwrap_or_default();
+        out.extend(
+            top.iter()
+                .enumerate()
+                .map(|(x, &t)| Cell::new(t, bottom.get(x))),
+        );
+    }
+}
+
 /// The two colors of a half-block cell. The upper pixel of the pair is the
 /// foreground and the lower one is the background.
 #[derive(Clone, Copy, PartialEq)]
 struct Cell {
     fg: [u8; 3],
     bg: [u8; 3],
+}
+
+impl Cell {
+    /// The cell of the pixel `top` above the pixel `bottom`, both
+    /// composited over black. An odd height leaves the last cell row with
+    /// nothing below, which is black.
+    fn new(
+        top: tiny_skia::PremultipliedColorU8,
+        bottom: Option<&tiny_skia::PremultipliedColorU8>,
+    ) -> Self {
+        Self {
+            fg: blend_on_black(top),
+            bg: bottom.map_or(BLACK, |&b| blend_on_black(b)),
+        }
+    }
 }
 
 const BLACK: [u8; 3] = [0, 0, 0];
@@ -1102,6 +1211,56 @@ mod tests {
 
     fn rows(buf: &[u8]) -> usize {
         buf.windows(2).filter(|w| w == b"\r\n").count()
+    }
+
+    /// The frame that `update_text_blocks` writes for `pixmap`, and the
+    /// cells it holds.
+    fn update(screen: &mut BlockScreen, pixmap: &Pixmap) -> (Vec<u8>, usize) {
+        let mut out: Vec<u8> = Vec::new();
+        update_text_blocks(&mut out, pixmap, &mut Vec::new(), screen).expect("write ok");
+        let cells = String::from_utf8_lossy(&out).matches('▀').count();
+        (out, cells)
+    }
+
+    #[test]
+    fn a_repeated_half_block_frame_writes_no_cell() {
+        let pm = solid(4, 2, 0, 0, 255);
+        let mut screen = BlockScreen::default();
+        assert_eq!(update(&mut screen, &pm).1, 4);
+        assert_eq!(update(&mut screen, &pm).0, b"\x1b[0m");
+    }
+
+    #[test]
+    fn a_half_block_frame_writes_the_cell_that_changed() {
+        let mut screen = BlockScreen::default();
+        assert_eq!(update(&mut screen, &solid(4, 2, 0, 0, 255)).1, 4);
+        let mut pm = solid(4, 2, 0, 0, 255);
+        pm.pixels_mut()[1] = tiny_skia::ColorU8::from_rgba(255, 0, 0, 255).premultiply();
+        let (out, cells) = update(&mut screen, &pm);
+        assert_eq!(cells, 1);
+        // Row 1, column 2 of the terminal.
+        assert!(
+            String::from_utf8_lossy(&out).contains("\x1b[1;2H"),
+            "missing the jump: {:?}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+
+    #[test]
+    fn a_forgotten_half_block_screen_writes_every_cell() {
+        let pm = solid(4, 2, 0, 0, 255);
+        let mut screen = BlockScreen::default();
+        assert_eq!(update(&mut screen, &pm).1, 4);
+        screen.forget();
+        assert_eq!(update(&mut screen, &pm).1, 4);
+    }
+
+    #[test]
+    fn a_half_block_frame_of_another_shape_writes_every_cell() {
+        let mut screen = BlockScreen::default();
+        // Both hold four cells, in one row of four and in two rows of two.
+        assert_eq!(update(&mut screen, &solid(4, 2, 0, 0, 255)).1, 4);
+        assert_eq!(update(&mut screen, &solid(2, 4, 0, 0, 255)).1, 4);
     }
 
     #[test]
