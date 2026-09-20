@@ -37,8 +37,10 @@ the text of the value.
 
 For an animation, a `Display` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `Event`s. A frame that
-does not reach the display comes back as a `PresentError`, and the session
-stays open, so the program chooses the words and decides whether to stop. A
+does not reach the display comes back as a `PresentError`, and a message of
+the peer that does not decode comes back as a `NoEvent`, both with the error
+that caused them. The library writes nothing to stderr and ends no session
+on its own, so the program chooses the words and decides whether to stop. A
 `Sender` wakes it from another thread with a close or a bare wake. The same
 loop runs over stdio, where the frames go to a view as Cap'n Proto messages
 and the input comes back. The schema is in `schema/`, one file for the

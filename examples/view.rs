@@ -83,6 +83,8 @@ fn main() -> ExitCode {
                 let _ = to_engine::write_close(&mut to_engine, UNROUTED);
                 break;
             }
+            Err(NoEvent::Damaged(e)) => eprintln!("view: {e}"),
+            Err(NoEvent::Broken(e)) => eprintln!("view: {e}"),
             Err(NoEvent::Timeout) => {}
         }
     }

@@ -50,6 +50,10 @@ fn main() -> ExitCode {
                 KeyKind::Down | KeyKind::Up => {}
             },
             Err(NoEvent::Close) => break,
+            // A view that sends a message the engine cannot read is a bug
+            // in the view, and the game goes on without that input.
+            Err(NoEvent::Damaged(e)) => eprintln!("engine: {e}"),
+            Err(NoEvent::Broken(e)) => eprintln!("engine: {e}"),
             Ok(Event::Input(InputEvent::Mouse(_) | InputEvent::Resize { .. }))
             | Err(NoEvent::Wake | NoEvent::Timeout) => {}
         }

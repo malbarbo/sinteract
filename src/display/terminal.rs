@@ -538,11 +538,14 @@ fn read_input(
             Ok(true) => ct_event::read(),
             Err(e) => Err(e),
         };
-        // A read that fails ends the input, and the Close says so. The
-        // engine has no way to read the tty again, so the cause goes
-        // nowhere.
-        let Ok(ev) = ev else {
-            return;
+        let ev = match ev {
+            Ok(ev) => ev,
+            // The tty is unreadable from now on, and the guard closes the
+            // session right after this.
+            Err(e) => {
+                let _ = tx.send_broken(e);
+                return;
+            }
         };
         let key = match ev {
             ct_event::Event::Key(key) => key,

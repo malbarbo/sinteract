@@ -152,19 +152,22 @@ impl Drop for Stdio {
 /// Read the messages of the peer into the queue until the stream or the
 /// session ends. The display serves one view, so it takes the input of
 /// every player as its own. [`to_engine::read`] skips a message or an event of an arm
-/// from a newer schema. A payload that does not decode is logged and
-/// skipped, since the framing already found where the next message starts.
+/// from a newer schema. A payload that does not decode goes into the queue
+/// as [`NoEvent::Damaged`] and the loop goes on, since the framing already
+/// found where the next message starts.
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
         let ev = match to_engine::read(&mut reader) {
             Ok(None | Some((_, Message::Close))) => break,
             Ok(Some((_, Message::Input(ev)))) => ev,
             Err(ReadError::Payload(e)) => {
-                eprintln!("[sinteract::stdio] skipping a message that does not decode: {e}");
+                if tx.send_damaged(e).is_err() {
+                    return;
+                }
                 continue;
             }
             Err(ReadError::Broken(e)) => {
-                eprintln!("[sinteract::stdio] read error: {e}");
+                let _ = tx.send_broken(e);
                 break;
             }
         };
@@ -251,6 +254,12 @@ mod tests {
     /// otherwise.
     fn closes(fr: &mut Stdio) -> bool {
         matches!(fr.wait_event(None), Err(NoEvent::Close))
+    }
+
+    /// Returns `true` if the next wait of `fr` gives a read that broke and
+    /// the one after gives Close, `false` otherwise.
+    fn breaks(fr: &mut Stdio) -> bool {
+        matches!(fr.wait_event(None), Err(NoEvent::Broken(_))) && closes(fr)
     }
 
     fn decode_messages(mut buf: &[u8]) -> Vec<to_view::Message> {
@@ -350,11 +359,13 @@ mod tests {
     }
 
     #[test]
-    fn wait_event_skips_a_payload_that_does_not_decode() {
+    fn wait_event_reports_a_payload_that_does_not_decode() {
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&[0xff; 8]));
         stream.extend_from_slice(&event(&InputEvent::Vsync));
-        assert!(matches!(input(&mut reading(stream)), InputEvent::Vsync));
+        let mut fr = reading(stream);
+        assert!(matches!(fr.wait_event(None), Err(NoEvent::Damaged(_))));
+        assert!(matches!(input(&mut fr), InputEvent::Vsync));
     }
 
     #[test]
@@ -369,7 +380,7 @@ mod tests {
     fn missing_magic_is_an_error_not_a_panic() {
         let mut bad = header(Side::View, UNROUTED, 0);
         bad[..4].copy_from_slice(b"junk");
-        assert!(closes(&mut reading(bad.to_vec())));
+        assert!(breaks(&mut reading(bad.to_vec())));
     }
 
     #[test]
@@ -377,7 +388,7 @@ mod tests {
         let mut stream = Vec::new();
         to_view::write_close(&mut stream, UNROUTED).unwrap();
         stream.extend_from_slice(&event(&InputEvent::Vsync));
-        assert!(closes(&mut reading(stream)));
+        assert!(breaks(&mut reading(stream)));
     }
 
     #[test]

@@ -12,6 +12,8 @@
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
 //!         Err(NoEvent::Wake) => on_wake(),
 //!         Err(NoEvent::Timeout) => on_tick(),
+//!         Err(NoEvent::Damaged(e)) => report(e),
+//!         Err(NoEvent::Broken(e)) => report(e),
 //!         Err(NoEvent::Close) => break,
 //!     }
 //! }
@@ -28,13 +30,20 @@ pub enum Event {
     Input(InputEvent),
 }
 
-/// Why `wait_event` returned no event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Why `wait_event` returned no event. A failure comes with the error that
+/// caused it, since the library writes no message of its own.
+#[derive(Debug)]
 pub enum NoEvent {
     /// A `Sender` woke the loop, with no data.
     Wake,
     /// The deadline passed with nothing to deliver.
     Timeout,
+    /// A message of the peer did not decode, and the reader skipped it. The
+    /// envelope already found where the next message starts, so the session
+    /// goes on.
+    Damaged(crate::wire::Error),
+    /// A read from the tty or from the peer failed. A `Close` follows.
+    Broken(std::io::Error),
     /// The user, the platform or the peer ended the session, or the display
     /// closed. Every wait from now on returns it.
     Close,
