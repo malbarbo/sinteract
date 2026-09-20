@@ -22,7 +22,7 @@ scene
     .line_to(40.0, 30.0)
     .line_to(0.0, 30.0);
 
-sinteract::display::terminal::show_image(&scene);
+let _ = sinteract::display::terminal::show_image(&scene);
 let pdf: Vec<u8> = sinteract::renderer::pdf::render_to_pdf(&scene);
 ```
 
@@ -30,6 +30,10 @@ let pdf: Vec<u8> = sinteract::renderer::pdf::render_to_pdf(&scene);
 when it is dropped, and `Scene::clip` returns a scope that collects what is
 drawn inside it into one clipped element. An arc becomes cubics inside the
 scope, so a renderer only sees moves, lines, quadratics and cubics.
+
+`show_image` prints one image where the cursor sits, and says why it
+printed none when the terminal shows no graphics, so a REPL falls back to
+the text of the value.
 
 For an animation, a `Display` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `Event`s. A `Sender`

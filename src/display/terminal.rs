@@ -246,27 +246,36 @@ struct ImageBuffers {
     blocks: BlockScreen,
 }
 
+/// Why [`show_image`] showed no image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoImage {
+    /// The terminal shows neither Kitty, Sixel nor truecolor graphics, or
+    /// stdout is not a terminal. The probe runs once per process, so every
+    /// call after the first answers this too. A REPL prints the value as
+    /// text instead.
+    NoGraphics,
+    /// A [`Terminal`] session holds the tty.
+    Busy,
+    /// The rasterizer built no pixels for the scene, or the write stopped
+    /// part way, which may leave part of the image on screen.
+    Failed,
+}
+
 /// Print `scene` at the cursor, through Kitty when the terminal supports
-/// it, else Sixel, else half-blocks. Prints nothing while a [`Terminal`]
-/// holds the tty, or when the terminal has no graphics. A program that
-/// draws one frame after another opens a [`Terminal`], which keeps the
-/// buffers and writes only what changed.
-pub fn show_image(scene: &Scene) {
+/// it, else Sixel, else half-blocks. A program that draws one frame after
+/// another opens a [`Terminal`], which keeps the buffers and writes only
+/// what changed.
+pub fn show_image(scene: &Scene) -> Result<(), NoImage> {
     if TTY.load(Ordering::Acquire) != FREE {
-        eprintln!("[sinteract] a terminal session is open; not printing the image");
-        return;
+        return Err(NoImage::Busy);
     }
-    let Some(backend) = pick_backend() else {
-        return;
-    };
+    let backend = pick_backend().ok_or(NoImage::NoGraphics)?;
     let scale = scale_for_backend(backend, scene.width(), scene.height());
     let mut renderer = PixmapRenderer::default();
-    let Some(pixmap) = rasterize(&mut renderer, scale, scene) else {
-        return;
-    };
+    let pixmap = rasterize(&mut renderer, scale, scene).ok_or(NoImage::Failed)?;
     let mut buffers = ImageBuffers::default();
     let mut stdout = io::stdout().lock();
-    let _ = match backend {
+    let written = match backend {
         Backend::Kitty => emit_kitty(
             &mut stdout,
             pixmap,
@@ -280,7 +289,9 @@ pub fn show_image(scene: &Scene) {
             .and_then(|()| writeln!(stdout)),
         Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut buffers.escapes),
     };
-    let _ = stdout.flush();
+    written
+        .and_then(|()| stdout.flush())
+        .map_err(|_| NoImage::Failed)
 }
 
 /// Returns `true` if the terminal reports 24-bit color, `false` otherwise.
@@ -1213,6 +1224,13 @@ mod tests {
         update_text_blocks(&mut out, pixmap, &mut Vec::new(), screen).expect("write ok");
         let cells = String::from_utf8_lossy(&out).matches('▀').count();
         (out, cells)
+    }
+
+    #[test]
+    fn show_image_shows_nothing_while_a_session_holds_the_tty() {
+        let claim = Claim::take().expect("no session runs in a test");
+        assert_eq!(show_image(&Scene::new(4.0, 4.0)), Err(NoImage::Busy));
+        drop(claim);
     }
 
     #[test]
