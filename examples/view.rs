@@ -75,8 +75,11 @@ fn main() -> ExitCode {
             Err(NoEvent::Wake) => {
                 match drain(fr.as_mut(), &from_reader, &mut stats, &mut warned_bitmaps) {
                     Session::Open => {}
-                    // The engine ended the session, so the view sends no close.
-                    Session::Closed => break,
+                    Session::EngineClosed => break,
+                    Session::DisplayFailed => {
+                        let _ = to_engine::write_close(&mut to_engine, UNROUTED);
+                        break;
+                    }
                 }
             }
             Err(NoEvent::Close) => {
@@ -125,7 +128,11 @@ fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Message>, wake: S
 
 enum Session {
     Open,
-    Closed,
+    /// The engine sent its close, so the view sends none back.
+    EngineClosed,
+    /// The display of the view failed, and the engine hears nothing of it
+    /// until the view closes the session.
+    DisplayFailed,
 }
 
 /// Act on the messages of the engine that arrived. The assets go to the
@@ -144,7 +151,7 @@ fn drain(
             Message::Asset { id, blob, mime } => {
                 if let Err(e) = fr.push_asset(id, &blob, mime.as_deref()) {
                     eprintln!("view: {e}");
-                    return Session::Closed;
+                    return Session::DisplayFailed;
                 }
             }
             Message::Frame(scene) => {
@@ -157,7 +164,7 @@ fn drain(
                 }
             }
             Message::Close => {
-                session = Session::Closed;
+                session = Session::EngineClosed;
                 break;
             }
         }
@@ -166,7 +173,7 @@ fn drain(
         let start = Instant::now();
         if let Err(e) = fr.present(&scene) {
             eprintln!("view: {e}");
-            return Session::Closed;
+            return Session::DisplayFailed;
         }
         stats.shown(start.elapsed());
     }
