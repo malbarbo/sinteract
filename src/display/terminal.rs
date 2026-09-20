@@ -169,9 +169,8 @@ impl Terminal {
                 &mut self.buffers.image,
                 &mut self.buffers.escapes,
             ),
-            Backend::Sixel => {
-                sixel::encode(pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))
-            }
+            Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND, &mut self.buffers.image)
+                .and_then(|b| stdout.write_all(&b)),
             Backend::TextBlocks => update_text_blocks(
                 &mut stdout,
                 pixmap,
@@ -258,11 +257,11 @@ impl Drop for Terminal {
     }
 }
 
-/// The bytes a frame needs. Sixel builds its own bytes and leaves all
-/// three empty.
+/// The bytes a frame needs.
 #[derive(Default)]
 struct ImageBuffers {
-    /// The PNG that the Kitty protocol carries.
+    /// What the backend stages, the PNG that the Kitty protocol carries or
+    /// the pixels that the Sixel encoder quantizes.
     image: Vec<u8>,
     /// The escapes that go to the terminal.
     escapes: Vec<u8>,
@@ -334,7 +333,7 @@ pub fn show_image(scene: &Scene) -> Result<(), NoImage> {
             &mut buffers.escapes,
         )
         .and_then(|()| writeln!(stdout)),
-        Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND)
+        Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND, &mut buffers.image)
             .and_then(|b| stdout.write_all(&b))
             .and_then(|()| writeln!(stdout)),
         Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut buffers.escapes),

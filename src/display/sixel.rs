@@ -12,16 +12,18 @@ use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 /// Encode `pixmap` as Sixel, with the DCS introducer and the string
 /// terminator. The encoder composites every pixel over `bg` before it
-/// quantizes. An image over 64 megapixels is an error.
-pub fn encode(pixmap: &Pixmap, bg: (u8, u8, u8)) -> io::Result<Vec<u8>> {
-    let rgba: Vec<u8> = pixmap.pixels().iter().flat_map(|&p| over(p, bg)).collect();
+/// quantizes. An image over 64 megapixels is an error. `buf` holds the
+/// composited pixels, and a caller that encodes again passes the same one.
+pub fn encode(pixmap: &Pixmap, bg: (u8, u8, u8), buf: &mut Vec<u8>) -> io::Result<Vec<u8>> {
+    buf.clear();
+    buf.extend(pixmap.pixels().iter().flat_map(|&p| over(p, bg)));
     // Dithering scatters noise over the flat fills of a drawing.
     let options = icy_sixel::EncodeOptions {
         diffusion: 0.0,
         ..Default::default()
     };
     icy_sixel::sixel_encode(
-        &rgba,
+        buf,
         pixmap.width() as usize,
         pixmap.height() as usize,
         &options,
@@ -65,7 +67,7 @@ mod tests {
     #[test]
     fn encode_solid_red_pixmap_is_well_formed() {
         let pm = make_solid(8, 6, [255, 0, 0, 255]);
-        let bytes = encode(&pm, (255, 255, 255)).unwrap();
+        let bytes = encode(&pm, (255, 255, 255), &mut Vec::new()).unwrap();
         assert!(bytes.starts_with(b"\x1bP"));
         assert!(bytes.ends_with(b"\x1b\\"));
         assert!(window_contains(&bytes, b";2;100;0;0"));
@@ -74,7 +76,7 @@ mod tests {
     #[test]
     fn encode_transparent_uses_background() {
         let pm = make_solid(4, 4, [0, 0, 0, 0]);
-        let bytes = encode(&pm, (255, 255, 255)).unwrap();
+        let bytes = encode(&pm, (255, 255, 255), &mut Vec::new()).unwrap();
         assert!(window_contains(&bytes, b";2;100;100;100"));
     }
 
