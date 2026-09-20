@@ -231,6 +231,14 @@ impl Drop for Terminal {
 /// it, else Sixel, else half-blocks. Prints nothing while a [`Terminal`]
 /// holds the tty, or when the terminal has no graphics.
 pub fn show_image(scene: &Scene) {
+    show_image_with(scene, &mut PixmapRenderer::default(), &mut Vec::new());
+}
+
+/// [`show_image`], with the surface that rasterizes the scene and the
+/// buffer that takes the bytes of the image. A program that shows one image
+/// after another passes the same two and allocates once. Sixel builds its
+/// own bytes and leaves the buffer empty.
+pub fn show_image_with(scene: &Scene, renderer: &mut PixmapRenderer, buf: &mut Vec<u8>) {
     if TTY.load(Ordering::Acquire) != FREE {
         eprintln!("[sinteract] a terminal session is open; not printing the image");
         return;
@@ -238,20 +246,19 @@ pub fn show_image(scene: &Scene) {
     let Some(backend) = pick_backend() else {
         return;
     };
-    let mut renderer = PixmapRenderer::default();
     let scale = scale_for_backend(backend, scene.width(), scene.height());
-    let Some(pixmap) = rasterize(&mut renderer, scale, scene) else {
+    let Some(pixmap) = rasterize(renderer, scale, scene) else {
         return;
     };
     let mut stdout = io::stdout().lock();
     let _ = match backend {
         Backend::Kitty => {
-            emit_kitty(&mut stdout, pixmap, None, &mut Vec::new()).and_then(|()| writeln!(stdout))
+            emit_kitty(&mut stdout, pixmap, None, buf).and_then(|()| writeln!(stdout))
         }
         Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND)
             .and_then(|b| stdout.write_all(&b))
             .and_then(|()| writeln!(stdout)),
-        Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut Vec::new()),
+        Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, buf),
     };
     let _ = stdout.flush();
 }
