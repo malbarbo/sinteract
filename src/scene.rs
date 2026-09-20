@@ -948,19 +948,6 @@ impl Scene {
         &self.elements
     }
 
-    /// Returns `true` if any element, inside a clip or not, is a bitmap,
-    /// `false` otherwise.
-    pub fn has_bitmaps(&self) -> bool {
-        fn walk(elements: &[Element]) -> bool {
-            elements.iter().any(|e| match e {
-                Element::Bitmap(_) => true,
-                Element::Clipped { elements, .. } => walk(elements),
-                Element::Path(_) | Element::Text(_) => false,
-            })
-        }
-        walk(&self.elements)
-    }
-
     /// Append a [`Path`] built elsewhere. [`Self::path`] builds one in place.
     pub fn add_path(&mut self, mut path: Path) {
         // The finiteness first, so a limit that is not finite still drops
@@ -1270,22 +1257,6 @@ impl ClipPathBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn has_bitmaps_sees_through_clip_subtrees() {
-        let mut scene = Scene::new(10.0, 10.0);
-        {
-            let mut p = scene.path(PathStyle::default(), 0.0, 0.0);
-            p.line_to(5.0, 5.0);
-        }
-        assert!(!scene.has_bitmaps());
-
-        let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
-            .line_to(10.0, 10.0)
-            .build();
-        scene.clip(clip).bitmap(Bitmap::default());
-        assert!(scene.has_bitmaps());
-    }
 
     #[test]
     fn builders_append_one_segment_per_call() {
