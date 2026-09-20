@@ -65,8 +65,8 @@ pub struct Terminal {
     frame_size: Option<(u32, u32)>,
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
     renderer: PixmapRenderer,
-    /// The bytes of the frame, kept across frames so the half-blocks reuse
-    /// the allocation.
+    /// The escapes of the frame, kept across frames so a frame reuses the
+    /// allocation.
     escapes: Vec<u8>,
     /// The scene of the last present, drawn again after a resize.
     last: Option<Scene>,
@@ -153,7 +153,12 @@ impl Terminal {
         }
         let _ = queue!(stdout, cursor::MoveTo(0, 0));
         let _ = match self.backend {
-            Backend::Kitty => emit_kitty(&mut stdout, pixmap, Some(KITTY_ANIMATION_ID)),
+            Backend::Kitty => emit_kitty(
+                &mut stdout,
+                pixmap,
+                Some(KITTY_ANIMATION_ID),
+                &mut self.escapes,
+            ),
             Backend::Sixel => {
                 sixel::encode(pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))
             }
@@ -240,7 +245,9 @@ pub fn show_image(scene: &Scene) {
     };
     let mut stdout = io::stdout().lock();
     let _ = match backend {
-        Backend::Kitty => emit_kitty(&mut stdout, pixmap, None).and_then(|()| writeln!(stdout)),
+        Backend::Kitty => {
+            emit_kitty(&mut stdout, pixmap, None, &mut Vec::new()).and_then(|()| writeln!(stdout))
+        }
         Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND)
             .and_then(|b| stdout.write_all(&b))
             .and_then(|()| writeln!(stdout)),
@@ -825,33 +832,46 @@ fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
 
 /// Write the Kitty escape sequences that show `pixmap` at the cursor, as raw
 /// RGBA in chunks. An image with an `id` replaces the image of that id, and
-/// one without stays until the terminal scrolls it away.
-fn emit_kitty<W: Write>(w: &mut W, pixmap: &Pixmap, id: Option<u32>) -> io::Result<()> {
-    let encoded = B64.encode(pixmap.data());
-    let bytes = encoded.as_bytes();
-    let chunk_size = 4096;
-    let total_chunks = bytes.len().div_ceil(chunk_size).max(1);
-    for (idx, chunk) in bytes.chunks(chunk_size).enumerate() {
+/// one without stays until the terminal scrolls it away. `buf` holds the
+/// escapes, and a caller that draws again passes the same one.
+fn emit_kitty<W: Write>(
+    w: &mut W,
+    pixmap: &Pixmap,
+    id: Option<u32>,
+    buf: &mut Vec<u8>,
+) -> io::Result<()> {
+    // The pixels of one chunk. Base64 turns them into the 4096 bytes that
+    // the protocol allows, and a multiple of 3 leaves no padding inside.
+    const CHUNK_PIXELS: usize = 3072;
+    let data = pixmap.data();
+    buf.clear();
+    buf.reserve(data.len() * 4 / 3 + data.len() / CHUNK_PIXELS * 16 + 64);
+    let mut encoded = [0u8; CHUNK_PIXELS / 3 * 4];
+    let total_chunks = data.len().div_ceil(CHUNK_PIXELS).max(1);
+    for (idx, chunk) in data.chunks(CHUNK_PIXELS).enumerate() {
         let more: u8 = if idx + 1 < total_chunks { 1 } else { 0 };
         if idx == 0 {
             write!(
-                w,
+                buf,
                 "\x1b_Ga=T,f=32,s={},v={},q=2,m={}",
                 pixmap.width(),
                 pixmap.height(),
                 more,
             )?;
             if let Some(id) = id {
-                write!(w, ",i={id}")?;
+                write!(buf, ",i={id}")?;
             }
-            w.write_all(b";")?;
+            buf.push(b';');
         } else {
-            write!(w, "\x1b_Gm={},q=2;", more)?;
+            write!(buf, "\x1b_Gm={},q=2;", more)?;
         }
-        w.write_all(chunk)?;
-        write!(w, "\x1b\\")?;
+        let n = B64
+            .encode_slice(chunk, &mut encoded)
+            .expect("a chunk encodes into four bytes per three");
+        buf.extend_from_slice(encoded.get(..n).expect("encode_slice fills a prefix"));
+        buf.extend_from_slice(b"\x1b\\");
     }
-    Ok(())
+    w.write_all(buf)
 }
 
 fn delete_kitty_image<W: Write>(w: &mut W, id: u32) -> io::Result<()> {
@@ -1038,14 +1058,14 @@ mod tests {
     fn kitty_names_the_frame_and_not_an_inline_image() {
         let pm = Pixmap::new(1, 1).unwrap();
         let mut framed = Vec::new();
-        emit_kitty(&mut framed, &pm, Some(KITTY_ANIMATION_ID)).unwrap();
+        emit_kitty(&mut framed, &pm, Some(KITTY_ANIMATION_ID), &mut Vec::new()).unwrap();
         assert!(
             String::from_utf8(framed)
                 .unwrap()
                 .starts_with("\x1b_Ga=T,f=32,s=1,v=1,q=2,m=0,i=1042;")
         );
         let mut inline = Vec::new();
-        emit_kitty(&mut inline, &pm, None).unwrap();
+        emit_kitty(&mut inline, &pm, None, &mut Vec::new()).unwrap();
         assert!(
             String::from_utf8(inline)
                 .unwrap()
