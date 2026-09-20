@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use super::driver::OpenError;
+use super::driver::{OpenError, PresentError};
 use super::inbox::{Inbox, Sender};
 use crate::event::{Event, NoEvent};
 use crate::scene::Scene;
@@ -88,24 +88,24 @@ impl Stdio {
     }
 
     /// Write one message with `write`, unless the session ended.
-    fn send(&mut self, write: impl FnOnce(&mut Writer) -> io::Result<()>) {
+    fn send(
+        &mut self,
+        write: impl FnOnce(&mut Writer) -> io::Result<()>,
+    ) -> Result<(), PresentError> {
         if self.closed || self.peer_closed.load(Ordering::Acquire) {
-            return;
+            return Err(PresentError::Closed);
         }
-        if let Err(e) = write(&mut self.writer) {
-            // The peer may keep stdin open after it stops reading, so the
-            // reader thread does not see the end.
-            eprintln!("[sinteract::stdio] write failed, closing the session: {e}");
-            self.peer_closed.store(true, Ordering::Release);
-            let _ = self.inbox.sender().send_close();
-        }
+        // A peer that stopped reading may keep stdin open, so the reader
+        // thread sees no end and only this write fails. The caller decides
+        // whether that ends the session.
+        write(&mut self.writer).map_err(PresentError::Io)
     }
 }
 
 impl super::Display for Stdio {
     /// Send a frame and flush, so the peer sees it at once.
-    fn present(&mut self, scene: &Scene) {
-        self.send(|w| to_view::write_frame(w, UNROUTED, scene));
+    fn present(&mut self, scene: &Scene) -> Result<(), PresentError> {
+        self.send(|w| to_view::write_frame(w, UNROUTED, scene))
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
@@ -121,8 +121,8 @@ impl super::Display for Stdio {
     /// Send a bitmap upload. Call it before the first `present` that
     /// references `id`, because the peer may process the stream as it
     /// arrives.
-    fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) {
-        self.send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime));
+    fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) -> Result<(), PresentError> {
+        self.send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime))
     }
 
     /// Tell the peer that the session ended, unless the peer ended it.
@@ -130,7 +130,7 @@ impl super::Display for Stdio {
         if self.closed {
             return;
         }
-        self.send(|w| to_view::write_close(w, UNROUTED));
+        let _ = self.send(|w| to_view::write_close(w, UNROUTED));
         self.closed = true;
         self.inbox.close();
     }
@@ -272,7 +272,7 @@ mod tests {
             );
             p.line_to(10.0, 10.0);
         }
-        fr.present(&scene);
+        fr.present(&scene).expect("the frame goes out");
         match &decode_messages(&written.bytes())[..] {
             [to_view::Message::Frame(d)] => {
                 assert_eq!(d.width(), 10.0);
@@ -378,8 +378,10 @@ mod tests {
     #[test]
     fn push_asset_then_present_share_writer() {
         let (mut fr, _input, written) = open_session();
-        fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"));
-        fr.present(&Scene::new(8.0, 8.0));
+        fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"))
+            .expect("the asset goes out");
+        fr.present(&Scene::new(8.0, 8.0))
+            .expect("the frame goes out");
         match &decode_messages(&written.bytes())[..] {
             [to_view::Message::Asset { .. }, to_view::Message::Frame(_)] => {}
             other => panic!("expected an Asset and a Frame, got {other:?}"),
@@ -391,7 +393,10 @@ mod tests {
         let (mut fr, _input, written) = open_session();
         fr.close();
         fr.close();
-        fr.present(&Scene::new(8.0, 8.0));
+        assert!(matches!(
+            fr.present(&Scene::new(8.0, 8.0)),
+            Err(PresentError::Closed)
+        ));
         assert!(matches!(
             &decode_messages(&written.bytes())[..],
             [to_view::Message::Close]
@@ -415,16 +420,23 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_write_closes_the_session() {
-        // The input stays open, so only the write can end the session.
+    fn a_failed_write_reports_the_error_and_keeps_the_session() {
+        // The input stays open, so only the write can fail.
         let (r, _input) = io::pipe().unwrap();
         let broken = BrokenWriter::default();
         let mut fr = Stdio::with_streams(BufReader::new(r), broken.clone()).unwrap();
-        fr.present(&Scene::new(8.0, 8.0));
-        assert!(closes(&mut fr));
-        fr.present(&Scene::new(8.0, 8.0));
+        assert!(matches!(
+            fr.present(&Scene::new(8.0, 8.0)),
+            Err(PresentError::Io(_))
+        ));
+        // The caller decides what a lost frame means, so the next one
+        // tries again.
+        assert!(matches!(
+            fr.present(&Scene::new(8.0, 8.0)),
+            Err(PresentError::Io(_))
+        ));
         fr.close();
-        assert_eq!(*broken.0.lock().unwrap(), 1);
+        assert_eq!(*broken.0.lock().unwrap(), 3);
     }
 
     #[test]

@@ -21,7 +21,7 @@ use crossterm::event::{
 use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
-use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
+use super::driver::{OpenError, PresentError, period_from_hz, sealed, warn_bitmaps_once};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use crate::event::{
@@ -135,11 +135,10 @@ impl Terminal {
         })
     }
 
-    fn draw(&mut self, scene: &Scene) {
+    fn draw(&mut self, scene: &Scene) -> Result<(), PresentError> {
         let scale = scale_for_backend(self.backend, scene.width(), scene.height());
-        let Some(pixmap) = rasterize(&mut self.renderer, scale, scene) else {
-            return;
-        };
+        self.renderer.set_scale(scale);
+        let pixmap = self.renderer.render(scene)?;
         *self.cells.lock().unwrap_or_else(PoisonError::into_inner) =
             CellMap::new(self.backend, cell_pixels(), scale);
         let mut stdout = io::stdout().lock();
@@ -148,11 +147,11 @@ impl Terminal {
         // before the transmit, shows the cleared cells for one refresh.
         let size = (pixmap.width(), pixmap.height());
         if self.frame_size.replace(size) != Some(size) && self.backend != Backend::Kitty {
-            let _ = queue!(stdout, terminal::Clear(terminal::ClearType::All));
+            queue!(stdout, terminal::Clear(terminal::ClearType::All))?;
             self.buffers.blocks.forget();
         }
-        let _ = queue!(stdout, cursor::MoveTo(0, 0));
-        let _ = match self.backend {
+        queue!(stdout, cursor::MoveTo(0, 0))?;
+        match self.backend {
             Backend::Kitty => emit_kitty(
                 &mut stdout,
                 pixmap,
@@ -169,29 +168,38 @@ impl Terminal {
                 &mut self.buffers.escapes,
                 &mut self.buffers.blocks,
             ),
-        };
-        let _ = stdout.flush();
+        }?;
+        stdout.flush()?;
+        Ok(())
     }
 
     /// Draw the last scene again, after a resize. The terminal may have
     /// moved or wrapped the cells of the old frame, so the screen clears.
+    /// A failure here reaches the caller at its next `present`, which fails
+    /// the same way.
     fn redraw(&mut self) {
         if let Some(scene) = self.last.take() {
             self.frame_size = None;
-            self.draw(&scene);
+            let _ = self.draw(&scene);
             self.last = Some(scene);
         }
     }
 }
 
 impl super::Display for Terminal {
-    fn present(&mut self, scene: &Scene) {
+    fn present(&mut self, scene: &Scene) -> Result<(), PresentError> {
         if self.live.is_none() {
-            return;
+            return Err(PresentError::Closed);
         }
         warn_bitmaps_once(&mut self.warned_bitmaps, scene, "terminal");
-        self.draw(scene);
+        let drawn = self.draw(scene);
         self.last = Some(scene.clone());
+        if drawn.is_err() {
+            // Part of the frame is on screen, and which part is unknown, so
+            // the next one clears and writes every cell.
+            self.frame_size = None;
+        }
+        drawn
     }
 
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
@@ -208,7 +216,14 @@ impl super::Display for Terminal {
     }
 
     /// The terminal draws without bitmaps, so it drops the upload.
-    fn push_asset(&mut self, _id: u32, _blob: &[u8], _mime: Option<&str>) {}
+    fn push_asset(
+        &mut self,
+        _id: u32,
+        _blob: &[u8],
+        _mime: Option<&str>,
+    ) -> Result<(), PresentError> {
+        Ok(())
+    }
 
     /// Stop the reader thread, and leave the alt screen and raw mode.
     fn close(&mut self) {
@@ -272,7 +287,8 @@ pub fn show_image(scene: &Scene) -> Result<(), NoImage> {
     let backend = pick_backend().ok_or(NoImage::NoGraphics)?;
     let scale = scale_for_backend(backend, scene.width(), scene.height());
     let mut renderer = PixmapRenderer::default();
-    let pixmap = rasterize(&mut renderer, scale, scene).ok_or(NoImage::Failed)?;
+    renderer.set_scale(scale);
+    let pixmap = renderer.render(scene).map_err(|_| NoImage::Failed)?;
     let mut buffers = ImageBuffers::default();
     let mut stdout = io::stdout().lock();
     let written = match backend {
@@ -365,19 +381,6 @@ fn pick_backend() -> Option<Backend> {
     } else {
         None
     }
-}
-
-fn rasterize<'r>(
-    renderer: &'r mut PixmapRenderer,
-    scale: f32,
-    scene: &Scene,
-) -> Option<&'r Pixmap> {
-    renderer.set_scale(scale);
-    let pixmap = renderer.render(scene).ok();
-    if pixmap.is_none() {
-        eprintln!("[sinteract] failed to rasterize draw list");
-    }
-    pixmap
 }
 
 // -----------------------------------------------------------------------------

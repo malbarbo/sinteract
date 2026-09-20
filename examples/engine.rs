@@ -39,7 +39,10 @@ fn main() -> ExitCode {
                 last = Some(now);
                 // A long pause would throw the balls through the walls.
                 game.step(dt.min(0.1));
-                fr.present(&game.scene());
+                if let Err(e) = fr.present(&game.scene()) {
+                    eprintln!("engine: {e}");
+                    break;
+                }
             }
             Ok(Event::Input(InputEvent::Key(k))) => match k.kind {
                 KeyKind::Press if k.key == "q" => break,

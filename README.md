@@ -36,12 +36,14 @@ printed none when the terminal shows no graphics, so a REPL falls back to
 the text of the value.
 
 For an animation, a `Display` owns the terminal or the window, presents a
-scene per frame and delivers the input as a stream of `Event`s. A `Sender`
-wakes it from another thread with a close or a bare wake. The
-same loop runs over stdio, where the frames go to a view as Cap'n Proto
-messages and the input comes back. The schema is in `schema/`, one file for
-the drawing, one for the input and one for the session, and `PLAN.md`
-describes the server and client modes.
+scene per frame and delivers the input as a stream of `Event`s. A frame that
+does not reach the display comes back as a `PresentError`, and the session
+stays open, so the program chooses the words and decides whether to stop. A
+`Sender` wakes it from another thread with a close or a bare wake. The same
+loop runs over stdio, where the frames go to a view as Cap'n Proto messages
+and the input comes back. The schema is in `schema/`, one file for the
+drawing, one for the input and one for the session, and `PLAN.md` describes
+the server and client modes.
 
 The scene, the rasterizer, the text measuring and the PDF and SVG writers
 build on `wasm32`, so a view in a browser can paint a scene without native

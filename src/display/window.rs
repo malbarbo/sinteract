@@ -28,7 +28,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{OpenError, period_from_hz, sealed, warn_bitmaps_once};
+use super::driver::{OpenError, PresentError, period_from_hz, sealed, warn_bitmaps_once};
 use super::inbox::{Inbox, Next, Sender};
 use crate::event::{
     Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
@@ -114,13 +114,14 @@ impl Window {
 }
 
 impl super::Display for Window {
-    fn present(&mut self, scene: &Scene) {
+    fn present(&mut self, scene: &Scene) -> Result<(), PresentError> {
         let Some(session) = self.session.as_mut() else {
-            return;
+            return Err(PresentError::Closed);
         };
         warn_bitmaps_once(&mut self.warned_bitmaps, scene, "window");
-        session.draw(scene);
+        let drawn = session.draw(scene);
         session.last = Some(scene.clone());
+        drawn
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
@@ -153,7 +154,14 @@ impl super::Display for Window {
     }
 
     /// The window draws without bitmaps, so it drops the upload.
-    fn push_asset(&mut self, _id: u32, _blob: &[u8], _mime: Option<&str>) {}
+    fn push_asset(
+        &mut self,
+        _id: u32,
+        _blob: &[u8],
+        _mime: Option<&str>,
+    ) -> Result<(), PresentError> {
+        Ok(())
+    }
 
     /// Destroy the window and give the event loop back.
     fn close(&mut self) {
@@ -185,35 +193,33 @@ impl Drop for Window {
 
 impl Session {
     /// Rasterize `scene` at the size of the surface and present it.
-    fn draw(&mut self, scene: &Scene) {
+    fn draw(&mut self, scene: &Scene) -> Result<(), PresentError> {
         let inner = self.window.inner_size();
+        // A window of no pixels is minimized, and the platform asks for a
+        // redraw when it comes back.
         let (Some(w), Some(h)) = (NonZeroU32::new(inner.width), NonZeroU32::new(inner.height))
         else {
-            return;
+            return Ok(());
         };
-        if self.surface.resize(w, h).is_err() {
-            return;
-        }
+        self.surface.resize(w, h).map_err(surface_error)?;
         let target_px = (w.get(), h.get());
         // The scene fills the window, so there is no cap on the scale.
         let scale = fit_scale(scene.width(), scene.height(), target_px);
         self.renderer.set_scale(scale);
-        let Ok(pixmap) = self.renderer.render(scene) else {
-            return;
-        };
-        let Ok(mut buffer) = self.surface.buffer_mut() else {
-            return;
-        };
+        let pixmap = self.renderer.render(scene)?;
+        let mut buffer = self.surface.buffer_mut().map_err(surface_error)?;
         let placement = Placement::centered(scale, pixmap, target_px);
         blit_pixmap(pixmap, &mut buffer, (w, h), placement.offset);
         self.app.placement = placement;
-        let _ = buffer.present();
+        buffer.present().map_err(surface_error)
     }
 
-    /// Draw the last scene again, at the current size of the window.
+    /// Draw the last scene again, at the current size of the window. A
+    /// failure here reaches the caller at its next `present`, which fails
+    /// the same way.
     fn redraw(&mut self) {
         if let Some(scene) = self.last.take() {
-            self.draw(&scene);
+            let _ = self.draw(&scene);
             self.last = Some(scene);
         }
     }
@@ -228,6 +234,10 @@ fn new_surface(
 
 fn platform_error(e: impl std::fmt::Display) -> OpenError {
     OpenError::Platform(e.to_string())
+}
+
+fn surface_error(e: impl std::fmt::Display) -> PresentError {
+    PresentError::Platform(e.to_string())
 }
 
 // -----------------------------------------------------------------------------

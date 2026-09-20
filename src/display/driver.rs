@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use super::inbox::Sender;
 use crate::event::{Event, NoEvent};
+use crate::renderer::AllocError;
 use crate::scene::Scene;
 
 /// A session that shows scenes and delivers events. Opening is the
@@ -18,7 +19,7 @@ use crate::scene::Scene;
 /// let mut fr = sinteract::display::open_native("My game", 400.0, 300.0, options)?;
 /// loop {
 ///     match fr.wait_event(None) {
-///         Ok(Event::Input(InputEvent::Vsync)) => fr.present(&next_scene()),
+///         Ok(Event::Input(InputEvent::Vsync)) => fr.present(&next_scene())?,
 ///         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 ///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 ///         Ok(Event::Input(InputEvent::Resize { .. })) => {}
@@ -34,8 +35,10 @@ use crate::scene::Scene;
 /// implementation outside the crate would need a public way to build a
 /// [`Sender`].
 pub trait Display: sealed::Sealed {
-    /// Show `scene`. After [`Display::close`] it does nothing.
-    fn present(&mut self, scene: &Scene);
+    /// Show `scene`. A failure leaves the session open, and the caller
+    /// decides whether to show the error, to try another scene or to
+    /// [`close`](Display::close).
+    fn present(&mut self, scene: &Scene) -> Result<(), PresentError>;
 
     /// Block until the next event, or until `deadline` and then return
     /// [`NoEvent::Timeout`], or with no limit when it is `None`. The events
@@ -48,8 +51,8 @@ pub trait Display: sealed::Sealed {
     fn sender(&self) -> Sender;
 
     /// Upload a bitmap for `Bitmap.id`. A display that draws without
-    /// bitmaps drops it.
-    fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>);
+    /// bitmaps drops it and returns `Ok`.
+    fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) -> Result<(), PresentError>;
 
     /// End the session. A second call does nothing, and drop calls it.
     fn close(&mut self);
@@ -57,6 +60,55 @@ pub trait Display: sealed::Sealed {
 
 pub(super) mod sealed {
     pub trait Sealed {}
+}
+
+/// Why a frame or an asset did not reach the display.
+#[derive(Debug)]
+pub enum PresentError {
+    /// The session ended, at [`Display::close`] or because the peer stopped
+    /// reading. [`Display::wait_event`] also reports it, as
+    /// [`NoEvent::Close`].
+    Closed,
+    /// Rasterizing the scene failed.
+    Alloc(AllocError),
+    /// A write to the terminal or to the peer failed. Part of the frame may
+    /// have arrived.
+    Io(io::Error),
+    /// The surface of the window refused the frame.
+    Platform(String),
+}
+
+impl fmt::Display for PresentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PresentError::Closed => f.write_str("the session ended"),
+            PresentError::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
+            PresentError::Io(e) => write!(f, "cannot show the frame: {e}"),
+            PresentError::Platform(e) => write!(f, "cannot show the frame: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for PresentError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PresentError::Alloc(e) => Some(e),
+            PresentError::Io(e) => Some(e),
+            PresentError::Closed | PresentError::Platform(_) => None,
+        }
+    }
+}
+
+impl From<AllocError> for PresentError {
+    fn from(e: AllocError) -> Self {
+        PresentError::Alloc(e)
+    }
+}
+
+impl From<io::Error> for PresentError {
+    fn from(e: io::Error) -> Self {
+        PresentError::Io(e)
+    }
 }
 
 /// The terminal when stdout is a tty with graphics, and a window of `width`

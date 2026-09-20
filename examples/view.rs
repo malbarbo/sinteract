@@ -131,7 +131,12 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
     let mut session = Session::Open;
     for message in from_reader.try_iter() {
         match message {
-            Message::Asset { id, blob, mime } => fr.push_asset(id, &blob, mime.as_deref()),
+            Message::Asset { id, blob, mime } => {
+                if let Err(e) = fr.push_asset(id, &blob, mime.as_deref()) {
+                    eprintln!("view: {e}");
+                    return Session::Closed;
+                }
+            }
             Message::Frame(scene) => {
                 if last.replace(scene).is_some() {
                     stats.skipped += 1;
@@ -145,7 +150,10 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
     }
     if let Some(scene) = last {
         let start = Instant::now();
-        fr.present(&scene);
+        if let Err(e) = fr.present(&scene) {
+            eprintln!("view: {e}");
+            return Session::Closed;
+        }
         stats.shown(start.elapsed());
     }
     session
