@@ -804,26 +804,24 @@ fn capped_scale(width: f32, height: f32, target: Option<(u32, u32)>, cap: f32) -
 /// again passes the same one.
 fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>) -> io::Result<()> {
     buf.clear();
-    // A cell takes about 36 bytes, and a cell row covers two pixel rows.
-    buf.reserve(pixmap.width() as usize * pixmap.height() as usize * 18);
+    // A cell takes about 12 bytes once the repeated colors are left out, and
+    // a cell row covers two pixel rows.
+    buf.reserve(pixmap.width() as usize * pixmap.height() as usize * 6);
     // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
     let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
     while let Some(top) = rows.next() {
         // An odd height leaves the last cell row with nothing below.
         let bottom = rows.next().unwrap_or_default();
+        // The reset at the end of a row leaves the terminal with the default
+        // colors, which no cell carries, so the first cell sets both.
+        let mut shown = None;
         for (x, &t) in top.iter().enumerate() {
-            let (tr, tg, tb) = blend_on_black(t);
-            let (br, bg, bb) = match bottom.get(x) {
-                Some(&b) => blend_on_black(b),
-                None => (0, 0, 0),
+            let cell = Cell {
+                fg: blend_on_black(t),
+                bg: bottom.get(x).map_or(BLACK, |&b| blend_on_black(b)),
             };
-            // One SGR for both colors is shorter and leaves no partial state
-            // if the write stops.
-            buf.extend_from_slice(b"\x1b[38;2;");
-            push_channels(buf, tr, tg, tb);
-            buf.extend_from_slice(b";48;2;");
-            push_channels(buf, br, bg, bb);
-            buf.extend_from_slice("m▀".as_bytes());
+            push_cell(buf, cell, shown);
+            shown = Some(cell);
         }
         // In raw mode a bare LF does not return the cursor to column 0.
         buf.extend_from_slice(b"\x1b[0m\r\n");
@@ -831,10 +829,46 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>)
     out.write_all(buf)
 }
 
+/// The two colors of a half-block cell. The upper pixel of the pair is the
+/// foreground and the lower one is the background.
+#[derive(Clone, Copy, PartialEq)]
+struct Cell {
+    fg: [u8; 3],
+    bg: [u8; 3],
+}
+
+const BLACK: [u8; 3] = [0, 0, 0];
+
+/// Write `cell`, with an SGR only for a color that `shown` does not already
+/// hold. A drawing repeats a color across neighboring cells, and a cell that
+/// changes neither color costs three bytes instead of thirty-six.
+fn push_cell(buf: &mut Vec<u8>, cell: Cell, shown: Option<Cell>) {
+    let (fg, bg) = match shown {
+        Some(shown) => (shown.fg != cell.fg, shown.bg != cell.bg),
+        None => (true, true),
+    };
+    // One SGR for both colors is shorter and leaves no partial state if the
+    // write stops.
+    if fg {
+        buf.extend_from_slice(b"\x1b[38;2;");
+        push_channels(buf, cell.fg);
+        if bg {
+            buf.extend_from_slice(b";48;2;");
+            push_channels(buf, cell.bg);
+        }
+        buf.push(b'm');
+    } else if bg {
+        buf.extend_from_slice(b"\x1b[48;2;");
+        push_channels(buf, cell.bg);
+        buf.push(b'm');
+    }
+    buf.extend_from_slice("▀".as_bytes());
+}
+
 /// The three channels of an SGR color, separated by `;`. A `write!` here
 /// costs ten times what the digits cost, because it formats at run time.
-fn push_channels(buf: &mut Vec<u8>, r: u8, g: u8, b: u8) {
-    for (i, v) in [r, g, b].into_iter().enumerate() {
+fn push_channels(buf: &mut Vec<u8>, color: [u8; 3]) {
+    for (i, v) in color.into_iter().enumerate() {
         if i > 0 {
             buf.push(b';');
         }
@@ -848,9 +882,9 @@ fn push_channels(buf: &mut Vec<u8>, r: u8, g: u8, b: u8) {
     }
 }
 
-fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
+fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> [u8; 3] {
     // The pixel is premultiplied, so compositing over black changes nothing.
-    (p.red(), p.green(), p.blue())
+    [p.red(), p.green(), p.blue()]
 }
 
 // -----------------------------------------------------------------------------
@@ -1035,6 +1069,17 @@ mod tests {
         assert!(s.contains("\x1b[38;2;"), "missing 24-bit fg SGR: {s:?}");
         assert!(s.contains(";48;2;"), "missing 24-bit bg SGR: {s:?}");
         assert!(s.contains("\x1b[0m"), "missing reset: {s:?}");
+    }
+
+    #[test]
+    fn text_blocks_sets_a_color_once_for_a_run_of_cells() {
+        let pm = solid(8, 2, 0, 0, 255);
+        let mut buf: Vec<u8> = Vec::new();
+        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
+        let s = String::from_utf8_lossy(&buf);
+        assert_eq!(s.matches("\x1b[38;2;").count(), 1, "one fg SGR: {s:?}");
+        assert_eq!(s.matches("48;2;").count(), 1, "one bg SGR: {s:?}");
+        assert_eq!(s.matches('▀').count(), 8);
     }
 
     #[test]
