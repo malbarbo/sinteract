@@ -324,8 +324,8 @@ impl ResolvedFont {
         } else {
             None
         };
-        if let Some(family) = alias {
-            return family.variant(weight, style).resolved();
+        if let Some(embedded) = alias {
+            return embedded.variant(weight, style).resolved();
         }
 
         if let Some(font) = system::font(key, weight, style) {
