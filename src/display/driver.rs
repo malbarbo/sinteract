@@ -185,7 +185,12 @@ impl std::error::Error for OpenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             OpenError::Io(e) => Some(e),
-            _ => None,
+            OpenError::Busy
+            | OpenError::NoGraphics
+            | OpenError::WrongThread
+            | OpenError::LoopEnded
+            | OpenError::Timeout
+            | OpenError::Platform(_) => None,
         }
     }
 }
