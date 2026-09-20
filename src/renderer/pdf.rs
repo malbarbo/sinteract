@@ -563,12 +563,13 @@ impl Shading {
             f.n(1.0);
             f.finish();
         }
-        let &[ref subs @ .., main_fn_ref] = refs.functions.as_slice() else {
-            panic!("a gradient has a function");
-        };
+        let (&main_fn_ref, subs) = refs
+            .functions
+            .split_last()
+            .expect("a gradient has a function");
         // With one interval, the only function is the exponential one.
         if let [_, inner @ .., _] = stops.as_slice()
-            && !inner.is_empty()
+            && !subs.is_empty()
         {
             assert_eq!(
                 subs.len(),
