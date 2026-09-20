@@ -851,9 +851,10 @@ fn capped_scale(width: f32, height: f32, target: Option<(u32, u32)>, cap: f32) -
 /// again passes the same one.
 fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>) -> io::Result<()> {
     buf.clear();
-    // A cell takes about 12 bytes once the repeated colors are left out, and
-    // a cell row covers two pixel rows.
-    buf.reserve(pixmap.width() as usize * pixmap.height() as usize * 6);
+    // A cell whose colors repeat takes the three bytes of `▀`, which is the
+    // common case in a drawing, and a cell row covers two pixel rows. A
+    // frame of many colors grows the buffer once and keeps the room.
+    buf.reserve(pixmap.width() as usize * pixmap.height() as usize * 2);
     // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
     let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
     while let Some(top) = rows.next() {
