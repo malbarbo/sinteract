@@ -761,7 +761,10 @@ fn blit_pixmap(
     let src_rows = pixmap.pixels().chunks(pixmap.width() as usize);
     let dst_rows = buffer.chunks_mut(bw.get() as usize).skip(off_y as usize);
     for (src, dst) in src_rows.zip(dst_rows) {
-        for (d, p) in dst.iter_mut().skip(off_x as usize).zip(src) {
+        let dst = dst
+            .get_mut(off_x as usize..)
+            .expect("the offset leaves the pixmap inside the buffer");
+        for (d, p) in dst.iter_mut().zip(src) {
             // softbuffer takes 0RGB. A premultiplied pixel is already the
             // pixel over black, the color of the band.
             *d = (u32::from(p.red()) << 16) | (u32::from(p.green()) << 8) | u32::from(p.blue());
