@@ -535,12 +535,11 @@ fn read_input(
             Ok(true) => ct_event::read(),
             Err(e) => Err(e),
         };
-        let ev = match ev {
-            Ok(ev) => ev,
-            Err(e) => {
-                eprintln!("[sinteract] terminal read error: {e}");
-                return;
-            }
+        // A read that fails ends the input, and the Close says so. The
+        // engine has no way to read the tty again, so the cause goes
+        // nowhere.
+        let Ok(ev) = ev else {
+            return;
         };
         let key = match ev {
             ct_event::Event::Key(key) => key,
