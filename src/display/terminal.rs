@@ -847,15 +847,18 @@ fn emit_kitty<W: Write>(
     id: Option<u32>,
     buf: &mut Vec<u8>,
 ) -> io::Result<()> {
-    // The pixels of one chunk. Base64 turns them into the 4096 bytes that
-    // the protocol allows, and a multiple of 3 leaves no padding inside.
-    const CHUNK_PIXELS: usize = 3072;
-    let data = pixmap.data();
+    // The pixels of one chunk. Their bytes are a multiple of 3, so base64
+    // turns them into the 4096 bytes that the protocol allows, with no
+    // padding inside.
+    const CHUNK_PIXELS: usize = 768;
+    const CHUNK_BYTES: usize = CHUNK_PIXELS * 4;
+    let pixels = pixmap.pixels();
     buf.clear();
-    buf.reserve(data.len() * 4 / 3 + data.len() / CHUNK_PIXELS * 16 + 64);
-    let mut encoded = [0u8; CHUNK_PIXELS / 3 * 4];
-    let total_chunks = data.len().div_ceil(CHUNK_PIXELS).max(1);
-    for (idx, chunk) in data.chunks(CHUNK_PIXELS).enumerate() {
+    buf.reserve(pixels.len() * 16 / 3 + pixels.len() / CHUNK_PIXELS * 16 + 64);
+    let mut straight = [0u8; CHUNK_BYTES];
+    let mut encoded = [0u8; CHUNK_BYTES / 3 * 4];
+    let total_chunks = pixels.len().div_ceil(CHUNK_PIXELS).max(1);
+    for (idx, chunk) in pixels.chunks(CHUNK_PIXELS).enumerate() {
         let more: u8 = if idx + 1 < total_chunks { 1 } else { 0 };
         if idx == 0 {
             write!(
@@ -873,12 +876,25 @@ fn emit_kitty<W: Write>(
             write!(buf, "\x1b_Gm={},q=2;", more)?;
         }
         let n = B64
-            .encode_slice(chunk, &mut encoded)
+            .encode_slice(straight_alpha(chunk, &mut straight), &mut encoded)
             .expect("a chunk encodes into four bytes per three");
         buf.extend_from_slice(encoded.get(..n).expect("encode_slice fills a prefix"));
         buf.extend_from_slice(b"\x1b\\");
     }
     w.write_all(buf)
+}
+
+/// The pixels of `chunk` in `out`, with the premultiplication undone. Kitty
+/// composes with straight alpha, so a premultiplied pixel would take its
+/// alpha a second time and come out dark.
+fn straight_alpha<'a>(chunk: &[tiny_skia::PremultipliedColorU8], out: &'a mut [u8]) -> &'a [u8] {
+    let (groups, _) = out.as_chunks_mut::<4>();
+    for (px, p) in groups.iter_mut().zip(chunk) {
+        let c = p.demultiply();
+        *px = [c.red(), c.green(), c.blue(), c.alpha()];
+    }
+    out.get(..chunk.len() * 4)
+        .expect("a chunk holds at most the pixels of the buffer")
 }
 
 fn delete_kitty_image<W: Write>(w: &mut W, id: u32) -> io::Result<()> {
@@ -1078,6 +1094,20 @@ mod tests {
                 .unwrap()
                 .starts_with("\x1b_Ga=T,f=32,s=1,v=1,q=2,m=0;")
         );
+    }
+
+    #[test]
+    fn a_kitty_pixel_goes_out_with_straight_alpha() {
+        let mut pm = Pixmap::new(1, 1).unwrap();
+        let half_red = tiny_skia::ColorU8::from_rgba(255, 0, 0, 128);
+        pm.pixels_mut().fill(half_red.premultiply());
+        let mut out = Vec::new();
+        emit_kitty(&mut out, &pm, None, &mut Vec::new()).unwrap();
+        let payload = String::from_utf8(out).unwrap();
+        let payload = payload
+            .trim_start_matches("\x1b_Ga=T,f=32,s=1,v=1,q=2,m=0;")
+            .trim_end_matches("\x1b\\");
+        assert_eq!(B64.decode(payload).unwrap(), [255, 0, 0, 128]);
     }
 
     #[test]
