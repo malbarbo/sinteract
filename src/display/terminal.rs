@@ -65,6 +65,9 @@ pub struct Terminal {
     frame_size: Option<(u32, u32)>,
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
     renderer: PixmapRenderer,
+    /// The bytes of the frame, kept across frames so the half-blocks reuse
+    /// the allocation.
+    escapes: Vec<u8>,
     /// The scene of the last present, drawn again after a resize.
     last: Option<Scene>,
     /// How the reader maps a cell to the scene on screen.
@@ -126,6 +129,7 @@ impl Terminal {
             live: Some(Live { reader, claim }),
             frame_size: None,
             renderer: PixmapRenderer::default(),
+            escapes: Vec::new(),
             last: None,
             cells,
             warned_bitmaps: false,
@@ -153,7 +157,7 @@ impl Terminal {
             Backend::Sixel => {
                 sixel::encode(pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))
             }
-            Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap),
+            Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut self.escapes),
         };
         let _ = stdout.flush();
     }
@@ -240,7 +244,7 @@ pub fn show_image(scene: &Scene) {
         Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND)
             .and_then(|b| stdout.write_all(&b))
             .and_then(|()| writeln!(stdout)),
-        Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap),
+        Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut Vec::new()),
     };
     let _ = stdout.flush();
 }
@@ -760,8 +764,14 @@ fn capped_scale(width: f32, height: f32, target: Option<(u32, u32)>, cap: f32) -
 
 /// Write `pixmap` as truecolor half-blocks (`▀`). Each pair of rows becomes
 /// one cell row, with the upper pixel in the foreground and the lower one in
-/// the background, both composited over black.
-fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<()> {
+/// the background, both composited over black. The frame goes out in one
+/// write, because `out` is a `LineWriter` that would otherwise make a
+/// syscall per cell row. `buf` holds the frame, and a caller that draws
+/// again passes the same one.
+fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>) -> io::Result<()> {
+    buf.clear();
+    // A cell takes about 36 bytes, and a cell row covers two pixel rows.
+    buf.reserve(pixmap.width() as usize * pixmap.height() as usize * 18);
     // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
     let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
     while let Some(top) = rows.next() {
@@ -775,16 +785,33 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<()> 
             };
             // One SGR for both colors is shorter and leaves no partial state
             // if the write stops.
-            write!(
-                out,
-                "\x1b[38;2;{};{};{};48;2;{};{};{}m▀",
-                tr, tg, tb, br, bg, bb
-            )?;
+            buf.extend_from_slice(b"\x1b[38;2;");
+            push_channels(buf, tr, tg, tb);
+            buf.extend_from_slice(b";48;2;");
+            push_channels(buf, br, bg, bb);
+            buf.extend_from_slice("m▀".as_bytes());
         }
         // In raw mode a bare LF does not return the cursor to column 0.
-        out.write_all(b"\x1b[0m\r\n")?;
+        buf.extend_from_slice(b"\x1b[0m\r\n");
     }
-    Ok(())
+    out.write_all(buf)
+}
+
+/// The three channels of an SGR color, separated by `;`. A `write!` here
+/// costs ten times what the digits cost, because it formats at run time.
+fn push_channels(buf: &mut Vec<u8>, r: u8, g: u8, b: u8) {
+    for (i, v) in [r, g, b].into_iter().enumerate() {
+        if i > 0 {
+            buf.push(b';');
+        }
+        if v >= 100 {
+            buf.push(b'0' + v / 100);
+        }
+        if v >= 10 {
+            buf.push(b'0' + (v / 10) % 10);
+        }
+        buf.push(b'0' + v % 10);
+    }
 }
 
 fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
@@ -909,7 +936,7 @@ mod tests {
     fn text_blocks_renders_some_pixels() {
         let pm = solid(4, 4, 255, 0, 0);
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm).expect("write ok");
+        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         assert_eq!(rows(&buf), 2);
         // U+2580 in UTF-8.
         assert!(buf.windows(3).any(|w| w == [0xE2, 0x96, 0x80]));
@@ -919,7 +946,7 @@ mod tests {
     fn text_blocks_uses_truecolor_codes() {
         let pm = solid(2, 2, 0, 0, 255);
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm).expect("write ok");
+        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         let s = String::from_utf8_lossy(&buf);
         assert!(s.contains("\x1b[38;2;"), "missing 24-bit fg SGR: {s:?}");
         assert!(s.contains(";48;2;"), "missing 24-bit bg SGR: {s:?}");
@@ -931,7 +958,7 @@ mod tests {
         // The last cell row has no bottom pixel and takes black.
         let pm = solid(3, 3, 255, 255, 255);
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm).expect("write ok");
+        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         // ceil(3 / 2) rows.
         assert_eq!(rows(&buf), 2);
     }
@@ -940,7 +967,7 @@ mod tests {
     fn text_blocks_writes_one_row_for_one_pixel() {
         let pm = Pixmap::new(1, 1).unwrap();
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm).expect("write ok");
+        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         assert_eq!(rows(&buf), 1);
     }
 
