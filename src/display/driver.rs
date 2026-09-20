@@ -14,9 +14,14 @@ use crate::scene::Scene;
 /// constructor of the implementation, and the session ends at
 /// [`Display::close`] or at drop:
 ///
-/// ```ignore
-/// let options = TerminalOptions::default();
-/// let mut fr = sinteract::display::open_native("My game", 400.0, 300.0, options)?;
+/// ```no_run
+/// # use sinteract::display::Display;
+/// # use sinteract::event::{Event, InputEvent, KeyEvent, MouseEvent, NoEvent};
+/// # use sinteract::scene::Scene;
+/// # fn next_scene() -> Scene { Scene::new(400.0, 300.0) }
+/// # fn on_key(_: KeyEvent) {}
+/// # fn on_mouse(_: MouseEvent) {}
+/// # fn run(fr: &mut dyn Display) -> Result<(), Box<dyn std::error::Error>> {
 /// loop {
 ///     match fr.wait_event(None) {
 ///         Ok(Event::Input(InputEvent::Vsync)) => fr.present(&next_scene())?,
@@ -30,6 +35,8 @@ use crate::scene::Scene;
 ///     }
 /// }
 /// fr.close();
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// The trait is sealed. Its contract, the order of arrival, one Vsync
@@ -123,6 +130,14 @@ impl From<io::Error> for PresentError {
 /// by `height` logical pixels otherwise. `title` only matters for a window,
 /// because a terminal keeps the title of the shell, and `options` only for a
 /// terminal.
+///
+/// ```no_run
+/// # use sinteract::display::{Display, TerminalOptions, open_native};
+/// let options = TerminalOptions::default();
+/// let mut fr = open_native("My game", 400.0, 300.0, options)?;
+/// fr.close();
+/// # Ok::<(), sinteract::display::OpenError>(())
+/// ```
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub fn open_native(
     title: &str,
