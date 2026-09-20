@@ -145,6 +145,14 @@ pub enum OpenError {
     Busy,
     /// The terminal shows neither Kitty, Sixel nor truecolor.
     NoGraphics,
+    /// Another thread opened the first window, and winit keeps the event
+    /// loop of the process on that one.
+    WrongThread,
+    /// The event loop of the windows ended, and the platform starts no
+    /// other one in this process.
+    LoopEnded,
+    /// The window did not open in time.
+    Timeout,
     /// A read or a write failed, or a thread did not start.
     Io(io::Error),
     /// The platform has no window for us.
@@ -160,6 +168,13 @@ impl fmt::Display for OpenError {
                  a Sixel terminal (Windows Terminal 1.22 or later, mlterm, foot, mintty) \
                  or a truecolor terminal (set COLORTERM=truecolor)",
             ),
+            OpenError::WrongThread => {
+                f.write_str("a window opens only on the thread of the first window")
+            }
+            OpenError::LoopEnded => {
+                f.write_str("the window event loop ended, and it cannot start again")
+            }
+            OpenError::Timeout => f.write_str("the window did not open in time"),
             OpenError::Io(e) => write!(f, "cannot open the display: {e}"),
             OpenError::Platform(e) => write!(f, "cannot open a window: {e}"),
         }

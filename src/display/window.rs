@@ -293,12 +293,8 @@ impl Lent {
         }
         match owner {
             Err(e) => Err(OpenError::Platform(e.clone())),
-            Ok(id) if *id != thread::current().id() => Err(OpenError::Platform(
-                "a window opens only on the thread of the first window".into(),
-            )),
-            Ok(_) if LOOP_DEAD.get() => Err(OpenError::Platform(
-                "the window event loop ended, and it cannot start again".into(),
-            )),
+            Ok(id) if *id != thread::current().id() => Err(OpenError::WrongThread),
+            Ok(_) if LOOP_DEAD.get() => Err(OpenError::LoopEnded),
             Ok(_) => PARKED
                 .with_borrow_mut(|p| p.0.take())
                 .map(Self::of)
@@ -348,18 +344,12 @@ impl Lent {
         let deadline = Instant::now() + timeout;
         loop {
             if !self.pump(app, Some(Duration::from_millis(16))) {
-                return Err(OpenError::Platform(
-                    "the window event loop ended before the window opened".into(),
-                ));
+                return Err(OpenError::LoopEnded);
             }
             match app.created.take() {
                 Some(Ok(window)) => return Ok(window),
                 Some(Err(e)) => return Err(OpenError::Platform(e)),
-                None if Instant::now() >= deadline => {
-                    return Err(OpenError::Platform(
-                        "the window did not open in time".into(),
-                    ));
-                }
+                None if Instant::now() >= deadline => return Err(OpenError::Timeout),
                 None => {}
             }
         }
