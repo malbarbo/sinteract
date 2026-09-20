@@ -65,9 +65,8 @@ pub struct Terminal {
     frame_size: Option<(u32, u32)>,
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
     renderer: PixmapRenderer,
-    /// The escapes of the frame, kept across frames so a frame reuses the
-    /// allocation.
-    escapes: Vec<u8>,
+    /// Kept across frames, so a frame reuses the allocations.
+    buffers: ImageBuffers,
     /// The scene of the last present, drawn again after a resize.
     last: Option<Scene>,
     /// How the reader maps a cell to the scene on screen.
@@ -129,7 +128,7 @@ impl Terminal {
             live: Some(Live { reader, claim }),
             frame_size: None,
             renderer: PixmapRenderer::default(),
-            escapes: Vec::new(),
+            buffers: ImageBuffers::default(),
             last: None,
             cells,
             warned_bitmaps: false,
@@ -157,12 +156,15 @@ impl Terminal {
                 &mut stdout,
                 pixmap,
                 Some(KITTY_ANIMATION_ID),
-                &mut self.escapes,
+                &mut self.buffers.image,
+                &mut self.buffers.escapes,
             ),
             Backend::Sixel => {
                 sixel::encode(pixmap, SIXEL_BACKGROUND).and_then(|b| stdout.write_all(&b))
             }
-            Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut self.escapes),
+            Backend::TextBlocks => {
+                render_text_blocks(&mut stdout, pixmap, &mut self.buffers.escapes)
+            }
         };
         let _ = stdout.flush();
     }
@@ -227,18 +229,31 @@ impl Drop for Terminal {
     }
 }
 
+/// The bytes a frame of [`show_image_with`] needs. Sixel builds its own
+/// bytes and leaves both empty.
+#[derive(Default)]
+pub struct ImageBuffers {
+    /// The PNG that the Kitty protocol carries.
+    image: Vec<u8>,
+    /// The escapes that go to the terminal.
+    escapes: Vec<u8>,
+}
+
 /// Print `scene` at the cursor, through Kitty when the terminal supports
 /// it, else Sixel, else half-blocks. Prints nothing while a [`Terminal`]
 /// holds the tty, or when the terminal has no graphics.
 pub fn show_image(scene: &Scene) {
-    show_image_with(scene, &mut PixmapRenderer::default(), &mut Vec::new());
+    show_image_with(
+        scene,
+        &mut PixmapRenderer::default(),
+        &mut ImageBuffers::default(),
+    );
 }
 
 /// [`show_image`], with the surface that rasterizes the scene and the
-/// buffer that takes the bytes of the image. A program that shows one image
-/// after another passes the same two and allocates once. Sixel builds its
-/// own bytes and leaves the buffer empty.
-pub fn show_image_with(scene: &Scene, renderer: &mut PixmapRenderer, buf: &mut Vec<u8>) {
+/// buffers that take its bytes. A program that shows one image after
+/// another passes the same two and allocates once.
+pub fn show_image_with(scene: &Scene, renderer: &mut PixmapRenderer, buffers: &mut ImageBuffers) {
     if TTY.load(Ordering::Acquire) != FREE {
         eprintln!("[sinteract] a terminal session is open; not printing the image");
         return;
@@ -252,13 +267,18 @@ pub fn show_image_with(scene: &Scene, renderer: &mut PixmapRenderer, buf: &mut V
     };
     let mut stdout = io::stdout().lock();
     let _ = match backend {
-        Backend::Kitty => {
-            emit_kitty(&mut stdout, pixmap, None, buf).and_then(|()| writeln!(stdout))
-        }
+        Backend::Kitty => emit_kitty(
+            &mut stdout,
+            pixmap,
+            None,
+            &mut buffers.image,
+            &mut buffers.escapes,
+        )
+        .and_then(|()| writeln!(stdout)),
         Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND)
             .and_then(|b| stdout.write_all(&b))
             .and_then(|()| writeln!(stdout)),
-        Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, buf),
+        Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut buffers.escapes),
     };
     let _ = stdout.flush();
 }
@@ -837,37 +857,34 @@ fn blend_on_black(p: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
 // Kitty graphics protocol I/O
 // -----------------------------------------------------------------------------
 
-/// Write the Kitty escape sequences that show `pixmap` at the cursor, as raw
-/// RGBA in chunks. An image with an `id` replaces the image of that id, and
-/// one without stays until the terminal scrolls it away. `buf` holds the
-/// escapes, and a caller that draws again passes the same one.
+/// The pixels of one conversion, and of one chunk of the escapes. Their
+/// bytes are a multiple of 3, so base64 turns them into the 4096 bytes that
+/// the protocol allows, with no padding inside.
+const CHUNK_PIXELS: usize = 768;
+const CHUNK_BYTES: usize = CHUNK_PIXELS * 4;
+
+/// Write the Kitty escape sequences that show `pixmap` at the cursor, as a
+/// PNG in chunks. An image with an `id` replaces the image of that id, and
+/// one without stays until the terminal scrolls it away. `image` takes the
+/// PNG and `buf` the escapes, and a caller that draws again passes the same
+/// two.
 fn emit_kitty<W: Write>(
     w: &mut W,
     pixmap: &Pixmap,
     id: Option<u32>,
+    image: &mut Vec<u8>,
     buf: &mut Vec<u8>,
 ) -> io::Result<()> {
-    // The pixels of one chunk. Their bytes are a multiple of 3, so base64
-    // turns them into the 4096 bytes that the protocol allows, with no
-    // padding inside.
-    const CHUNK_PIXELS: usize = 768;
-    const CHUNK_BYTES: usize = CHUNK_PIXELS * 4;
-    let pixels = pixmap.pixels();
+    encode_png(pixmap, image)?;
     buf.clear();
-    buf.reserve(pixels.len() * 16 / 3 + pixels.len() / CHUNK_PIXELS * 16 + 64);
-    let mut straight = [0u8; CHUNK_BYTES];
+    buf.reserve(image.len() * 4 / 3 + image.len() / CHUNK_BYTES * 16 + 64);
     let mut encoded = [0u8; CHUNK_BYTES / 3 * 4];
-    let total_chunks = pixels.len().div_ceil(CHUNK_PIXELS).max(1);
-    for (idx, chunk) in pixels.chunks(CHUNK_PIXELS).enumerate() {
+    let total_chunks = image.len().div_ceil(CHUNK_BYTES).max(1);
+    for (idx, chunk) in image.chunks(CHUNK_BYTES).enumerate() {
         let more: u8 = if idx + 1 < total_chunks { 1 } else { 0 };
         if idx == 0 {
-            write!(
-                buf,
-                "\x1b_Ga=T,f=32,s={},v={},q=2,m={}",
-                pixmap.width(),
-                pixmap.height(),
-                more,
-            )?;
+            // The PNG header carries the size, so s and v say nothing here.
+            write!(buf, "\x1b_Ga=T,f=100,q=2,m={}", more)?;
             if let Some(id) = id {
                 write!(buf, ",i={id}")?;
             }
@@ -876,7 +893,7 @@ fn emit_kitty<W: Write>(
             write!(buf, "\x1b_Gm={},q=2;", more)?;
         }
         let n = B64
-            .encode_slice(straight_alpha(chunk, &mut straight), &mut encoded)
+            .encode_slice(chunk, &mut encoded)
             .expect("a chunk encodes into four bytes per three");
         buf.extend_from_slice(encoded.get(..n).expect("encode_slice fills a prefix"));
         buf.extend_from_slice(b"\x1b\\");
@@ -884,9 +901,33 @@ fn emit_kitty<W: Write>(
     w.write_all(buf)
 }
 
-/// The pixels of `chunk` in `out`, with the premultiplication undone. Kitty
-/// composes with straight alpha, so a premultiplied pixel would take its
-/// alpha a second time and come out dark.
+/// Encode `pixmap` into `out` as a PNG with straight alpha.
+///
+/// The terminal reads the raw pixels of a frame of 960 by 540 in 95 ms,
+/// because they travel in base64, and the same frame as a PNG in 1 ms. The
+/// adaptive filter is what earns it, since it turns a flat area into a row
+/// of zeros. `Balanced` shrinks the frame four times more and costs ten
+/// times the encoding, which the write does not give back.
+fn encode_png(pixmap: &Pixmap, out: &mut Vec<u8>) -> io::Result<()> {
+    out.clear();
+    let mut encoder = png::Encoder::new(&mut *out, pixmap.width(), pixmap.height());
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.set_filter(png::Filter::Adaptive);
+    let mut writer = encoder.write_header().map_err(io::Error::other)?;
+    let mut rows = writer.stream_writer().map_err(io::Error::other)?;
+    let mut straight = [0u8; CHUNK_BYTES];
+    for chunk in pixmap.pixels().chunks(CHUNK_PIXELS) {
+        rows.write_all(straight_alpha(chunk, &mut straight))?;
+    }
+    rows.finish().map_err(io::Error::other)?;
+    writer.finish().map_err(io::Error::other)
+}
+
+/// The pixels of `chunk` in `out`, with the premultiplication undone. PNG
+/// holds straight alpha, so a premultiplied pixel would take its alpha a
+/// second time and come out dark.
 fn straight_alpha<'a>(chunk: &[tiny_skia::PremultipliedColorU8], out: &'a mut [u8]) -> &'a [u8] {
     let (groups, _) = out.as_chunks_mut::<4>();
     for (px, p) in groups.iter_mut().zip(chunk) {
@@ -1077,22 +1118,42 @@ mod tests {
         assert!(Claim::take().is_ok());
     }
 
+    /// The pixels of the image that `escapes` carries.
+    fn decode_kitty(escapes: Vec<u8>, header: &str) -> Vec<u8> {
+        let escapes = String::from_utf8(escapes).unwrap();
+        let payload = escapes
+            .strip_prefix(header)
+            .expect("the frame starts with the header")
+            .trim_end_matches("\x1b\\");
+        let png = B64.decode(payload).unwrap();
+        let mut reader = png::Decoder::new(io::Cursor::new(png)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        pixels.truncate(info.buffer_size());
+        pixels
+    }
+
     #[test]
     fn kitty_names_the_frame_and_not_an_inline_image() {
         let pm = Pixmap::new(1, 1).unwrap();
         let mut framed = Vec::new();
-        emit_kitty(&mut framed, &pm, Some(KITTY_ANIMATION_ID), &mut Vec::new()).unwrap();
-        assert!(
-            String::from_utf8(framed)
-                .unwrap()
-                .starts_with("\x1b_Ga=T,f=32,s=1,v=1,q=2,m=0,i=1042;")
+        emit_kitty(
+            &mut framed,
+            &pm,
+            Some(KITTY_ANIMATION_ID),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            decode_kitty(framed, "\x1b_Ga=T,f=100,q=2,m=0,i=1042;"),
+            [0, 0, 0, 0]
         );
         let mut inline = Vec::new();
-        emit_kitty(&mut inline, &pm, None, &mut Vec::new()).unwrap();
-        assert!(
-            String::from_utf8(inline)
-                .unwrap()
-                .starts_with("\x1b_Ga=T,f=32,s=1,v=1,q=2,m=0;")
+        emit_kitty(&mut inline, &pm, None, &mut Vec::new(), &mut Vec::new()).unwrap();
+        assert_eq!(
+            decode_kitty(inline, "\x1b_Ga=T,f=100,q=2,m=0;"),
+            [0, 0, 0, 0]
         );
     }
 
@@ -1102,12 +1163,11 @@ mod tests {
         let half_red = tiny_skia::ColorU8::from_rgba(255, 0, 0, 128);
         pm.pixels_mut().fill(half_red.premultiply());
         let mut out = Vec::new();
-        emit_kitty(&mut out, &pm, None, &mut Vec::new()).unwrap();
-        let payload = String::from_utf8(out).unwrap();
-        let payload = payload
-            .trim_start_matches("\x1b_Ga=T,f=32,s=1,v=1,q=2,m=0;")
-            .trim_end_matches("\x1b\\");
-        assert_eq!(B64.decode(payload).unwrap(), [255, 0, 0, 128]);
+        emit_kitty(&mut out, &pm, None, &mut Vec::new(), &mut Vec::new()).unwrap();
+        assert_eq!(
+            decode_kitty(out, "\x1b_Ga=T,f=100,q=2,m=0;"),
+            [255, 0, 0, 128]
+        );
     }
 
     #[test]
