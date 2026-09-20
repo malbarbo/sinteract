@@ -762,7 +762,7 @@ fn capped_scale(width: f32, height: f32, target: Option<(u32, u32)>, cap: f32) -
 /// one cell row, with the upper pixel in the foreground and the lower one in
 /// the background, both composited over black.
 fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap) -> io::Result<()> {
-    // A pixmap is never 0 pixels wide, so the chunks are never empty.
+    // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
     let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
     while let Some(top) = rows.next() {
         // An odd height leaves the last cell row with nothing below.

@@ -120,7 +120,6 @@ enum Entry {
 
 /// What [`Inbox::wait_with`] hands to the display.
 pub(crate) enum Next {
-    /// What `wait_event` returns.
     Ready(Result<Event, NoEvent>),
     /// Draw the last scene again, and wait again.
     Redraw,

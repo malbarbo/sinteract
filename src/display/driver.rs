@@ -41,7 +41,7 @@ pub trait Display: sealed::Sealed {
     /// [`NoEvent::Timeout`], or with no limit when it is `None`. The events
     /// go out in the order of arrival. After a Close, every call returns
     /// [`NoEvent::Close`]. A `while let Ok(ev)` over it also stops at the
-    /// first Timeout.
+    /// first Wake or Timeout.
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent>;
 
     /// A handle that pushes into this queue from any thread.
