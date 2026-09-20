@@ -326,16 +326,19 @@ impl Inbox {
 
 /// Returns `true` if `new` makes `old` worthless, `false` otherwise.
 fn supersedes(new: &Entry, old: &Entry) -> bool {
-    let is_move = |e: &Entry| {
+    let (Entry::Input(new), Entry::Input(old)) = (new, old) else {
+        return false;
+    };
+    let is_move = |e: &InputEvent| {
         matches!(
             e,
-            Entry::Input(InputEvent::Mouse(MouseEvent {
+            InputEvent::Mouse(MouseEvent {
                 action: MouseAction::Move,
                 ..
-            }))
+            })
         )
     };
-    let is_resize = |e: &Entry| matches!(e, Entry::Input(InputEvent::Resize { .. }));
+    let is_resize = |e: &InputEvent| matches!(e, InputEvent::Resize { .. });
     (is_move(new) && is_move(old)) || (is_resize(new) && is_resize(old))
 }
 
