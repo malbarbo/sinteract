@@ -28,8 +28,8 @@ use crate::event::{
     Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
     NoEvent, key,
 };
-use crate::renderer::Renderer;
 use crate::renderer::pixmap::PixmapRenderer;
+use crate::renderer::{AllocError, Renderer};
 use crate::scene::Scene;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
@@ -264,8 +264,9 @@ struct ImageBuffers {
     blocks: BlockScreen,
 }
 
-/// Why [`show_image`] showed no image.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Why [`show_image`] showed no image. A failure comes with the error that
+/// caused it, since the library writes no message of its own.
+#[derive(Debug)]
 pub enum NoImage {
     /// The terminal shows neither Kitty, Sixel nor truecolor graphics, or
     /// stdout is not a terminal. The probe runs once per process, so every
@@ -274,9 +275,11 @@ pub enum NoImage {
     NoGraphics,
     /// A [`Terminal`] session holds the tty.
     Busy,
-    /// The rasterizer built no pixels for the scene, or the write stopped
-    /// part way, which may leave part of the image on screen.
-    Failed,
+    /// Rasterizing the scene failed.
+    Alloc(AllocError),
+    /// The write stopped part way, which may leave part of the image on
+    /// screen.
+    Io(io::Error),
 }
 
 /// Print `scene` at the cursor, through Kitty when the terminal supports
@@ -291,7 +294,7 @@ pub fn show_image(scene: &Scene) -> Result<(), NoImage> {
     let scale = scale_for_backend(backend, scene.width(), scene.height());
     let mut renderer = PixmapRenderer::default();
     renderer.set_scale(scale);
-    let pixmap = renderer.render(scene).map_err(|_| NoImage::Failed)?;
+    let pixmap = renderer.render(scene).map_err(NoImage::Alloc)?;
     let mut buffers = ImageBuffers::default();
     let mut stdout = io::stdout().lock();
     let written = match backend {
@@ -308,9 +311,7 @@ pub fn show_image(scene: &Scene) -> Result<(), NoImage> {
             .and_then(|()| writeln!(stdout)),
         Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut buffers.escapes),
     };
-    written
-        .and_then(|()| stdout.flush())
-        .map_err(|_| NoImage::Failed)
+    written.and_then(|()| stdout.flush()).map_err(NoImage::Io)
 }
 
 /// Returns `true` if the terminal reports 24-bit color, `false` otherwise.
@@ -1237,7 +1238,10 @@ mod tests {
     #[test]
     fn show_image_shows_nothing_while_a_session_holds_the_tty() {
         let claim = Claim::take().expect("no session runs in a test");
-        assert_eq!(show_image(&Scene::new(4.0, 4.0)), Err(NoImage::Busy));
+        assert!(matches!(
+            show_image(&Scene::new(4.0, 4.0)),
+            Err(NoImage::Busy)
+        ));
         drop(claim);
     }
 
