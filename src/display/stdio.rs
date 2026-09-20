@@ -104,8 +104,8 @@ impl Stdio {
 
 impl super::Display for Stdio {
     /// Send a frame and flush, so the peer sees it at once.
-    fn present(&mut self, scene: &Scene) -> Result<(), PresentError> {
-        self.send(|w| to_view::write_frame(w, UNROUTED, scene))
+    fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
+        self.send(|w| to_view::write_frame(w, UNROUTED, &scene))
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
@@ -286,7 +286,7 @@ mod tests {
             );
             p.line_to(10.0, 10.0);
         }
-        fr.present(&scene).expect("the frame goes out");
+        fr.present(scene).expect("the frame goes out");
         match &decode_messages(&written.bytes())[..] {
             [to_view::Message::Frame(d)] => {
                 assert_eq!(d.width(), 10.0);
@@ -396,7 +396,7 @@ mod tests {
         let (mut fr, _input, written) = open_session();
         fr.push_asset(7, b"\x89PNG\r\n", Some("image/png"))
             .expect("the asset goes out");
-        fr.present(&Scene::new(8.0, 8.0))
+        fr.present(Scene::new(8.0, 8.0))
             .expect("the frame goes out");
         match &decode_messages(&written.bytes())[..] {
             [to_view::Message::Asset { .. }, to_view::Message::Frame(_)] => {}
@@ -410,7 +410,7 @@ mod tests {
         fr.close();
         fr.close();
         assert!(matches!(
-            fr.present(&Scene::new(8.0, 8.0)),
+            fr.present(Scene::new(8.0, 8.0)),
             Err(PresentError::Closed)
         ));
         assert!(matches!(
@@ -442,13 +442,13 @@ mod tests {
         let broken = BrokenWriter::default();
         let mut fr = Stdio::with_streams(BufReader::new(r), broken.clone()).unwrap();
         assert!(matches!(
-            fr.present(&Scene::new(8.0, 8.0)),
+            fr.present(Scene::new(8.0, 8.0)),
             Err(PresentError::Io(_))
         ));
         // The caller decides what a lost frame means, so the next one
         // tries again.
         assert!(matches!(
-            fr.present(&Scene::new(8.0, 8.0)),
+            fr.present(Scene::new(8.0, 8.0)),
             Err(PresentError::Io(_))
         ));
         fr.close();

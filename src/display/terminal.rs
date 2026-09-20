@@ -196,12 +196,12 @@ impl Terminal {
 }
 
 impl super::Display for Terminal {
-    fn present(&mut self, scene: &Scene) -> Result<(), PresentError> {
+    fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }
-        let drawn = self.draw(scene);
-        self.last = Some(scene.clone());
+        let drawn = self.draw(&scene);
+        self.last = Some(scene);
         drawn
     }
 

@@ -24,7 +24,7 @@ use crate::scene::Scene;
 /// # fn run(fr: &mut dyn Display) -> Result<(), Box<dyn std::error::Error>> {
 /// loop {
 ///     match fr.wait_event(None) {
-///         Ok(Event::Input(InputEvent::Vsync)) => fr.present(&next_scene())?,
+///         Ok(Event::Input(InputEvent::Vsync)) => fr.present(next_scene())?,
 ///         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 ///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 ///         Ok(Event::Input(InputEvent::Resize { .. })) => {}
@@ -44,10 +44,11 @@ use crate::scene::Scene;
 /// implementation outside the crate would need a public way to build a
 /// [`Sender`].
 pub trait Display: sealed::Sealed {
-    /// Show `scene`. A failure leaves the session open, and the caller
-    /// decides whether to show the error, to try another scene or to
+    /// Show `scene`. The display takes it, because a resize draws it
+    /// again at the new scale. A failure leaves the session open, and the
+    /// caller decides whether to show the error, to try another scene or to
     /// [`close`](Display::close).
-    fn present(&mut self, scene: &Scene) -> Result<(), PresentError>;
+    fn present(&mut self, scene: Scene) -> Result<(), PresentError>;
 
     /// Block until the next event, or until `deadline` and then return
     /// [`NoEvent::Timeout`], or with no limit when it is `None`. The events

@@ -171,7 +171,7 @@ fn drain(
     }
     if let Some(scene) = last {
         let start = Instant::now();
-        if let Err(e) = fr.present(&scene) {
+        if let Err(e) = fr.present(scene) {
             eprintln!("view: {e}");
             return Session::DisplayFailed;
         }

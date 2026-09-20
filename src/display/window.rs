@@ -112,12 +112,12 @@ impl Window {
 }
 
 impl super::Display for Window {
-    fn present(&mut self, scene: &Scene) -> Result<(), PresentError> {
+    fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
         let Some(session) = self.session.as_mut() else {
             return Err(PresentError::Closed);
         };
-        let drawn = session.draw(scene);
-        session.last = Some(scene.clone());
+        let drawn = session.draw(&scene);
+        session.last = Some(scene);
         drawn
     }
 
