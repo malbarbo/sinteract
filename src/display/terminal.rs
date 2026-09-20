@@ -7,6 +7,7 @@
 //! [`show_image`] prints nothing while it does. A Unix terminal does not
 //! tell a key down from a key up, so every key event is a press.
 
+use std::fmt;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -286,6 +287,27 @@ pub enum NoImage {
     /// The write stopped part way, which may leave part of the image on
     /// screen.
     Io(io::Error),
+}
+
+impl fmt::Display for NoImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NoImage::NoGraphics => f.write_str("the terminal shows no graphics"),
+            NoImage::Busy => f.write_str("a terminal session holds the tty"),
+            NoImage::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
+            NoImage::Io(e) => write!(f, "cannot show the image: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for NoImage {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            NoImage::Alloc(e) => Some(e),
+            NoImage::Io(e) => Some(e),
+            NoImage::NoGraphics | NoImage::Busy => None,
+        }
+    }
 }
 
 /// Print `scene` at the cursor, through Kitty when the terminal supports
