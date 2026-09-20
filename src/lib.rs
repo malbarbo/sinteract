@@ -28,13 +28,13 @@ pub mod wire;
 // names them from the crate root, so they are mounted here and not inside
 // `wire`. The VERB_* constants exist for the readers that are not Rust.
 #[path = "wire/event_capnp.rs"]
-#[allow(dead_code, clippy::unwrap_used)]
+#[allow(dead_code, clippy::unwrap_used, clippy::indexing_slicing)]
 mod event_capnp;
 #[path = "wire/protocol_capnp.rs"]
-#[allow(dead_code, clippy::unwrap_used)]
+#[allow(dead_code, clippy::unwrap_used, clippy::indexing_slicing)]
 mod protocol_capnp;
 #[path = "wire/scene_capnp.rs"]
-#[allow(dead_code, clippy::unwrap_used)]
+#[allow(dead_code, clippy::unwrap_used, clippy::indexing_slicing)]
 mod scene_capnp;
 
 // A wrong path in the example of the README fails the doctests. The example
