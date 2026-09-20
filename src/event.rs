@@ -21,8 +21,6 @@
 //! terminal and in the window, rAF in the browser and the view on stdio. The
 //! engine derives a simulation tick from the time between two.
 
-use std::fmt;
-
 /// What happened, as `wait_event` delivers it.
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -40,16 +38,6 @@ pub enum NoEvent {
     /// The user, the platform or the peer ended the session, or the display
     /// closed. Every wait from now on returns it.
     Close,
-}
-
-impl fmt::Display for NoEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            NoEvent::Wake => "a sender woke the loop",
-            NoEvent::Timeout => "the deadline passed with no event",
-            NoEvent::Close => "the session ended",
-        })
-    }
 }
 
 #[derive(Clone, Debug)]
