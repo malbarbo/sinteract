@@ -364,7 +364,7 @@ pub fn text_blocks_supported() -> bool {
         let lc = prog.to_ascii_lowercase();
         if matches!(
             lc.as_str(),
-            "ghostty" | "wezterm" | "konsole" | "vscode" | "iterm.app" | "apple_terminal"
+            "ghostty" | "wezterm" | "konsole" | "vscode" | "iterm.app"
         ) {
             return true;
         }
