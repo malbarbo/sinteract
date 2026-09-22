@@ -62,31 +62,29 @@ fn main() -> ExitCode {
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
     let mut stats = Stats::default();
-    loop {
+    // Whether the view closes the session, which the engine has to hear.
+    let close = loop {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
                 if to_engine::write_input(&mut to_engine, UNROUTED, &ev).is_err() {
-                    break;
+                    break false;
                 }
             }
             // The messages of the engine come through the channel, and the
             // reader thread wakes the loop after each one.
             Err(NoEvent::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
                 Session::Open => {}
-                Session::EngineClosed => break,
-                Session::DisplayFailed => {
-                    let _ = to_engine::write_close(&mut to_engine, UNROUTED);
-                    break;
-                }
+                Session::EngineClosed => break false,
+                Session::DisplayFailed => break true,
             },
-            Err(NoEvent::Close) => {
-                let _ = to_engine::write_close(&mut to_engine, UNROUTED);
-                break;
-            }
+            Err(NoEvent::Close) => break true,
             Err(NoEvent::Damaged(e)) => eprintln!("view: {e}"),
             Err(NoEvent::Broken(e)) => eprintln!("view: {e}"),
             Err(NoEvent::Timeout) => {}
         }
+    };
+    if close {
+        let _ = to_engine::write_close(&mut to_engine, UNROUTED);
     }
     drop(to_engine);
     // The reader thread may wait on a full channel. Without the receiver
