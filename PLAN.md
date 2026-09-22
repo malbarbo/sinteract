@@ -115,9 +115,9 @@ de um engine local ou de um WebSocket e não sabe a diferença.
 - sinteract hospeda toda lib genérica.
 - **`Display` é um trait selado** em `sinteract::display`, implementado por
   `Terminal`, `Window` e `Stdio`. `open_native` devolve `Box<dyn Display>`,
-  o terminal quando há gráficos e a janela senão. A vtable custa uma chamada
-  por quadro, e o trait deixa as features `terminal` e `window` tirarem um
-  display sem mudar o tipo que o engine recebe.
+  a janela quando ela abre e o terminal senão, como por ssh. A vtable custa
+  uma chamada por quadro, e o trait deixa as features `terminal` e `window`
+  tirarem um display sem mudar o tipo que o engine recebe.
 - Servidor de jogos é processo separado (não em sinteract). Pode crescer no
   `simplecode/server` ou ser binário novo. Recebe WebSocket, spawna
   `spython --server` subprocess, liga stdio.

@@ -132,10 +132,11 @@ impl From<io::Error> for PresentError {
     }
 }
 
-/// The terminal when stdout is a tty with graphics, and a window of `width`
-/// by `height` logical pixels otherwise. `title` only matters for a window,
-/// because a terminal keeps the title of the shell, and `options` only for a
-/// terminal.
+/// A window of `width` by `height` logical pixels, and the terminal when no
+/// window opens, as over ssh. `title` only matters for a window, because a
+/// terminal keeps the title of the shell, and `options` only for a
+/// terminal. When neither opens, the error is the one of the terminal,
+/// which names the terminals that show graphics.
 ///
 /// ```no_run
 /// # use sinteract::display::{Display, TerminalOptions, open_native};
@@ -151,10 +152,9 @@ pub fn open_native(
     height: f32,
     options: super::TerminalOptions,
 ) -> Result<Box<dyn Display>, OpenError> {
-    match super::Terminal::open_with(options) {
-        Ok(terminal) => Ok(Box::new(terminal)),
-        Err(OpenError::NoGraphics) => Ok(Box::new(super::Window::open(title, width, height)?)),
-        Err(e) => Err(e),
+    match super::Window::open(title, width, height) {
+        Ok(window) => Ok(Box::new(window)),
+        Err(_) => Ok(Box::new(super::Terminal::open_with(options)?)),
     }
 }
 

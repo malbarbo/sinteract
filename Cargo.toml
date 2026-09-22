@@ -17,7 +17,7 @@ native-fonts = ["dep:fontdb"]
 # The displays that show a scene. With both off, `Stdio` is the only
 # display, and a build that only talks stdio, such as a server, drops
 # crossterm, winit and softbuffer. `open_native` needs both, since it falls
-# back from the terminal to the window.
+# back from the window to the terminal.
 terminal = [
     "dep:crossterm",
     "dep:vte",
