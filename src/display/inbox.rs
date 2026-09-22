@@ -51,15 +51,10 @@ impl Sender {
         self.send(Entry::Input(ev))
     }
 
-    /// Queue [`NoEvent::Damaged`], in order with the events.
-    pub(crate) fn send_damaged(&self, e: crate::wire::Error) -> Result<(), Closed> {
-        self.send(Entry::Damaged(e))
-    }
-
-    /// Queue [`NoEvent::Broken`], in order with the events. The reader that
-    /// failed sends a close right after.
-    pub(crate) fn send_broken(&self, e: std::io::Error) -> Result<(), Closed> {
-        self.send(Entry::Broken(e))
+    /// Queue [`NoEvent::Read`], in order with the events. A reader that
+    /// sends a `ReadError::Broken` sends a close right after.
+    pub(crate) fn send_read_error(&self, e: crate::wire::ReadError) -> Result<(), Closed> {
+        self.send(Entry::Read(e))
     }
 
     /// Ask the display to draw the last scene again, as after a resize.
@@ -126,8 +121,7 @@ struct Item {
 enum Entry {
     Input(InputEvent),
     Wake,
-    Damaged(crate::wire::Error),
-    Broken(std::io::Error),
+    Read(crate::wire::ReadError),
     Close,
 }
 
@@ -328,8 +322,7 @@ impl Inbox {
         Some(match self.pending.pop_front()?.entry {
             Entry::Input(ev) => Ok(Event::Input(ev)),
             Entry::Wake => Err(NoEvent::Wake),
-            Entry::Damaged(e) => Err(NoEvent::Damaged(e)),
-            Entry::Broken(e) => Err(NoEvent::Broken(e)),
+            Entry::Read(e) => Err(NoEvent::Read(e)),
             Entry::Close => {
                 self.close();
                 Err(NoEvent::Close)
@@ -445,14 +438,16 @@ mod tests {
         let mut inbox = Inbox::new(None);
         let tx = inbox.sender();
         tx.send_input(key("a")).unwrap();
-        tx.send_damaged(crate::wire::Error::PathLengthMismatch {
-            verbs: 2,
-            coords: 1,
-        })
+        tx.send_read_error(crate::wire::ReadError::Payload(
+            crate::wire::Error::PathLengthMismatch {
+                verbs: 2,
+                coords: 1,
+            },
+        ))
         .unwrap();
         tx.send_input(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Err(NoEvent::Damaged(_))));
+        assert!(matches!(inbox.wait(None), Err(NoEvent::Read(_))));
         assert_eq!(key_name(&inbox.wait(None)), Some("b"));
     }
 

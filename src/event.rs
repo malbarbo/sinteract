@@ -12,8 +12,7 @@
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
 //!         Err(NoEvent::Wake) => on_wake(),
 //!         Err(NoEvent::Timeout) => on_tick(),
-//!         Err(NoEvent::Damaged(e)) => report(e),
-//!         Err(NoEvent::Broken(e)) => report(e),
+//!         Err(NoEvent::Read(e)) => report(e),
 //!         Err(NoEvent::Close) => break,
 //!     }
 //! }
@@ -38,12 +37,10 @@ pub enum NoEvent {
     Wake,
     /// The deadline passed with nothing to deliver.
     Timeout,
-    /// A message of the peer did not decode, and the reader skipped it. The
-    /// envelope already found where the next message starts, so the session
-    /// goes on.
-    Damaged(crate::wire::Error),
-    /// A read from the tty or from the peer failed. A `Close` follows.
-    Broken(std::io::Error),
+    /// A read from the tty or from the peer failed. `ReadError::Payload`
+    /// skipped one message and the session goes on, and `ReadError::Broken`
+    /// ends it, with a `Close` right after.
+    Read(crate::wire::ReadError),
     /// The user, the platform or the peer ended the session, or the display
     /// closed. Every wait from now on returns it.
     Close,

@@ -147,21 +147,21 @@ impl Drop for Stdio {
 /// session ends. The display serves one view, so it takes the input of
 /// every player as its own. [`to_engine::read`] skips a message or an event of an arm
 /// from a newer schema. A payload that does not decode goes into the queue
-/// as [`NoEvent::Damaged`] and the loop goes on, since the framing already
+/// as [`NoEvent::Read`] and the loop goes on, since the framing already
 /// found where the next message starts.
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
         let ev = match to_engine::read(&mut reader) {
             Ok(None | Some((_, Message::Close))) => break,
             Ok(Some((_, Message::Input(ev)))) => ev,
-            Err(ReadError::Payload(e)) => {
-                if tx.send_damaged(e).is_err() {
+            Err(e @ ReadError::Payload(_)) => {
+                if tx.send_read_error(e).is_err() {
                     return;
                 }
                 continue;
             }
-            Err(ReadError::Broken(e)) => {
-                let _ = tx.send_broken(e);
+            Err(e @ ReadError::Broken(_)) => {
+                let _ = tx.send_read_error(e);
                 break;
             }
         };
@@ -253,7 +253,10 @@ mod tests {
     /// Returns `true` if the next wait of `fr` gives a read that broke and
     /// the one after gives Close, `false` otherwise.
     fn breaks(fr: &mut Stdio) -> bool {
-        matches!(fr.wait_event(None), Err(NoEvent::Broken(_))) && closes(fr)
+        matches!(
+            fr.wait_event(None),
+            Err(NoEvent::Read(ReadError::Broken(_)))
+        ) && closes(fr)
     }
 
     fn decode_messages(mut buf: &[u8]) -> Vec<to_view::Message> {
@@ -358,7 +361,10 @@ mod tests {
         stream.extend_from_slice(&frame(&[0xff; 8]));
         stream.extend_from_slice(&event(&InputEvent::Vsync));
         let mut fr = reading(stream);
-        assert!(matches!(fr.wait_event(None), Err(NoEvent::Damaged(_))));
+        assert!(matches!(
+            fr.wait_event(None),
+            Err(NoEvent::Read(ReadError::Payload(_)))
+        ));
         assert!(matches!(input(&mut fr), InputEvent::Vsync));
     }
 

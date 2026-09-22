@@ -30,8 +30,7 @@ use crate::scene::Scene;
 ///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 ///         Ok(Event::Input(InputEvent::Resize { .. })) => {}
 ///         Err(NoEvent::Wake | NoEvent::Timeout) => {}
-///         Err(NoEvent::Damaged(e)) => eprintln!("{e}"),
-///         Err(NoEvent::Broken(e)) => eprintln!("{e}"),
+///         Err(NoEvent::Read(e)) => eprintln!("{e}"),
 ///         Err(NoEvent::Close) => break,
 ///     }
 /// }

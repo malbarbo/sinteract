@@ -78,8 +78,7 @@ fn main() -> ExitCode {
                 Session::DisplayFailed => break true,
             },
             Err(NoEvent::Close) => break true,
-            Err(NoEvent::Damaged(e)) => eprintln!("view: {e}"),
-            Err(NoEvent::Broken(e)) => eprintln!("view: {e}"),
+            Err(NoEvent::Read(e)) => eprintln!("view: {e}"),
             Err(NoEvent::Timeout) => {}
         }
     };
