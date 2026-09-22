@@ -50,6 +50,10 @@ pub struct TerminalOptions {
     /// Close goes into the queue. Raw mode turns off the signal of Ctrl-C,
     /// so an engine stops here the code that never calls `wait_event`.
     pub on_interrupt: Option<Box<dyn FnMut() + Send>>,
+    /// Print the last frame on the main screen at close, where it stays
+    /// with the rest of the output of the program. Without it the frame
+    /// goes away with the alt screen.
+    pub keep_last_frame: bool,
 }
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
@@ -72,6 +76,8 @@ pub struct Terminal {
     last: Option<Scene>,
     /// How the reader maps a cell to the scene on screen.
     cells: Arc<Mutex<CellMap>>,
+    /// [`TerminalOptions::keep_last_frame`].
+    keep_last_frame: bool,
 }
 
 /// What a session holds until it closes.
@@ -131,6 +137,7 @@ impl Terminal {
             buffers: ImageBuffers::default(),
             last: None,
             cells,
+            keep_last_frame: options.keep_last_frame,
         })
     }
 
@@ -243,6 +250,13 @@ impl super::Display for Terminal {
         drain_input();
         if !live.claim.restored() {
             leave(self.backend, self.frame_size.is_some());
+            // The session is over, and close has no way to report that
+            // the frame did not print.
+            if self.keep_last_frame
+                && let Some(scene) = &self.last
+            {
+                let _ = print_scene(self.backend, &mut self.renderer, scene);
+            }
         }
     }
 }
@@ -316,8 +330,17 @@ pub fn show_image(scene: &Scene) -> Result<(), NoImage> {
         return Err(NoImage::Busy);
     }
     let backend = pick_backend().ok_or(NoImage::NoGraphics)?;
+    print_scene(backend, &mut PixmapRenderer::default(), scene)
+}
+
+/// Print `scene` at the cursor through `backend`, with every cell of the
+/// image, and leave the cursor on the line below it.
+fn print_scene(
+    backend: Backend,
+    renderer: &mut PixmapRenderer,
+    scene: &Scene,
+) -> Result<(), NoImage> {
     let scale = scale_for_backend(backend, scene.width(), scene.height());
-    let mut renderer = PixmapRenderer::default();
     renderer.set_scale(scale);
     let pixmap = renderer.render(scene).map_err(NoImage::Alloc)?;
     let mut buffers = ImageBuffers::default();
