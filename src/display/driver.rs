@@ -6,7 +6,7 @@ use std::io;
 use std::time::Instant;
 
 use super::inbox::Sender;
-use crate::event::{Event, NoEvent};
+use crate::event::{Event, Interrupt};
 use crate::renderer::AllocError;
 use crate::renderer::pixmap::AssetError;
 use crate::scene::Scene;
@@ -17,7 +17,7 @@ use crate::scene::Scene;
 ///
 /// ```no_run
 /// # use sinteract::display::Display;
-/// # use sinteract::event::{Event, InputEvent, KeyEvent, MouseEvent, NoEvent};
+/// # use sinteract::event::{Event, InputEvent, KeyEvent, MouseEvent, Interrupt};
 /// # use sinteract::scene::Scene;
 /// # fn next_scene() -> Scene { Scene::new(400.0, 300.0) }
 /// # fn on_key(_: KeyEvent) {}
@@ -29,9 +29,9 @@ use crate::scene::Scene;
 ///         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 ///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 ///         Ok(Event::Input(InputEvent::Resize { .. })) => {}
-///         Err(NoEvent::Wake | NoEvent::Timeout) => {}
-///         Err(NoEvent::Read(e)) => eprintln!("{e}"),
-///         Err(NoEvent::Close) => break,
+///         Err(Interrupt::Wake | Interrupt::Timeout) => {}
+///         Err(Interrupt::Read(e)) => eprintln!("{e}"),
+///         Err(Interrupt::Close) => break,
 ///     }
 /// }
 /// fr.close();
@@ -51,11 +51,11 @@ pub trait Display: sealed::Sealed {
     fn present(&mut self, scene: Scene) -> Result<(), PresentError>;
 
     /// Block until the next event, or until `deadline` and then return
-    /// [`NoEvent::Timeout`], or with no limit when it is `None`. The events
+    /// [`Interrupt::Timeout`], or with no limit when it is `None`. The events
     /// go out in the order of arrival. After a Close, every call returns
-    /// [`NoEvent::Close`]. A `while let Ok(ev)` over it also stops at the
+    /// [`Interrupt::Close`]. A `while let Ok(ev)` over it also stops at the
     /// first Wake or Timeout.
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent>;
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt>;
 
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;
@@ -77,7 +77,7 @@ pub(super) mod sealed {
 pub enum PresentError {
     /// The session ended, at [`Display::close`] or because the peer stopped
     /// reading. [`Display::wait_event`] also reports it, as
-    /// [`NoEvent::Close`].
+    /// [`Interrupt::Close`].
     Closed,
     /// Rasterizing the scene failed.
     Alloc(AllocError),

@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use super::driver::{OpenError, PresentError};
 use super::inbox::{Inbox, Sender};
-use crate::event::{Event, NoEvent};
+use crate::event::{Event, Interrupt};
 use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
 use crate::wire::to_engine::{self, Message};
@@ -109,8 +109,8 @@ impl super::Display for Stdio {
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
-    /// arrival. A read error or EOF arrives as [`NoEvent::Close`].
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
+    /// arrival. A read error or EOF arrives as [`Interrupt::Close`].
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
         self.inbox.wait(deadline)
     }
 
@@ -147,7 +147,7 @@ impl Drop for Stdio {
 /// session ends. The display serves one view, so it takes the input of
 /// every player as its own. [`to_engine::read`] skips a message or an event of an arm
 /// from a newer schema. A payload that does not decode goes into the queue
-/// as [`NoEvent::Read`] and the loop goes on, since the framing already
+/// as [`Interrupt::Read`] and the loop goes on, since the framing already
 /// found where the next message starts.
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
@@ -247,7 +247,7 @@ mod tests {
     /// Returns `true` if the next wait of `fr` gives Close, `false`
     /// otherwise.
     fn closes(fr: &mut Stdio) -> bool {
-        matches!(fr.wait_event(None), Err(NoEvent::Close))
+        matches!(fr.wait_event(None), Err(Interrupt::Close))
     }
 
     /// Returns `true` if the next wait of `fr` gives a read that broke and
@@ -255,7 +255,7 @@ mod tests {
     fn breaks(fr: &mut Stdio) -> bool {
         matches!(
             fr.wait_event(None),
-            Err(NoEvent::Read(ReadError::Broken(_)))
+            Err(Interrupt::Read(ReadError::Broken(_)))
         ) && closes(fr)
     }
 
@@ -323,7 +323,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_millis(20);
         assert!(matches!(
             fr.wait_event(Some(deadline)),
-            Err(NoEvent::Timeout)
+            Err(Interrupt::Timeout)
         ));
     }
 
@@ -335,7 +335,7 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
             tx.wake().unwrap();
         });
-        assert!(matches!(fr.wait_event(None), Err(NoEvent::Wake)));
+        assert!(matches!(fr.wait_event(None), Err(Interrupt::Wake)));
         t.join().unwrap();
     }
 
@@ -363,7 +363,7 @@ mod tests {
         let mut fr = reading(stream);
         assert!(matches!(
             fr.wait_event(None),
-            Err(NoEvent::Read(ReadError::Payload(_)))
+            Err(Interrupt::Read(ReadError::Payload(_)))
         ));
         assert!(matches!(input(&mut fr), InputEvent::Vsync));
     }

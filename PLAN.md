@@ -51,9 +51,9 @@ de um engine local ou de um WebSocket e não sabe a diferença.
 ### B. Loop e timing
 
 - **Tick é evento na fila**, não timer interno do engine.
-- `Display::wait_event(deadline) -> Result<Event, NoEvent>` bloqueia até
-  chegar um evento ou até o prazo, e devolve `Err(NoEvent::Timeout)` no
-  prazo e `Err(NoEvent::Close)` quando a sessão acaba.
+- `Display::wait_event(deadline) -> Result<Event, Interrupt>` bloqueia até
+  chegar um evento ou até o prazo, e devolve `Err(Interrupt::Timeout)` no
+  prazo e `Err(Interrupt::Close)` quando a sessão acaba.
 - Em wasm: `Atomics.wait` no shared buffer (já é o padrão usado pra `sleep`
   hoje em simplecode).
 - rAF da main thread empurra Tick + `Atomics.notify` no ritmo de `tick_rate`.

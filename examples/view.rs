@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
-use sinteract::event::{Event, NoEvent};
+use sinteract::event::{Event, Interrupt};
 use sinteract::scene::Scene;
 use sinteract::wire::framing::UNROUTED;
 use sinteract::wire::to_view::{self, Message};
@@ -72,14 +72,14 @@ fn main() -> ExitCode {
             }
             // The messages of the engine come through the channel, and the
             // reader thread wakes the loop after each one.
-            Err(NoEvent::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
+            Err(Interrupt::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
                 Session::Open => {}
                 Session::EngineClosed => break false,
                 Session::DisplayFailed => break true,
             },
-            Err(NoEvent::Close) => break true,
-            Err(NoEvent::Read(e)) => eprintln!("view: {e}"),
-            Err(NoEvent::Timeout) => {}
+            Err(Interrupt::Close) => break true,
+            Err(Interrupt::Read(e)) => eprintln!("view: {e}"),
+            Err(Interrupt::Timeout) => {}
         }
     };
     if close {

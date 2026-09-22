@@ -25,7 +25,7 @@ use tiny_skia::Pixmap;
 use super::driver::{OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
-use crate::event::{Event, InputEvent, MouseEvent, NoEvent};
+use crate::event::{Event, InputEvent, Interrupt, MouseEvent};
 use crate::renderer::pixmap::{Assets, PixmapRenderer};
 use crate::renderer::{AllocError, Renderer};
 use crate::scene::Scene;
@@ -57,7 +57,7 @@ pub struct TerminalOptions {
 }
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
-/// Ctrl-C arrives as [`NoEvent::Close`]. The size of the terminal
+/// Ctrl-C arrives as [`Interrupt::Close`]. The size of the terminal
 /// arrives as an [`InputEvent::Resize`] ahead of the first Vsync, and again
 /// after each change. A mouse event gives the center of its cell.
 pub struct Terminal {
@@ -194,7 +194,7 @@ impl super::Display for Terminal {
         drawn
     }
 
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
         loop {
             match self.inbox.wait_with(deadline, Inbox::receive) {
                 Next::Ready(ready) => return ready,

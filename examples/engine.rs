@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use sinteract::display::{Display, Stdio};
-use sinteract::event::{Event, InputEvent, KeyKind, NoEvent, key};
+use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Paint, PathStyle, Scene};
 
 const WIDTH: f32 = 400.0;
@@ -49,13 +49,13 @@ fn main() -> ExitCode {
                 KeyKind::Press => game.key(&k.key),
                 KeyKind::Down | KeyKind::Up => {}
             },
-            Err(NoEvent::Close) => break,
+            Err(Interrupt::Close) => break,
             // A message the engine cannot read is a bug in the view, and
             // the game goes on without that input. A read that broke ends
             // the session with the Close that follows it.
-            Err(NoEvent::Read(e)) => eprintln!("engine: {e}"),
+            Err(Interrupt::Read(e)) => eprintln!("engine: {e}"),
             Ok(Event::Input(InputEvent::Mouse(_) | InputEvent::Resize { .. }))
-            | Err(NoEvent::Wake | NoEvent::Timeout) => {}
+            | Err(Interrupt::Wake | Interrupt::Timeout) => {}
         }
     }
     fr.close();

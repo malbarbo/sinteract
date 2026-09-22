@@ -10,14 +10,14 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, InputEvent, MouseAction, MouseEvent, NoEvent};
+use crate::event::{Event, InputEvent, Interrupt, MouseAction, MouseEvent};
 
 /// Pushes into the queue of a display from any thread, and wakes a
 /// `wait_event` that blocks on it. Get one from
 /// [`super::Display::sender`].
 ///
 /// The queue has no bound. Once the display closes or delivers
-/// [`NoEvent::Close`], every send returns [`Closed`]. A message sent after
+/// [`Interrupt::Close`], every send returns [`Closed`]. A message sent after
 /// a Close that has not gone out yet is lost.
 #[derive(Clone)]
 pub struct Sender {
@@ -34,13 +34,13 @@ pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 pub struct Closed;
 
 impl Sender {
-    /// Queue [`NoEvent::Close`], in order with the events. A Ctrl-C handler
+    /// Queue [`Interrupt::Close`], in order with the events. A Ctrl-C handler
     /// of the engine calls it to end a `wait_event` that blocks.
     pub fn send_close(&self) -> Result<(), Closed> {
         self.send(Entry::Close)
     }
 
-    /// Queue [`NoEvent::Wake`], in order with the events. A thread that
+    /// Queue [`Interrupt::Wake`], in order with the events. A thread that
     /// hands its data over a channel of its own calls it, so the loop looks
     /// at that channel.
     pub fn wake(&self) -> Result<(), Closed> {
@@ -51,7 +51,7 @@ impl Sender {
         self.send(Entry::Input(ev))
     }
 
-    /// Queue [`NoEvent::Read`], in order with the events. A reader that
+    /// Queue [`Interrupt::Read`], in order with the events. A reader that
     /// sends a `ReadError::Broken` sends a close right after.
     pub(crate) fn send_read_error(&self, e: crate::wire::ReadError) -> Result<(), Closed> {
         self.send(Entry::Read(e))
@@ -127,7 +127,7 @@ enum Entry {
 
 /// What [`Inbox::wait_with`] hands to the display.
 pub(crate) enum Next {
-    Ready(Result<Event, NoEvent>),
+    Ready(Result<Event, Interrupt>),
     /// Draw the last scene again, and wait again.
     Redraw,
 }
@@ -201,7 +201,7 @@ impl Inbox {
 
     /// [`Inbox::wait_with`] on the channel, for a display that has nothing
     /// to redraw.
-    pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
+    pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
         loop {
             if let Next::Ready(ready) = self.wait_with(deadline, Self::receive) {
                 return ready;
@@ -209,7 +209,7 @@ impl Inbox {
         }
     }
 
-    /// The oldest event, or [`NoEvent::Timeout`] once `deadline` passes. A
+    /// The oldest event, or [`Interrupt::Timeout`] once `deadline` passes. A
     /// `deadline` of `None` waits for as long as it takes. A redraw goes
     /// out when no event is ready, so an engine that presents anyway skips it.
     ///
@@ -233,7 +233,7 @@ impl Inbox {
             }
             let now = Instant::now();
             if deadline.is_some_and(|d| now >= d) {
-                return Next::Ready(Err(NoEvent::Timeout));
+                return Next::Ready(Err(Interrupt::Timeout));
             }
             let timeout = self.wake_at(deadline).map(|t| t - now);
             block(self, timeout);
@@ -259,9 +259,9 @@ impl Inbox {
     }
 
     /// The oldest entry that is ready, without blocking.
-    fn poll(&mut self) -> Option<Result<Event, NoEvent>> {
+    fn poll(&mut self) -> Option<Result<Event, Interrupt>> {
         if self.closed {
-            return Some(Err(NoEvent::Close));
+            return Some(Err(Interrupt::Close));
         }
         while let Ok(msg) = self.rx.try_recv() {
             self.take(msg);
@@ -312,7 +312,7 @@ impl Inbox {
 
     /// The older of the front of `pending` and a Vsync that arrived by
     /// `now`, or `None` when neither exists.
-    fn pop(&mut self, now: Instant) -> Option<Result<Event, NoEvent>> {
+    fn pop(&mut self, now: Instant) -> Option<Result<Event, Interrupt>> {
         let front = self.pending.front().map(|item| item.at);
         let vsync = self.vsync.at().filter(|&at| at <= now);
         if vsync.is_some_and(|v| front.is_none_or(|f| v < f)) {
@@ -321,11 +321,11 @@ impl Inbox {
         }
         Some(match self.pending.pop_front()?.entry {
             Entry::Input(ev) => Ok(Event::Input(ev)),
-            Entry::Wake => Err(NoEvent::Wake),
-            Entry::Read(e) => Err(NoEvent::Read(e)),
+            Entry::Wake => Err(Interrupt::Wake),
+            Entry::Read(e) => Err(Interrupt::Read(e)),
             Entry::Close => {
                 self.close();
-                Err(NoEvent::Close)
+                Err(Interrupt::Close)
             }
         })
     }
@@ -398,23 +398,23 @@ mod tests {
         })
     }
 
-    fn key_name(ready: &Result<Event, NoEvent>) -> Option<&str> {
+    fn key_name(ready: &Result<Event, Interrupt>) -> Option<&str> {
         match ready {
             Ok(Event::Input(InputEvent::Key(k))) => Some(&k.key),
             _ => None,
         }
     }
 
-    fn is_vsync(ready: &Result<Event, NoEvent>) -> bool {
+    fn is_vsync(ready: &Result<Event, Interrupt>) -> bool {
         matches!(ready, Ok(Event::Input(InputEvent::Vsync)))
     }
 
-    fn is_close(ready: &Result<Event, NoEvent>) -> bool {
-        matches!(ready, Err(NoEvent::Close))
+    fn is_close(ready: &Result<Event, Interrupt>) -> bool {
+        matches!(ready, Err(Interrupt::Close))
     }
 
-    fn is_timeout(ready: &Result<Event, NoEvent>) -> bool {
-        matches!(ready, Err(NoEvent::Timeout))
+    fn is_timeout(ready: &Result<Event, Interrupt>) -> bool {
+        matches!(ready, Err(Interrupt::Timeout))
     }
 
     fn soon() -> Option<Instant> {
@@ -429,7 +429,7 @@ mod tests {
         tx.wake().unwrap();
         tx.send_input(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Err(NoEvent::Wake)));
+        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
         assert_eq!(key_name(&inbox.wait(None)), Some("b"));
     }
 
@@ -447,7 +447,7 @@ mod tests {
         .unwrap();
         tx.send_input(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Err(NoEvent::Read(_))));
+        assert!(matches!(inbox.wait(None), Err(Interrupt::Read(_))));
         assert_eq!(key_name(&inbox.wait(None)), Some("b"));
     }
 
@@ -539,9 +539,9 @@ mod tests {
         tx.wake().unwrap();
         tx.send_input(key("a")).unwrap();
         tx.wake().unwrap();
-        assert!(matches!(inbox.wait(None), Err(NoEvent::Wake)));
+        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Err(NoEvent::Wake)));
+        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
         assert!(is_timeout(&inbox.wait(soon())));
     }
 
@@ -574,7 +574,7 @@ mod tests {
         let mut next = || inbox.wait_with(soon(), Inbox::receive);
         assert!(matches!(next(), Next::Ready(r) if key_name(&r) == Some("a")));
         assert!(matches!(next(), Next::Redraw));
-        assert!(matches!(next(), Next::Ready(Err(NoEvent::Timeout))));
+        assert!(matches!(next(), Next::Ready(Err(Interrupt::Timeout))));
     }
 
     #[test]
@@ -592,7 +592,7 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
             tx.wake().unwrap();
         });
-        assert!(matches!(inbox.wait(None), Err(NoEvent::Wake)));
+        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
         t.join().unwrap();
     }
 

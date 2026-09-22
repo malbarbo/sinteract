@@ -10,10 +10,10 @@
 //!         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 //!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
-//!         Err(NoEvent::Wake) => on_wake(),
-//!         Err(NoEvent::Timeout) => on_tick(),
-//!         Err(NoEvent::Read(e)) => report(e),
-//!         Err(NoEvent::Close) => break,
+//!         Err(Interrupt::Wake) => on_wake(),
+//!         Err(Interrupt::Timeout) => on_tick(),
+//!         Err(Interrupt::Read(e)) => report(e),
+//!         Err(Interrupt::Close) => break,
 //!     }
 //! }
 //! ```
@@ -29,10 +29,11 @@ pub enum Event {
     Input(InputEvent),
 }
 
-/// Why `wait_event` returned no event. A failure comes with the error that
-/// caused it, since the library writes no message of its own.
+/// What interrupted a `wait_event` that delivered no event. A failure comes
+/// with the error that caused it, since the library writes no message of its
+/// own.
 #[derive(Debug)]
-pub enum NoEvent {
+pub enum Interrupt {
     /// A `Sender` woke the loop, with no data.
     Wake,
     /// The deadline passed with nothing to deliver.

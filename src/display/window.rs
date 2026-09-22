@@ -31,15 +31,15 @@ use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 use super::driver::{OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use crate::event::{
-    Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
-    NoEvent, key,
+    Event, InputEvent, Interrupt, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons,
+    MouseEvent, key,
 };
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
 use crate::scene::Scene;
 
 /// A [`super::Display`] over a winit window. Closing the window arrives
-/// as [`NoEvent::Close`], and the window stays until
+/// as [`Interrupt::Close`], and the window stays until
 /// [`super::Display::close`]. The size of the window arrives as an
 /// [`InputEvent::Resize`] ahead of the first Vsync, and again after each
 /// change.
@@ -122,7 +122,7 @@ impl super::Display for Window {
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, NoEvent> {
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
         loop {
             let mut session = self.session.as_mut();
             let wait = self.inbox.wait_with(deadline, |_, timeout| {
