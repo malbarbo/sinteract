@@ -50,6 +50,6 @@ pub use inbox::{Closed, Sender};
 #[cfg(not(target_arch = "wasm32"))]
 pub use stdio::Stdio;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
-pub use terminal::{Terminal, TerminalOptions};
+pub use terminal::{PrintError, Printer, Terminal, TerminalOptions};
 #[cfg(all(feature = "window", not(target_arch = "wasm32")))]
 pub use window::Window;

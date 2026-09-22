@@ -9,7 +9,7 @@ half-blocks, whichever the terminal supports. The PDF and SVG outputs are
 vector, with text as glyph outlines.
 
 ```rust,no_run
-use sinteract::display::terminal::Printer;
+use sinteract::display::Printer;
 use sinteract::scene::{Paint, PathStyle, Scene};
 
 let blue = PathStyle {
