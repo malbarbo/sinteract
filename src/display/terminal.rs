@@ -349,10 +349,7 @@ impl Canvas {
     reason = "a Canvas holds one Painter, so a smaller enum saves nothing"
 )]
 enum Painter {
-    Kitty {
-        /// The PNG that the escapes carry.
-        png: Vec<u8>,
-    },
+    Kitty,
     Sixel(sixel::Encoder),
     /// The cells on screen, which a frame compares with its own and
     /// replaces. A print writes every cell and leaves them alone.
@@ -362,7 +359,7 @@ enum Painter {
 impl Painter {
     fn new(backend: Backend) -> Self {
         match backend {
-            Backend::Kitty => Painter::Kitty { png: Vec::new() },
+            Backend::Kitty => Painter::Kitty,
             Backend::Sixel => Painter::Sixel(sixel::Encoder::new()),
             Backend::TextBlocks => Painter::TextBlocks(BlockScreen::default()),
         }
@@ -370,7 +367,7 @@ impl Painter {
 
     fn backend(&self) -> Backend {
         match self {
-            Painter::Kitty { .. } => Backend::Kitty,
+            Painter::Kitty => Backend::Kitty,
             Painter::Sixel(_) => Backend::Sixel,
             Painter::TextBlocks(_) => Backend::TextBlocks,
         }
@@ -387,12 +384,12 @@ impl Painter {
         placement: Placement,
     ) -> io::Result<()> {
         match self {
-            Painter::Kitty { png } => {
+            Painter::Kitty => {
                 let id = match placement {
                     Placement::Frame => Some(KITTY_ANIMATION_ID),
                     Placement::Still => None,
                 };
-                emit_kitty(out, pixmap, id, png, bytes)?;
+                emit_kitty(out, pixmap, id, bytes)?;
                 placement.end(out)
             }
             Painter::Sixel(encoder) => {
@@ -414,7 +411,7 @@ impl Painter {
             // The same id replaces the whole image in place, and a clear, or
             // a delete before the transmit, shows the cleared cells for one
             // refresh.
-            Painter::Kitty { .. } => Ok(()),
+            Painter::Kitty => Ok(()),
             Painter::Sixel(_) => queue!(out, terminal::Clear(terminal::ClearType::All)),
             Painter::TextBlocks(screen) => {
                 queue!(out, terminal::Clear(terminal::ClearType::All))?;
@@ -1172,52 +1169,107 @@ const CHUNK_BYTES: usize = CHUNK_PIXELS * 4;
 
 /// Write the Kitty escape sequences that show `pixmap` at the cursor, as a
 /// PNG in chunks. An image with an `id` replaces the image of that id, and
-/// one without stays until the terminal scrolls it away. `image` takes the
-/// PNG and `buf` the escapes, and a caller that draws again passes the same
-/// two.
+/// one without stays until the terminal scrolls it away. `buf` takes the
+/// escapes, and a caller that draws again passes the same one.
 fn emit_kitty<W: Write>(
     w: &mut W,
     pixmap: &Pixmap,
     id: Option<u32>,
-    image: &mut Vec<u8>,
     buf: &mut Vec<u8>,
 ) -> io::Result<()> {
-    encode_png(pixmap, image)?;
-    buf.clear();
-    buf.reserve(image.len() * 4 / 3 + image.len() / CHUNK_BYTES * 16 + 64);
-    let mut encoded = [0u8; CHUNK_BYTES / 3 * 4];
-    let total_chunks = image.len().div_ceil(CHUNK_BYTES).max(1);
-    for (idx, chunk) in image.chunks(CHUNK_BYTES).enumerate() {
-        let more: u8 = if idx + 1 < total_chunks { 1 } else { 0 };
-        if idx == 0 {
-            // The PNG header carries the size, so s and v say nothing here.
-            write!(buf, "\x1b_Ga=T,f=100,q=2,m={}", more)?;
-            if let Some(id) = id {
-                write!(buf, ",i={id}")?;
-            }
-            buf.push(b';');
-        } else {
-            write!(buf, "\x1b_Gm={},q=2;", more)?;
-        }
-        let n = B64
-            .encode_slice(chunk, &mut encoded)
-            .expect("a chunk encodes into four bytes per three");
-        buf.extend_from_slice(encoded.get(..n).expect("encode_slice fills a prefix"));
-        buf.extend_from_slice(b"\x1b\\");
-    }
+    let mut chunks = KittyChunks::new(buf, id);
+    encode_png(pixmap, &mut chunks)?;
+    chunks.finish();
     w.write_all(buf)
 }
 
-/// Encode `pixmap` into `out` as a PNG with straight alpha.
+/// Cuts a PNG into the chunks of the Kitty protocol as the encoder writes
+/// it, and appends each chunk to `buf` in base64 with its escape. Only the
+/// last chunk says `m=0`, so a full chunk waits for the next byte.
+struct KittyChunks<'a> {
+    /// Empty until the first chunk, which carries the header.
+    buf: &'a mut Vec<u8>,
+    id: Option<u32>,
+    pending: [u8; CHUNK_BYTES],
+    /// The number of bytes in `pending`.
+    len: usize,
+}
+
+impl<'a> KittyChunks<'a> {
+    fn new(buf: &'a mut Vec<u8>, id: Option<u32>) -> Self {
+        buf.clear();
+        Self {
+            buf,
+            id,
+            pending: [0; CHUNK_BYTES],
+            len: 0,
+        }
+    }
+
+    /// Append the last chunk.
+    fn finish(mut self) {
+        self.emit(false);
+    }
+
+    fn emit(&mut self, more: bool) {
+        let m = u8::from(more);
+        if self.buf.is_empty() {
+            // The PNG header carries the size, so s and v say nothing here.
+            write!(self.buf, "\x1b_Ga=T,f=100,q=2,m={m}").expect("a Vec takes every write");
+            if let Some(id) = self.id {
+                write!(self.buf, ",i={id}").expect("a Vec takes every write");
+            }
+            self.buf.push(b';');
+        } else {
+            write!(self.buf, "\x1b_Gm={m},q=2;").expect("a Vec takes every write");
+        }
+        let chunk = self
+            .pending
+            .get(..self.len)
+            .expect("len counts bytes of pending");
+        let mut encoded = [0u8; CHUNK_BYTES / 3 * 4];
+        let n = B64
+            .encode_slice(chunk, &mut encoded)
+            .expect("a chunk encodes into four bytes per three");
+        self.buf
+            .extend_from_slice(encoded.get(..n).expect("encode_slice fills a prefix"));
+        self.buf.extend_from_slice(b"\x1b\\");
+        self.len = 0;
+    }
+}
+
+impl Write for KittyChunks<'_> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        // An empty write says nothing about whether more bytes follow.
+        if data.is_empty() {
+            return Ok(0);
+        }
+        if self.len == CHUNK_BYTES {
+            self.emit(true);
+        }
+        let mut room = self
+            .pending
+            .get_mut(self.len..)
+            .expect("len counts bytes of pending");
+        let n = room.write(data)?;
+        self.len += n;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Write `pixmap` into `out` as a PNG with straight alpha.
 ///
 /// The terminal reads the raw pixels of a frame of 960 by 540 in 95 ms,
 /// because they travel in base64, and the same frame as a PNG in 1 ms. The
 /// adaptive filter is what earns it, since it turns a flat area into a row
 /// of zeros. `Balanced` shrinks the frame four times more and costs ten
 /// times the encoding, which the write does not give back.
-fn encode_png(pixmap: &Pixmap, out: &mut Vec<u8>) -> io::Result<()> {
-    out.clear();
-    let mut encoder = png::Encoder::new(&mut *out, pixmap.width(), pixmap.height());
+fn encode_png<W: Write>(pixmap: &Pixmap, out: W) -> io::Result<()> {
+    let mut encoder = png::Encoder::new(out, pixmap.width(), pixmap.height());
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_compression(png::Compression::Fast);
@@ -1620,7 +1672,10 @@ mod tests {
             .strip_prefix(header)
             .expect("the frame starts with the header")
             .trim_end_matches("\x1b\\");
-        let png = B64.decode(payload).unwrap();
+        decode_png(B64.decode(payload).unwrap())
+    }
+
+    fn decode_png(png: Vec<u8>) -> Vec<u8> {
         let mut reader = png::Decoder::new(io::Cursor::new(png)).read_info().unwrap();
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut pixels).unwrap();
@@ -1628,24 +1683,79 @@ mod tests {
         pixels
     }
 
+    /// The headers of the chunks that `writes` make, one write per slice.
+    fn kitty_headers(writes: &[&[u8]]) -> Vec<String> {
+        let mut buf = Vec::new();
+        let mut chunks = KittyChunks::new(&mut buf, None);
+        for data in writes {
+            assert_eq!(chunks.write(data).unwrap(), data.len());
+        }
+        chunks.finish();
+        String::from_utf8(buf)
+            .unwrap()
+            .split_terminator("\x1b\\")
+            .map(|chunk| chunk.split_once(';').unwrap().0.to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_full_kitty_chunk_waits_for_the_next_byte() {
+        let full = [0; CHUNK_BYTES];
+        assert_eq!(
+            kitty_headers(&[&full, &full]),
+            ["\x1b_Ga=T,f=100,q=2,m=1", "\x1b_Gm=0,q=2"]
+        );
+        // An empty write says nothing about more bytes, so the chunk is
+        // still the last.
+        assert_eq!(kitty_headers(&[&full, &[]]), ["\x1b_Ga=T,f=100,q=2,m=0"]);
+    }
+
+    #[test]
+    fn a_kitty_image_of_many_chunks_marks_all_but_the_last() {
+        // Noise does not compress, so the PNG takes several chunks.
+        let mut pm = Pixmap::new(64, 64).unwrap();
+        let mut expected = Vec::new();
+        let mut seed = 1u32;
+        for p in pm.pixels_mut() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let [r, g, b, _] = seed.to_be_bytes();
+            *p = tiny_skia::ColorU8::from_rgba(r, g, b, 255).premultiply();
+            expected.extend([r, g, b, 255]);
+        }
+        let mut out = Vec::new();
+        emit_kitty(&mut out, &pm, None, &mut Vec::new()).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let chunks: Vec<&str> = out.split_terminator("\x1b\\").collect();
+        assert!(chunks.len() > 2, "{} chunks", chunks.len());
+        let mut payload = String::new();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let (header, data) = chunk.split_once(';').unwrap();
+            let last = i + 1 == chunks.len();
+            let expected = match (i, last) {
+                (0, _) => "\x1b_Ga=T,f=100,q=2,m=1",
+                (_, false) => "\x1b_Gm=1,q=2",
+                (_, true) => "\x1b_Gm=0,q=2",
+            };
+            assert_eq!(header, expected, "chunk {i}");
+            if !last {
+                assert_eq!(data.len(), 4096, "chunk {i}");
+            }
+            payload.push_str(data);
+        }
+        assert_eq!(decode_png(B64.decode(payload).unwrap()), expected);
+    }
+
     #[test]
     fn kitty_names_the_frame_and_not_an_inline_image() {
         let pm = Pixmap::new(1, 1).unwrap();
         let mut framed = Vec::new();
-        emit_kitty(
-            &mut framed,
-            &pm,
-            Some(KITTY_ANIMATION_ID),
-            &mut Vec::new(),
-            &mut Vec::new(),
-        )
-        .unwrap();
+        emit_kitty(&mut framed, &pm, Some(KITTY_ANIMATION_ID), &mut Vec::new()).unwrap();
         assert_eq!(
             decode_kitty(framed, "\x1b_Ga=T,f=100,q=2,m=0,i=1042;"),
             [0, 0, 0, 0]
         );
         let mut inline = Vec::new();
-        emit_kitty(&mut inline, &pm, None, &mut Vec::new(), &mut Vec::new()).unwrap();
+        emit_kitty(&mut inline, &pm, None, &mut Vec::new()).unwrap();
         assert_eq!(
             decode_kitty(inline, "\x1b_Ga=T,f=100,q=2,m=0;"),
             [0, 0, 0, 0]
@@ -1658,7 +1768,7 @@ mod tests {
         let half_red = tiny_skia::ColorU8::from_rgba(255, 0, 0, 128);
         pm.pixels_mut().fill(half_red.premultiply());
         let mut out = Vec::new();
-        emit_kitty(&mut out, &pm, None, &mut Vec::new(), &mut Vec::new()).unwrap();
+        emit_kitty(&mut out, &pm, None, &mut Vec::new()).unwrap();
         assert_eq!(
             decode_kitty(out, "\x1b_Ga=T,f=100,q=2,m=0;"),
             [255, 0, 0, 128]
