@@ -362,7 +362,7 @@ impl Canvas {
 }
 
 /// Where an image goes.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Placement {
     /// A frame of the session, which replaces the frame on screen.
     Frame,
@@ -1346,6 +1346,68 @@ mod tests {
             Err(PrintError::Busy)
         ));
         drop(claim);
+    }
+
+    /// The mark of each backend in what it writes, which the other two
+    /// never write. A Kitty image is a graphics escape, a Sixel image a
+    /// device control string, and half-blocks are cells of one character.
+    const MARKS: [(Backend, &[u8]); 3] = [
+        (Backend::Kitty, b"\x1b_Ga=T"),
+        (Backend::Sixel, b"\x1bP"),
+        (Backend::TextBlocks, "▀".as_bytes()),
+    ];
+
+    /// What `write_image` writes for a small blue image.
+    fn dispatch(backend: Backend, placement: Placement) -> Vec<u8> {
+        let pixmap = solid(4, 4, 0, 0, 255);
+        let mut out: Vec<u8> = Vec::new();
+        let mut buffers = ImageBuffers::default();
+        write_image(&mut out, backend, &pixmap, &mut buffers, placement).expect("write ok");
+        out
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[test]
+    fn a_backend_writes_its_own_protocol_and_no_other() {
+        for placement in [Placement::Frame, Placement::Still] {
+            for (backend, _) in MARKS {
+                let out = dispatch(backend, placement);
+                for (other, mark) in MARKS {
+                    assert_eq!(
+                        contains(&out, mark),
+                        other == backend,
+                        "{backend:?} {placement:?} wrote the mark of {other:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_still_image_ends_in_one_newline_and_a_frame_ends_in_none() {
+        for (backend, _) in MARKS {
+            let still = dispatch(backend, Placement::Still);
+            assert!(still.ends_with(b"\n"), "{backend:?} still");
+            assert!(!still.ends_with(b"\n\n"), "{backend:?} still");
+            let frame = dispatch(backend, Placement::Frame);
+            assert!(!frame.ends_with(b"\n"), "{backend:?} frame");
+        }
+    }
+
+    #[test]
+    fn the_kitty_frame_carries_the_animation_id_and_the_still_image_none() {
+        let id = format!(",i={KITTY_ANIMATION_ID};");
+        assert!(contains(
+            &dispatch(Backend::Kitty, Placement::Frame),
+            id.as_bytes()
+        ));
+        assert!(!contains(
+            &dispatch(Backend::Kitty, Placement::Still),
+            b",i="
+        ));
     }
 
     #[test]
