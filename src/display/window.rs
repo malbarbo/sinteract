@@ -28,7 +28,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{OpenError, PresentError, Upload, period_from_hz, sealed};
+use super::driver::{OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use crate::event::{
     Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
@@ -156,12 +156,12 @@ impl super::Display for Window {
         id: u32,
         blob: &[u8],
         _mime: Option<&str>,
-    ) -> Result<Upload, PresentError> {
+    ) -> Result<(), PresentError> {
         let Some(session) = self.session.as_mut() else {
             return Err(PresentError::Closed);
         };
         session.renderer.assets_mut().insert_png(id, blob)?;
-        Ok(Upload::Kept)
+        Ok(())
     }
 
     /// Destroy the window and give the event loop back.

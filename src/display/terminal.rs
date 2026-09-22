@@ -22,7 +22,7 @@ use crossterm::event::{
 use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
-use super::driver::{OpenError, PresentError, Upload, period_from_hz, sealed};
+use super::driver::{OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use crate::event::{
@@ -224,12 +224,12 @@ impl super::Display for Terminal {
         id: u32,
         blob: &[u8],
         _mime: Option<&str>,
-    ) -> Result<Upload, PresentError> {
+    ) -> Result<(), PresentError> {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }
         self.renderer.assets_mut().insert_png(id, blob)?;
-        Ok(Upload::Kept)
+        Ok(())
     }
 
     /// Stop the reader thread, and leave the alt screen and raw mode.

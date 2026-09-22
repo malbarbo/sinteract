@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sinteract::display::{Display, PresentError, Sender, TerminalOptions, Upload, open_native};
+use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, NoEvent};
 use sinteract::scene::Scene;
 use sinteract::wire::framing::UNROUTED;
@@ -62,7 +62,6 @@ fn main() -> ExitCode {
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
     let mut stats = Stats::default();
-    let mut warned_bitmaps = false;
     loop {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
@@ -72,16 +71,14 @@ fn main() -> ExitCode {
             }
             // The messages of the engine come through the channel, and the
             // reader thread wakes the loop after each one.
-            Err(NoEvent::Wake) => {
-                match drain(fr.as_mut(), &from_reader, &mut stats, &mut warned_bitmaps) {
-                    Session::Open => {}
-                    Session::EngineClosed => break,
-                    Session::DisplayFailed => {
-                        let _ = to_engine::write_close(&mut to_engine, UNROUTED);
-                        break;
-                    }
+            Err(NoEvent::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
+                Session::Open => {}
+                Session::EngineClosed => break,
+                Session::DisplayFailed => {
+                    let _ = to_engine::write_close(&mut to_engine, UNROUTED);
+                    break;
                 }
-            }
+            },
             Err(NoEvent::Close) => {
                 let _ = to_engine::write_close(&mut to_engine, UNROUTED);
                 break;
@@ -138,23 +135,13 @@ enum Session {
 /// Act on the messages of the engine that arrived. The assets go to the
 /// display in order, and only the last frame is shown, since the ones
 /// before it are already stale.
-fn drain(
-    fr: &mut dyn Display,
-    from_reader: &Receiver<Message>,
-    stats: &mut Stats,
-    warned_bitmaps: &mut bool,
-) -> Session {
+fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stats) -> Session {
     let mut last: Option<Scene> = None;
     let mut session = Session::Open;
     for message in from_reader.try_iter() {
         match message {
             Message::Asset { id, blob, mime } => match fr.push_asset(id, &blob, mime.as_deref()) {
-                Ok(Upload::Kept) => {}
-                Ok(Upload::Dropped) if *warned_bitmaps => {}
-                Ok(Upload::Dropped) => {
-                    *warned_bitmaps = true;
-                    eprintln!("view: this display draws no bitmap, so a frame goes without");
-                }
+                Ok(()) => {}
                 // The rest of the frame still draws.
                 Err(e @ PresentError::Asset(_)) => eprintln!("view: {e}"),
                 Err(e) => {

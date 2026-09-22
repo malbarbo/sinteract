@@ -61,15 +61,9 @@ pub trait Display: sealed::Sealed {
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;
 
-    /// Upload a bitmap for `Bitmap.id`, and say what the display did with
-    /// it. Call it before the first [`present`](Display::present) of a
-    /// scene that names `id`.
-    fn push_asset(
-        &mut self,
-        id: u32,
-        blob: &[u8],
-        mime: Option<&str>,
-    ) -> Result<Upload, PresentError>;
+    /// Upload a bitmap for `Bitmap.id`. Call it before the first
+    /// [`present`](Display::present) of a scene that names `id`.
+    fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) -> Result<(), PresentError>;
 
     /// End the session. A second call does nothing, and drop calls it.
     fn close(&mut self);
@@ -136,18 +130,6 @@ impl From<io::Error> for PresentError {
     fn from(e: io::Error) -> Self {
         PresentError::Io(e)
     }
-}
-
-/// What a display did with an upload. A dropped asset is not a failure.
-/// The rest of the scene still draws, and the program decides whether to
-/// tell the user that the image will not appear.
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Upload {
-    /// The display keeps the asset, and a bitmap of that id draws.
-    Kept,
-    /// The display draws no bitmap, so it dropped the asset.
-    Dropped,
 }
 
 /// The terminal when stdout is a tty with graphics, and a window of `width`
