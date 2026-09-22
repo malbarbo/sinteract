@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sinteract::display::{Display, Sender, TerminalOptions, Upload, open_native};
+use sinteract::display::{Display, PresentError, Sender, TerminalOptions, Upload, open_native};
 use sinteract::event::{Event, NoEvent};
 use sinteract::scene::Scene;
 use sinteract::wire::framing::UNROUTED;
@@ -155,6 +155,8 @@ fn drain(
                     *warned_bitmaps = true;
                     eprintln!("view: this display draws no bitmap, so a frame goes without");
                 }
+                // The rest of the frame still draws.
+                Err(e @ PresentError::Asset(_)) => eprintln!("view: {e}"),
                 Err(e) => {
                     eprintln!("view: {e}");
                     return Session::DisplayFailed;

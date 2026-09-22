@@ -218,14 +218,18 @@ impl super::Display for Terminal {
         self.inbox.sender()
     }
 
-    /// The rasterizer draws no bitmap, so the asset goes nowhere.
+    /// Decode the asset as a PNG, whatever `mime` says.
     fn push_asset(
         &mut self,
-        _id: u32,
-        _blob: &[u8],
+        id: u32,
+        blob: &[u8],
         _mime: Option<&str>,
     ) -> Result<Upload, PresentError> {
-        Ok(Upload::Dropped)
+        if self.live.is_none() {
+            return Err(PresentError::Closed);
+        }
+        self.renderer.assets_mut().insert_png(id, blob)?;
+        Ok(Upload::Kept)
     }
 
     /// Stop the reader thread, and leave the alt screen and raw mode.

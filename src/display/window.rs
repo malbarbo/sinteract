@@ -150,14 +150,18 @@ impl super::Display for Window {
         self.inbox.sender()
     }
 
-    /// The rasterizer draws no bitmap, so the asset goes nowhere.
+    /// Decode the asset as a PNG, whatever `mime` says.
     fn push_asset(
         &mut self,
-        _id: u32,
-        _blob: &[u8],
+        id: u32,
+        blob: &[u8],
         _mime: Option<&str>,
     ) -> Result<Upload, PresentError> {
-        Ok(Upload::Dropped)
+        let Some(session) = self.session.as_mut() else {
+            return Err(PresentError::Closed);
+        };
+        session.renderer.assets_mut().insert_png(id, blob)?;
+        Ok(Upload::Kept)
     }
 
     /// Destroy the window and give the event loop back.

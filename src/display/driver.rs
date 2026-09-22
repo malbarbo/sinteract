@@ -8,6 +8,7 @@ use std::time::Instant;
 use super::inbox::Sender;
 use crate::event::{Event, NoEvent};
 use crate::renderer::AllocError;
+use crate::renderer::pixmap::AssetError;
 use crate::scene::Scene;
 
 /// A session that shows scenes and delivers events. Opening is the
@@ -92,6 +93,8 @@ pub enum PresentError {
     Io(io::Error),
     /// The surface of the window refused the frame.
     Platform(String),
+    /// The asset does not decode, so a bitmap of its id draws nothing.
+    Asset(AssetError),
 }
 
 impl fmt::Display for PresentError {
@@ -101,6 +104,7 @@ impl fmt::Display for PresentError {
             PresentError::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
             PresentError::Io(e) => write!(f, "cannot show the frame: {e}"),
             PresentError::Platform(e) => write!(f, "cannot show the frame: {e}"),
+            PresentError::Asset(e) => write!(f, "cannot keep the asset: {e}"),
         }
     }
 }
@@ -110,6 +114,7 @@ impl std::error::Error for PresentError {
         match self {
             PresentError::Alloc(e) => Some(e),
             PresentError::Io(e) => Some(e),
+            PresentError::Asset(e) => Some(e),
             PresentError::Closed | PresentError::Platform(_) => None,
         }
     }
@@ -118,6 +123,12 @@ impl std::error::Error for PresentError {
 impl From<AllocError> for PresentError {
     fn from(e: AllocError) -> Self {
         PresentError::Alloc(e)
+    }
+}
+
+impl From<AssetError> for PresentError {
+    fn from(e: AssetError) -> Self {
+        PresentError::Asset(e)
     }
 }
 
