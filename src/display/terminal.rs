@@ -1486,6 +1486,48 @@ mod tests {
         assert_eq!(update(&mut screen, &pm).0, b"\x1b[0m");
     }
 
+    /// A blue pixmap of `w` by `h` with the top pixels of the columns in
+    /// `red` turned red.
+    fn blue_with_red_tops(w: u32, h: u32, red: &[usize]) -> Pixmap {
+        let mut pm = solid(w, h, 0, 0, 255);
+        for &x in red {
+            pm.pixels_mut()[x] = tiny_skia::ColorU8::from_rgba(255, 0, 0, 255).premultiply();
+        }
+        pm
+    }
+
+    #[test]
+    fn a_half_block_frame_sets_both_colors_once_for_a_run_of_cells() {
+        let mut screen = BlockScreen::default();
+        let (out, _) = update(&mut screen, &blue_with_red_tops(2, 2, &[0, 1]));
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "\x1b[1;1H\x1b[38;2;255;0;0;48;2;0;0;255m▀▀\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn a_half_block_frame_jumps_over_a_cell_that_stays() {
+        let mut screen = BlockScreen::default();
+        update(&mut screen, &solid(4, 2, 0, 0, 255));
+        let (out, cells) = update(&mut screen, &blue_with_red_tops(4, 2, &[0, 2]));
+        assert_eq!(cells, 2);
+        let out = String::from_utf8_lossy(&out);
+        assert!(
+            out.contains("\x1b[1;1H") && out.contains("\x1b[1;3H"),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn a_half_block_frame_does_not_jump_to_the_next_cell() {
+        let mut screen = BlockScreen::default();
+        update(&mut screen, &solid(4, 2, 0, 0, 255));
+        let (out, cells) = update(&mut screen, &blue_with_red_tops(4, 2, &[1, 2]));
+        assert_eq!(cells, 2);
+        assert_eq!(String::from_utf8_lossy(&out).matches("H").count(), 1);
+    }
+
     #[test]
     fn a_half_block_frame_writes_the_cell_that_changed() {
         let mut screen = BlockScreen::default();
