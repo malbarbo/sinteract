@@ -139,26 +139,24 @@ impl Terminal {
     /// it empty and the next frame clears and writes every cell.
     fn draw(&mut self, scene: &Scene) -> Result<(), PresentError> {
         let Canvas {
-            backend,
             renderer,
-            buffers,
+            bytes,
+            painter,
         } = &mut self.canvas;
-        let scale = scale_for_backend(*backend, scene.width(), scene.height());
+        let backend = painter.backend();
+        let scale = scale_for_backend(backend, scene.width(), scene.height());
         renderer.set_scale(scale);
         let pixmap = renderer.render(scene)?;
         *self.cells.lock().unwrap_or_else(PoisonError::into_inner) =
-            CellMap::new(*backend, cell_pixels(), scale);
+            CellMap::new(backend, cell_pixels(), scale);
         let mut stdout = io::stdout().lock();
-        // A smaller frame leaves the edges of the one before. The same Kitty
-        // id replaces the whole image in place, and a clear, or a delete
-        // before the transmit, shows the cleared cells for one refresh.
+        // A smaller frame leaves the edges of the one before.
         let size = (pixmap.width(), pixmap.height());
-        if self.frame_size.take() != Some(size) && *backend != Backend::Kitty {
-            queue!(stdout, terminal::Clear(terminal::ClearType::All))?;
-            buffers.blocks.forget();
+        if self.frame_size.take() != Some(size) {
+            painter.clear_old_frame(&mut stdout)?;
         }
         queue!(stdout, cursor::MoveTo(0, 0))?;
-        write_image(&mut stdout, *backend, pixmap, buffers, Placement::Frame)?;
+        painter.write_image(&mut stdout, bytes, pixmap, Placement::Frame)?;
         stdout.flush()?;
         self.frame_size = Some(size);
         Ok(())
@@ -222,7 +220,7 @@ impl super::Display for Terminal {
         self.inbox.close();
         live.reader.stop();
         if !live.claim.restored() {
-            leave(self.canvas.backend, self.frame_size.is_some());
+            leave(self.canvas.painter.backend(), self.frame_size.is_some());
             // The session is over, and close has no way to report that
             // the frame did not print.
             if self.keep_last_frame
@@ -240,20 +238,6 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         super::Display::close(self);
     }
-}
-
-/// The bytes a frame needs.
-#[derive(Default)]
-struct ImageBuffers {
-    /// The PNG that the Kitty protocol carries.
-    image: Vec<u8>,
-    /// The Sixel encoder, which keeps the pixels and the text of a frame.
-    sixel: sixel::Encoder,
-    /// The escapes that go to the terminal.
-    escapes: Vec<u8>,
-    /// The cells that a half-block frame compares against and replaces. A
-    /// print writes every cell and leaves this alone.
-    blocks: BlockScreen,
 }
 
 /// Why a print did not reach the terminal. A failure comes with the error
@@ -324,40 +308,120 @@ impl Printer {
 }
 
 /// What draws a scene into the terminal, for the frames of a [`Terminal`]
-/// and the prints of a [`Printer`].
+/// and the prints of a [`Printer`]. Every field lives from one image to the
+/// next, so an image reuses the allocations.
 struct Canvas {
-    backend: Backend,
-    /// Kept across frames, so a frame reuses the pixmap and the clip masks.
+    /// The pixmap, the clip masks and the images of the bitmaps.
     renderer: PixmapRenderer,
-    /// Kept across frames, so a frame reuses the allocations.
-    buffers: ImageBuffers,
+    /// Where Kitty and half-blocks build the escapes of an image before the
+    /// write.
+    bytes: Vec<u8>,
+    painter: Painter,
 }
 
 impl Canvas {
     fn new(backend: Backend) -> Self {
         Self {
-            backend,
             renderer: PixmapRenderer::default(),
-            buffers: ImageBuffers::default(),
+            bytes: Vec::new(),
+            painter: Painter::new(backend),
         }
     }
 
     /// Print `scene` at the cursor, with every cell of the image, and leave
     /// the cursor on the line below it.
     fn print(&mut self, scene: &Scene) -> Result<(), PrintError> {
-        let scale = scale_for_backend(self.backend, scene.width(), scene.height());
+        let scale = scale_for_backend(self.painter.backend(), scene.width(), scene.height());
         self.renderer.set_scale(scale);
         let pixmap = self.renderer.render(scene).map_err(PrintError::Alloc)?;
         let mut stdout = io::stdout().lock();
-        write_image(
-            &mut stdout,
-            self.backend,
-            pixmap,
-            &mut self.buffers,
-            Placement::Still,
-        )
-        .and_then(|()| stdout.flush())
-        .map_err(PrintError::Io)
+        self.painter
+            .write_image(&mut stdout, &mut self.bytes, pixmap, Placement::Still)
+            .and_then(|()| stdout.flush())
+            .map_err(PrintError::Io)
+    }
+}
+
+/// The backend of a [`Canvas`], with what it keeps from one image to the
+/// next.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a Canvas holds one Painter, so a smaller enum saves nothing"
+)]
+enum Painter {
+    Kitty {
+        /// The PNG that the escapes carry.
+        png: Vec<u8>,
+    },
+    Sixel(sixel::Encoder),
+    /// The cells on screen, which a frame compares with its own and
+    /// replaces. A print writes every cell and leaves them alone.
+    TextBlocks(BlockScreen),
+}
+
+impl Painter {
+    fn new(backend: Backend) -> Self {
+        match backend {
+            Backend::Kitty => Painter::Kitty { png: Vec::new() },
+            Backend::Sixel => Painter::Sixel(sixel::Encoder::new()),
+            Backend::TextBlocks => Painter::TextBlocks(BlockScreen::default()),
+        }
+    }
+
+    fn backend(&self) -> Backend {
+        match self {
+            Painter::Kitty { .. } => Backend::Kitty,
+            Painter::Sixel(_) => Backend::Sixel,
+            Painter::TextBlocks(_) => Backend::TextBlocks,
+        }
+    }
+
+    /// Write `pixmap`. A still image goes at the cursor. A frame goes at
+    /// (0, 0), so the cursor has to be there. A caller that draws again
+    /// passes the same `bytes`.
+    fn write_image<W: Write>(
+        &mut self,
+        out: &mut W,
+        bytes: &mut Vec<u8>,
+        pixmap: &Pixmap,
+        placement: Placement,
+    ) -> io::Result<()> {
+        match self {
+            Painter::Kitty { png } => {
+                let id = match placement {
+                    Placement::Frame => Some(KITTY_ANIMATION_ID),
+                    Placement::Still => None,
+                };
+                emit_kitty(out, pixmap, id, png, bytes)?;
+                placement.end(out)
+            }
+            Painter::Sixel(encoder) => {
+                out.write_all(encoder.encode(pixmap, SIXEL_BACKGROUND)?)?;
+                placement.end(out)
+            }
+            Painter::TextBlocks(screen) => match placement {
+                Placement::Frame => update_text_blocks(out, pixmap, bytes, screen),
+                // Each row of the cells ends in a newline, so the cursor
+                // already sits on the line below the image.
+                Placement::Still => render_text_blocks(out, pixmap, bytes),
+            },
+        }
+    }
+
+    /// Remove the frame on screen, unless the next frame replaces it whole.
+    fn clear_old_frame<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
+        match self {
+            // The same id replaces the whole image in place, and a clear, or
+            // a delete before the transmit, shows the cleared cells for one
+            // refresh.
+            Painter::Kitty { .. } => Ok(()),
+            Painter::Sixel(_) => queue!(out, terminal::Clear(terminal::ClearType::All)),
+            Painter::TextBlocks(screen) => {
+                queue!(out, terminal::Clear(terminal::ClearType::All))?;
+                screen.forget();
+                Ok(())
+            }
+        }
     }
 }
 
@@ -371,40 +435,13 @@ enum Placement {
     Still,
 }
 
-/// Write `pixmap` through `backend` at the cursor.
-fn write_image<W: Write>(
-    out: &mut W,
-    backend: Backend,
-    pixmap: &Pixmap,
-    buffers: &mut ImageBuffers,
-    placement: Placement,
-) -> io::Result<()> {
-    let kitty_id = match placement {
-        Placement::Frame => Some(KITTY_ANIMATION_ID),
-        Placement::Still => None,
-    };
-    match (backend, placement) {
-        (Backend::Kitty, _) => emit_kitty(
-            out,
-            pixmap,
-            kitty_id,
-            &mut buffers.image,
-            &mut buffers.escapes,
-        )?,
-        (Backend::Sixel, _) => {
-            out.write_all(buffers.sixel.encode(pixmap, SIXEL_BACKGROUND)?)?;
+impl Placement {
+    /// Leave the cursor on the line below a still image.
+    fn end<W: Write>(self, out: &mut W) -> io::Result<()> {
+        match self {
+            Placement::Frame => Ok(()),
+            Placement::Still => writeln!(out),
         }
-        (Backend::TextBlocks, Placement::Frame) => {
-            return update_text_blocks(out, pixmap, &mut buffers.escapes, &mut buffers.blocks);
-        }
-        // Each row of the cells ends in a newline.
-        (Backend::TextBlocks, Placement::Still) => {
-            return render_text_blocks(out, pixmap, &mut buffers.escapes);
-        }
-    }
-    match placement {
-        Placement::Frame => Ok(()),
-        Placement::Still => writeln!(out),
     }
 }
 
@@ -1357,13 +1394,53 @@ mod tests {
         (Backend::TextBlocks, "▀".as_bytes()),
     ];
 
-    /// What `write_image` writes for a small blue image.
+    /// What [`Painter::write_image`] writes for a small blue image.
     fn dispatch(backend: Backend, placement: Placement) -> Vec<u8> {
         let pixmap = solid(4, 4, 0, 0, 255);
         let mut out: Vec<u8> = Vec::new();
-        let mut buffers = ImageBuffers::default();
-        write_image(&mut out, backend, &pixmap, &mut buffers, placement).expect("write ok");
+        Painter::new(backend)
+            .write_image(&mut out, &mut Vec::new(), &pixmap, placement)
+            .expect("write ok");
         out
+    }
+
+    #[test]
+    fn a_painter_reports_its_backend() {
+        for (backend, _) in MARKS {
+            assert_eq!(Painter::new(backend).backend(), backend);
+        }
+    }
+
+    #[test]
+    fn an_old_frame_clears_the_screen_except_under_kitty() {
+        for (backend, _) in MARKS {
+            let mut out: Vec<u8> = Vec::new();
+            Painter::new(backend)
+                .clear_old_frame(&mut out)
+                .expect("write ok");
+            assert_eq!(
+                contains(&out, b"\x1b[2J"),
+                backend != Backend::Kitty,
+                "{backend:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cleared_half_block_frame_writes_every_cell_again() {
+        let pixmap = solid(4, 2, 0, 0, 255);
+        let mut painter = Painter::new(Backend::TextBlocks);
+        let cells = |painter: &mut Painter| {
+            let mut out: Vec<u8> = Vec::new();
+            painter
+                .write_image(&mut out, &mut Vec::new(), &pixmap, Placement::Frame)
+                .expect("write ok");
+            String::from_utf8_lossy(&out).matches('▀').count()
+        };
+        assert_eq!(cells(&mut painter), 4);
+        assert_eq!(cells(&mut painter), 0);
+        painter.clear_old_frame(&mut Vec::new()).expect("write ok");
+        assert_eq!(cells(&mut painter), 4);
     }
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
