@@ -2,11 +2,14 @@
 //! no tty or window, so it builds on wasm. The terminal and the window
 //! present the pixels.
 
+use std::collections::HashMap;
+use std::fmt;
+
 use tiny_skia::{
-    Color as SkColor, FillRule as SkFillRule, GradientStop as SkStop, LineCap as SkLineCap,
-    LineJoin as SkLineJoin, Mask, Paint as SkPaint, Path as SkPath, PathBuilder, PathStroker,
-    Pixmap, Point as SkPoint, Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash,
-    Transform,
+    Color as SkColor, FillRule as SkFillRule, FilterQuality, GradientStop as SkStop,
+    LineCap as SkLineCap, LineJoin as SkLineJoin, Mask, Paint as SkPaint, Path as SkPath,
+    PathBuilder, PathStroker, Pixmap, PixmapPaint, Point as SkPoint, Rect as SkRect,
+    Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
 use crate::outline::PathSink;
@@ -14,7 +17,8 @@ use crate::renderer::{
     AllocError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
 };
 use crate::scene::{
-    ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, SpreadMode, Stop, Text,
+    Bitmap, ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, SpreadMode,
+    Stop, Text,
 };
 use crate::text::TextLayout;
 
@@ -52,6 +56,7 @@ pub struct PixmapRenderer {
     /// The builder of the next path. A finished path clears back into it, so
     /// the next path reuses its capacity.
     builder: PathBuilder,
+    assets: Assets,
 }
 
 impl PixmapRenderer {
@@ -67,7 +72,13 @@ impl PixmapRenderer {
             clip_stack: Vec::new(),
             mask_pool: Vec::new(),
             builder: PathBuilder::new(),
+            assets: Assets::default(),
         })
+    }
+
+    /// The images that a [`Bitmap`] of the next frames names.
+    pub fn assets_mut(&mut self) -> &mut Assets {
+        &mut self.assets
     }
 
     /// Render the next frames at `scale`. The surface grows or shrinks at
@@ -86,6 +97,38 @@ impl Default for PixmapRenderer {
     /// A surface at scale 1.0 that takes its size at the first render.
     fn default() -> Self {
         Self::new(1.0, 1.0, 1.0).expect("a 1x1 pixmap always allocates")
+    }
+}
+
+/// The images that the bitmaps of a scene name by id, decoded.
+#[derive(Clone, Debug, Default)]
+pub struct Assets {
+    images: HashMap<u32, Pixmap>,
+}
+
+impl Assets {
+    /// Decode the PNG in `blob` and keep it for the bitmaps of `id`, in place
+    /// of the image that `id` named before.
+    pub fn insert_png(&mut self, id: u32, blob: &[u8]) -> Result<(), AssetError> {
+        let image = Pixmap::decode_png(blob).map_err(AssetError)?;
+        self.images.insert(id, image);
+        Ok(())
+    }
+}
+
+/// An asset that does not decode as a PNG.
+#[derive(Debug)]
+pub struct AssetError(png::DecodingError);
+
+impl fmt::Display for AssetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "cannot decode the image as PNG: {}", self.0)
+    }
+}
+
+impl std::error::Error for AssetError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
     }
 }
 
@@ -178,6 +221,35 @@ impl Canvas for PixmapRenderer {
             InEffect::Through(mask) => Some(mask),
         };
         render_text(node, &mut self.pixmap, mask, self.base, &mut self.builder);
+    }
+
+    /// Draw the image of `bitmap.id`. An id with no image draws nothing.
+    fn draw_bitmap(&mut self, bitmap: &Bitmap) {
+        let Some(image) = self.assets.images.get(&bitmap.id) else {
+            return;
+        };
+        let mask = match in_effect(&self.clip_stack) {
+            InEffect::Nothing => return,
+            InEffect::Everything => None,
+            InEffect::Through(mask) => Some(mask),
+        };
+        let (w, h) = (image.width() as f32, image.height() as f32);
+        let [a, b, c, d, e, f] = bitmap.transform;
+        // The transform puts the center of the image at the origin, and the
+        // pixmap starts at its top left corner.
+        let transform = Transform::from_translate(-w / 2.0, -h / 2.0)
+            .post_concat(Transform::from_row(a, b, c, d, e, f))
+            .post_concat(self.base);
+        let reach = SkRect::from_xywh(0.0, 0.0, w, h)
+            .is_some_and(|rect| rect_within_reach(rect, transform));
+        if reach {
+            let paint = PixmapPaint {
+                quality: FilterQuality::Bilinear,
+                ..PixmapPaint::default()
+            };
+            self.pixmap
+                .draw_pixmap(0, 0, image.as_ref(), &paint, transform, mask);
+        }
     }
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
@@ -481,13 +553,18 @@ const MAX_REACH: f32 = (1u32 << 28) as f32;
 fn within_reach(path: &SkPath, transform: Transform, pad: f32) -> bool {
     path.bounds()
         .outset(pad, pad)
-        .and_then(|b| b.transform(transform))
-        .is_some_and(|b| {
-            b.left() >= -MAX_REACH
-                && b.top() >= -MAX_REACH
-                && b.right() <= MAX_REACH
-                && b.bottom() <= MAX_REACH
-        })
+        .is_some_and(|b| rect_within_reach(b, transform))
+}
+
+/// Returns `true` if `rect` under `transform` stays within [`MAX_REACH`],
+/// `false` otherwise.
+fn rect_within_reach(rect: SkRect, transform: Transform) -> bool {
+    rect.transform(transform).is_some_and(|b| {
+        b.left() >= -MAX_REACH
+            && b.top() >= -MAX_REACH
+            && b.right() <= MAX_REACH
+            && b.bottom() <= MAX_REACH
+    })
 }
 
 /// Returns `true` if `stroke` of `path` under `transform` stays within
@@ -628,6 +705,48 @@ mod tests {
         r.draw_path(&square_path(solid(0, 255, 0), 20.0));
         let pm = r.into_pixmap();
         assert_eq!(pixel_rgba(&pm, 10, 10), (0, 255, 0, 255));
+    }
+
+    #[test]
+    fn a_bitmap_stretches_its_image_over_the_rect() {
+        let pm = draw_red_blue_png(1);
+        assert_eq!(pixel_rgba(&pm, 2, 5), (255, 0, 0, 255));
+        assert_eq!(pixel_rgba(&pm, 17, 5), (0, 0, 255, 255));
+    }
+
+    #[test]
+    fn a_bitmap_with_no_image_draws_nothing() {
+        let pm = draw_red_blue_png(2);
+        assert!(pm.pixels().iter().all(|p| p.alpha() == 0));
+    }
+
+    #[test]
+    fn insert_png_refuses_what_is_not_a_png() {
+        let mut assets = Assets::default();
+        assert!(assets.insert_png(1, b"GIF89a").is_err());
+    }
+
+    /// Keep a PNG of two pixels, red on the left and blue on the right, as
+    /// id 1, and draw the bitmap of `id` over a canvas of 20x10.
+    fn draw_red_blue_png(id: u32) -> Pixmap {
+        let mut png = Pixmap::new(2, 1).expect("alloc");
+        png.pixels_mut().copy_from_slice(&[
+            tiny_skia::ColorU8::from_rgba(255, 0, 0, 255).premultiply(),
+            tiny_skia::ColorU8::from_rgba(0, 0, 255, 255).premultiply(),
+        ]);
+        let mut r = PixmapRenderer::new(1.0, 20.0, 10.0).expect("alloc");
+        r.assets_mut()
+            .insert_png(1, &png.encode_png().expect("encode"))
+            .expect("a PNG decodes");
+        let rect = RotatedRect {
+            cx: 10.0,
+            cy: 5.0,
+            w: 20.0,
+            h: 10.0,
+            angle_deg: 0.0,
+        };
+        r.draw_bitmap(&Bitmap::fit(id, 2, 1, rect));
+        r.into_pixmap()
     }
 
     #[test]

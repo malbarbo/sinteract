@@ -22,14 +22,13 @@ terminal = [
     "dep:crossterm",
     "dep:vte",
     "dep:base64",
-    "dep:png",
     "dep:libc",
     "dep:windows-sys",
 ]
 window = ["dep:winit", "dep:softbuffer", "dep:libc"]
 
 [dependencies]
-tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"] }
 kurbo = { version = "0.13", default-features = false, features = ["std"] }
 # The bindings for the files in schema/ are generated offline and committed
 # in src/wire/*_capnp.rs, so the build does not need the capnp CLI.
@@ -39,6 +38,10 @@ ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 pdf-writer = "0.14"
 # Pure Rust, so the Sixel encoder builds on wasm too.
 icy_sixel = "0.7"
+# Decodes an asset, through tiny-skia, and encodes the Kitty frame. The
+# terminal reads a PNG fifty times faster than the raw pixels, which arrive
+# in base64.
+png = "0.18"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 fontdb = { version = "0.23", optional = true }
@@ -46,9 +49,6 @@ crossterm = { version = "0.29", optional = true }
 # Parses the replies of the terminal to the probe in term_query.
 vte = { version = "0.15", default-features = false, features = ["std"], optional = true }
 base64 = { version = "0.22", optional = true }
-# Encodes the Kitty frame. The terminal reads a PNG fifty times faster than
-# the raw pixels, which arrive in base64.
-png = { version = "0.18", optional = true }
 winit = { version = "0.30", optional = true, default-features = false, features = [
     "x11",
     "wayland",
