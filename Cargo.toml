@@ -40,7 +40,7 @@ pdf-writer = "0.14"
 # encoder that keeps its buffers between frames. Go back to the release
 # once it has the change. Cargo.lock is not in the repository, so the
 # revision is pinned here.
-icy_sixel = { git = "https://github.com/malbarbo/icy_sixel", rev = "c9e8b3c06ae5415806c281a4e1c41c54ab9a7df7" }
+icy_sixel = { git = "https://github.com/malbarbo/icy_sixel", rev = "3cfeba1b7ec9c36546538aa38dd42e2aad44c269" }
 # Decodes an asset, through tiny-skia, and encodes the Kitty frame. The
 # terminal reads a PNG fifty times faster than the raw pixels, which arrive
 # in base64.

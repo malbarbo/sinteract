@@ -16,8 +16,6 @@ pub struct Encoder {
     inner: icy_sixel::SixelEncoder,
     /// The pixels of the frame over the background, which `inner` reads.
     pixels: Vec<u8>,
-    /// The Sixel of the frame, which the caller borrows until the next call.
-    text: String,
 }
 
 impl Encoder {
@@ -31,28 +29,29 @@ impl Encoder {
         Encoder {
             inner: icy_sixel::SixelEncoder::new().with_options(options),
             pixels: Vec::new(),
-            text: String::new(),
         }
     }
 
-    /// Encode `pixmap` as Sixel, with the DCS introducer and the string
-    /// terminator, and return the bytes, which last until the next call.
-    /// Every pixel goes over `bg` first. An image over 64 megapixels is an
-    /// error.
-    pub fn encode(&mut self, pixmap: &Pixmap, bg: (u8, u8, u8)) -> io::Result<&[u8]> {
+    /// Append `pixmap` to `out` as Sixel, with the DCS introducer and the
+    /// string terminator. Every pixel goes over `bg` first. An image over 64
+    /// megapixels is an error, which leaves `out` as it was.
+    pub fn encode(
+        &mut self,
+        pixmap: &Pixmap,
+        bg: (u8, u8, u8),
+        out: &mut Vec<u8>,
+    ) -> io::Result<()> {
         self.pixels.clear();
         self.pixels
             .extend(pixmap.pixels().iter().flat_map(|&p| over(p, bg)));
-        self.text.clear();
         self.inner
             .encode_into(
                 &self.pixels,
                 pixmap.width() as usize,
                 pixmap.height() as usize,
-                &mut self.text,
+                out,
             )
-            .map_err(io::Error::other)?;
-        Ok(self.text.as_bytes())
+            .map_err(io::Error::other)
     }
 }
 
@@ -109,39 +108,41 @@ mod tests {
 
     #[test]
     fn encode_solid_red_pixmap_is_well_formed() {
-        let pm = make_solid(8, 6, [255, 0, 0, 255]);
-        let mut encoder = Encoder::new();
-        let bytes = encoder.encode(&pm, (255, 255, 255)).unwrap();
+        let bytes = sixel(Encoder::new(), &make_solid(8, 6, [255, 0, 0, 255]));
         assert!(bytes.starts_with(b"\x1bP"));
         assert!(bytes.ends_with(b"\x1b\\"));
-        assert!(window_contains(bytes, b";2;100;0;0"));
+        assert!(window_contains(&bytes, b";2;100;0;0"));
     }
 
     #[test]
     fn encode_transparent_uses_background() {
-        let pm = make_solid(4, 4, [0, 0, 0, 0]);
-        let mut encoder = Encoder::new();
-        let bytes = encoder.encode(&pm, (255, 255, 255)).unwrap();
-        assert!(window_contains(bytes, b";2;100;100;100"));
+        let bytes = sixel(Encoder::new(), &make_solid(4, 4, [0, 0, 0, 0]));
+        assert!(window_contains(&bytes, b";2;100;100;100"));
+    }
+
+    #[test]
+    fn encode_appends_to_out() {
+        let pm = make_solid(2, 2, [255, 0, 0, 255]);
+        let mut out = b"prefix".to_vec();
+        Encoder::new().encode(&pm, WHITE, &mut out).unwrap();
+        assert_eq!(
+            out.strip_prefix(b"prefix"),
+            Some(&*sixel(Encoder::new(), &pm))
+        );
     }
 
     #[test]
     fn a_reused_encoder_matches_a_fresh_one() {
         let mut reused = Encoder::new();
+        let mut out = Vec::new();
         // The sizes shrink and grow, so every buffer the encoder keeps has
         // to grow, shrink and be cleared between two frames. A gradient
         // fills the palette, which a flat fill leaves almost empty.
         for (w, h) in [(4, 4), (31, 23), (9, 7), (31, 23), (1, 1)] {
             let pm = make_gradient(w, h);
-            let fresh = Encoder::new()
-                .encode(&pm, (255, 255, 255))
-                .unwrap()
-                .to_vec();
-            assert_eq!(
-                reused.encode(&pm, (255, 255, 255)).unwrap(),
-                fresh,
-                "{w}x{h}"
-            );
+            out.clear();
+            reused.encode(&pm, WHITE, &mut out).unwrap();
+            assert_eq!(out, sixel(Encoder::new(), &pm), "{w}x{h}");
         }
     }
 
@@ -150,14 +151,16 @@ mod tests {
         // A flat fill encodes the same at any diffusion, so only a gradient
         // shows that `default` turns dithering off as `new` does.
         let pm = make_gradient(24, 18);
-        let expected = Encoder::new()
-            .encode(&pm, (255, 255, 255))
-            .unwrap()
-            .to_vec();
-        assert_eq!(
-            Encoder::default().encode(&pm, (255, 255, 255)).unwrap(),
-            expected
-        );
+        assert_eq!(sixel(Encoder::default(), &pm), sixel(Encoder::new(), &pm));
+    }
+
+    const WHITE: (u8, u8, u8) = (255, 255, 255);
+
+    /// The Sixel of `pm` over white.
+    fn sixel(mut encoder: Encoder, pm: &Pixmap) -> Vec<u8> {
+        let mut out = Vec::new();
+        encoder.encode(pm, WHITE, &mut out).unwrap();
+        out
     }
 
     fn window_contains(haystack: &[u8], needle: &[u8]) -> bool {

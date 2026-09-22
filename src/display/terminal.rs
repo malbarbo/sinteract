@@ -313,8 +313,7 @@ impl Printer {
 struct Canvas {
     /// The pixmap, the clip masks and the images of the bitmaps.
     renderer: PixmapRenderer,
-    /// Where Kitty and half-blocks build the escapes of an image before the
-    /// write.
+    /// Where the backend builds the escapes of an image before the write.
     bytes: Vec<u8>,
     painter: Painter,
 }
@@ -393,7 +392,9 @@ impl Painter {
                 placement.end(out)
             }
             Painter::Sixel(encoder) => {
-                out.write_all(encoder.encode(pixmap, SIXEL_BACKGROUND)?)?;
+                bytes.clear();
+                encoder.encode(pixmap, SIXEL_BACKGROUND, bytes)?;
+                out.write_all(bytes)?;
                 placement.end(out)
             }
             Painter::TextBlocks(screen) => match placement {
@@ -1502,6 +1503,29 @@ mod tests {
                         "{backend:?} {placement:?} wrote the mark of {other:?}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn an_image_leaves_nothing_of_the_one_before_in_the_bytes() {
+        let pixmap = solid(4, 4, 0, 0, 255);
+        let mut bytes = Vec::new();
+        for placement in [Placement::Frame, Placement::Still] {
+            for (backend, _) in MARKS {
+                let mut painter = Painter::new(backend);
+                let mut write = |painter: &mut Painter| {
+                    let mut out: Vec<u8> = Vec::new();
+                    painter
+                        .write_image(&mut out, &mut bytes, &pixmap, placement)
+                        .expect("write ok");
+                    out
+                };
+                let first = write(&mut painter);
+                // A half-block frame writes only the cells that changed, so
+                // the second one starts from a cleared screen.
+                painter.clear_old_frame(&mut Vec::new()).expect("write ok");
+                assert_eq!(write(&mut painter), first, "{backend:?} {placement:?}");
             }
         }
     }
