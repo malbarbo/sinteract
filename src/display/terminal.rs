@@ -62,16 +62,12 @@ pub struct TerminalOptions {
 /// after each change. A mouse event gives the center of its cell.
 pub struct Terminal {
     inbox: Inbox,
-    backend: Backend,
+    canvas: Canvas,
     /// `None` after [`super::Display::close`].
     live: Option<Live>,
     /// The size in pixels of the frame on screen, or `None` before the
     /// first one. Kitty keeps a frame after the session.
     frame_size: Option<(u32, u32)>,
-    /// Kept across frames, so a frame reuses the pixmap and the clip masks.
-    renderer: PixmapRenderer,
-    /// Kept across frames, so a frame reuses the allocations.
-    buffers: ImageBuffers,
     /// The scene of the last present, drawn again after a resize.
     last: Option<Scene>,
     /// How the reader maps a cell to the scene on screen.
@@ -130,11 +126,9 @@ impl Terminal {
         };
         Ok(Self {
             inbox,
-            backend,
+            canvas: Canvas::new(backend),
             live: Some(Live { reader, claim }),
             frame_size: None,
-            renderer: PixmapRenderer::default(),
-            buffers: ImageBuffers::default(),
             last: None,
             cells,
             keep_last_frame: options.keep_last_frame,
@@ -153,28 +147,27 @@ impl Terminal {
     }
 
     fn write_frame(&mut self, scene: &Scene) -> Result<(), PresentError> {
-        let scale = scale_for_backend(self.backend, scene.width(), scene.height());
-        self.renderer.set_scale(scale);
-        let pixmap = self.renderer.render(scene)?;
+        let Canvas {
+            backend,
+            renderer,
+            buffers,
+        } = &mut self.canvas;
+        let scale = scale_for_backend(*backend, scene.width(), scene.height());
+        renderer.set_scale(scale);
+        let pixmap = renderer.render(scene)?;
         *self.cells.lock().unwrap_or_else(PoisonError::into_inner) =
-            CellMap::new(self.backend, cell_pixels(), scale);
+            CellMap::new(*backend, cell_pixels(), scale);
         let mut stdout = io::stdout().lock();
         // A smaller frame leaves the edges of the one before. The same Kitty
         // id replaces the whole image in place, and a clear, or a delete
         // before the transmit, shows the cleared cells for one refresh.
         let size = (pixmap.width(), pixmap.height());
-        if self.frame_size.replace(size) != Some(size) && self.backend != Backend::Kitty {
+        if self.frame_size.replace(size) != Some(size) && *backend != Backend::Kitty {
             queue!(stdout, terminal::Clear(terminal::ClearType::All))?;
-            self.buffers.blocks.forget();
+            buffers.blocks.forget();
         }
         queue!(stdout, cursor::MoveTo(0, 0))?;
-        write_image(
-            &mut stdout,
-            self.backend,
-            pixmap,
-            &mut self.buffers,
-            Placement::Frame,
-        )?;
+        write_image(&mut stdout, *backend, pixmap, buffers, Placement::Frame)?;
         stdout.flush()?;
         Ok(())
     }
@@ -225,7 +218,7 @@ impl super::Display for Terminal {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }
-        self.renderer.assets_mut().insert_png(id, blob)?;
+        self.canvas.renderer.assets_mut().insert_png(id, blob)?;
         Ok(())
     }
 
@@ -239,13 +232,13 @@ impl super::Display for Terminal {
         // Keys typed after the reader stopped would go to the shell.
         drain_input();
         if !live.claim.restored() {
-            leave(self.backend, self.frame_size.is_some());
+            leave(self.canvas.backend, self.frame_size.is_some());
             // The session is over, and close has no way to report that
             // the frame did not print.
             if self.keep_last_frame
                 && let Some(scene) = &self.last
             {
-                let _ = print_scene(self.backend, &mut self.renderer, scene);
+                let _ = self.canvas.print(scene);
             }
         }
     }
@@ -320,24 +313,45 @@ pub fn show_image(scene: &Scene) -> Result<(), NoImage> {
         return Err(NoImage::Busy);
     }
     let backend = pick_backend().ok_or(NoImage::NoGraphics)?;
-    print_scene(backend, &mut PixmapRenderer::default(), scene)
+    Canvas::new(backend).print(scene)
 }
 
-/// Print `scene` at the cursor through `backend`, with every cell of the
-/// image, and leave the cursor on the line below it.
-fn print_scene(
+/// What draws a scene into the terminal, for the frames of a [`Terminal`]
+/// and for [`show_image`].
+struct Canvas {
     backend: Backend,
-    renderer: &mut PixmapRenderer,
-    scene: &Scene,
-) -> Result<(), NoImage> {
-    let scale = scale_for_backend(backend, scene.width(), scene.height());
-    renderer.set_scale(scale);
-    let pixmap = renderer.render(scene).map_err(NoImage::Alloc)?;
-    let mut buffers = ImageBuffers::default();
-    let mut stdout = io::stdout().lock();
-    write_image(&mut stdout, backend, pixmap, &mut buffers, Placement::Still)
+    /// Kept across frames, so a frame reuses the pixmap and the clip masks.
+    renderer: PixmapRenderer,
+    /// Kept across frames, so a frame reuses the allocations.
+    buffers: ImageBuffers,
+}
+
+impl Canvas {
+    fn new(backend: Backend) -> Self {
+        Self {
+            backend,
+            renderer: PixmapRenderer::default(),
+            buffers: ImageBuffers::default(),
+        }
+    }
+
+    /// Print `scene` at the cursor, with every cell of the image, and leave
+    /// the cursor on the line below it.
+    fn print(&mut self, scene: &Scene) -> Result<(), NoImage> {
+        let scale = scale_for_backend(self.backend, scene.width(), scene.height());
+        self.renderer.set_scale(scale);
+        let pixmap = self.renderer.render(scene).map_err(NoImage::Alloc)?;
+        let mut stdout = io::stdout().lock();
+        write_image(
+            &mut stdout,
+            self.backend,
+            pixmap,
+            &mut self.buffers,
+            Placement::Still,
+        )
         .and_then(|()| stdout.flush())
         .map_err(NoImage::Io)
+    }
 }
 
 /// Where an image goes.
