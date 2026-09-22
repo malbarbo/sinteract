@@ -48,7 +48,9 @@ pub struct GraphicsCaps {
     /// terminal did not answer.
     pub cell_px: Option<(u32, u32)>,
     /// The terminal speaks the keyboard protocol of Kitty, which reports
-    /// when a key goes down and comes up.
+    /// when a key goes down and comes up. Windows reads the keys through
+    /// win32-input-mode, so it does not look at the reply.
+    #[cfg(unix)]
     pub kitty_keyboard: bool,
 }
 
@@ -124,6 +126,7 @@ impl Replies {
             kitty: self.found.kitty,
             sixel: self.found.sixel,
             cell_px: self.found.cell_px,
+            #[cfg(unix)]
             kitty_keyboard: self.found.kitty_keyboard,
         }
     }
@@ -642,8 +645,8 @@ mod tests {
 
     #[test]
     fn a_keyboard_flags_reply_means_the_kitty_keyboard() {
-        assert!(replies(b"\x1b[?0u\x1b[12;34R").caps().kitty_keyboard);
-        assert!(!replies(b"\x1b[?62;1;4c\x1b[12;34R").caps().kitty_keyboard);
+        assert!(replies(b"\x1b[?0u\x1b[12;34R").found.kitty_keyboard);
+        assert!(!replies(b"\x1b[?62;1;4c\x1b[12;34R").found.kitty_keyboard);
     }
 
     #[test]
