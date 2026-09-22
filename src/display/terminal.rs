@@ -262,10 +262,10 @@ struct ImageBuffers {
     blocks: BlockScreen,
 }
 
-/// Why [`Printer::print`] printed no image. A failure comes with the error
+/// Why a print did not reach the terminal. A failure comes with the error
 /// that caused it, since the library writes no message of its own.
 #[derive(Debug)]
-pub enum NoImage {
+pub enum PrintError {
     /// A [`Terminal`] session holds the tty.
     Busy,
     /// Rasterizing the scene failed.
@@ -275,22 +275,22 @@ pub enum NoImage {
     Io(io::Error),
 }
 
-impl fmt::Display for NoImage {
+impl fmt::Display for PrintError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NoImage::Busy => f.write_str("a terminal session holds the tty"),
-            NoImage::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
-            NoImage::Io(e) => write!(f, "cannot show the image: {e}"),
+            PrintError::Busy => f.write_str("a terminal session holds the tty"),
+            PrintError::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
+            PrintError::Io(e) => write!(f, "cannot show the image: {e}"),
         }
     }
 }
 
-impl std::error::Error for NoImage {
+impl std::error::Error for PrintError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            NoImage::Alloc(e) => Some(e),
-            NoImage::Io(e) => Some(e),
-            NoImage::Busy => None,
+            PrintError::Alloc(e) => Some(e),
+            PrintError::Io(e) => Some(e),
+            PrintError::Busy => None,
         }
     }
 }
@@ -321,9 +321,9 @@ impl Printer {
 
     /// Print `scene` at the cursor, and leave the cursor on the line below
     /// it.
-    pub fn print(&mut self, scene: &Scene) -> Result<(), NoImage> {
+    pub fn print(&mut self, scene: &Scene) -> Result<(), PrintError> {
         if TTY.load(Ordering::Acquire) != FREE {
-            return Err(NoImage::Busy);
+            return Err(PrintError::Busy);
         }
         self.canvas.print(scene)
     }
@@ -350,10 +350,10 @@ impl Canvas {
 
     /// Print `scene` at the cursor, with every cell of the image, and leave
     /// the cursor on the line below it.
-    fn print(&mut self, scene: &Scene) -> Result<(), NoImage> {
+    fn print(&mut self, scene: &Scene) -> Result<(), PrintError> {
         let scale = scale_for_backend(self.backend, scene.width(), scene.height());
         self.renderer.set_scale(scale);
-        let pixmap = self.renderer.render(scene).map_err(NoImage::Alloc)?;
+        let pixmap = self.renderer.render(scene).map_err(PrintError::Alloc)?;
         let mut stdout = io::stdout().lock();
         write_image(
             &mut stdout,
@@ -363,7 +363,7 @@ impl Canvas {
             Placement::Still,
         )
         .and_then(|()| stdout.flush())
-        .map_err(NoImage::Io)
+        .map_err(PrintError::Io)
     }
 }
 
@@ -1353,7 +1353,7 @@ mod tests {
         let claim = Claim::take().expect("no session runs in a test");
         assert!(matches!(
             printer.print(&Scene::new(4.0, 4.0)),
-            Err(NoImage::Busy)
+            Err(PrintError::Busy)
         ));
         drop(claim);
     }
