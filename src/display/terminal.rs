@@ -1005,8 +1005,7 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>)
     out.write_all(buf)
 }
 
-/// The half-block cells of the frame on screen, and of the one being
-/// written.
+/// The half-block cells of the frame on screen.
 #[derive(Default)]
 struct BlockScreen {
     /// The cells that the terminal shows, row by row. Empty before the
@@ -1014,8 +1013,6 @@ struct BlockScreen {
     shown: Vec<Cell>,
     /// The cells of one row of `shown`.
     cols: usize,
-    /// The cells of the frame being written.
-    next: Vec<Cell>,
 }
 
 impl BlockScreen {
@@ -1029,9 +1026,10 @@ impl BlockScreen {
 }
 
 /// Write the cells where `pixmap` differs from the frame that `screen`
-/// holds, and keep `pixmap` as that frame. The cells start at (0, 0), so
-/// only a caller that owns the whole screen may call this. `buf` holds the
-/// escapes, and a caller that draws again passes the same one.
+/// holds, and keep `pixmap` as that frame. A write that fails empties
+/// `screen`, so the next frame writes every cell. The cells start at
+/// (0, 0), so only a caller that owns the whole screen may call this. `buf`
+/// holds the escapes, and a caller that draws again passes the same one.
 ///
 /// A frame of an animation changes a few percent of the cells, and the
 /// cursor jumps over the rest.
@@ -1042,27 +1040,40 @@ fn update_text_blocks<W: Write>(
     screen: &mut BlockScreen,
 ) -> io::Result<()> {
     let cols = pixmap.width() as usize;
-    block_cells(pixmap, &mut screen.next);
-    // A frame of another shape shares no cell with the one on screen.
-    let shown = if screen.cols == cols && screen.shown.len() == screen.next.len() {
-        screen.shown.as_slice()
-    } else {
-        &[]
-    };
+    let len = cols * pixmap.height().div_ceil(2) as usize;
+    // A frame of another shape shares no cell with the one on screen, so
+    // the loop writes every cell and never compares with the fill of the
+    // resize.
+    let all = screen.cols != cols || screen.shown.len() != len;
+    screen.shown.resize(
+        len,
+        Cell {
+            fg: BLACK,
+            bg: BLACK,
+        },
+    );
+    screen.cols = cols;
     buf.clear();
     // The reset at the end of a frame leaves the terminal with the default
     // colors, which no cell carries, so the first cell sets both.
     let mut state = None;
     // Where the cursor sits after the cell written last.
     let mut at = None;
-    for (r, row) in screen.next.chunks(cols).enumerate() {
-        let old = shown.get(r * cols..(r + 1) * cols).unwrap_or_default();
-        for (x, &cell) in row.iter().enumerate() {
-            if old.get(x) == Some(&cell) {
+    // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
+    let mut rows = pixmap.pixels().chunks(cols);
+    for (r, shown) in screen.shown.chunks_mut(cols).enumerate() {
+        let top = rows
+            .next()
+            .expect("each row of cells has a top row of pixels");
+        let bottom = rows.next().unwrap_or_default();
+        for (x, (slot, &t)) in shown.iter_mut().zip(top).enumerate() {
+            let cell = Cell::new(t, bottom.get(x));
+            if !all && *slot == cell {
                 continue;
             }
+            *slot = cell;
             if at != Some((r, x)) {
-                write!(buf, "\x1b[{};{}H", r + 1, x + 1)?;
+                write!(buf, "\x1b[{};{}H", r + 1, x + 1).expect("a Vec takes every write");
             }
             push_cell(buf, cell, state);
             state = Some(cell);
@@ -1070,30 +1081,10 @@ fn update_text_blocks<W: Write>(
         }
     }
     buf.extend_from_slice(b"\x1b[0m");
-    if let Err(e) = out.write_all(buf) {
+    out.write_all(buf).inspect_err(|_| {
         // Part of the frame reached the terminal, and which part is unknown.
         screen.forget();
-        return Err(e);
-    }
-    std::mem::swap(&mut screen.shown, &mut screen.next);
-    screen.cols = cols;
-    Ok(())
-}
-
-/// The half-block cells of `pixmap`, row by row, in `out`.
-fn block_cells(pixmap: &Pixmap, out: &mut Vec<Cell>) {
-    out.clear();
-    out.reserve(pixmap.width() as usize * pixmap.height().div_ceil(2) as usize);
-    // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
-    let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
-    while let Some(top) = rows.next() {
-        let bottom = rows.next().unwrap_or_default();
-        out.extend(
-            top.iter()
-                .enumerate()
-                .map(|(x, &t)| Cell::new(t, bottom.get(x))),
-        );
-    }
+    })
 }
 
 /// The two colors of a half-block cell. The upper pixel of the pair is the
@@ -1518,6 +1509,41 @@ mod tests {
         assert_eq!(update(&mut screen, &pm).1, 4);
         screen.forget();
         assert_eq!(update(&mut screen, &pm).1, 4);
+    }
+
+    #[test]
+    fn a_failed_half_block_frame_writes_every_cell_next_time() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut screen = BlockScreen::default();
+        assert_eq!(update(&mut screen, &solid(4, 2, 0, 0, 255)).1, 4);
+        let red = solid(4, 2, 255, 0, 0);
+        assert!(update_text_blocks(&mut Broken, &red, &mut Vec::new(), &mut screen).is_err());
+        assert_eq!(update(&mut screen, &red).1, 4);
+    }
+
+    #[test]
+    fn a_half_block_frame_of_odd_height_has_a_last_row_of_cells() {
+        let pm = solid(2, 3, 0, 0, 255);
+        let mut screen = BlockScreen::default();
+        assert_eq!(update(&mut screen, &pm).1, 4);
+        assert_eq!(update(&mut screen, &pm).1, 0);
+    }
+
+    #[test]
+    fn a_taller_half_block_frame_writes_its_new_rows() {
+        // The new rows are black, the color of the fill that the screen
+        // grows with.
+        let mut screen = BlockScreen::default();
+        assert_eq!(update(&mut screen, &solid(2, 2, 0, 0, 0)).1, 2);
+        assert_eq!(update(&mut screen, &solid(2, 4, 0, 0, 0)).1, 4);
     }
 
     #[test]
