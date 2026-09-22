@@ -168,23 +168,13 @@ impl Terminal {
             self.buffers.blocks.forget();
         }
         queue!(stdout, cursor::MoveTo(0, 0))?;
-        match self.backend {
-            Backend::Kitty => emit_kitty(
-                &mut stdout,
-                pixmap,
-                Some(KITTY_ANIMATION_ID),
-                &mut self.buffers.image,
-                &mut self.buffers.escapes,
-            ),
-            Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND, &mut self.buffers.image)
-                .and_then(|b| stdout.write_all(&b)),
-            Backend::TextBlocks => update_text_blocks(
-                &mut stdout,
-                pixmap,
-                &mut self.buffers.escapes,
-                &mut self.buffers.blocks,
-            ),
-        }?;
+        write_image(
+            &mut stdout,
+            self.backend,
+            pixmap,
+            &mut self.buffers,
+            Placement::Frame,
+        )?;
         stdout.flush()?;
         Ok(())
     }
@@ -345,21 +335,60 @@ fn print_scene(
     let pixmap = renderer.render(scene).map_err(NoImage::Alloc)?;
     let mut buffers = ImageBuffers::default();
     let mut stdout = io::stdout().lock();
-    let written = match backend {
-        Backend::Kitty => emit_kitty(
-            &mut stdout,
+    write_image(&mut stdout, backend, pixmap, &mut buffers, Placement::Still)
+        .and_then(|()| stdout.flush())
+        .map_err(NoImage::Io)
+}
+
+/// Where an image goes.
+#[derive(Clone, Copy)]
+enum Placement {
+    /// A frame of the session, which replaces the frame on screen.
+    Frame,
+    /// An image at the cursor, which stays until the terminal scrolls it
+    /// away, with the cursor on the line below it.
+    Still,
+}
+
+/// Write `pixmap` through `backend` at the cursor.
+fn write_image<W: Write>(
+    out: &mut W,
+    backend: Backend,
+    pixmap: &Pixmap,
+    buffers: &mut ImageBuffers,
+    placement: Placement,
+) -> io::Result<()> {
+    let kitty_id = match placement {
+        Placement::Frame => Some(KITTY_ANIMATION_ID),
+        Placement::Still => None,
+    };
+    match (backend, placement) {
+        (Backend::Kitty, _) => emit_kitty(
+            out,
             pixmap,
-            None,
+            kitty_id,
             &mut buffers.image,
             &mut buffers.escapes,
-        )
-        .and_then(|()| writeln!(stdout)),
-        Backend::Sixel => sixel::encode(pixmap, SIXEL_BACKGROUND, &mut buffers.image)
-            .and_then(|b| stdout.write_all(&b))
-            .and_then(|()| writeln!(stdout)),
-        Backend::TextBlocks => render_text_blocks(&mut stdout, pixmap, &mut buffers.escapes),
-    };
-    written.and_then(|()| stdout.flush()).map_err(NoImage::Io)
+        )?,
+        (Backend::Sixel, _) => {
+            out.write_all(&sixel::encode(
+                pixmap,
+                SIXEL_BACKGROUND,
+                &mut buffers.image,
+            )?)?;
+        }
+        (Backend::TextBlocks, Placement::Frame) => {
+            return update_text_blocks(out, pixmap, &mut buffers.escapes, &mut buffers.blocks);
+        }
+        // Each row of the cells ends in a newline.
+        (Backend::TextBlocks, Placement::Still) => {
+            return render_text_blocks(out, pixmap, &mut buffers.escapes);
+        }
+    }
+    match placement {
+        Placement::Frame => Ok(()),
+        Placement::Still => writeln!(out),
+    }
 }
 
 /// Returns `true` if the terminal reports 24-bit color, `false` otherwise.
