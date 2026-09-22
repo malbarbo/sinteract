@@ -79,8 +79,9 @@ pub struct KeyEvent {
 
 /// What happened to a key. The window and a browser send `Down` and then
 /// `Press` when a key goes down and each time it repeats, and `Up` when it
-/// comes up. A terminal sends `Press` alone, since it does not see a key go
-/// down or come up.
+/// comes up. So does a terminal that speaks the keyboard protocol of Kitty,
+/// and Windows Terminal. Any other terminal sends `Press` alone, since it
+/// does not see a key go down or come up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum KeyKind {

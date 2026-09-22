@@ -5,11 +5,13 @@
 //! whichever it opened.
 //!
 //! [`terminal`] shows a pixmap through Kitty, Sixel or half-blocks,
-//! `term_query` probes what the terminal supports, [`sixel`] encodes a
-//! pixmap for the terminals that take Sixel and not Kitty, and [`window`]
-//! shows a pixmap in a winit window. [`stdio`] shows nothing. It
-//! writes the frames and reads the events as Cap'n Proto messages, for a
-//! server that runs the engine as a subprocess.
+//! `term_query` probes what the terminal supports, `vt_input` reads the
+//! keys, with or without the keyboard protocol of Kitty or the
+//! win32-input-mode of Windows Terminal, [`sixel`] encodes a pixmap for the
+//! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
+//! in a winit window. [`stdio`] shows nothing. It writes the frames and
+//! reads the events as Cap'n Proto messages, for a server that runs the
+//! engine as a subprocess.
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the
 //! window, and `open_native` needs both. Only `sixel` builds on wasm32. The
@@ -34,6 +36,8 @@ pub mod stdio;
 mod term_query;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 pub mod terminal;
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+mod vt_input;
 #[cfg(all(feature = "window", not(target_arch = "wasm32")))]
 pub mod window;
 

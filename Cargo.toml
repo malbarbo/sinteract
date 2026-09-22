@@ -20,7 +20,7 @@ native-fonts = ["dep:fontdb"]
 # back from the window to the terminal.
 terminal = [
     "dep:crossterm",
-    "dep:vte",
+    "dep:vtparse",
     "dep:base64",
     "dep:libc",
     "dep:windows-sys",
@@ -45,9 +45,10 @@ png = "0.18"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 fontdb = { version = "0.23", optional = true }
-crossterm = { version = "0.29", optional = true }
-# Parses the replies of the terminal to the probe in term_query.
-vte = { version = "0.15", default-features = false, features = ["std"], optional = true }
+crossterm = { version = "0.29", optional = true, default-features = false, features = ["windows"] }
+# Parses what the terminal sends, the replies to the probe in term_query and
+# the keys in vt_input.
+vtparse = { version = "0.6", optional = true }
 base64 = { version = "0.22", optional = true }
 winit = { version = "0.30", optional = true, default-features = false, features = [
     "x11",

@@ -4,8 +4,10 @@
 //! and a [`Printer`] prints images inline.
 //!
 //! The tty belongs to the process, so one `Terminal` exists at a time, and
-//! a [`Printer`] prints nothing while it does. A Unix terminal does not
-//! tell a key down from a key up, so every key event is a press.
+//! a [`Printer`] prints nothing while it does. A terminal without the
+//! keyboard protocol of Kitty or the win32-input-mode of Windows Terminal
+//! does not tell a key down from a key up, so each key event there is a
+//! press. With stdin redirected the display reads no keys and no mouse.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -16,19 +18,14 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
-use crossterm::event::{
-    self as ct_event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
-};
+use crossterm::style::Print;
 use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
 use super::driver::{OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
-use crate::event::{
-    Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
-    NoEvent, key,
-};
+use crate::event::{Event, InputEvent, MouseEvent, NoEvent};
 use crate::renderer::pixmap::{Assets, PixmapRenderer};
 use crate::renderer::{AllocError, Renderer};
 use crate::scene::Scene;
@@ -48,7 +45,9 @@ const SIXEL_BACKGROUND: (u8, u8, u8) = (255, 255, 255);
 pub struct TerminalOptions {
     /// Runs on the reader thread when the user presses Ctrl-C, after the
     /// Close goes into the queue. Raw mode turns off the signal of Ctrl-C,
-    /// so an engine stops here the code that never calls `wait_event`.
+    /// so an engine stops here the code that never calls `wait_event`. With
+    /// stdin redirected no reader takes the keys, and Ctrl-C raises SIGINT
+    /// instead.
     pub on_interrupt: Option<Box<dyn FnMut() + Send>>,
     /// Print the last frame on the main screen at close, where it stays
     /// with the rest of the output of the program. Without it the frame
@@ -97,26 +96,25 @@ impl Terminal {
     /// when the terminal shows neither Kitty, Sixel nor truecolor.
     pub fn open_with(options: TerminalOptions) -> Result<Self, OpenError> {
         let claim = Claim::take()?;
-        // The probe reads the replies from the tty, so it runs under the
+        // The probe reads the replies from stdin, so it runs under the
         // claim, where no reader thread takes them.
         let backend = pick_backend().ok_or(OpenError::NoGraphics)?;
         claim.show_through(backend);
-        terminal::enable_raw_mode().map_err(OpenError::Io)?;
+        let stdin_tty = io::IsTerminal::is_terminal(&io::stdin());
+        enter_raw_mode(stdin_tty).map_err(OpenError::Io)?;
         install_panic_hook();
-        let entered = execute!(
-            io::stdout(),
-            terminal::EnterAlternateScreen,
-            cursor::Hide,
-            ct_event::EnableMouseCapture
-        );
+        let keys = execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
+            .and_then(|()| KeyInput::start(stdin_tty));
         let mut inbox = Inbox::new(Some(Self::VSYNC_PERIOD));
         let cell = cell_pixels();
         if let Some((width, height)) = terminal::size().ok().and_then(|s| scene_size(s, cell)) {
             inbox.send_first(InputEvent::Resize { width, height });
         }
         let cells = Arc::new(Mutex::new(CellMap::before_frames(backend, cell)));
-        let reader = entered
-            .and_then(|()| Reader::spawn(inbox.sender(), Arc::clone(&cells), options.on_interrupt));
+        let reader = keys.and_then(|keys| {
+            let cells = Arc::clone(&cells);
+            Reader::spawn(inbox.sender(), cells, keys, options.on_interrupt)
+        });
         let reader = match reader {
             Ok(reader) => reader,
             Err(e) => {
@@ -229,8 +227,6 @@ impl super::Display for Terminal {
         };
         self.inbox.close();
         live.reader.stop();
-        // Keys typed after the reader stopped would go to the shell.
-        drain_input();
         if !live.claim.restored() {
             leave(self.canvas.backend, self.frame_size.is_some());
             // The session is over, and close has no way to report that
@@ -557,6 +553,29 @@ fn restore_held() -> Option<Backend> {
     )
 }
 
+/// Enter raw mode. With stdin redirected nobody reads the keys, and Ctrl-C
+/// has to raise SIGINT.
+#[cfg(unix)]
+fn enter_raw_mode(stdin_tty: bool) -> io::Result<()> {
+    terminal::enable_raw_mode()?;
+    if !stdin_tty && let Err(e) = super::term_query::signal_on_ctrl_c() {
+        let _ = terminal::disable_raw_mode();
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Enter raw mode. On Windows raw mode changes only the input of the
+/// console, so with stdin redirected the console stays as it is, and Ctrl-C
+/// keeps its signal.
+#[cfg(windows)]
+fn enter_raw_mode(stdin_tty: bool) -> io::Result<()> {
+    if stdin_tty {
+        terminal::enable_raw_mode()?;
+    }
+    Ok(())
+}
+
 /// Leave the alt screen and raw mode. Kitty keeps an image across the flip
 /// of the alt screen, so a frame it shows goes by id. Sixel and half-blocks
 /// output lives in the alt screen and goes with it.
@@ -565,13 +584,27 @@ fn leave(backend: Backend, frame_shown: bool) {
     if frame_shown && backend == Backend::Kitty {
         let _ = delete_kitty_image(&mut stdout, KITTY_ANIMATION_ID);
     }
+    // A terminal ignores the pop of a protocol that it does not speak and
+    // the reset of a mode that it does not know, so these go out whether or
+    // not the session turned them on. Kitty keeps a stack of the keyboard
+    // flags per screen, so the pop goes before the alt screen leaves. On
+    // Windows, crossterm turns on the escapes of the console at the first
+    // command that writes one, which Print does not, so Print goes second.
     let _ = execute!(
         stdout,
-        ct_event::DisableMouseCapture,
         cursor::Show,
+        Print(INPUT_OFF),
         terminal::LeaveAlternateScreen
     );
     drop(stdout);
+    // The input that nobody read would go to the shell, and so would a key
+    // up or a mouse report that the terminal sent before it took the
+    // escapes above. A redirected stdin belongs to the shell.
+    if io::IsTerminal::is_terminal(&io::stdin()) {
+        super::term_query::discard_input();
+    }
+    #[cfg(windows)]
+    let _ = super::term_query::set_vt_input(false);
     let _ = terminal::disable_raw_mode();
 }
 
@@ -600,6 +633,57 @@ fn install_panic_hook() {
 // Input
 // -----------------------------------------------------------------------------
 
+/// Report the buttons and every motion of the mouse, in the SGR form, or in
+/// the rxvt form for a terminal without it.
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h";
+
+/// Report when the terminal loses the focus.
+const FOCUS_ON: &str = "\x1b[?1004h";
+
+/// Pop the keyboard protocol of Kitty, and turn off win32-input-mode and
+/// the reports of the focus and of the mouse.
+const INPUT_OFF: &str =
+    "\x1b[<u\x1b[?9001l\x1b[?1004l\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+
+/// Who reads the keys of the terminal.
+#[derive(Clone, Copy)]
+enum KeyInput {
+    /// [`super::vt_input`] reads the bytes of stdin, and `kitty` says that
+    /// the terminal is under the keyboard protocol of Kitty.
+    Bytes { kitty: bool },
+    /// Nobody, because stdin is not a terminal. Ctrl-C raises SIGINT.
+    Off,
+}
+
+impl KeyInput {
+    /// Pick who reads the keys, and turn on the mouse for them. Push the
+    /// keyboard protocol of Kitty when the terminal speaks it, and on
+    /// Windows turn on win32-input-mode. Both report when a key comes up,
+    /// so the terminal also reports the focus, whose loss brings up every
+    /// key that is down.
+    fn start(stdin_tty: bool) -> io::Result<Self> {
+        if !stdin_tty {
+            return Ok(KeyInput::Off);
+        }
+        #[cfg(unix)]
+        let (kitty, keys_on) = if super::term_query::graphics_caps().kitty_keyboard {
+            let push = format!("\x1b[>{}u{FOCUS_ON}", super::vt_input::FLAGS);
+            (true, push)
+        } else {
+            (false, String::new())
+        };
+        #[cfg(windows)]
+        let (kitty, keys_on) = {
+            super::term_query::set_vt_input(true)?;
+            (false, format!("\x1b[?9001h{FOCUS_ON}"))
+        };
+        let mut stdout = io::stdout();
+        write!(stdout, "{MOUSE_ON}{keys_on}")?;
+        stdout.flush()?;
+        Ok(KeyInput::Bytes { kitty })
+    }
+}
+
 /// The thread that moves the input of the terminal into the queue.
 struct Reader {
     stop: Arc<AtomicBool>,
@@ -614,13 +698,17 @@ impl Reader {
     fn spawn(
         tx: Sender,
         cells: Arc<Mutex<CellMap>>,
+        keys: KeyInput,
         on_interrupt: Option<Box<dyn FnMut() + Send>>,
     ) -> io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let thread = thread::Builder::new()
             .name("sinteract-terminal".into())
-            .spawn(move || read_input(&tx, &cells, &flag, on_interrupt))?;
+            .spawn(move || match keys {
+                KeyInput::Bytes { kitty } => read_bytes(&tx, &cells, &flag, kitty, on_interrupt),
+                KeyInput::Off => watch_size(&tx, &flag),
+            })?;
         Ok(Self { stop, thread })
     }
 
@@ -630,70 +718,116 @@ impl Reader {
     }
 }
 
-/// Send the input until `stop`, Ctrl-C or a read error. A Close goes into
-/// the queue on every way out, so a reader that dies does not leave the
-/// engine waiting in raw mode.
-fn read_input(
+/// Send the input of the terminal until `stop`, Ctrl-C or a read error,
+/// with the keyboard protocol of Kitty when `kitty` holds. A Close goes
+/// into the queue on every way out, so a reader that dies does not leave
+/// the engine waiting in raw mode. A resize sends nothing through the tty,
+/// so the reader compares the size at each turn.
+fn read_bytes(
     tx: &Sender,
     cells: &Mutex<CellMap>,
     stop: &AtomicBool,
+    kitty: bool,
     mut on_interrupt: Option<Box<dyn FnMut() + Send>>,
 ) {
+    use super::vt_input::{Input, VtInput};
+
     let _close = CloseOnExit(tx);
-    let mut buttons = MouseButtons::default();
+    let mut tty = match super::term_query::TtyInput::open() {
+        Ok(tty) => tty,
+        Err(e) => {
+            let _ = tx.send_broken(e);
+            return;
+        }
+    };
+    let mut keys = VtInput::new(kitty);
+    let mut size = SizeWatch::default();
+    let mut bytes = Vec::new();
+    let mut inputs = Vec::new();
     while !stop.load(Ordering::Acquire) {
-        let ev = match ct_event::poll(READ_POLL) {
-            Ok(false) => continue,
-            Ok(true) => ct_event::read(),
-            Err(e) => Err(e),
-        };
-        let ev = match ev {
-            Ok(ev) => ev,
-            // The tty is unreadable from now on, and the guard closes the
-            // session right after this.
-            Err(e) => {
-                let _ = tx.send_broken(e);
+        if size.check(tx).is_err() {
+            return;
+        }
+        if let Err(e) = tty.read(READ_POLL, &mut bytes) {
+            let _ = tx.send_broken(e);
+            return;
+        }
+        if bytes.is_empty() {
+            keys.flush(&mut inputs);
+        } else {
+            keys.feed(&bytes, &mut inputs);
+            bytes.clear();
+        }
+        for input in inputs.drain(..) {
+            let sent = match input {
+                Input::Key(k) => tx.send_input(InputEvent::Key(k)),
+                Input::Mouse(m) => {
+                    let cells = *cells.lock().unwrap_or_else(PoisonError::into_inner);
+                    let (x, y) = cells.to_scene(m.column, m.row);
+                    tx.send_input(InputEvent::Mouse(MouseEvent {
+                        action: m.action,
+                        x,
+                        y,
+                        modifiers: m.modifiers,
+                        buttons: m.buttons,
+                    }))
+                }
+                Input::Interrupt => {
+                    let _ = tx.send_close();
+                    if let Some(f) = on_interrupt.as_mut() {
+                        f();
+                    }
+                    return;
+                }
+            };
+            if sent.is_err() {
                 return;
             }
-        };
-        let key = match ev {
-            ct_event::Event::Key(key) => key,
-            ct_event::Event::Mouse(m) => {
-                let cells = *cells.lock().unwrap_or_else(PoisonError::into_inner);
-                if tx
-                    .send_input(InputEvent::Mouse(mouse_event(m, &mut buttons, cells)))
-                    .is_err()
-                {
-                    return;
-                }
-                continue;
-            }
-            ct_event::Event::Resize(cols, rows) => {
-                if let Some((width, height)) = scene_size((cols, rows), cell_pixels()) {
-                    let _ = tx.send_input(InputEvent::Resize { width, height });
-                }
-                if tx.request_redraw().is_err() {
-                    return;
-                }
-                continue;
-            }
-            ct_event::Event::FocusGained
-            | ct_event::Event::FocusLost
-            | ct_event::Event::Paste(_) => continue,
-        };
-        if is_ctrl_c(&key) {
-            let _ = tx.send_close();
-            if let Some(f) = on_interrupt.as_mut() {
-                f();
-            }
-            return;
-        }
-        if let Some(k) = key_event(key)
-            && tx.send_input(InputEvent::Key(k)).is_err()
-        {
-            return;
         }
     }
+}
+
+/// Send the resizes until `stop`, for a terminal that has no reader of the
+/// keys.
+fn watch_size(tx: &Sender, stop: &AtomicBool) {
+    let _close = CloseOnExit(tx);
+    let mut size = SizeWatch::default();
+    while !stop.load(Ordering::Acquire) {
+        if size.check(tx).is_err() {
+            return;
+        }
+        thread::sleep(READ_POLL);
+    }
+}
+
+/// The size of the terminal at the last check.
+struct SizeWatch(Option<(u16, u16)>);
+
+impl Default for SizeWatch {
+    fn default() -> Self {
+        Self(terminal::size().ok())
+    }
+}
+
+impl SizeWatch {
+    /// Send a resize when the size changed since the last check.
+    fn check(&mut self, tx: &Sender) -> Result<(), super::Closed> {
+        let now = terminal::size().ok();
+        if now == self.0 {
+            return Ok(());
+        }
+        self.0 = now;
+        now.map_or(Ok(()), |now| resized(tx, now))
+    }
+}
+
+/// Send the size of the scene for a terminal of `(cols, rows)`, and draw
+/// the last frame again.
+fn resized(tx: &Sender, size: (u16, u16)) -> Result<(), super::Closed> {
+    if let Some((width, height)) = scene_size(size, cell_pixels()) {
+        let _ = tx.send_input(InputEvent::Resize { width, height });
+    }
+    tx.request_redraw()
 }
 
 struct CloseOnExit<'a>(&'a Sender);
@@ -702,116 +836,6 @@ impl Drop for CloseOnExit<'_> {
     fn drop(&mut self) {
         let _ = self.0.send_close();
     }
-}
-
-fn is_ctrl_c(key: &KeyEvent) -> bool {
-    key.kind != KeyEventKind::Release
-        && key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('c'))
-}
-
-/// Drop the events that crossterm read and nobody took.
-fn drain_input() {
-    while ct_event::poll(Duration::ZERO).unwrap_or(false) {
-        if ct_event::read().is_err() {
-            break;
-        }
-    }
-}
-
-/// The key event of a crossterm key, or `None` for a release or a key with no
-/// name. Windows reports every release, and a Unix terminal reports one only
-/// with the kitty keyboard protocol, which is off. A release is dropped, so a
-/// terminal sends a press alone on every platform. A repeat arrives as a
-/// press.
-fn key_event(ev: KeyEvent) -> Option<crate::event::KeyEvent> {
-    if ev.kind == KeyEventKind::Release {
-        return None;
-    }
-    let key = key_code_to_string(ev.code)?;
-    Some(crate::event::KeyEvent {
-        kind: KeyKind::Press,
-        key,
-        modifiers: modifiers(ev.modifiers),
-        repeat: ev.kind == KeyEventKind::Repeat,
-    })
-}
-
-fn modifiers(m: KeyModifiers) -> Modifiers {
-    Modifiers {
-        alt: m.contains(KeyModifiers::ALT),
-        ctrl: m.contains(KeyModifiers::CONTROL),
-        shift: m.contains(KeyModifiers::SHIFT),
-        meta: m.contains(KeyModifiers::SUPER),
-    }
-}
-
-/// The mouse event of a crossterm one, at the center of its cell. `buttons`
-/// holds the buttons down across events, since crossterm reports only the
-/// button of each event.
-fn mouse_event(m: ct_event::MouseEvent, buttons: &mut MouseButtons, cells: CellMap) -> MouseEvent {
-    let action = match m.kind {
-        MouseEventKind::Down(b) => {
-            *buttons = buttons.with(mouse_button(b));
-            MouseAction::Down(mouse_button(b))
-        }
-        MouseEventKind::Up(b) => {
-            *buttons = buttons.without(mouse_button(b));
-            MouseAction::Up(mouse_button(b))
-        }
-        MouseEventKind::Drag(b) => {
-            *buttons = buttons.with(mouse_button(b));
-            MouseAction::Move
-        }
-        MouseEventKind::Moved => MouseAction::Move,
-        MouseEventKind::ScrollDown => MouseAction::Wheel { dx: 0.0, dy: 1.0 },
-        MouseEventKind::ScrollUp => MouseAction::Wheel { dx: 0.0, dy: -1.0 },
-        MouseEventKind::ScrollRight => MouseAction::Wheel { dx: 1.0, dy: 0.0 },
-        MouseEventKind::ScrollLeft => MouseAction::Wheel { dx: -1.0, dy: 0.0 },
-    };
-    let (x, y) = cells.to_scene(m.column, m.row);
-    MouseEvent {
-        action,
-        x,
-        y,
-        modifiers: modifiers(m.modifiers),
-        buttons: *buttons,
-    }
-}
-
-fn mouse_button(b: ct_event::MouseButton) -> MouseButton {
-    match b {
-        ct_event::MouseButton::Left => MouseButton::Left,
-        ct_event::MouseButton::Middle => MouseButton::Middle,
-        ct_event::MouseButton::Right => MouseButton::Right,
-    }
-}
-
-/// Map a crossterm key code to its name in [`crate::event::key`], or to the
-/// text it types. A function key above F12 has no name, as in the window.
-fn key_code_to_string(code: KeyCode) -> Option<String> {
-    Some(match code {
-        KeyCode::Char(c) => c.to_string(),
-        KeyCode::Backspace => key::BACKSPACE.into(),
-        KeyCode::Enter => key::ENTER.into(),
-        KeyCode::Left => key::ARROW_LEFT.into(),
-        KeyCode::Right => key::ARROW_RIGHT.into(),
-        KeyCode::Up => key::ARROW_UP.into(),
-        KeyCode::Down => key::ARROW_DOWN.into(),
-        KeyCode::Home => key::HOME.into(),
-        KeyCode::End => key::END.into(),
-        KeyCode::PageUp => key::PAGE_UP.into(),
-        KeyCode::PageDown => key::PAGE_DOWN.into(),
-        KeyCode::Tab | KeyCode::BackTab => key::TAB.into(),
-        KeyCode::Delete => key::DELETE.into(),
-        KeyCode::Insert => key::INSERT.into(),
-        KeyCode::Esc => key::ESCAPE.into(),
-        KeyCode::F(n) => key::FUNCTION_KEYS
-            .get(usize::from(n).checked_sub(1)?)
-            .copied()?
-            .into(),
-        _ => return None,
-    })
 }
 
 /// Pixel size of one terminal cell, from the cached probe in
@@ -1237,29 +1261,6 @@ mod tests {
     }
 
     #[test]
-    fn a_drag_holds_its_button_until_the_up() {
-        let cells = CellMap::new(Backend::Kitty, (1, 1), 1.0);
-        let mut buttons = MouseButtons::default();
-        let at = |kind| ct_event::MouseEvent {
-            kind,
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::SHIFT,
-        };
-        let left = ct_event::MouseButton::Left;
-        let down = mouse_event(at(MouseEventKind::Down(left)), &mut buttons, cells);
-        assert_eq!(down.action, MouseAction::Down(MouseButton::Left));
-        assert!(down.modifiers.shift);
-        let drag = mouse_event(at(MouseEventKind::Drag(left)), &mut buttons, cells);
-        assert_eq!(drag.action, MouseAction::Move);
-        assert!(drag.buttons.contains(MouseButton::Left));
-        let up = mouse_event(at(MouseEventKind::Up(left)), &mut buttons, cells);
-        assert_eq!(up.buttons, MouseButtons::default());
-        let wheel = mouse_event(at(MouseEventKind::ScrollUp), &mut buttons, cells);
-        assert_eq!(wheel.action, MouseAction::Wheel { dx: 0.0, dy: -1.0 });
-    }
-
-    #[test]
     fn capped_scale_fits_the_width_or_the_height() {
         assert_eq!(capped_scale(200.0, 100.0, Some((50, 50)), 1.0), 0.25);
         assert_eq!(capped_scale(100.0, 200.0, Some((200, 50)), 1.0), 0.25);
@@ -1398,48 +1399,6 @@ mod tests {
         assert_eq!(update(&mut screen, &solid(2, 4, 0, 0, 255)).1, 4);
     }
 
-    #[test]
-    fn a_key_release_sends_nothing() {
-        let press = KeyEvent::new_with_kind(KeyCode::Up, KeyModifiers::NONE, KeyEventKind::Press);
-        let release = KeyEvent {
-            kind: KeyEventKind::Release,
-            ..press
-        };
-        assert_eq!(key_event(press).map(|k| k.kind), Some(KeyKind::Press));
-        assert!(key_event(release).is_none());
-    }
-
-    #[test]
-    fn every_key_name_of_the_terminal_is_in_key_all() {
-        let codes = [
-            KeyCode::Backspace,
-            KeyCode::Enter,
-            KeyCode::Left,
-            KeyCode::Right,
-            KeyCode::Up,
-            KeyCode::Down,
-            KeyCode::Home,
-            KeyCode::End,
-            KeyCode::PageUp,
-            KeyCode::PageDown,
-            KeyCode::Tab,
-            KeyCode::BackTab,
-            KeyCode::Delete,
-            KeyCode::Insert,
-            KeyCode::Esc,
-        ];
-        for code in codes.into_iter().chain((1..=12).map(KeyCode::F)) {
-            let name = key_code_to_string(code).expect("named");
-            assert!(key::ALL.contains(&name.as_str()), "{name}");
-        }
-    }
-
-    #[test]
-    fn a_function_key_above_f12_sends_nothing() {
-        assert_eq!(key_code_to_string(KeyCode::F(12)).as_deref(), Some("F12"));
-        assert!(key_code_to_string(KeyCode::F(13)).is_none());
-    }
-
     /// One test, since [`TTY`] is global.
     #[test]
     fn a_claim_holds_the_tty_and_the_panic_hook_restores_it_once() {
@@ -1507,21 +1466,5 @@ mod tests {
             decode_kitty(out, "\x1b_Ga=T,f=100,q=2,m=0;"),
             [255, 0, 0, 128]
         );
-    }
-
-    #[test]
-    fn ctrl_c_is_a_press_of_c_with_control() {
-        let press = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert!(is_ctrl_c(&press));
-        let release = KeyEvent::new_with_kind(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL,
-            KeyEventKind::Release,
-        );
-        assert!(!is_ctrl_c(&release));
-        assert!(!is_ctrl_c(&KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::NONE
-        )));
     }
 }
