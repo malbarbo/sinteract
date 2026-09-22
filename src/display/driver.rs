@@ -183,11 +183,7 @@ impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OpenError::Busy => f.write_str("another session is open"),
-            OpenError::NoGraphics => f.write_str(
-                "the terminal shows no graphics; try Kitty, Ghostty, WezTerm, Konsole, \
-                 a Sixel terminal (Windows Terminal 1.22 or later, mlterm, foot, mintty) \
-                 or a truecolor terminal (set COLORTERM=truecolor)",
-            ),
+            OpenError::NoGraphics => NoGraphics.fmt(f),
             OpenError::WrongThread => {
                 f.write_str("a window opens only on the thread of the first window")
             }
@@ -212,6 +208,29 @@ impl std::error::Error for OpenError {
             | OpenError::Timeout
             | OpenError::Platform(_) => None,
         }
+    }
+}
+
+/// The terminal shows neither Kitty, Sixel nor truecolor, or stdout is not
+/// a terminal, so it takes no image.
+#[derive(Debug)]
+pub struct NoGraphics;
+
+impl fmt::Display for NoGraphics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "the terminal shows no graphics; try Kitty, Ghostty, WezTerm, Konsole, \
+             a Sixel terminal (Windows Terminal 1.22 or later, mlterm, foot, mintty) \
+             or a truecolor terminal (set COLORTERM=truecolor)",
+        )
+    }
+}
+
+impl std::error::Error for NoGraphics {}
+
+impl From<NoGraphics> for OpenError {
+    fn from(_: NoGraphics) -> Self {
+        OpenError::NoGraphics
     }
 }
 

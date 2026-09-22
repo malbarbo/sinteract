@@ -22,7 +22,7 @@ use crossterm::style::Print;
 use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
-use super::driver::{OpenError, PresentError, period_from_hz, sealed};
+use super::driver::{NoGraphics, OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use crate::event::{Event, InputEvent, Interrupt, MouseEvent};
@@ -99,7 +99,7 @@ impl Terminal {
         let claim = Claim::take()?;
         // The probe reads the replies from stdin, so it runs under the
         // claim, where no reader thread takes them.
-        let backend = pick_backend().ok_or(OpenError::NoGraphics)?;
+        let backend = pick_backend().ok_or(NoGraphics)?;
         claim.show_through(backend);
         let stdin_tty = io::IsTerminal::is_terminal(&io::stdin());
         enter_raw_mode(stdin_tty).map_err(OpenError::Io)?;
@@ -304,12 +304,11 @@ pub struct Printer {
 }
 
 impl Printer {
-    /// Fails with [`OpenError::NoGraphics`] when the terminal shows neither
-    /// Kitty, Sixel nor truecolor graphics, or stdout is not a terminal. A
-    /// REPL prints its values as text then. The probe runs once per
-    /// process.
-    pub fn new() -> Result<Self, OpenError> {
-        let backend = pick_backend().ok_or(OpenError::NoGraphics)?;
+    /// Fails with [`NoGraphics`] when the terminal shows neither Kitty,
+    /// Sixel nor truecolor graphics, or stdout is not a terminal. A REPL
+    /// prints its values as text then. The probe runs once per process.
+    pub fn new() -> Result<Self, NoGraphics> {
+        let backend = pick_backend().ok_or(NoGraphics)?;
         Ok(Self {
             canvas: Canvas::new(backend),
         })
