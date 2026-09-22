@@ -36,8 +36,11 @@ capnp = "0.25"
 # These make no syscalls, so text and pdf build on wasm too.
 ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 pdf-writer = "0.14"
-# Pure Rust, so the Sixel encoder builds on wasm too.
-icy_sixel = "0.7"
+# Pure Rust, so the Sixel encoder builds on wasm too. The fork adds the
+# encoder that keeps its buffers between frames. Go back to the release
+# once it has the change. Cargo.lock is not in the repository, so the
+# revision is pinned here.
+icy_sixel = { git = "https://github.com/malbarbo/icy_sixel", rev = "c9e8b3c06ae5415806c281a4e1c41c54ab9a7df7" }
 # Decodes an asset, through tiny-skia, and encodes the Kitty frame. The
 # terminal reads a PNG fifty times faster than the raw pixels, which arrive
 # in base64.

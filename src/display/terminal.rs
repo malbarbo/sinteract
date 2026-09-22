@@ -245,9 +245,10 @@ impl Drop for Terminal {
 /// The bytes a frame needs.
 #[derive(Default)]
 struct ImageBuffers {
-    /// What the backend stages, the PNG that the Kitty protocol carries or
-    /// the pixels that the Sixel encoder quantizes.
+    /// The PNG that the Kitty protocol carries.
     image: Vec<u8>,
+    /// The Sixel encoder, which keeps the pixels and the text of a frame.
+    sixel: sixel::Encoder,
     /// The escapes that go to the terminal.
     escapes: Vec<u8>,
     /// The cells that a half-block frame compares against and replaces. A
@@ -391,11 +392,7 @@ fn write_image<W: Write>(
             &mut buffers.escapes,
         )?,
         (Backend::Sixel, _) => {
-            out.write_all(&sixel::encode(
-                pixmap,
-                SIXEL_BACKGROUND,
-                &mut buffers.image,
-            )?)?;
+            out.write_all(buffers.sixel.encode(pixmap, SIXEL_BACKGROUND)?)?;
         }
         (Backend::TextBlocks, Placement::Frame) => {
             return update_text_blocks(out, pixmap, &mut buffers.escapes, &mut buffers.blocks);
