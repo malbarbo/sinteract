@@ -37,7 +37,14 @@ impl std::fmt::Display for ReadError {
     }
 }
 
-impl std::error::Error for ReadError {}
+impl std::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ReadError::Broken(e) => Some(e),
+            ReadError::Payload(e) => Some(e),
+        }
+    }
+}
 
 /// Read the messages that `side` wrote until `decode` returns one, and
 /// return it with its player. `decode` returns `None` for a message of an
