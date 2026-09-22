@@ -1,10 +1,10 @@
 //! Terminal display of a [`crate::scene::Scene`] through the Kitty graphics
 //! protocol, DEC Sixel or truecolor half-blocks. [`Terminal`] is a session
 //! in the alt screen, where each frame replaces the previous one at (0, 0),
-//! and [`show_image`] prints one image inline.
+//! and a [`Printer`] prints images inline.
 //!
 //! The tty belongs to the process, so one `Terminal` exists at a time, and
-//! [`show_image`] prints nothing while it does. A Unix terminal does not
+//! a [`Printer`] prints nothing while it does. A Unix terminal does not
 //! tell a key down from a key up, so every key event is a press.
 
 use std::fmt;
@@ -29,7 +29,7 @@ use crate::event::{
     Event, InputEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
     NoEvent, key,
 };
-use crate::renderer::pixmap::PixmapRenderer;
+use crate::renderer::pixmap::{Assets, PixmapRenderer};
 use crate::renderer::{AllocError, Renderer};
 use crate::scene::Scene;
 
@@ -260,20 +260,15 @@ struct ImageBuffers {
     image: Vec<u8>,
     /// The escapes that go to the terminal.
     escapes: Vec<u8>,
-    /// The cells that a half-block frame compares against and replaces.
-    /// [`show_image`] writes every cell and leaves this empty.
+    /// The cells that a half-block frame compares against and replaces. A
+    /// print writes every cell and leaves this alone.
     blocks: BlockScreen,
 }
 
-/// Why [`show_image`] showed no image. A failure comes with the error that
-/// caused it, since the library writes no message of its own.
+/// Why [`Printer::print`] printed no image. A failure comes with the error
+/// that caused it, since the library writes no message of its own.
 #[derive(Debug)]
 pub enum NoImage {
-    /// The terminal shows neither Kitty, Sixel nor truecolor graphics, or
-    /// stdout is not a terminal. The probe runs once per process, so every
-    /// call after the first answers this too. A REPL prints the value as
-    /// text instead.
-    NoGraphics,
     /// A [`Terminal`] session holds the tty.
     Busy,
     /// Rasterizing the scene failed.
@@ -286,7 +281,6 @@ pub enum NoImage {
 impl fmt::Display for NoImage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NoImage::NoGraphics => f.write_str("the terminal shows no graphics"),
             NoImage::Busy => f.write_str("a terminal session holds the tty"),
             NoImage::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
             NoImage::Io(e) => write!(f, "cannot show the image: {e}"),
@@ -299,25 +293,48 @@ impl std::error::Error for NoImage {
         match self {
             NoImage::Alloc(e) => Some(e),
             NoImage::Io(e) => Some(e),
-            NoImage::NoGraphics | NoImage::Busy => None,
+            NoImage::Busy => None,
         }
     }
 }
 
-/// Print `scene` at the cursor, through Kitty when the terminal supports
-/// it, else Sixel, else half-blocks. A program that draws one frame after
-/// another opens a [`Terminal`], which keeps the buffers and writes only
-/// what changed.
-pub fn show_image(scene: &Scene) -> Result<(), NoImage> {
-    if TTY.load(Ordering::Acquire) != FREE {
-        return Err(NoImage::Busy);
+/// Prints scenes at the cursor, outside a session, through Kitty when the
+/// terminal supports it, else Sixel, else half-blocks. It keeps the images
+/// of the bitmaps and the buffers from one print to the next. A program that
+/// draws one frame over another opens a [`Terminal`] instead.
+pub struct Printer {
+    canvas: Canvas,
+}
+
+impl Printer {
+    /// Fails with [`OpenError::NoGraphics`] when the terminal shows neither
+    /// Kitty, Sixel nor truecolor graphics, or stdout is not a terminal. A
+    /// REPL prints its values as text then. The probe runs once per
+    /// process.
+    pub fn new() -> Result<Self, OpenError> {
+        let backend = pick_backend().ok_or(OpenError::NoGraphics)?;
+        Ok(Self {
+            canvas: Canvas::new(backend),
+        })
     }
-    let backend = pick_backend().ok_or(NoImage::NoGraphics)?;
-    Canvas::new(backend).print(scene)
+
+    /// The images that a [`crate::scene::Bitmap`] of the next prints names.
+    pub fn assets_mut(&mut self) -> &mut Assets {
+        self.canvas.renderer.assets_mut()
+    }
+
+    /// Print `scene` at the cursor, and leave the cursor on the line below
+    /// it.
+    pub fn print(&mut self, scene: &Scene) -> Result<(), NoImage> {
+        if TTY.load(Ordering::Acquire) != FREE {
+            return Err(NoImage::Busy);
+        }
+        self.canvas.print(scene)
+    }
 }
 
 /// What draws a scene into the terminal, for the frames of a [`Terminal`]
-/// and for [`show_image`].
+/// and the prints of a [`Printer`].
 struct Canvas {
     backend: Backend,
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
@@ -1328,10 +1345,13 @@ mod tests {
     }
 
     #[test]
-    fn show_image_shows_nothing_while_a_session_holds_the_tty() {
+    fn a_printer_prints_nothing_while_a_session_holds_the_tty() {
+        let mut printer = Printer {
+            canvas: Canvas::new(Backend::TextBlocks),
+        };
         let claim = Claim::take().expect("no session runs in a test");
         assert!(matches!(
-            show_image(&Scene::new(4.0, 4.0)),
+            printer.print(&Scene::new(4.0, 4.0)),
             Err(NoImage::Busy)
         ));
         drop(claim);

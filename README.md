@@ -9,6 +9,7 @@ half-blocks, whichever the terminal supports. The PDF and SVG outputs are
 vector, with text as glyph outlines.
 
 ```rust,no_run
+use sinteract::display::terminal::Printer;
 use sinteract::scene::{Paint, PathStyle, Scene};
 
 let blue = PathStyle {
@@ -22,7 +23,9 @@ scene
     .line_to(40.0, 30.0)
     .line_to(0.0, 30.0);
 
-let _ = sinteract::display::terminal::show_image(&scene);
+if let Ok(mut printer) = Printer::new() {
+    let _ = printer.print(&scene);
+}
 let pdf: Vec<u8> = sinteract::renderer::pdf::render_to_pdf(&scene);
 ```
 
@@ -31,9 +34,10 @@ when it is dropped, and `Scene::clip` returns a scope that collects what is
 drawn inside it into one clipped element. An arc becomes cubics inside the
 scope, so a renderer only sees moves, lines, quadratics and cubics.
 
-`show_image` prints one image where the cursor sits, and says why it
-printed none when the terminal shows no graphics, so a REPL falls back to
-the text of the value.
+A `Printer` prints images where the cursor sits. It fails to open when the
+terminal shows no graphics, so a REPL falls back to the text of the value.
+Its `Assets` hold the PNG images that the bitmaps of the scenes name, and
+it keeps them from one print to the next.
 
 For an animation, a `Display` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `Event`s. A frame that
