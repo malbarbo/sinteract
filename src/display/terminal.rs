@@ -134,18 +134,10 @@ impl Terminal {
         })
     }
 
-    /// Rasterize `scene` and write the frame.
+    /// Rasterize `scene` and write the frame. `frame_size` takes the size
+    /// once the frame is on screen, so a write that stops part way leaves
+    /// it empty and the next frame clears and writes every cell.
     fn draw(&mut self, scene: &Scene) -> Result<(), PresentError> {
-        let drawn = self.write_frame(scene);
-        if drawn.is_err() {
-            // Part of the frame is on screen, and which part is unknown, so
-            // the next one clears and writes every cell.
-            self.frame_size = None;
-        }
-        drawn
-    }
-
-    fn write_frame(&mut self, scene: &Scene) -> Result<(), PresentError> {
         let Canvas {
             backend,
             renderer,
@@ -161,13 +153,14 @@ impl Terminal {
         // id replaces the whole image in place, and a clear, or a delete
         // before the transmit, shows the cleared cells for one refresh.
         let size = (pixmap.width(), pixmap.height());
-        if self.frame_size.replace(size) != Some(size) && *backend != Backend::Kitty {
+        if self.frame_size.take() != Some(size) && *backend != Backend::Kitty {
             queue!(stdout, terminal::Clear(terminal::ClearType::All))?;
             buffers.blocks.forget();
         }
         queue!(stdout, cursor::MoveTo(0, 0))?;
         write_image(&mut stdout, *backend, pixmap, buffers, Placement::Frame)?;
         stdout.flush()?;
+        self.frame_size = Some(size);
         Ok(())
     }
 
