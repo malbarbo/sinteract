@@ -33,8 +33,10 @@ impl Encoder {
     }
 
     /// Append `pixmap` to `out` as Sixel, with the DCS introducer and the
-    /// string terminator. `pixmap` has to be opaque. An image over 64
-    /// megapixels is an error, which leaves `out` as it was.
+    /// string terminator. `pixmap` has to be opaque. The encoding fails when
+    /// the width is over 1,000,000, when the height rounded up to a multiple
+    /// of 6 is over 1,000,000, or when the width times that height is over
+    /// 2^26. A failure leaves `out` as it was.
     pub fn encode(&mut self, pixmap: &Pixmap, out: &mut Vec<u8>) -> io::Result<()> {
         debug_assert!(
             pixmap.pixels().iter().all(|p| p.alpha() == 255),
