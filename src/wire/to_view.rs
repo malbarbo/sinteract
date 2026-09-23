@@ -6,7 +6,6 @@
 
 use std::io::{self, Read, Write};
 
-use capnp::Word;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::protocol_capnp::engine_message;
@@ -33,8 +32,8 @@ pub enum Message {
 /// Returns `None` at the end of the stream. A message of an arm from a
 /// newer schema is skipped, and the next one comes out.
 pub fn read(r: &mut impl Read) -> Result<Option<(Player, Message)>, ReadError> {
-    read_next(r, Side::Engine, |player, words| {
-        Ok(decode(words)?.map(|message| (player, message)))
+    read_next(r, Side::Engine, |player, payload| {
+        Ok(decode(payload)?.map(|message| (player, message)))
     })
 }
 
@@ -59,10 +58,9 @@ pub fn write_close(w: &mut impl Write, player: Player) -> io::Result<()> {
     write_framed(w, Side::Engine, player, &close_message())
 }
 
-/// Decode the payload in `words` in place. `None` for a message of an arm
-/// from a newer schema.
-pub(super) fn decode(words: &[Word]) -> Result<Option<Message>, Error> {
-    decode_root::<engine_message::Owned, _>(words, decode_message)
+/// Decode `payload`. `None` for a message of an arm from a newer schema.
+pub(super) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
+    decode_root::<engine_message::Owned, _>(payload, decode_message)
 }
 
 fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Error> {

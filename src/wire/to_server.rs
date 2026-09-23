@@ -7,7 +7,6 @@
 
 use std::io::{self, Read, Write};
 
-use capnp::Word;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::event::InputEvent;
@@ -31,7 +30,7 @@ pub enum Message {
 /// and the next one comes out. The server knows the player of a view from
 /// its connection, so the player in the header does not count.
 pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
-    read_next(r, Side::View, |_, words| decode(words))
+    read_next(r, Side::View, |_, payload| decode(payload))
 }
 
 /// Write the input `ev`.
@@ -44,10 +43,10 @@ pub fn write_close(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::View, UNROUTED, &close_message())
 }
 
-/// Decode the payload in `words` in place. `None` for a message or an event
-/// of an arm from a newer schema.
-pub(super) fn decode(words: &[Word]) -> Result<Option<Message>, Error> {
-    decode_root::<view_message::Owned, _>(words, decode_message)
+/// Decode `payload`. `None` for a message or an event of an arm from a
+/// newer schema.
+pub(super) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
+    decode_root::<view_message::Owned, _>(payload, decode_message)
 }
 
 fn decode_message(msg: view_message::Reader<'_>) -> Result<Option<Message>, Error> {

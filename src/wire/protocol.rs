@@ -54,27 +54,81 @@ impl std::error::Error for ReadError {
 pub(super) fn read_next<T>(
     r: &mut impl Read,
     side: Side,
-    decode: impl Fn(Player, &[Word]) -> Result<Option<T>, Error>,
+    decode: impl Fn(Player, &[u8]) -> Result<Option<T>, Error>,
 ) -> Result<Option<T>, ReadError> {
     loop {
         let Some((player, words)) = read_framed(r, side).map_err(ReadError::Broken)? else {
             return Ok(None);
         };
-        if let Some(message) = decode(player, &words).map_err(ReadError::Payload)? {
+        let payload = Word::words_to_bytes(&words);
+        if let Some(message) = decode(player, payload).map_err(ReadError::Payload)? {
             return Ok(Some(message));
         }
     }
 }
 
-/// Open the payload in `words` in place as a message whose root is `T`, and
-/// hand the root to `decode`.
+/// Open `payload` as a message whose root is `T`, and hand the root to
+/// `decode`. Cap'n Proto reads a payload in place when it starts on a word,
+/// and a payload that does not goes into a copy first. A payload that is
+/// not a whole number of words is an error on both paths.
 pub(super) fn decode_root<T: Owned, M>(
-    words: &[Word],
+    payload: &[u8],
     decode: impl FnOnce(T::Reader<'_>) -> Result<Option<M>, Error>,
 ) -> Result<Option<M>, Error> {
-    let reader = serialize::read_message_from_flat_slice_no_alloc(
-        &mut Word::words_to_bytes(words),
-        ReaderOptions::new(),
-    )?;
+    if !payload.len().is_multiple_of(size_of::<Word>()) {
+        return Err(capnp::Error::failed(format!(
+            "payload of {} bytes is not a whole number of words",
+            payload.len()
+        ))
+        .into());
+    }
+    let copy;
+    let mut bytes = if payload.as_ptr().addr().is_multiple_of(align_of::<Word>()) {
+        payload
+    } else {
+        copy = aligned_copy(payload);
+        Word::words_to_bytes(&copy)
+    };
+    let reader =
+        serialize::read_message_from_flat_slice_no_alloc(&mut bytes, ReaderOptions::new())?;
     decode(reader.get_root()?)
+}
+
+/// `payload`, a whole number of words, copied into words.
+fn aligned_copy(payload: &[u8]) -> Vec<Word> {
+    let mut words = Word::allocate_zeroed_vec(payload.len() / size_of::<Word>());
+    Word::words_to_bytes_mut(&mut words).copy_from_slice(payload);
+    words
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::to_view::{self, Message, encode_close};
+
+    #[test]
+    fn a_payload_that_does_not_start_on_a_word_decodes() {
+        let close = encode_close();
+        let (buffer, start) = unaligned(&close);
+        let payload = &buffer[start..start + close.len()];
+        assert!(matches!(to_view::decode(payload), Ok(Some(Message::Close))));
+    }
+
+    #[test]
+    fn a_payload_that_is_not_whole_words_is_an_error_on_both_paths() {
+        let close = encode_close();
+        let cut = &close[..close.len() - 3];
+        assert!(to_view::decode(cut).is_err());
+        let (buffer, start) = unaligned(cut);
+        assert!(to_view::decode(&buffer[start..start + cut.len()]).is_err());
+    }
+
+    /// A buffer that holds `bytes` from `start`, one byte past a word.
+    fn unaligned(bytes: &[u8]) -> (Vec<u8>, usize) {
+        let mut buffer = vec![0u8; bytes.len() + 9];
+        let start = (1..=8)
+            .find(|&i| buffer[i..].as_ptr().addr() % 8 == 1)
+            .unwrap();
+        buffer[start..start + bytes.len()].copy_from_slice(bytes);
+        (buffer, start)
+    }
 }

@@ -336,20 +336,18 @@ mod tests {
     /// Decode a message of the engine of an arm this schema knows, as
     /// [`to_view::read`] does after the envelope.
     fn decode(bytes: &[u8]) -> Result<Message, Error> {
-        Ok(to_view::decode(&words(bytes))?.expect("an arm this schema knows"))
+        Ok(to_view::decode(bytes)?.expect("an arm this schema knows"))
     }
 
     /// Whether [`to_view::read`] skips the payload in `bytes`.
     fn is_skipped(bytes: &[u8]) -> bool {
-        matches!(to_view::decode(&words(bytes)), Ok(None))
+        matches!(to_view::decode(bytes), Ok(None))
     }
 
     /// Decode a message of the server of an arm this schema knows, as
     /// [`to_engine::read`] does after the envelope.
     fn decode_event(bytes: &[u8]) -> Result<InputEvent, Error> {
-        match to_engine::decode(framing::UNROUTED, &words(bytes))?
-            .expect("an arm this schema knows")
-        {
+        match to_engine::decode(framing::UNROUTED, bytes)?.expect("an arm this schema knows") {
             to_engine::Message::Input { event, .. } => Ok(event),
             other => panic!("got {other:?}"),
         }
@@ -357,10 +355,7 @@ mod tests {
 
     /// Whether [`to_engine::read`] skips the payload in `bytes`.
     fn is_event_skipped(bytes: &[u8]) -> bool {
-        matches!(
-            to_engine::decode(framing::UNROUTED, &words(bytes)),
-            Ok(None)
-        )
+        matches!(to_engine::decode(framing::UNROUTED, bytes), Ok(None))
     }
 
     fn nonzero(n: u32) -> std::num::NonZeroU32 {
@@ -372,13 +367,6 @@ mod tests {
             player: nonzero(player),
             nickname: nickname.into(),
         }
-    }
-
-    /// `bytes` in the words that the decoder reads in place.
-    fn words(bytes: &[u8]) -> Vec<capnp::Word> {
-        let mut words = capnp::Word::allocate_zeroed_vec(bytes.len().div_ceil(8));
-        capnp::Word::words_to_bytes_mut(&mut words)[..bytes.len()].copy_from_slice(bytes);
-        words
     }
 
     fn assert_scene_eq(a: &Scene, b: &Scene) {
@@ -519,7 +507,7 @@ mod tests {
             Ok(InputEvent::Vsync)
         ));
         assert!(matches!(
-            to_engine::decode(framing::UNROUTED, &words(&to_engine::encode_close())),
+            to_engine::decode(framing::UNROUTED, &to_engine::encode_close()),
             Ok(Some(to_engine::Message::Close))
         ));
     }
@@ -545,7 +533,7 @@ mod tests {
     #[test]
     fn a_message_of_a_view_of_an_unknown_arm_is_skipped() {
         let bytes = with_unknown_view_value(&to_server::encode_close(), |m| tag_of(m));
-        assert!(matches!(to_server::decode(&words(&bytes)), Ok(None)));
+        assert!(matches!(to_server::decode(&bytes), Ok(None)));
     }
 
     #[test]
@@ -617,7 +605,7 @@ mod tests {
             for (i, &p) in players.iter().enumerate() {
                 list.reborrow().get(i as u32).set_player(p);
             }
-            words(&finish(builder))
+            finish(builder)
         };
         assert!(matches!(
             to_engine::decode(framing::UNROUTED, &start(&[1, 0])),

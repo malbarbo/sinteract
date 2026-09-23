@@ -11,7 +11,6 @@ use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
-use capnp::Word;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::event::InputEvent;
@@ -121,12 +120,11 @@ pub fn write_leave(w: &mut impl Write, player: NonZeroU32) -> io::Result<()> {
     write_framed(w, Side::Server, player.get(), &leave_message())
 }
 
-/// Decode the payload in `words` in place, for `player` of the header.
-/// `None` for a message or an event of an arm from a newer schema. A join,
-/// a leave or a member of player 0, and a roster that repeats a player, are
-/// errors.
-pub(super) fn decode(player: Player, words: &[Word]) -> Result<Option<Message>, Error> {
-    decode_root::<server_message::Owned, _>(words, |msg| decode_message(player, msg))
+/// Decode `payload`, for `player` of the header. `None` for a message or
+/// an event of an arm from a newer schema. A join, a leave or a member of
+/// player 0, and a roster that repeats a player, are errors.
+pub(super) fn decode(player: Player, payload: &[u8]) -> Result<Option<Message>, Error> {
+    decode_root::<server_message::Owned, _>(payload, |msg| decode_message(player, msg))
 }
 
 fn decode_message(
