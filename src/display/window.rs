@@ -123,6 +123,14 @@ impl super::Display for Window {
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
+        // A frame that draws for longer than the period finds the next Vsync
+        // due, so the wait returns it without a pump, and the platform takes
+        // a window that never answers for hung. So every call pumps once.
+        if let Some(s) = self.session.as_mut()
+            && !s.lent.pump(&mut s.app, Some(Duration::ZERO))
+        {
+            let _ = s.app.tx.send_close();
+        }
         loop {
             let mut session = self.session.as_mut();
             let wait = self.inbox.wait_with(deadline, |_, timeout| {
