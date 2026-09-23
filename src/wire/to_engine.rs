@@ -22,15 +22,15 @@ use super::protocol::{ReadError, decode_root, read_next};
 
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with
-/// [`crate::event::Event`]. The player of `Input`, `Join` and `Leave` is
-/// the one that [`read`] returns with the message.
+/// [`crate::event::Event`]. The player comes from the header, and `Close`
+/// and `Start` are about the whole session.
 #[derive(Clone, Debug)]
 pub enum Message {
-    Input(InputEvent),
+    Input { player: Player, event: InputEvent },
     Close,
     Start(Vec<Member>),
-    Join { nickname: String },
-    Leave,
+    Join { player: Player, nickname: String },
+    Leave { player: Player },
 }
 
 /// A player of the session.
@@ -41,10 +41,10 @@ pub struct Member {
     pub nickname: String,
 }
 
-/// Read the next message of the server, with the player it is about.
-/// Returns `None` at the end of the stream. A message or an event of an arm
-/// from a newer schema is skipped, and the next one comes out.
-pub fn read(r: &mut impl Read) -> Result<Option<(Player, Message)>, ReadError> {
+/// Read the next message of the server. Returns `None` at the end of the
+/// stream. A message or an event of an arm from a newer schema is skipped,
+/// and the next one comes out.
+pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
     read_next(r, Side::Server, decode)
 }
 
@@ -73,18 +73,23 @@ pub fn write_leave(w: &mut impl Write, player: Player) -> io::Result<()> {
     write_framed(w, Side::Server, player, &leave_message())
 }
 
-/// Decode the payload in `words` in place. `None` for a message or an event
-/// of an arm from a newer schema.
-pub(super) fn decode(words: &[Word]) -> Result<Option<Message>, Error> {
-    decode_root::<server_message::Owned, _>(words, decode_message)
+/// Decode the payload in `words` in place, for `player` of the header.
+/// `None` for a message or an event of an arm from a newer schema.
+pub(super) fn decode(player: Player, words: &[Word]) -> Result<Option<Message>, Error> {
+    decode_root::<server_message::Owned, _>(words, |msg| decode_message(player, msg))
 }
 
-fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Error> {
+fn decode_message(
+    player: Player,
+    msg: server_message::Reader<'_>,
+) -> Result<Option<Message>, Error> {
     let Ok(which) = msg.which() else {
         return Ok(None);
     };
     match which {
-        server_message::Event(e) => Ok(read_input_event(e?)?.map(Message::Input)),
+        server_message::Event(e) => {
+            Ok(read_input_event(e?)?.map(|event| Message::Input { player, event }))
+        }
         server_message::Close(_) => Ok(Some(Message::Close)),
         server_message::Start(s) => {
             let members = s?
@@ -100,9 +105,10 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
             Ok(Some(Message::Start(members)))
         }
         server_message::Join(j) => Ok(Some(Message::Join {
+            player,
             nickname: j?.get_nickname()?.to_str()?.to_owned(),
         })),
-        server_message::Leave(_) => Ok(Some(Message::Leave)),
+        server_message::Leave(_) => Ok(Some(Message::Leave { player })),
     }
 }
 

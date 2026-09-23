@@ -47,21 +47,21 @@ impl std::error::Error for ReadError {
     }
 }
 
-/// Read the messages that `side` wrote until `decode` returns one, and
-/// return it with its player. `decode` returns `None` for a message of an
-/// arm from a newer schema, which is skipped. `None` at the end of the
-/// stream.
+/// Read the messages that `side` wrote until `decode` returns one. `decode`
+/// gets the player of the header with the payload, and returns `None` for
+/// a message of an arm from a newer schema, which `read_next` skips. `None`
+/// at the end of the stream.
 pub(super) fn read_next<T>(
     r: &mut impl Read,
     side: Side,
-    decode: impl Fn(&[Word]) -> Result<Option<T>, Error>,
-) -> Result<Option<(Player, T)>, ReadError> {
+    decode: impl Fn(Player, &[Word]) -> Result<Option<T>, Error>,
+) -> Result<Option<T>, ReadError> {
     loop {
         let Some((player, words)) = read_framed(r, side).map_err(ReadError::Broken)? else {
             return Ok(None);
         };
-        if let Some(message) = decode(&words).map_err(ReadError::Payload)? {
-            return Ok(Some((player, message)));
+        if let Some(message) = decode(player, &words).map_err(ReadError::Payload)? {
+            return Ok(Some(message));
         }
     }
 }

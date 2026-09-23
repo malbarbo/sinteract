@@ -33,7 +33,9 @@ pub enum Message {
 /// Returns `None` at the end of the stream. A message of an arm from a
 /// newer schema is skipped, and the next one comes out.
 pub fn read(r: &mut impl Read) -> Result<Option<(Player, Message)>, ReadError> {
-    read_next(r, Side::Engine, decode)
+    read_next(r, Side::Engine, |player, words| {
+        Ok(decode(words)?.map(|message| (player, message)))
+    })
 }
 
 /// Write a scene as a frame for `player`.

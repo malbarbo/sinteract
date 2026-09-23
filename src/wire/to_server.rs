@@ -31,7 +31,7 @@ pub enum Message {
 /// and the next one comes out. The server knows the player of a view from
 /// its connection, so the player in the header does not count.
 pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
-    Ok(read_next(r, Side::View, decode)?.map(|(_, message)| message))
+    read_next(r, Side::View, |_, words| decode(words))
 }
 
 /// Write the input `ev`.

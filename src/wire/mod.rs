@@ -340,15 +340,20 @@ mod tests {
     /// Decode a message of the server of an arm this schema knows, as
     /// [`to_engine::read`] does after the envelope.
     fn decode_event(bytes: &[u8]) -> Result<InputEvent, Error> {
-        match to_engine::decode(&words(bytes))?.expect("an arm this schema knows") {
-            to_engine::Message::Input(ev) => Ok(ev),
+        match to_engine::decode(framing::UNROUTED, &words(bytes))?
+            .expect("an arm this schema knows")
+        {
+            to_engine::Message::Input { event, .. } => Ok(event),
             other => panic!("got {other:?}"),
         }
     }
 
     /// Whether [`to_engine::read`] skips the payload in `bytes`.
     fn is_event_skipped(bytes: &[u8]) -> bool {
-        matches!(to_engine::decode(&words(bytes)), Ok(None))
+        matches!(
+            to_engine::decode(framing::UNROUTED, &words(bytes)),
+            Ok(None)
+        )
     }
 
     /// `bytes` in the words that the decoder reads in place.
@@ -496,7 +501,7 @@ mod tests {
             Ok(InputEvent::Vsync)
         ));
         assert!(matches!(
-            to_engine::decode(&words(&to_engine::encode_close())),
+            to_engine::decode(framing::UNROUTED, &words(&to_engine::encode_close())),
             Ok(Some(to_engine::Message::Close))
         ));
     }
@@ -544,14 +549,17 @@ mod tests {
         let mut r = &stream[..];
         let mut next = || to_engine::read(&mut r).unwrap().expect("a message");
         match next() {
-            (framing::UNROUTED, to_engine::Message::Start(got)) => assert_eq!(got, members),
+            to_engine::Message::Start(got) => assert_eq!(got, members),
             other => panic!("got {other:?}"),
         }
         match next() {
-            (3, to_engine::Message::Join { nickname }) => assert_eq!(nickname, "Caio"),
+            to_engine::Message::Join {
+                player: 3,
+                nickname,
+            } => assert_eq!(nickname, "Caio"),
             other => panic!("got {other:?}"),
         }
-        assert!(matches!(next(), (2, to_engine::Message::Leave)));
+        assert!(matches!(next(), to_engine::Message::Leave { player: 2 }));
         assert!(to_engine::read(&mut r).unwrap().is_none());
     }
 

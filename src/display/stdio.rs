@@ -153,9 +153,9 @@ impl Drop for Stdio {
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
     loop {
         let ev = match to_engine::read(&mut reader) {
-            Ok(None | Some((_, Message::Close))) => break,
-            Ok(Some((_, Message::Input(ev)))) => ev,
-            Ok(Some((_, Message::Start(_) | Message::Join { .. } | Message::Leave))) => continue,
+            Ok(None | Some(Message::Close)) => break,
+            Ok(Some(Message::Input { event, .. })) => event,
+            Ok(Some(Message::Start(_) | Message::Join { .. } | Message::Leave { .. })) => continue,
             Err(e @ ReadError::Payload(_)) => {
                 if tx.send_read_error(e).is_err() {
                     return;
