@@ -18,9 +18,10 @@
 //! rest needs threads, a tty, a window or platform FFI. In a browser the page, which
 //! hosts the engine, implements `wait_event` itself.
 
-// The links above go to the modules of both features.
+// Most links above go to items that only a native build with both
+// features has.
 #![cfg_attr(
-    not(all(feature = "terminal", feature = "window")),
+    not(all(feature = "terminal", feature = "window", not(target_arch = "wasm32"))),
     allow(rustdoc::broken_intra_doc_links)
 )]
 

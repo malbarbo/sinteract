@@ -1,4 +1,4 @@
-//! The events a [`crate::display::Display`] delivers.
+//! The events that a [`display`](crate::display) delivers.
 //!
 //! Every display turns its input into the same [`InputEvent`] stream, and
 //! the engine loop blocks on `wait_event` and dispatches:
