@@ -1,10 +1,10 @@
 //! Sixel encoder, for a terminal that supports DEC Sixel and not the Kitty
 //! protocol, such as Windows Terminal 1.22, mlterm, foot and mintty.
 //!
-//! `icy_sixel` does the encoding. It picks a palette of up to 256 colors for
-//! each image, so an anti-aliased edge keeps its shades. Sixel has no
-//! transparency that keeps the previous frame, so the encoder takes an
-//! opaque pixmap. A renderer gives one when it draws over an opaque
+//! `icy_sixel` does the encoding. An image of at most 256 colors keeps every
+//! color in its palette, and the quantizer picks up to 256 for a larger one.
+//! Sixel has no transparency that keeps the previous frame, so the encoder
+//! takes an opaque pixmap. A renderer gives one when it draws over an opaque
 //! background. [`PixmapRenderer::set_background`] sets that background.
 //!
 //! [`PixmapRenderer::set_background`]: crate::renderer::pixmap::PixmapRenderer::set_background
@@ -21,14 +21,17 @@ pub struct Encoder {
 
 impl Encoder {
     /// An encoder with dithering off, since dithering scatters noise over
-    /// the flat fills of a drawing.
+    /// the flat fills of a drawing, and with an exact palette, since the
+    /// quantizer merges close colors that a drawing keeps apart.
     pub fn new() -> Self {
         let options = icy_sixel::EncodeOptions {
             diffusion: 0.0,
             ..Default::default()
         };
         Encoder {
-            inner: icy_sixel::SixelEncoder::new().with_options(options),
+            inner: icy_sixel::SixelEncoder::new()
+                .with_options(options)
+                .with_exact_palette(true),
         }
     }
 
@@ -91,6 +94,13 @@ mod tests {
         assert!(bytes.starts_with(b"\x1bP"));
         assert!(bytes.ends_with(b"\x1b\\"));
         assert!(window_contains(&bytes, b";2;100;0;0"));
+    }
+
+    #[test]
+    fn an_image_of_256_colors_keeps_every_color() {
+        let bytes = sixel(Encoder::new(), &make_gradient(16, 16));
+        let palette = bytes.windows(3).filter(|w| w == b";2;").count();
+        assert_eq!(palette, 256);
     }
 
     #[test]
