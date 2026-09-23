@@ -3,21 +3,23 @@
 //! Cap'n Proto frames its own payload, and this envelope puts a header of
 //! 12 bytes in front of it: a magic of four bytes, the player as a
 //! little-endian `u32`, and the length of the payload as a little-endian
-//! `u32`. The magic is `SI`, then `E` from the engine or `V` from the view,
-//! then the version of the payload, `1`.
+//! `u32`. The magic is `SI`, then `E` from the engine, `V` from the view or
+//! `S` from the server, then the version of the payload, `1`.
 //!
 //! The magic rejects text from another writer on the same pipe, such as a
 //! stray `print` from the program of a student, before the bytes reach the
 //! Cap'n Proto reader. It also says who wrote the message, since a Cap'n
-//! Proto message does not name its root, and a peer that gets the magic of
-//! its own side knows that the two ends have the same role. A reader that
-//! does not know the version stops instead of reading what it cannot.
+//! Proto message does not name its root, and a reader that gets the magic
+//! of another side knows that the two ends are not wired as it expects. A
+//! reader that does not know the version stops instead of reading what it
+//! cannot.
 //!
 //! The player routes a message between the engine and a server that
 //! serves several views, and a view behind the server never sees it. The
 //! server reads the header and passes the payload on untouched, so a view
-//! cannot claim to be another player. A WebSocket, which frames its own messages, carries the
-//! payload alone and the version in its subprotocol, `sinteract.v1`.
+//! cannot claim to be another player. A WebSocket, which frames its own
+//! messages, carries the payload alone and the version in its subprotocol,
+//! `sinteract.v1`.
 //!
 //! A message goes from the builder to the writer, and from the reader into
 //! the words that the decoder reads in place, with no copy in between.
@@ -35,6 +37,10 @@ pub enum Side {
     Engine,
     /// Draws the frames and sends the input.
     View,
+    /// Owns the session. It passes the input of the views to the engine and
+    /// tells the engine who plays. A view that talks to the engine alone
+    /// takes this side.
+    Server,
 }
 
 impl Side {
@@ -43,14 +49,15 @@ impl Side {
         match self {
             Side::Engine => *b"SIE1",
             Side::View => *b"SIV1",
+            Side::Server => *b"SIS1",
         }
     }
 
-    fn other(self) -> Side {
-        match self {
-            Side::Engine => Side::View,
-            Side::View => Side::Engine,
-        }
+    /// The side whose magic is `magic`, if any.
+    fn from_magic(magic: [u8; 4]) -> Option<Side> {
+        [Side::Engine, Side::View, Side::Server]
+            .into_iter()
+            .find(|side| side.magic() == magic)
     }
 }
 
@@ -150,9 +157,8 @@ fn check_magic(magic: [u8; 4], side: Side) -> io::Result<()> {
     if magic == expected {
         return Ok(());
     }
-    let other = side.other();
-    Err(invalid(if magic == other.magic() {
-        format!("got a message of the {other:?} side, which this end is too")
+    Err(invalid(if let Some(other) = Side::from_magic(magic) {
+        format!("got a message of the {other:?} side, not of the {side:?} side")
     } else if magic[..3] == expected[..3] {
         format!(
             "version {:?} of the protocol is not supported",
@@ -219,11 +225,18 @@ mod tests {
     }
 
     #[test]
-    fn a_message_of_the_same_side_is_an_error() {
-        let err = read_framed(&mut &header_with(Side::View.magic(), 0)[..], Side::Engine)
+    fn a_message_of_another_side_is_an_error() {
+        let err = read_framed(&mut &header_with(Side::View.magic(), 0)[..], Side::Server)
             .expect_err("an error");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("View side"), "{err}");
+    }
+
+    #[test]
+    fn each_side_has_its_own_magic() {
+        for side in [Side::Engine, Side::View, Side::Server] {
+            assert_eq!(Side::from_magic(side.magic()), Some(side));
+        }
     }
 
     #[test]
