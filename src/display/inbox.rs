@@ -373,11 +373,13 @@ impl Vsync {
         }
     }
 
-    /// The Vsync went out at `now`. The clock counts the next period from
-    /// the delivery, so an engine slower than the period still gets its input.
+    /// The Vsync went out at `now`. The clock keeps its beat, so a frame
+    /// that took less than the period loses no time to the wait. An engine
+    /// slower than the period gets the next Vsync at once, and the input
+    /// that came before `now` still goes out ahead of it.
     fn deliver(&mut self, now: Instant) {
         match self {
-            Vsync::Clock { period, due } => *due = now + *period,
+            Vsync::Clock { period, due } => *due = (*due + *period).max(now),
             Vsync::Channel { arrived } => *arrived = None,
         }
     }
@@ -631,7 +633,37 @@ mod tests {
         let late = t0 + period * 10;
         assert_eq!(key_name(&inbox.pop(late).unwrap()), Some("a"));
         assert!(is_vsync(&inbox.pop(late).unwrap()));
-        assert!(inbox.pop(late).is_none());
+    }
+
+    #[test]
+    fn the_clock_keeps_its_beat_after_a_short_frame() {
+        let period = Duration::from_millis(16);
+        let mut inbox = Inbox::new(Some(period));
+        let t0 = Instant::now();
+        assert!(is_vsync(&inbox.pop(t0).unwrap()));
+        // The engine comes back a little after the Vsync was due.
+        assert!(is_vsync(&inbox.pop(t0 + period + period / 4).unwrap()));
+        assert!(inbox.pop(t0 + period * 2 - period / 8).is_none());
+        assert!(is_vsync(&inbox.pop(t0 + period * 2).unwrap()));
+    }
+
+    #[test]
+    fn a_late_engine_gets_the_next_vsync_at_once() {
+        let period = Duration::from_millis(16);
+        let mut inbox = Inbox::new(Some(period));
+        let t0 = Instant::now();
+        assert!(is_vsync(&inbox.pop(t0).unwrap()));
+        let late = t0 + period * 3;
+        assert!(is_vsync(&inbox.pop(late).unwrap()));
+        // A key arrives while the frame takes two periods. The next Vsync
+        // fell due when the frame began, so it goes out first, and the key
+        // goes out ahead of the Vsync after it.
+        inbox.push(item(late + period / 2, key("a")));
+        let next = late + period * 2;
+        assert!(is_vsync(&inbox.pop(next).unwrap()));
+        let after = next + period * 2;
+        assert_eq!(key_name(&inbox.pop(after).unwrap()), Some("a"));
+        assert!(is_vsync(&inbox.pop(after).unwrap()));
     }
 
     #[test]
