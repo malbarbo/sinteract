@@ -28,6 +28,15 @@ pub enum Message {
     Close,
 }
 
+/// The arm of a message of the engine. A server routes a message by its
+/// arm and passes the payload on as it came.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arm {
+    Asset,
+    Frame,
+    Close,
+}
+
 /// Read the next message of the engine, with the player it goes to.
 /// Returns `None` at the end of the stream. A message of an arm from a
 /// newer schema is skipped, and the next one comes out.
@@ -56,6 +65,21 @@ pub fn write_asset(
 /// Write the close of the session of `player`.
 pub fn write_close(w: &mut impl Write, player: Player) -> io::Result<()> {
     write_framed(w, Side::Engine, player, &close_message())
+}
+
+/// The arm of `payload`, a message with no envelope, without a decode of
+/// the scene of a frame. `None` for an arm from a newer schema.
+pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
+    decode_root::<engine_message::Owned, _>(payload, |msg| {
+        let Ok(which) = msg.which() else {
+            return Ok(None);
+        };
+        Ok(Some(match which {
+            engine_message::Asset(_) => Arm::Asset,
+            engine_message::Frame(_) => Arm::Frame,
+            engine_message::Close(_) => Arm::Close,
+        }))
+    })
 }
 
 /// Decode `payload`. `None` for a message of an arm from a newer schema.

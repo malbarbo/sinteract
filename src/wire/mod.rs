@@ -531,6 +531,19 @@ mod tests {
     }
 
     #[test]
+    fn the_arm_of_a_message_of_the_engine_comes_without_a_decode() {
+        let frame = to_view::encode_frame(&Scene::new(4.0, 3.0));
+        assert_eq!(to_view::arm(&frame).unwrap(), Some(to_view::Arm::Frame));
+        let asset = to_view::encode_asset(1, &[0; 4], None);
+        assert_eq!(to_view::arm(&asset).unwrap(), Some(to_view::Arm::Asset));
+        let close = to_view::encode_close();
+        assert_eq!(to_view::arm(&close).unwrap(), Some(to_view::Arm::Close));
+        let unknown = with_unknown_engine_value(&close, |m| tag_of(m));
+        assert_eq!(to_view::arm(&unknown).unwrap(), None);
+        assert!(to_view::arm(&[0; 8]).is_err());
+    }
+
+    #[test]
     fn a_message_of_a_view_decodes_without_its_header() {
         let mut stream = Vec::new();
         to_server::write_input(&mut stream, &InputEvent::Vsync).unwrap();
