@@ -954,16 +954,30 @@ impl CellMap {
     }
 }
 
-/// Upper bound on the scale of the rasterizer for `backend`. In Kitty and
-/// Sixel a pixmap pixel is a screen pixel, so the cap of 1.0 keeps the image
-/// at native size or smaller. In half-blocks a pixmap pixel covers a cell
-/// width by half a cell height, so the cap is the inverse of the larger of
-/// the two, and a logical pixel never grows past a screen pixel.
+/// Upper bound on the scale of the rasterizer for `backend`, so that a
+/// logical pixel never grows past [`pixel_density`] screen pixels. In Kitty
+/// and Sixel a pixmap pixel is a screen pixel. In half-blocks a pixmap pixel
+/// covers a cell width by half a cell height, so the cap divides by the
+/// larger of the two.
 fn max_scale_for_backend(backend: Backend, (cw, ch): (u32, u32)) -> f32 {
+    let density = pixel_density(ch);
     match backend {
-        Backend::Kitty | Backend::Sixel => 1.0,
-        Backend::TextBlocks => 1.0 / (cw as f32).max(ch as f32 / 2.0),
+        Backend::Kitty | Backend::Sixel => density,
+        Backend::TextBlocks => density / (cw as f32).max(ch as f32 / 2.0),
     }
+}
+
+/// The height in pixels of a cell of Monospace 11 at a desktop scale of 1,
+/// as foot draws it.
+const REFERENCE_CELL_H: f32 = 19.0;
+
+/// How many screen pixels a logical pixel covers, from a cell `ch` pixels
+/// high. A terminal does not tell its HiDPI factor, and the cell grows with
+/// that factor and with the font, so the ratio to [`REFERENCE_CELL_H`]
+/// stands for it. The scene then keeps its size next to the text, as it
+/// does in a window. A small font does not shrink it below 1.
+fn pixel_density(ch: u32) -> f32 {
+    (ch as f32 / REFERENCE_CELL_H).max(1.0)
 }
 
 /// Scale for a `width` by `height` frame on `backend`. The frame shrinks to
@@ -1363,6 +1377,18 @@ mod tests {
             1.0 / 8.0
         );
         assert_eq!(max_scale_for_backend(Backend::Kitty, (8, 16)), 1.0);
+    }
+
+    #[test]
+    fn a_taller_cell_than_the_reference_raises_the_cap() {
+        // A cell of 38 pixels is twice the reference, as at a HiDPI of 2.
+        assert_eq!(max_scale_for_backend(Backend::Kitty, (18, 38)), 2.0);
+        assert_eq!(max_scale_for_backend(Backend::Sixel, (18, 38)), 2.0);
+        assert_eq!(
+            max_scale_for_backend(Backend::TextBlocks, (18, 38)),
+            2.0 / 19.0
+        );
+        assert_eq!(max_scale_for_backend(Backend::Kitty, (10, 19)), 1.0);
     }
 
     #[test]
