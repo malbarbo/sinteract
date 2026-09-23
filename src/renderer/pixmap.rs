@@ -57,6 +57,8 @@ pub struct PixmapRenderer {
     /// the next path reuses its capacity.
     builder: PathBuilder,
     assets: Assets,
+    /// The color of the pixmap before a frame draws on it.
+    background: SkColor,
 }
 
 impl PixmapRenderer {
@@ -73,6 +75,7 @@ impl PixmapRenderer {
             mask_pool: Vec::new(),
             builder: PathBuilder::new(),
             assets: Assets::default(),
+            background: SkColor::TRANSPARENT,
         })
     }
 
@@ -85,6 +88,13 @@ impl PixmapRenderer {
     /// the next render.
     pub fn set_scale(&mut self, scale: f32) {
         self.base = base(scale);
+    }
+
+    /// Start the next frames from `color`, where the default is
+    /// transparent. A display that cannot show transparency passes an
+    /// opaque color, and every pixel comes out opaque.
+    pub fn set_background(&mut self, color: Rgba) {
+        self.background = sk_color(color);
     }
 
     /// The pixmap of the last render.
@@ -133,25 +143,23 @@ impl std::error::Error for AssetError {
 }
 
 impl Canvas for PixmapRenderer {
-    /// Clears the surface, and reallocates it when the scaled size changed.
+    /// Reallocates the surface when the scaled size changed, then fills it
+    /// with the background.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
         let (out_w, out_h) = out_size(width, height, self.base.sx);
         // A frame ends with an empty clip stack, and its masks serve the next
         // frame.
         self.mask_pool
             .extend(self.clip_stack.drain(..).filter_map(Clip::into_mask));
-        if (out_w, out_h) == (self.pixmap.width(), self.pixmap.height()) {
-            self.pixmap.fill(SkColor::TRANSPARENT);
-        } else {
+        if (out_w, out_h) != (self.pixmap.width(), self.pixmap.height()) {
             // Masks are canvas-sized, so a resize invalidates every pooled one.
             self.mask_pool.clear();
-            // A new pixmap is transparent, so the background of the backend
-            // shows through.
             self.pixmap = Pixmap::new(out_w, out_h).ok_or(AllocError {
                 width: out_w,
                 height: out_h,
             })?;
         }
+        self.pixmap.fill(self.background);
         Ok(())
     }
 
@@ -1108,6 +1116,30 @@ mod tests {
         let pm = rasterize(&scene);
         let (r, g, b, _) = pixel_rgba(&pm, 20, 20);
         assert_eq!((r, g, b), (255, 0, 0));
+    }
+
+    #[test]
+    fn a_background_fills_every_frame_of_any_size() {
+        let mut renderer = PixmapRenderer::default();
+        renderer.set_background(Rgba {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 1.0,
+        });
+        let mut dot = Scene::new(4.0, 4.0);
+        {
+            let mut p = dot.path(solid(255, 0, 0), 4.0, 2.0);
+            p.arc_to(2.0, 2.0, 0.0, false, true, 0.0, 2.0);
+            p.arc_to(2.0, 2.0, 0.0, false, true, 4.0, 2.0);
+        }
+        let pm = renderer.render(&dot).unwrap();
+        assert_eq!(pixel_rgba(pm, 2, 2), (255, 0, 0, 255));
+        // The next frame of the same size starts from the background too.
+        let pm = renderer.render(&Scene::new(4.0, 4.0)).unwrap();
+        assert_eq!(pixel_rgba(pm, 2, 2), (255, 255, 255, 255));
+        let pm = renderer.render(&Scene::new(6.0, 3.0)).unwrap();
+        assert_eq!(pixel_rgba(pm, 5, 2), (255, 255, 255, 255));
     }
 
     #[test]
