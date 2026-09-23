@@ -94,6 +94,7 @@ impl<E> Sender<E> {
 }
 
 impl Sender<Event> {
+    #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
     pub(crate) fn send_input(&self, ev: InputEvent) -> Result<(), Closed> {
         self.send_event(Event::Input(ev))
     }

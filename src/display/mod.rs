@@ -32,6 +32,8 @@ pub mod sixel;
 mod driver;
 #[cfg(not(target_arch = "wasm32"))]
 mod inbox;
+#[cfg(not(target_arch = "wasm32"))]
+mod link;
 #[cfg(all(feature = "terminal", unix))]
 mod shm;
 #[cfg(not(target_arch = "wasm32"))]

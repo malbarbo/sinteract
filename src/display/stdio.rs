@@ -9,18 +9,16 @@
 //! serves one view, so its messages go to
 //! [`UNROUTED`].
 
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
+use std::io::{self, BufRead, BufReader, Write};
 use std::time::Instant;
 
 use super::driver::{OpenError, PresentError};
-use super::inbox::{Inbox, Sender};
+use super::inbox::Sender;
+use super::link::{Link, claim_stdin};
 use crate::event::{Event, Interrupt};
 use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
-use crate::wire::to_engine::{self, Message};
+use crate::wire::to_engine::Message;
 use crate::wire::{ReadError, to_view};
 
 /// A display that shows nothing. The peer sends the Vsync events, and this
@@ -28,28 +26,10 @@ use crate::wire::{ReadError, to_view};
 ///
 /// A thread reads the input and feeds the queue, so a [`Sender`] wakes
 /// [`Display::wait_event`](super::Display::wait_event) and the deadline
-/// holds. The thread blocks on the read and nothing interrupts it, so it
-/// ends with the stream, at EOF or at a read error.
+/// holds.
 pub struct Stdio {
-    /// Cap'n Proto writes a message in pieces, so they gather here and go
-    /// out with the flush at the end of each message. The buffer holds a
-    /// frame of a few hundred elements, which then goes out in one write.
-    writer: Writer,
-    inbox: Inbox,
-    /// Set when the peer closes the session or stops reading.
-    peer_closed: Arc<AtomicBool>,
-    /// Set by [`Display::close`](super::Display::close).
-    closed: bool,
+    link: Link<Event>,
 }
-
-type Writer = BufWriter<Box<dyn Write + Send>>;
-
-const WRITE_BUFFER_BYTES: usize = 64 * 1024;
-
-/// stdin belongs to the process, and a second reader would steal half of
-/// the frames. It stays claimed after [`Stdio::close`], because the reader
-/// thread only ends at EOF.
-static STDIN_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 impl Stdio {
     /// Talk over the stdin and the stdout of the process. The framing is
@@ -60,9 +40,7 @@ impl Stdio {
     /// exists in the process, and with [`OpenError::Io`] if the reader
     /// thread does not start.
     pub fn new() -> Result<Self, OpenError> {
-        if STDIN_CLAIMED.swap(true, Ordering::AcqRel) {
-            return Err(OpenError::Busy);
-        }
+        claim_stdin()?;
         Self::with_streams(BufReader::new(io::stdin()), io::stdout()).map_err(OpenError::Io)
     }
 
@@ -72,145 +50,70 @@ impl Stdio {
         R: BufRead + Send + 'static,
         W: Write + Send + 'static,
     {
-        let inbox = Inbox::new(None);
-        let peer_closed = Arc::new(AtomicBool::new(false));
-        let tx = inbox.sender();
-        let flag = Arc::clone(&peer_closed);
-        thread::Builder::new()
-            .name("sinteract-stdio".into())
-            .spawn(move || read_loop(reader, tx, flag))?;
-        Ok(Self {
-            writer: BufWriter::with_capacity(WRITE_BUFFER_BYTES, Box::new(writer)),
-            inbox,
-            peer_closed,
-            closed: false,
-        })
-    }
-
-    /// Write one message with `write`, unless the session ended.
-    fn send(
-        &mut self,
-        write: impl FnOnce(&mut Writer) -> io::Result<()>,
-    ) -> Result<(), PresentError> {
-        if self.closed || self.peer_closed.load(Ordering::Acquire) {
-            return Err(PresentError::Closed);
-        }
-        // A peer that stopped reading may keep stdin open, so the reader
-        // thread sees no end and only this write fails. The caller decides
-        // whether that ends the session.
-        write(&mut self.writer).map_err(PresentError::Io)
+        let link = Link::new(reader, writer, "sinteract-stdio", None, route)?;
+        Ok(Self { link })
     }
 }
 
 impl super::Display for Stdio {
     /// Send a frame and flush, so the peer sees it at once.
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        self.send(|w| to_view::write_frame(w, UNROUTED, &scene))
+        self.link
+            .send(|w| to_view::write_frame(w, UNROUTED, &scene))
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
     /// arrival. A read error or EOF arrives as [`Interrupt::Close`].
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
-        self.inbox.wait(deadline)
+        self.link.wait(deadline)
     }
 
     fn sender(&self) -> Sender {
-        self.inbox.sender()
+        self.link.sender()
     }
 
     /// Send the asset to the view, which answers nothing, so a success
     /// says that the asset went out and not that the view drew it.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) -> Result<(), PresentError> {
-        self.send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime))
+        self.link
+            .send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime))
     }
 
     /// Tell the peer that the session ended, unless the peer ended it.
     fn close(&mut self) {
-        if self.closed {
-            return;
-        }
-        let _ = self.send(|w| to_view::write_close(w, UNROUTED));
-        self.closed = true;
-        self.inbox.close();
+        self.link.close();
     }
 }
 
 impl super::driver::sealed::Sealed for Stdio {}
 
-impl Drop for Stdio {
-    fn drop(&mut self) {
-        super::Display::close(self);
+/// The event of a message of the server. The display serves one view, so
+/// it takes the input of every player as its own, and skips the players
+/// that join and leave.
+fn route(message: Message) -> Result<Option<Event>, ReadError> {
+    match message {
+        Message::Input { event, .. } => Ok(Some(Event::Input(event))),
+        Message::Start(_) | Message::Join { .. } | Message::Leave { .. } => Ok(None),
+        Message::Close => unreachable!("the link ends the session at a close"),
     }
-}
-
-/// Read the messages of the peer into the queue until the stream or the
-/// session ends. The display serves one view, so it takes the input of
-/// every player as its own, and skips the players that join and leave.
-/// [`to_engine::read`] skips a message or an event of an arm from a newer
-/// schema. A payload that does not decode goes into the queue
-/// as [`Interrupt::Read`] and the loop goes on, since the framing already
-/// found where the next message starts.
-fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
-    loop {
-        let ev = match to_engine::read(&mut reader) {
-            Ok(None | Some(Message::Close)) => break,
-            Ok(Some(Message::Input { event, .. })) => event,
-            Ok(Some(Message::Start(_) | Message::Join { .. } | Message::Leave { .. })) => continue,
-            Err(e @ ReadError::Payload(_)) => {
-                if tx.send_read_error(e).is_err() {
-                    return;
-                }
-                continue;
-            }
-            Err(e @ ReadError::Broken(_)) => {
-                let _ = tx.send_read_error(e);
-                break;
-            }
-        };
-        if tx.send_input(ev).is_err() {
-            // The display is closed, and nobody reads the queue.
-            return;
-        }
-    }
-    peer_closed.store(true, Ordering::Release);
-    let _ = tx.send_close();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::display::Display;
+    use crate::display::link::SharedWriter;
     use crate::event::{InputEvent, KeyEvent as IrKeyEvent, KeyKind, Modifiers};
     use crate::protocol_capnp::server_message;
     use crate::scene::{Paint, PathStyle};
     use crate::wire::framing::{Side, header};
-    use crate::wire::to_engine::{encode_close, encode_input};
+    use crate::wire::to_engine::{self, encode_close, encode_input};
     use crate::wire::{self, to_view};
-    use std::io::{Cursor, PipeWriter};
+    use std::io::{BufReader, Cursor, PipeWriter};
     use std::num::NonZeroU32;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
     use std::time::Duration;
-
-    /// A writer whose bytes the test reads back.
-    #[derive(Clone, Default)]
-    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for SharedWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl SharedWriter {
-        fn bytes(&self) -> Vec<u8> {
-            self.0.lock().unwrap().clone()
-        }
-    }
 
     /// `ev` as the server writes it.
     fn event(ev: &InputEvent) -> Vec<u8> {
