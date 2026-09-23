@@ -170,7 +170,7 @@ pub(crate) fn with_unknown_view_value(
 }
 
 /// [`with_unknown_value`] for the bytes of a bare `Scene`.
-#[cfg(test)]
+#[cfg(all(test, feature = "render"))]
 pub(crate) fn with_unknown_scene_value(
     bytes: &[u8],
     find: impl FnOnce(crate::scene_capnp::scene::Reader<'_>) -> *const u8,

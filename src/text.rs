@@ -122,6 +122,8 @@ impl<'a> TextLayout<'a> {
     }
 
     /// The glyph outlines of the text.
+    // Only the pixmap and PDF renderers draw a text as one path.
+    #[cfg(any(test, feature = "render"))]
     pub(crate) fn outline(&self, out: &mut dyn PathSink) {
         for (glyph, x) in self.placed_glyphs() {
             glyph.outline(x, self.baseline_y, out);

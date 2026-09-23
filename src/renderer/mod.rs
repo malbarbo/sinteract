@@ -17,7 +17,9 @@
 //! as on the wire. A backend with another convention applies a transform
 //! when it sizes its surface.
 
+#[cfg(feature = "render")]
 pub mod pdf;
+#[cfg(feature = "render")]
 pub mod pixmap;
 pub mod svg;
 

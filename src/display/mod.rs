@@ -17,9 +17,10 @@
 //! carry a player.
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the
-//! window, and `open_native` needs both. Only `sixel` builds on wasm32. The
-//! rest needs threads, a tty, a window or platform FFI. In a browser the page, which
-//! hosts the engine, implements `wait_event` itself.
+//! window, and `open_native` needs both. Only `sixel`, with the feature
+//! `render`, builds on wasm32. The rest needs threads, a tty, a window or
+//! platform FFI. In a browser the page, which hosts the engine, implements
+//! `wait_event` itself.
 
 // Most links above go to items that only a native build with both
 // features has.
@@ -28,6 +29,7 @@
     allow(rustdoc::broken_intra_doc_links)
 )]
 
+#[cfg(feature = "render")]
 pub mod sixel;
 
 #[cfg(not(target_arch = "wasm32"))]

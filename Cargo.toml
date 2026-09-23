@@ -8,7 +8,11 @@ repository = "https://github.com/malbarbo/sinteract"
 readme = "README.md"
 
 [features]
-default = ["native-fonts", "terminal", "window"]
+default = ["native-fonts", "render", "terminal", "window"]
+# The pixmap and PDF renderers and the Sixel encoder. Without it, a server
+# that only encodes and decodes messages keeps the scene, the text, the SVG
+# renderer and the codec.
+render = ["dep:tiny-skia", "dep:png", "dep:pdf-writer", "dep:icy_sixel"]
 # Look up a family the embedded fonts do not cover among the fonts installed
 # on the system. Turning it off drops fontdb and leaves only the embedded
 # families. The query needs a font directory, so wasm32 leaves it out even
@@ -19,32 +23,33 @@ native-fonts = ["dep:fontdb"]
 # crossterm, winit and softbuffer. `open_native` needs both, since it falls
 # back from the window to the terminal.
 terminal = [
+    "render",
     "dep:crossterm",
     "dep:vtparse",
     "dep:base64",
     "dep:libc",
     "dep:windows-sys",
 ]
-window = ["dep:winit", "dep:softbuffer", "dep:libc"]
+window = ["render", "dep:winit", "dep:softbuffer", "dep:libc"]
 
 [dependencies]
-tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"] }
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"], optional = true }
 kurbo = { version = "0.13", default-features = false, features = ["std"] }
 # The bindings for the files in schema/ are generated offline and committed
 # in src/wire/*_capnp.rs, so the build does not need the capnp CLI.
 capnp = "0.25"
 # These make no syscalls, so text and pdf build on wasm too.
 ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
-pdf-writer = "0.14"
+pdf-writer = { version = "0.14", optional = true }
 # Pure Rust, so the Sixel encoder builds on wasm too. The fork adds the
 # encoder that keeps its buffers between frames. Go back to the release
 # once it has the change. Cargo.lock is not in the repository, so the
 # revision is pinned here.
-icy_sixel = { git = "https://github.com/malbarbo/icy_sixel", rev = "b2dcf9a0e2d1eacc93f6444594cdd8b0a891de9b" }
+icy_sixel = { git = "https://github.com/malbarbo/icy_sixel", rev = "b2dcf9a0e2d1eacc93f6444594cdd8b0a891de9b", optional = true }
 # Decodes an asset, through tiny-skia, and encodes the Kitty frame. The
 # terminal reads a PNG fifty times faster than the raw pixels, which arrive
 # in base64.
-png = "0.18"
+png = { version = "0.18", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 fontdb = { version = "0.23", optional = true }
