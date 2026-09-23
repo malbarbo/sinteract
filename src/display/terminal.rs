@@ -12,7 +12,7 @@
 use std::fmt;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -65,14 +65,20 @@ pub struct TerminalOptions {
 /// Ctrl-C arrives as [`Interrupt::Close`]. The size of the terminal
 /// arrives as an [`InputEvent::Resize`] ahead of the first Vsync, and again
 /// after each change. A mouse event gives the center of its cell.
+///
+/// A thread of the session writes each frame while the next one renders.
+/// So a write that fails reports at the next
+/// [`present`](super::Display::present), and the failure of the last frame
+/// does not report. The thread takes the lock of stdout for each frame, so
+/// a caller that holds the lock across a `present` waits forever.
 pub struct Terminal {
     inbox: Inbox,
-    canvas: Canvas,
+    /// The pixmap of the next frame, the clip masks and the images of the
+    /// bitmaps.
+    renderer: PixmapRenderer,
+    backend: Backend,
     /// `None` after [`super::Display::close`].
     live: Option<Live>,
-    /// The size in pixels of the frame on screen, or `None` before the
-    /// first one. Kitty keeps a frame after the session.
-    frame_size: Option<(u32, u32)>,
     /// The scene of the last present, drawn again after a resize.
     last: Option<Scene>,
     /// How the reader maps a cell to the scene on screen.
@@ -84,6 +90,7 @@ pub struct Terminal {
 /// What a session holds until it closes.
 struct Live {
     reader: Reader,
+    writer: FrameWriter<Screen>,
     claim: Claim,
 }
 
@@ -128,53 +135,62 @@ impl Terminal {
                 return Err(OpenError::Io(e));
             }
         };
+        let Canvas {
+            renderer,
+            bytes,
+            painter,
+        } = Canvas::new(Painter::for_stdout(backend));
+        let screen = Screen {
+            painter,
+            bytes,
+            frame_size: None,
+        };
+        let writer = match FrameWriter::spawn(screen, Screen::write_frame) {
+            Ok(writer) => writer,
+            Err(e) => {
+                reader.stop();
+                leave(backend, false);
+                return Err(OpenError::Io(e));
+            }
+        };
         Ok(Self {
             inbox,
-            canvas: Canvas::new(Painter::for_stdout(backend)),
-            live: Some(Live { reader, claim }),
-            frame_size: None,
+            renderer,
+            backend,
+            live: Some(Live {
+                reader,
+                writer,
+                claim,
+            }),
             last: None,
             cells,
             keep_last_frame: options.keep_last_frame,
         })
     }
 
-    /// Rasterize `scene` and write the frame. `frame_size` takes the size
-    /// once the frame is on screen, so a write that stops part way leaves
-    /// it empty and the next frame clears and writes every cell.
-    fn draw(&mut self, scene: &Scene) -> Result<(), PresentError> {
-        let Canvas {
-            renderer,
-            bytes,
-            painter,
-        } = &mut self.canvas;
-        let backend = painter.backend();
-        let scale = scale_for_backend(backend, scene.width(), scene.height());
-        renderer.set_scale(scale);
-        let pixmap = renderer.render(scene)?;
+    /// Rasterize `scene` and hand the frame to the writer, which clears the
+    /// screen first when `after_resize` holds. Returns the result of the
+    /// write of the frame before.
+    fn draw(&mut self, scene: &Scene, after_resize: bool) -> Result<(), PresentError> {
+        let Some(live) = self.live.as_mut() else {
+            return Err(PresentError::Closed);
+        };
+        let scale = scale_for_backend(self.backend, scene.width(), scene.height());
+        self.renderer.set_scale(scale);
+        self.renderer.render(scene)?;
         *self.cells.lock().unwrap_or_else(PoisonError::into_inner) =
-            CellMap::new(backend, cell_pixels(), scale);
-        let mut stdout = io::stdout().lock();
-        // A smaller frame leaves the edges of the one before.
-        let size = (pixmap.width(), pixmap.height());
-        if self.frame_size.take() != Some(size) {
-            painter.clear_old_frame(&mut stdout)?;
-        }
-        queue!(stdout, cursor::MoveTo(0, 0))?;
-        painter.write_image(&mut stdout, bytes, pixmap, Placement::Frame)?;
-        stdout.flush()?;
-        self.frame_size = Some(size);
+            CellMap::new(self.backend, cell_pixels(), scale);
+        live.writer.write(&mut self.renderer, after_resize)?;
         Ok(())
     }
 
     /// Draw the last scene again, after a resize. The terminal may have
     /// moved or wrapped the cells of the old frame, so the screen clears.
-    /// A failure reaches the caller at its next `present`, which draws the
-    /// same scene.
+    /// The writer keeps a failed write for the next `present`, which also
+    /// renders again after a failed render.
     fn redraw(&mut self) {
         if let Some(scene) = self.last.take() {
-            self.frame_size = None;
-            let _ = self.draw(&scene);
+            let _ = self.draw(&scene, true);
             self.last = Some(scene);
         }
     }
@@ -185,7 +201,7 @@ impl super::Display for Terminal {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }
-        let drawn = self.draw(&scene);
+        let drawn = self.draw(&scene, false);
         self.last = Some(scene);
         drawn
     }
@@ -213,25 +229,36 @@ impl super::Display for Terminal {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }
-        self.canvas.renderer.assets_mut().insert_png(id, blob)?;
+        self.renderer.assets_mut().insert_png(id, blob)?;
         Ok(())
     }
 
-    /// Stop the reader thread, and leave the alt screen and raw mode.
+    /// Stop the reader thread, wait for the frame that the writer holds,
+    /// and leave the alt screen and raw mode.
     fn close(&mut self) {
         let Some(live) = self.live.take() else {
             return;
         };
         self.inbox.close();
         live.reader.stop();
+        // A writer that panicked hands back nothing, and the panic hook
+        // already put the tty back.
+        let Some(screen) = live.writer.finish() else {
+            return;
+        };
         if !live.claim.restored() {
-            leave(self.canvas.painter.backend(), self.frame_size.is_some());
+            leave(self.backend, screen.frame_size.is_some());
             // The session is over, and close has no way to report that
             // the frame did not print.
             if self.keep_last_frame
                 && let Some(scene) = &self.last
             {
-                let _ = self.canvas.print(scene);
+                let mut canvas = Canvas {
+                    renderer: std::mem::take(&mut self.renderer),
+                    bytes: screen.bytes,
+                    painter: screen.painter,
+                };
+                let _ = canvas.print(scene);
             }
         }
     }
@@ -242,6 +269,162 @@ impl sealed::Sealed for Terminal {}
 impl Drop for Terminal {
     fn drop(&mut self) {
         super::Display::close(self);
+    }
+}
+
+/// Writes the frames of a [`Terminal`] from a thread of its own, so the
+/// next frame renders while this one goes to the terminal. There are two
+/// pixmaps, one in the renderer and one with the thread, so at most one
+/// frame waits for its write. `S` is the state of the write, and the thread
+/// owns it.
+struct FrameWriter<S> {
+    frames: mpsc::Sender<Frame>,
+    written: mpsc::Receiver<Written>,
+    /// `None` after a panic of the thread went on in the caller.
+    thread: Option<JoinHandle<S>>,
+    /// The failed write of the frame before a redraw, which has no caller
+    /// to report to.
+    unreported: Option<io::Error>,
+}
+
+/// A frame for the thread of a [`FrameWriter`].
+struct Frame {
+    pixmap: Pixmap,
+    after_resize: bool,
+}
+
+/// A frame back from the thread, with the result of its write.
+struct Written {
+    pixmap: Pixmap,
+    result: io::Result<()>,
+}
+
+impl<S: Send + 'static> FrameWriter<S> {
+    /// Start the thread, which calls `write` with each frame.
+    fn spawn(mut state: S, write: fn(&mut S, &Pixmap, bool) -> io::Result<()>) -> io::Result<Self> {
+        let (frames, to_write) = mpsc::channel::<Frame>();
+        let (done, written) = mpsc::channel();
+        // The first write gives this pixmap to the renderer, and the next
+        // render resizes it.
+        done.send(Written {
+            pixmap: Pixmap::new(1, 1).expect("a 1x1 pixmap always allocates"),
+            result: Ok(()),
+        })
+        .expect("the receiver is in scope");
+        let thread = thread::Builder::new()
+            .name("sinteract-frames".into())
+            .spawn(move || {
+                for frame in to_write {
+                    let result = write(&mut state, &frame.pixmap, frame.after_resize);
+                    let back = Written {
+                        pixmap: frame.pixmap,
+                        result,
+                    };
+                    // A FrameWriter that drops without finish takes no
+                    // pixmap back.
+                    let _ = done.send(back);
+                }
+                state
+            })?;
+        Ok(Self {
+            frames,
+            written,
+            thread: Some(thread),
+            unreported: None,
+        })
+    }
+
+    /// Wait for the write of the frame before, hand the last render of
+    /// `renderer` to the thread, and give the pixmap of the frame before to
+    /// the renderer. The thread clears the screen first when `after_resize`
+    /// holds. Returns the result of the write of the frame before, except
+    /// after a resize, where the error waits for the next call.
+    fn write(&mut self, renderer: &mut PixmapRenderer, after_resize: bool) -> io::Result<()> {
+        let Ok(Written { pixmap, result }) = self.written.recv() else {
+            self.resume_panic();
+        };
+        let frame = Frame {
+            pixmap: renderer.replace_pixmap(pixmap),
+            after_resize,
+        };
+        if self.frames.send(frame).is_err() {
+            self.resume_panic();
+        }
+        let result = match self.unreported.take() {
+            Some(e) => Err(e),
+            None => result,
+        };
+        if after_resize {
+            self.unreported = result.err();
+            return Ok(());
+        }
+        result
+    }
+
+    /// Go on with the panic of the thread, the only way that the thread
+    /// ends before finish.
+    fn resume_panic(&mut self) -> ! {
+        let thread = self.thread.take().expect("the thread panics once");
+        match thread.join() {
+            Err(payload) => std::panic::resume_unwind(payload),
+            Ok(_) => panic!("the thread of the frames ended before finish"),
+        }
+    }
+
+    /// Wait for the thread to write the frame it holds, and take back `S`.
+    /// `None` when the thread panicked.
+    fn finish(self) -> Option<S> {
+        drop(self.frames);
+        self.thread?.join().ok()
+    }
+}
+
+/// What the writer of a [`Terminal`] keeps from one frame to the next.
+struct Screen {
+    painter: Painter,
+    /// Where the painter builds the escapes of a frame before the write.
+    bytes: Vec<u8>,
+    /// The size in pixels of the frame on screen, or `None` before the
+    /// first one. Kitty keeps a frame after the session.
+    frame_size: Option<(u32, u32)>,
+}
+
+impl Screen {
+    /// Write `pixmap` to stdout, unless the panic hook put the tty back,
+    /// since the frame would then print over the shell. The check holds the
+    /// lock of stdout, so a panic hook that puts the tty back waits for
+    /// this frame or makes it skip.
+    fn write_frame(&mut self, pixmap: &Pixmap, after_resize: bool) -> io::Result<()> {
+        let mut stdout = io::stdout().lock();
+        if TTY.load(Ordering::Acquire) == RESTORED {
+            return Ok(());
+        }
+        self.write_to(&mut stdout, pixmap, after_resize)
+    }
+
+    /// Write `pixmap` over the frame on screen. `frame_size` takes the size
+    /// once the frame is on screen, so a write that stops part way leaves
+    /// it empty and the next frame clears and writes every cell.
+    fn write_to<W: Write>(
+        &mut self,
+        out: &mut W,
+        pixmap: &Pixmap,
+        after_resize: bool,
+    ) -> io::Result<()> {
+        if after_resize {
+            self.frame_size = None;
+        }
+        // A smaller frame leaves the edges of the one before.
+        let size = (pixmap.width(), pixmap.height());
+        if self.frame_size.take() != Some(size) {
+            self.painter.clear_old_frame(out)?;
+        }
+        queue!(out, cursor::MoveTo(0, 0))?;
+        self.painter
+            .write_image(out, &mut self.bytes, pixmap, Placement::Frame)?;
+        out.flush()?;
+        self.frame_size = Some(size);
+        Ok(())
     }
 }
 
@@ -1531,6 +1714,179 @@ mod tests {
         update_text_blocks(&mut out, pixmap, &mut Vec::new(), screen).expect("write ok");
         let cells = String::from_utf8_lossy(&out).matches('▀').count();
         (out, cells)
+    }
+
+    /// A renderer whose last render is a `w` by `h` frame of `color`.
+    fn rendered(renderer: &mut PixmapRenderer, w: f32, h: f32, color: (u8, u8, u8)) {
+        let (r, g, b) = color;
+        renderer.set_background(Rgba { r, g, b, a: 1.0 });
+        renderer.render(&Scene::new(w, h)).unwrap();
+    }
+
+    /// The color of the top left pixel.
+    fn first_rgb(pixmap: &Pixmap) -> (u8, u8, u8) {
+        let p = pixmap.pixels()[0];
+        (p.red(), p.green(), p.blue())
+    }
+
+    /// The color of the top left pixel, the size and the resize flag of a
+    /// frame.
+    type Seen = ((u8, u8, u8), (u32, u32), bool);
+
+    /// The frames that the writer saw, and whether the write of each fails.
+    #[derive(Default)]
+    struct Log {
+        frames: Vec<Seen>,
+        fail: Vec<bool>,
+    }
+
+    fn log_frame(log: &mut Log, pixmap: &Pixmap, after_resize: bool) -> io::Result<()> {
+        let size = (pixmap.width(), pixmap.height());
+        log.frames.push((first_rgb(pixmap), size, after_resize));
+        match log.fail.get(log.frames.len() - 1) {
+            Some(true) => Err(io::Error::other("the write failed")),
+            Some(false) | None => Ok(()),
+        }
+    }
+
+    #[test]
+    fn the_writer_writes_each_frame_in_order() {
+        let mut writer = FrameWriter::spawn(Log::default(), log_frame).unwrap();
+        let mut renderer = PixmapRenderer::default();
+        rendered(&mut renderer, 4.0, 2.0, (255, 0, 0));
+        writer.write(&mut renderer, false).unwrap();
+        rendered(&mut renderer, 3.0, 3.0, (0, 0, 255));
+        writer.write(&mut renderer, true).unwrap();
+        let log = writer.finish().unwrap();
+        assert_eq!(
+            log.frames,
+            [((255, 0, 0), (4, 2), false), ((0, 0, 255), (3, 3), true)]
+        );
+    }
+
+    #[test]
+    fn the_renderer_gets_back_the_pixmap_of_the_frame_before() {
+        let mut writer = FrameWriter::spawn(Log::default(), log_frame).unwrap();
+        let mut renderer = PixmapRenderer::default();
+        rendered(&mut renderer, 4.0, 2.0, (255, 0, 0));
+        writer.write(&mut renderer, false).unwrap();
+        rendered(&mut renderer, 4.0, 2.0, (0, 0, 255));
+        writer.write(&mut renderer, false).unwrap();
+        let back = renderer.output();
+        assert_eq!((first_rgb(back), back.width()), ((255, 0, 0), 4));
+        writer.finish().unwrap();
+    }
+
+    #[test]
+    fn a_failed_write_reports_at_the_next_frame() {
+        let log = Log {
+            fail: vec![false, true, false],
+            ..Log::default()
+        };
+        let mut writer = FrameWriter::spawn(log, log_frame).unwrap();
+        let mut renderer = PixmapRenderer::default();
+        let mut results = Vec::new();
+        for _ in 0..4 {
+            rendered(&mut renderer, 2.0, 2.0, (0, 255, 0));
+            results.push(writer.write(&mut renderer, false).is_ok());
+        }
+        assert_eq!(results, [true, true, false, true]);
+        assert_eq!(writer.finish().unwrap().frames.len(), 4);
+    }
+
+    #[test]
+    fn a_failed_write_before_a_redraw_reports_at_the_frame_after() {
+        let log = Log {
+            fail: vec![false, true, false, false],
+            ..Log::default()
+        };
+        let mut writer = FrameWriter::spawn(log, log_frame).unwrap();
+        let mut renderer = PixmapRenderer::default();
+        let mut results = Vec::new();
+        for after_resize in [false, false, true, false, false] {
+            rendered(&mut renderer, 2.0, 2.0, (0, 255, 0));
+            results.push(writer.write(&mut renderer, after_resize).is_ok());
+        }
+        assert_eq!(results, [true, true, true, false, true]);
+        writer.finish().unwrap();
+    }
+
+    fn panic_at_the_write(_: &mut (), _: &Pixmap, _: bool) -> io::Result<()> {
+        panic!("the write broke");
+    }
+
+    #[test]
+    fn a_panic_of_the_writer_goes_on_in_the_caller() {
+        let mut writer = FrameWriter::spawn((), panic_at_the_write).unwrap();
+        let mut renderer = PixmapRenderer::default();
+        rendered(&mut renderer, 2.0, 2.0, (0, 255, 0));
+        writer.write(&mut renderer, false).unwrap();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            writer.write(&mut renderer, false)
+        }));
+        let payload = caught.unwrap_err();
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"the write broke"));
+        assert!(writer.finish().is_none());
+    }
+
+    /// A Sixel screen, whose painter clears the whole screen for a frame
+    /// that does not replace the one before.
+    fn sixel_screen() -> Screen {
+        Screen {
+            painter: Painter::new(Backend::Sixel),
+            bytes: Vec::new(),
+            frame_size: None,
+        }
+    }
+
+    /// Returns `true` if a write of `pixmap` clears the screen first,
+    /// `false` otherwise.
+    fn clears(screen: &mut Screen, pixmap: &Pixmap, after_resize: bool) -> bool {
+        let mut out = Vec::new();
+        screen.write_to(&mut out, pixmap, after_resize).unwrap();
+        out.starts_with(b"\x1b[2J")
+    }
+
+    #[test]
+    fn a_frame_clears_the_screen_when_it_does_not_cover_the_one_before() {
+        let mut screen = sixel_screen();
+        let (small, large) = (solid(2, 2, 0, 0, 255), solid(4, 4, 0, 0, 255));
+        assert!(clears(&mut screen, &large, false), "the first frame");
+        assert!(!clears(&mut screen, &large, false), "the same size");
+        assert!(clears(&mut screen, &small, false), "a smaller frame");
+        assert!(clears(&mut screen, &small, true), "after a resize");
+        assert!(!clears(&mut screen, &small, false), "the same size again");
+    }
+
+    /// A write that fails after `room` bytes.
+    struct Short {
+        room: usize,
+    }
+
+    impl Write for Short {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.room == 0 {
+                return Err(io::Error::other("the write failed"));
+            }
+            let n = buf.len().min(self.room);
+            self.room -= n;
+            Ok(n)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_frame_after_a_failed_write_clears_the_screen() {
+        let mut screen = sixel_screen();
+        let pixmap = solid(4, 4, 0, 0, 255);
+        assert!(clears(&mut screen, &pixmap, false));
+        let failed = screen.write_to(&mut Short { room: 8 }, &pixmap, false);
+        assert!(failed.is_err());
+        assert_eq!(screen.frame_size, None);
+        assert!(clears(&mut screen, &pixmap, false));
     }
 
     #[test]
