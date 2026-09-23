@@ -154,6 +154,24 @@ impl Queued for RoomEvent {
             ) => false,
         }
     }
+
+    /// The inputs of two players keep no order between them. A join or a
+    /// leave keeps its place among the inputs, so no input moves across a
+    /// change of the players.
+    fn independent(&self, other: &Self) -> bool {
+        match (self, other) {
+            (RoomEvent::Input { player, .. }, RoomEvent::Input { player: other, .. }) => {
+                player != other
+            }
+            (
+                RoomEvent::Vsync
+                | RoomEvent::Input { .. }
+                | RoomEvent::Join { .. }
+                | RoomEvent::Leave { .. },
+                _,
+            ) => false,
+        }
+    }
 }
 
 /// Read the first message, which has to be the start.
@@ -202,6 +220,7 @@ fn route(message: Message) -> Result<Option<RoomEvent>, ReadError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display::inbox::Inbox;
     use crate::display::link::SharedWriter;
     use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
     use crate::wire::to_engine::Member;
@@ -370,6 +389,76 @@ mod tests {
         assert!(input(1, at(2.0)).supersedes(&input(1, at(1.0))));
         assert!(!input(2, at(2.0)).supersedes(&input(1, at(1.0))));
         assert!(!input(1, key("a")).supersedes(&input(1, key("a"))));
+    }
+
+    #[test]
+    fn a_move_replaces_one_of_its_player_past_the_input_of_another() {
+        let mut inbox: Inbox<RoomEvent> = Inbox::new(None);
+        let tx = inbox.sender();
+        let input = |p, event| RoomEvent::Input {
+            player: player(p),
+            event,
+        };
+        for ev in [
+            input(1, at(1.0)),
+            input(2, at(1.0)),
+            input(1, at(2.0)),
+            input(2, key("a")),
+            input(1, at(3.0)),
+        ] {
+            tx.send_event(ev).unwrap();
+        }
+        let mut next = || match inbox.wait(None) {
+            Ok(RoomEvent::Input { player, event }) => (player.get(), event),
+            other => panic!("got {other:?}"),
+        };
+        assert!(matches!(next(), (1, InputEvent::Mouse(m)) if m.x == 3.0));
+        assert!(matches!(next(), (2, InputEvent::Mouse(m)) if m.x == 1.0));
+        assert!(matches!(next(), (2, InputEvent::Key(_))));
+    }
+
+    #[test]
+    fn a_move_keeps_its_order_with_the_input_of_its_player_and_a_wake() {
+        let mut inbox: Inbox<RoomEvent> = Inbox::new(None);
+        let tx = inbox.sender();
+        let input = |p, event| RoomEvent::Input {
+            player: player(p),
+            event,
+        };
+        tx.send_event(input(1, at(1.0))).unwrap();
+        tx.send_event(input(1, key("a"))).unwrap();
+        tx.send_event(input(2, key("b"))).unwrap();
+        tx.send_event(input(1, at(2.0))).unwrap();
+        tx.wake().unwrap();
+        tx.send_event(input(1, at(3.0))).unwrap();
+        let mut next = || match inbox.wait(None) {
+            Ok(RoomEvent::Input { player, event }) => Some((player.get(), event)),
+            Err(Interrupt::Wake) => None,
+            other => panic!("got {other:?}"),
+        };
+        assert!(matches!(next(), Some((1, InputEvent::Mouse(m))) if m.x == 1.0));
+        assert!(matches!(next(), Some((1, InputEvent::Key(_)))));
+        assert!(matches!(next(), Some((2, InputEvent::Key(_)))));
+        assert!(matches!(next(), Some((1, InputEvent::Mouse(m))) if m.x == 2.0));
+        assert!(next().is_none());
+        assert!(matches!(next(), Some((1, InputEvent::Mouse(m))) if m.x == 3.0));
+    }
+
+    #[test]
+    fn a_move_does_not_pass_a_leave() {
+        let mut inbox: Inbox<RoomEvent> = Inbox::new(None);
+        let tx = inbox.sender();
+        let input = |p, event| RoomEvent::Input {
+            player: player(p),
+            event,
+        };
+        tx.send_event(input(1, at(1.0))).unwrap();
+        tx.send_event(RoomEvent::Leave { player: player(2) })
+            .unwrap();
+        tx.send_event(input(1, at(2.0))).unwrap();
+        assert!(matches!(inbox.wait(None), Ok(RoomEvent::Input { .. })));
+        assert!(matches!(inbox.wait(None), Ok(RoomEvent::Leave { .. })));
+        assert!(matches!(inbox.wait(None), Ok(RoomEvent::Input { .. })));
     }
 
     #[test]

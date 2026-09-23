@@ -43,6 +43,10 @@ pub(crate) trait Queued {
     fn is_vsync(&self) -> bool;
     /// Returns `true` if `self` makes `old` worthless, `false` otherwise.
     fn supersedes(&self, old: &Self) -> bool;
+    /// Returns `true` if the order between `self` and `other` does not
+    /// matter, `false` otherwise. An event that replaces an older one moves
+    /// ahead of the independent events between them.
+    fn independent(&self, other: &Self) -> bool;
 }
 
 impl<E> Sender<E> {
@@ -320,8 +324,8 @@ impl<E: Queued> Inbox<E> {
     /// burst. A clock makes every Vsync, so it drops one from the channel.
     ///
     /// A move of the mouse or a resize replaces one of its kind at the back
-    /// of the queue, since only the latest one counts. A mouse at 1000 Hz
-    /// would flood an engine that runs at 60 Hz.
+    /// of the queue, past the independent events, since only the latest one
+    /// counts. A mouse at 1000 Hz would flood an engine that runs at 60 Hz.
     fn push(&mut self, item: Item<E>) {
         if matches!(&item.entry, Entry::Input(ev) if ev.is_vsync()) {
             if let Vsync::Channel { arrived } = &mut self.vsync {
@@ -329,15 +333,34 @@ impl<E: Queued> Inbox<E> {
             }
             return;
         }
-        if let Some(back) = self.pending.back_mut()
-            && let (Entry::Input(new), Entry::Input(old)) = (&item.entry, &back.entry)
-            && new.supersedes(old)
+        if let Entry::Input(new) = &item.entry
+            && let Some(i) = self.superseded(new)
         {
             // The older time keeps its place before a Vsync.
-            back.entry = item.entry;
+            self.pending
+                .get_mut(i)
+                .expect("an index of the queue")
+                .entry = item.entry;
             return;
         }
         self.pending.push_back(item);
+    }
+
+    /// The index of the event that `new` replaces, looking from the back
+    /// past the events independent of `new`.
+    fn superseded(&self, new: &E) -> Option<usize> {
+        for (i, item) in self.pending.iter().enumerate().rev() {
+            let Entry::Input(old) = &item.entry else {
+                return None;
+            };
+            if new.supersedes(old) {
+                return Some(i);
+            }
+            if !new.independent(old) {
+                return None;
+            }
+        }
+        None
     }
 
     /// The older of the front of `pending` and a Vsync that arrived by
@@ -373,6 +396,11 @@ impl Queued for Event {
     fn supersedes(&self, old: &Self) -> bool {
         let (Event::Input(new), Event::Input(old)) = (self, old);
         input_supersedes(new, old)
+    }
+
+    /// The events of one user keep their order.
+    fn independent(&self, _: &Self) -> bool {
+        false
     }
 }
 
