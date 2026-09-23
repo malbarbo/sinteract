@@ -1,351 +1,183 @@
-# sinteract — Plano de modo servidor / cliente / multiplayer
-
-Plano consolidado da discussão de design. WebSocket / networking concreto fica
-para a última fase — primeiro construir toda a infra local.
+# sinteract, plano dos modos servidor, cliente e multiplayer
 
 ## Objetivo
 
-sinteract é a lib gráfica compartilhada por **spython** (já) e **sgleam** (em
-breve). Adicionar suporte para:
+O sinteract é a biblioteca gráfica do spython e do sgleam. Além do jogo
+local, ela serve a dois modos novos. No modo servidor, o spython ou o sgleam
+roda como subprocesso de um servidor de jogos, lê a entrada no stdin e
+escreve os frames no stdout, e o estado do jogo nunca sai do processo. No
+modo cliente, uma view recebe os frames pela rede, desenha e manda a
+entrada, sem rodar engine. O jogo local continua como está para o aluno.
 
-- **Servidor de jogos**: spython/sgleam roda como subprocesso de um servidor;
-  inputs entram por stdin, frames saem por stdout. Anti-trapaça em multiplayer.
-- **Cliente multiplayer**: spython/sgleam (ou simplecode no browser) conecta a
-  um servidor, recebe DrawList por rede, pinta localmente, envia input.
-  Sem rodar engine.
-- **Singleplayer continua existindo** sem mudanças visíveis pro aluno.
+## Modos
 
-## Modos de execução
-
-Cada host (spython, sgleam) é uma binária só, com 3 modos via flag:
+Cada host é um binário só, com o modo escolhido na linha de comando:
 
 ```
-spython game.py            singleplayer (engine local + terminal/window)
-spython --server game.py   server      (engine local + stdio FlatBuffers)
-spython --client URL       client      (sem engine; recebe frames + manda input)
+spython jogo.py              local: engine e terminal ou janela
+spython --server jogo.py     servidor: engine num Room, stdin e stdout
+spython --client URL         cliente: view sem engine
 ```
 
-No browser via simplecode:
+No navegador, o simplecode roda a engine em wasm num Worker no jogo local,
+e o multiplayer não roda engine nenhuma. Nos dois casos quem desenha é o
+mesmo código, que lê a cena do buffer compartilhado ou do WebSocket.
 
-| Modo | O que roda | Render |
-|---|---|---|
-| Singleplayer browser | Engine wasm no Worker, FB → SharedArrayBuffer | JS canvas renderer (lê SAB) |
-| Multiplayer browser | **Sem engine.** WebSocket | JS canvas renderer (lê WS) |
+## Papéis e protocolo
 
-**O JS canvas renderer é o mesmo módulo** nos dois casos browser. Decoder FB
-único, paint code único. Mesma simetria nativa: o `Terminal` recebe a cena
-de um engine local ou de um WebSocket e não sabe a diferença.
+Há três lados. A engine roda o programa e manda os frames, a view desenha e
+manda a entrada, e o servidor é dono da sessão e diz à engine quem joga. O
+formato é Cap'n Proto, e `schema/` é a fonte da verdade, com um arquivo por
+camada: `scene.capnp` para a cena, `event.capnp` para a entrada e
+`protocol.capnp` para a sessão. Cada lado escreve a sua própria raiz, com
+os braços abaixo.
 
-## Decisões consolidadas
+| quem escreve | raiz            | mágica | braços                                     |
+|--------------|-----------------|--------|--------------------------------------------|
+| engine       | `EngineMessage` | `SIE1` | `asset`, `frame`, `close`                  |
+| view         | `ViewMessage`   | `SIV1` | `event`, `close`                           |
+| servidor     | `ServerMessage` | `SIS1` | `event`, `close`, `start`, `join`, `leave` |
 
-### A. Wire format
+Num pipe, cada mensagem vai atrás de um cabeçalho de 12 bytes: a mágica, o
+player em `u32` LE e o tamanho em `u32` LE. O player é o número do jogador
+na partida, a partir de 1, e o 0 quer dizer todos, ou a sessão inteira. Num
+WebSocket vai só o payload, e a versão vai no subprotocolo `sinteract.v1`.
+Uma view que fala com a engine sem servidor escreve `ServerMessage` com
+player 0.
 
-- **FlatBuffers** (schema-based, evolução por regras explícitas, JS oficial).
-- **Bitmaps**: cache **negociado por sessão**.
-  - `Message::Asset { id, blob }` (uploaded antes do jogo iniciar)
-  - `Message::Frame { DrawList }` (referencia bitmaps por id)
-  - `Message::Event { InputEvent }` (cliente → servidor)
-  - `Message::Close`
-- `DrawCmd::Bitmap { id: u32, cx, cy, w, h, angle, flip_h, flip_v }`.
+Um leitor pula a mensagem, o elemento ou o evento de um braço que não
+conhece, e o valor de enum ou o byte de verbo que não conhece. Uma paint de
+braço novo desenha a cor `fallback`. Um schema evolui só acrescentando
+campos com default.
 
-### B. Loop e timing
+A engine não sabe de rede. O servidor tira o player da conexão de cada
+view, então uma view não joga em nome de outra.
 
-- **Tick é evento na fila**, não timer interno do engine.
-- `Display::wait_event(deadline) -> Result<Event, Interrupt>` bloqueia até
-  chegar um evento ou até o prazo, e devolve `Err(Interrupt::Timeout)` no
-  prazo e `Err(Interrupt::Close)` quando a sessão acaba.
-- Em wasm: `Atomics.wait` no shared buffer (já é o padrão usado pra `sleep`
-  hoje em simplecode).
-- rAF da main thread empurra Tick + `Atomics.notify` no ritmo de `tick_rate`.
-- **Throttle a taxa fixa** (`tick_rate = 30` no aluno) para previsibilidade
-  entre monitores. Sem "1 rAF = 1 Tick".
-- Aluno define:
-  - `on_tick()` (sem dt) — beginner
-  - `on_tick_time(dt)` (com dt) — advanced
-  - Se ambos definidos, `on_tick` é chamado.
-- Loop Python idêntico em todos os modos:
-  ```python
-  while ev := wait_event():
-      if ev.is_tick(): on_tick(); show_image(self.draw())
-      else: handle(ev)
-  ```
-- `time.sleep` continua existindo como primitivo low-level (sleep puro, ignora
-  eventos), mas **sai da API de animação**.
+Regras da sessão com servidor:
 
-### B'. Shared buffer (simplecode)
+- o `start` é a primeira mensagem, com os jogadores que já estão na sala, e
+  pode vir vazio;
+- um jogador aparece uma vez no `start`, o número dele não se repete na
+  partida, e `join` e `leave` de player 0 são erro;
+- o `close` do servidor vai com player 0 e encerra a partida. Para tirar um
+  jogador, o servidor fecha o WebSocket dele e manda `leave`;
+- a engine manda os assets com player 0, os `id`s valem para a partida
+  toda, e o servidor guarda todos para quem entrar depois;
+- um frame para um jogador que saiu é descartado em silêncio, porque a
+  engine pode tê-lo escrito antes de ler o `leave`;
+- enquanto o WebSocket de um jogador está ocupado, o servidor guarda só o
+  frame mais novo dele;
+- não há keep-alive no schema. O servidor usa o ping do WebSocket, guarda
+  o lugar de quem caiu por uns 30 s e depois manda `leave`;
+- a view manda um `resize` como primeiro evento de cada conexão.
 
-- **Atomics + fila de eventos** continuam hand-coded:
-  - Renomear "key event" → "input event" (variantes KEYPRESS, KEYDOWN, KEYUP,
-    TICK, CLOSE).
-  - Mesmo spinlock + ring buffer.
-- **Frame output buffer** (worker → main) usa **FlatBuffers**:
-  - Worker escreve `[u32 len][FB bytes...]` + `Atomics.notify(FRAME_READY)`.
-  - Main lê em rAF callback, decodifica, pinta no canvas, kicka próximo Tick.
-- Modelo **"render previous, simulate next"** — paint sempre dentro de rAF,
-  síncrono com vsync.
-- env imports:
-  - `draw_svg(ptr, len)` → substituído por `draw_frame()` que sinaliza buffer.
-  - `get_key_event(...)` → substituído por `wait_event(deadline_ms)`.
-  - `sleep(ms)` → mantido para `time.sleep` user-level, removido do loop de
-    animação.
+O documento `sgleam/RUNTIME_PROTOCOL.md` descreve o servidor do Sarcade
+sobre esse protocolo, com um exemplo em Tokio.
 
-### C. Texto e fontes
+## Loop e ritmo
 
-- **Fontes embutidas**: Liberation Sans + Liberation Serif + Liberation Mono,
-  **4 variantes cada** (Regular/Bold/Italic/BoldItalic).
-- ~700KB WOFF2 no bundle JS, ~1MB no binário nativo.
-- **Resolução de família** (case-insensitive):
-  1. Aliases (`sans-serif`, `serif`, `monospace`, `mono`, "Liberation X") →
-     embutida correspondente.
-  2. Nome exato → busca no sistema (nativo via `fontdb`; JS via `ctx.font`
-     fallback chain).
-  3. Fallback final → Liberation Sans.
-- **`TextNode` ganha `family: String` + `weight: u16`**.
-- `family` no wire é a família **realmente usada** pelo servidor pra medir
-  (pós-resolução), não a string que o aluno pediu.
-- **Drops italic-shear synth e bold-as-regular** do `terminal.rs`/`pdf.rs`
-  (variantes reais agora).
-- Sem wrap automático (aluno quebra linhas com múltiplas chamadas).
-- **Mudança feita já**: `FontItalic` → `FontStyle` com `Slant` → `Oblique`.
-  Field `TextNode.italic` → `TextNode.style`. Compilou e passou nos testes.
+`Display::wait_event(deadline)` devolve um `Event` ou um `Interrupt`
+(`Wake`, `Timeout`, `Read` ou `Close`). O ritmo vem de um evento `Vsync` na
+fila. O terminal e a janela fazem o próprio `Vsync`, o `Stdio` recebe o da
+view, e o `Room` tem um relógio e ignora o das views, porque cada view tem
+o seu ritmo. O loop do aluno é o mesmo em todos os modos:
 
-### D. Topologia
-
-- spython/sgleam: 3 modos via flag (`--server`, `--client URL`, default).
-- sinteract hospeda toda lib genérica.
-- **`Display` é um trait selado** em `sinteract::display`, implementado por
-  `Terminal`, `Window` e `Stdio`. `open_native` devolve `Box<dyn Display>`,
-  a janela quando ela abre e o terminal senão, como por ssh. A vtable custa
-  uma chamada por quadro, e o trait deixa as features `terminal` e `window`
-  tirarem um display sem mudar o tipo que o engine recebe.
-- Servidor de jogos é processo separado (não em sinteract). Pode crescer no
-  `simplecode/server` ou ser binário novo. Recebe WebSocket, spawna
-  `spython --server` subprocess, liga stdio.
-- **WebSocket fica pra Fase 8** (deferred).
-
-## Estrutura de arquivos em sinteract
-
-```
-sinteract/src/
-├── ir.rs          (existe, alterar) — DrawList, TextNode com family/weight
-├── sink.rs        (existe)          — DrawSink trait
-├── pdf.rs         (existe, alterar) — fontes reais por variante
-├── text.rs        (alterar)         — fontdb + sans/serif/mono + variantes
-├── event.rs       (NOVO)            — InputEvent, KeyEvent, EventType (TICK etc)
-├── wire.rs        (NOVO)            — bindings FlatBuffers + ser/de
-├── display/       (NOVO)            — trait Display, Terminal, Window, Stdio
-└── client.rs      (NOVO, parcial)   — Transport trait + run<T>(t, display)
-                                       (WebSocket impl deferred)
-
-sinteract/schema/
-└── frame.fbs      (NOVO)            — schema FlatBuffers
-
-sinteract/fonts/
-├── LiberationSans-{Regular,Bold,Italic,BoldItalic}.ttf
-├── LiberationSerif-{Regular,Bold,Italic,BoldItalic}.ttf
-└── LiberationMono-{Regular,Bold,Italic,BoldItalic}.ttf
-                  (hoje só tem Liberation Sans Regular)
+```python
+while ev := wait_event():
+    if ev.is_tick(): on_tick(); show_image(draw())
+    else: handle(ev)
 ```
 
-## Mudanças nos hosts
+`time.sleep` continua existindo, mas sai da API de animação. No navegador,
+o Worker espera com `Atomics.wait` e o `requestAnimationFrame` da thread
+principal empurra o `Vsync` a uma taxa fixa.
 
-### spython
+## Texto e fontes
 
-- `cli/src/main.rs`: parsing de `--server` / `--client URL`.
-- `engine/src/lib.rs`: aceitar um `Display` em vez de chamar `host::*`.
-- `engine/src/host/native.rs`: virar `open_native()` em sinteract, deletar daqui.
-- `engine/src/host/wasm.rs`: ajustar pra escrever FB no shared buffer (em vez
-  de SVG via env).
-- `lib/spython/image.py`: passar `style` em vez de `italic`, adicionar `font` +
-  peso (`weight`).
-- `lib/spython/world.py`: novo loop `while ev := wait_event(): ...`.
+As doze Liberation (Sans, Serif e Mono em quatro variantes) vão embutidas.
+Uma família resolve por alias, depois pelas fontes do sistema com a feature
+`native-fonts`, e por fim cai na Liberation Sans. A engine mede o texto, e
+o `TextSpec` leva a família depois da resolução, então a view desenha com a
+mesma face.
 
-### sgleam
+## Engine
 
-Replicar mesma estrutura.
+`Display` é um trait selado, implementado por `Terminal`, `Window` e
+`Stdio`, e `open_native` escolhe a janela ou o terminal. O `Room` é o lado
+da engine numa sessão com jogadores. Ele não é um `Display`, porque o
+evento e o frame levam o jogador: `wait_event` entrega um `RoomEvent`, e há
+`present_to` e `present_all`. `Room::open` espera o `start` e devolve os
+jogadores. Um host roda o jogo local num `Display` e o modo servidor num
+`Room`, e um adaptador liga o jogo de um jogador só ao jogador 1.
 
-### simplecode (browser)
+## Dependências do servidor
 
-- `src/env.ts`: adicionar `wait_event` (Atomics.wait); manter `sleep` só pra
-  time.sleep user.
-- `src/ui_channel.ts`: renomear "key" → "input"; adicionar TICK type;
-  adicionar FRAME_READY slot e frame output buffer no layout.
-- `src/worker.ts`: ler FB do output buffer; escrever no canvas via novo
-  `sinteract-render.ts`.
-- `src/sinteract-render.ts` (NOVO): decoder FlatBuffers + Canvas 2D painter;
-  carrega WOFF2 via `@font-face`.
-- `src/main.ts`: rAF loop com push Tick + notify worker.
-- Servir Liberation WOFF2 estaticamente (preload sans, lazy serif/mono).
+O servidor usa só `wire`, `scene` e `event`, e o renderer `svg` se ele
+converte o frame em SVG. A feature `render`, default, traz o que ele não
+usa: `tiny-skia` e `png`, do renderer `pixmap`, `pdf-writer`, do `pdf`, e
+`icy_sixel`, do encoder Sixel, que vem do git e traz `quantette`,
+`palette` e `rand`. As features `terminal` e `window` ligam a `render`.
+Com `default-features = false`, o sinteract puxa `capnp`, `kurbo`,
+`ttf-parser` e as dependências pequenas deles, cerca de 5 crates em vez de
+52, e nada do git.
 
-## Plano de implementação (fases)
+Um crate separado para o `wire` não vale a pena. O `wire` converte a
+`Scene` e o `InputEvent`, a `Scene` usa o `text` para medir, e o `text` traz
+as fontes. O crate novo levaria `scene`, `event`, `text` e `wire`, que são
+quase todo o sinteract fora dos renderers e das displays, e as mesmas
+dependências que ficam sem a `render`. Ele ainda obrigaria a versionar dois
+crates juntos, já que a versão do protocolo está no schema.
 
-### Fase 1 — IR e wire (não toca host)
+## Hosts
 
-1. Adicionar `family: String`, `weight: u16` em `TextNode`. Atualizar testes.
-2. Adicionar `DrawCmd::Bitmap { id, cx, cy, w, h, angle, flip_h, flip_v }`
-   (hoje é placeholder vazio).
-3. Definir `sinteract::event::InputEvent` (KEYPRESS/KEYDOWN/KEYUP/TICK/CLOSE).
-4. Escrever `sinteract/schema/frame.fbs` (DrawList, Asset, Event, Message).
-5. Adicionar `sinteract::wire` com encode/decode FB + testes round-trip.
+No spython, o `cli` ganha `--server` e `--client`, a engine recebe um
+`Display` ou um `Room` em vez de chamar `host::*`, o `host/native.rs` some
+em favor de `open_native`, e o `world.py` passa ao loop de `wait_event`. O
+`image.py` passa `style`, `family` e `weight`. O sgleam faz o mesmo. No
+modo servidor, os dois guardam o descritor 1 para o protocolo e apontam o
+`print` do aluno para o stderr, já que um texto no stdout encerra a
+partida.
 
-### Fase 2 — Trait `Display` (refator interno sinteract)
+No simplecode, o `env.ts` ganha `wait_event` com `Atomics.wait`, o canal de
+teclas vira canal de entrada com o `Vsync`, e o Worker escreve o frame num
+buffer de saída que a thread principal desenha no `requestAnimationFrame`.
+As fontes WOFF2 são servidas estaticamente.
 
-6. Definir o trait selado `sinteract::display::Display`.
-7. Refatorar `terminal.rs` pra implementar `Terminal` (state em struct,
-   não global).
-8. Refatorar `window.rs` pra implementar `Window`.
-9. Adicionar métodos: `wait_event(deadline)`, `set_tick_rate(hz)`,
-   `push_asset(asset)`, `present(dl)`, `enter()`, `exit()`.
-10. Manter funções livres existentes (`show_image_dl`, `enter_animation` etc)
-    como wrappers pra não quebrar spython entre fases.
+## Estado
 
-### Fase 3 — `Stdio`
+Feito no sinteract:
 
-11. `sinteract::display::Stdio` — bloqueia em stdin com framing.
-12. Suporte: FRAME → stdout, EVENT → lê via stdin, ASSET → upload via stdin.
-13. Testes de integração (mock stdin/stdout).
+- a cena, os três renderers e o texto com as doze fontes;
+- o schema em três arquivos e o `wire` em camadas, com leitura tolerante a
+  schema mais novo;
+- o protocolo por direção, com os três lados e o player no cabeçalho;
+- o trait `Display`, com `Terminal`, `Window` e `Stdio`, as features
+  `terminal` e `window`, e o `wait_event` com `Interrupt`;
+- a entrada com teclado, mouse, resize e pad de 12 botões;
+- o `Room`, com o relógio próprio e a fila que junta movimentos por
+  jogador;
+- as funções do servidor: `framing::parse_header`, `to_server::decode` e
+  `to_view::arm`;
+- a feature `render`, que um servidor desliga.
 
-### Fase 4 — Fontes
+Falta:
 
-14. Embutir Liberation Serif e Liberation Mono (4 variantes cada). Hoje só tem
-    Liberation Sans Regular.
-15. Adicionar `fontdb` como dep nativa.
-16. Implementar `resolve_family(name, weight, italic) -> ResolvedFont` em
-    `text.rs`.
-17. Atualizar renderers (terminal, pdf) pra escolher variante correta de fonte.
-
-### Fase 5 — Integração spython
-
-18. `engine/src/host/native.rs` → mudar pra sinteract `open_native()`.
-19. `engine/src/lib.rs` aceita um `Display`.
-20. CLI ganha `--server` / `--client`.
-21. `lib/spython/world.py` muda pra wait_event loop.
-22. `lib/spython/image.py` passa style/font/weight.
-
-### Fase 6 — Integração simplecode (browser singleplayer)
-
-23. `sinteract-render.ts` — decoder FB + canvas painter.
-24. `ui_channel.ts` — adicionar TICK, FRAME_READY, frame output buffer.
-25. `env.ts` — `wait_event` via Atomics.wait.
-26. rAF loop em `main.ts`.
-27. WOFF2 das 12 fontes servidas estaticamente.
-
-### Fase 7 — sgleam
-
-28. Replicar fase 5 pra sgleam.
-
-### Fase 8 — Networking (deferred)
-
-29. `WebSocketTransport` em sinteract atrás de feature `websocket`.
-30. `sinteract::client::run` completo.
-31. CLI client mode em spython funciona end-to-end.
-32. Servidor de jogos (no simplecode/server ou novo binário).
+- a migração do spython e do sgleam para `Display` e `Room`, e os modos
+  `--server` e `--client`;
+- o lado do navegador no simplecode, e a escolha entre SVG feito no
+  servidor e um decodificador que desenha num canvas;
+- o servidor do Sarcade, que o Gabriel escreve;
+- os eixos do pad.
 
 ## Pontos abertos
 
-- Multiplexar input local + rede em `sinteract::client::run` — resolver na fase 8.
-- Protocolo de handshake (Hello, Join, AssetManifest) — definir antes da fase 8.
-- `tungstenite` em sinteract atrás de feature `websocket` (decisão tomada).
-- Timing exato do throttle no rAF: `t - lastTick >= 1000/tick_rate`.
-- Multi-jogador num jogo (vários inputs pra mesma engine): servidor multiplexa
-  em `Event { player_id, input }`.
-
-## Estado atual
-
-- ✅ Decisões A, B, C, D consolidadas.
-- ✅ Mudança preparatória: `FontItalic` → `FontStyle` (variante `Slant` →
-  `Oblique`), `TextNode.italic` → `TextNode.style`. Aplicado em
-  `sinteract/src/{ir,terminal,pdf}.rs` e
-  `spython/engine/src/drawlist.rs`.
-- ✅ **Fase 1 completa.**
-  - `TextNode` ganhou `family: String` e `weight: u16`. `Default` impl
-    adicionada (weight=400, family="").
-  - `DrawCmd::Bitmap(BitmapNode { id, cx, cy, w, h, angle, flip_h, flip_v })`.
-  - `sinteract::event` módulo: `InputEvent`, `KeyEvent`, `KeyKind`, MOD_*
-    bitmask. Compatível com wasm32. Depois o bitmask virou a struct
-    `Modifiers`, com quatro `bool`, e o campo `repeat` do `KeyEvent`, e
-    `event::key` passou a nomear as teclas que não digitam texto.
-  - `schema/scene.capnp`, `schema/event.capnp` e `schema/protocol.capnp`
-    (Cap'n Proto). Bindings geradas em `src/wire/*_capnp.rs` (commit). O
-    comando para regenerar está no cabeçalho do `scene.capnp`.
-    `Message`, `DrawCmd` e `InputEvent` usam unions nativas — sem wrapper
-    intermediário. `DrawList` é payload direto da `Message::frame`.
-  - `sinteract::wire` com `encode_frame/event/asset/close` + `decode` →
-    `Decoded`. Round-trip testes passam. Cap'n Proto self-frames cada
-    mensagem; stdio framing externo `[SINT][u32 LE len][bytes]` é
-    defesa adicional contra peer não-sinteract no pipe. Depois o decoder
-    passou a pular elemento, evento e mensagem de braço desconhecido
-    (`Decoded::Unknown`), e o stdio passou a descartar a mensagem que não
-    decodifica em vez de fechar a sessão. Em seguida passou a pular também
-    o elemento ou evento que contém um valor desconhecido (braço de
-    `Paint`, valor de enum, byte de verbo), e `Paint` ganhou `fallback` e
-    `hasFallback`, a cor que um leitor antigo desenha no lugar de um braço
-    novo.
-  - **Migrações de wire** (2026-05-08): planus → flatbuffers (descobrimos
-    que planus 1.3 produz `[file_id][root_offset][body]`, oposto ao spec)
-    → Cap'n Proto. flatbuffers oficial seguia o spec mas o gerador Rust
-    não suporta `[union]` (google/flatbuffers#6256), o que forçava um
-    wrapper `table DrawCmd { op: DrawOp; }`. Cap'n Proto trata unions
-    como cidadãos de primeira classe e `capnp` 1.1.0 já vem no apt;
-    crate `capnp = "0.25"` + plugin `capnpc-rust` (instalado em
-    `~/.cargo/bin/` via `cargo install capnpc`).
-  - **Simplificações de IR + wire** (2026-05-08, pós-Cap'n Proto):
-    - Removido `DrawCmd::PathEnd` — fechamento implícito por qualquer
-      cmd-terminator (PathBegin/Clip*/Text/Bitmap) ou fim da lista.
-    - Path bundling: `DrawCmd` (9 variantes, uma cmd por segmento) →
-      `DrawNode` (5 variantes), com `Path { style, verbs: Vec<u8>,
-      coords: Vec<f32> }` carregando o path inteiro num único nó. Verb
-      bytes (0=move, 1=line, 2=quad, 3=cubic) consumidos com 2/2/4/6
-      floats. `DrawList.cmds` → `DrawList.nodes`. Wire ~3-4× menor para
-      paths longos (path de 100 lineTo: ~970B vs 2.5KB anterior). API
-      pública do `DrawList` (`path_begin / move_to / line_to / quad_to
-      / cubic_to / arc_to / clip_push / clip_pop / text / bitmap`)
-      preservada — a montagem do `Path` acontece em buffer interno
-      (`open: Option<OpenPath>`), commit-on-terminator.
-- ✅ **Fase 2 completa.**
-  - `sinteract::frontend::Frontend` enum: `Terminal | Window | Stdio`. Métodos
-    `enter/exit/set_tick_rate/wait_event/present/push_asset`.
-  - `TickClock` helper para agendar Ticks com `tick_rate` configurável.
-  - `key_event_from_legacy()` adapta a tupla `(i32, String, [bool;5])` que
-    `terminal::poll_key_event` / `window::poll_key_event` retornam. Foi
-    removido depois, quando os dois passaram a devolver `KeyEvent`.
-  - Refator interno mínimo: `TerminalFrontend`/`WindowFrontend` delegam
-    para as funções livres existentes (estado global preservado por
-    enquanto). Funções livres continuam disponíveis para o spython
-    integrar gradualmente.
-- ✅ **Fase 3 completa.**
-  - `sinteract::stdio::StdioFrontend` com framing
-    `[SINT][u32 LE len][bytes]` em ambos os sentidos.
-  - `wait_event` lê e decodifica mensagens de stdin; mensagens
-    inesperadas viram log + continua. EOF → `None`. Erro de framing →
-    `InputEvent::Close`.
-  - Suite de testes com `Cursor`/`SharedWriter` cobre present/asset/close
-    + corrupção de magic.
-- Depois das fases 2 e 3 (D5 no REVIEW.md, e `56d260c` em 2026-09-18), o
-  enum virou o trait selado `sinteract::display::Display`, e
-  `TerminalFrontend`, `WindowFrontend` e `StdioFrontend` viraram `Terminal`,
-  `Window` e `Stdio`, com o estado da sessão fora dos globais.
-- ✅ **Fase 4 completa.**
-  - 12 fontes Liberation embutidas (Sans/Serif/Mono × Regular/Bold/Italic/
-    BoldItalic) em `sinteract/fonts/`.
-  - `sinteract::text::resolve(family, weight, style) -> ResolvedFont`.
-    Aliases (sans-serif/serif/monospace/mono/Liberation X, case-insensitive),
-    fallback por `fontdb` com leak controlado de `Face<'static>`,
-    fallback final para Liberation Sans.
-    Hoje `resolve` e `ResolvedFont` são privados de `text`. A API pública
-    é `text::measure`, e os renderers usam `TextLayout`.
-  - `terminal.rs` e `pdf.rs` passaram a consultar `resolve(...)` e usar
-    métricas reais (`face.units_per_em()`, `face.underline_metrics()`).
-    Synth de italic-shear + bold-as-regular foram removidos.
-- 🟡 **Próximo passo: Fase 5** — integração spython (CLI `--server`/
-  `--client`, `world.run` usando `Display`, Python passa `family/weight/
-  font_style` ao `_drawlist`). **Diferida pelo usuário** — só executar
-  quando ele pedir.
-
-### Resumo de testes / estado
-
-- 72 testes da sinteract passam.
-- spython compila sem mudanças (drawlist.rs preenche `family=""` e
-  `weight=400` por enquanto).
-- planus-cli (1.3.0) instalado em `~/.cargo/bin/planus`. Necessário só
-  para regerar `wire/generated.rs`.
+- O comentário de `ServerMessage.event` diz que o player 0 é o servidor,
+  como num tick, mas o `Room` rejeita um evento de player 0, e
+  `to_engine::write_input` aceita um `u32` qualquer.
+- Um `close` do servidor com player diferente de 0 encerra a partida
+  inteira sem aviso, e o `close` da engine com player N não tem sentido
+  definido.
+- O caminho do SVG no servidor precisa de `to_view::decode` público.
+- Os bytes que sobram depois de uma mensagem são aceitos.
+- O que sobrou do item A da revisão: `seq`, `Error` e `Hello`.
+- O cache de assets do servidor não tem como apagar um asset.
