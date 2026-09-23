@@ -3,7 +3,8 @@
 //! the server into the queue, and the display writes its own messages
 //! through the link.
 
-use std::io::{self, BufRead, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -34,11 +35,16 @@ pub(super) struct Link<E: Queued> {
 
 pub(super) type Writer = BufWriter<Box<dyn Write + Send>>;
 
+/// Stdin with the claim of the process on it. stdin belongs to the
+/// process, and a second reader would steal half of the messages. The
+/// claim ends when the reader drops it, at the end of the stream, at a
+/// close of the peer, or when the display fails to open. A display that
+/// closes while the stream goes on keeps the claim for the process, since
+/// its reader already holds bytes of the next message.
+pub(super) struct ClaimedStdin(BufReader<io::Stdin>);
+
 const WRITE_BUFFER_BYTES: usize = 64 * 1024;
 
-/// stdin belongs to the process, and a second reader would steal half of
-/// the messages. It stays claimed after the display closes, because the
-/// reader thread only ends at EOF.
 static STDIN_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 impl<E: Queued> Link<E> {
@@ -64,9 +70,14 @@ impl<E: Queued> Link<E> {
         let peer_closed = Arc::new(AtomicBool::new(false));
         let tx = inbox.sender();
         let flag = Arc::clone(&peer_closed);
-        thread::Builder::new()
-            .name(name.into())
-            .spawn(move || read_loop(reader, tx, flag, route))?;
+        thread::Builder::new().name(name.into()).spawn(move || {
+            let mut reader = reader;
+            if !read_loop(&mut reader, tx, flag, route) {
+                // The display closed while the stream goes on, so the
+                // reader keeps the claim on stdin for the process.
+                mem::forget(reader);
+            }
+        })?;
         Ok(Self {
             writer: BufWriter::with_capacity(WRITE_BUFFER_BYTES, Box::new(writer)),
             inbox,
@@ -119,28 +130,54 @@ impl<E: Queued> Drop for Link<E> {
     }
 }
 
-/// Claim stdin for the reader of a display, or fail with
-/// [`OpenError::Busy`] if a reader of another display holds it.
-pub(super) fn claim_stdin() -> Result<(), OpenError> {
-    if STDIN_CLAIMED.swap(true, Ordering::AcqRel) {
-        return Err(OpenError::Busy);
+impl ClaimedStdin {
+    /// Claim stdin, or fail with [`OpenError::Busy`] if a reader of another
+    /// display holds it.
+    pub(super) fn claim() -> Result<Self, OpenError> {
+        if STDIN_CLAIMED.swap(true, Ordering::AcqRel) {
+            return Err(OpenError::Busy);
+        }
+        Ok(Self(BufReader::new(io::stdin())))
     }
-    Ok(())
+}
+
+impl Read for ClaimedStdin {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl BufRead for ClaimedStdin {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        self.0.fill_buf()
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.0.consume(amount);
+    }
+}
+
+impl Drop for ClaimedStdin {
+    fn drop(&mut self) {
+        STDIN_CLAIMED.store(false, Ordering::Release);
+    }
 }
 
 /// Read the messages of the peer into the queue until the stream or the
-/// session ends. [`to_engine::read`] skips a message or an event of an arm
-/// from a newer schema. A payload that does not decode goes into the queue
-/// as [`Interrupt::Read`] and the loop goes on, since the framing already
-/// found where the next message starts.
+/// session ends. Returns `true` if the stream ended, broke or carried the
+/// close of the peer, `false` if the display closed first. [`to_engine::read`]
+/// skips a message or an event of an arm from a newer schema. A payload
+/// that does not decode goes into the queue as [`Interrupt::Read`] and the
+/// loop goes on, since the framing already found where the next message
+/// starts.
 fn read_loop<E>(
-    mut reader: impl BufRead,
+    reader: &mut impl BufRead,
     tx: Sender<E>,
     peer_closed: Arc<AtomicBool>,
     route: impl Fn(Message) -> Result<Option<E>, ReadError>,
-) {
+) -> bool {
     loop {
-        let routed = match to_engine::read(&mut reader) {
+        let routed = match to_engine::read(reader) {
             Ok(None | Some(Message::Close)) => break,
             Ok(Some(message)) => route(message),
             Err(e) => Err(e),
@@ -156,11 +193,12 @@ fn read_loop<E>(
         };
         if sent.is_err() {
             // The display is closed, and nobody reads the queue.
-            return;
+            return false;
         }
     }
     peer_closed.store(true, Ordering::Release);
     let _ = tx.send_close();
+    true
 }
 
 /// A writer whose bytes a test reads back.
@@ -184,5 +222,18 @@ impl Write for SharedWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stdin_goes_back_when_its_reader_drops() {
+        let first = ClaimedStdin::claim().unwrap();
+        assert!(matches!(ClaimedStdin::claim(), Err(OpenError::Busy)));
+        drop(first);
+        assert!(ClaimedStdin::claim().is_ok());
     }
 }

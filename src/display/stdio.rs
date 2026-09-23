@@ -9,12 +9,12 @@
 //! serves one view, so its messages go to
 //! [`UNROUTED`].
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
 use super::driver::{OpenError, PresentError};
 use super::inbox::Sender;
-use super::link::{Link, claim_stdin};
+use super::link::{ClaimedStdin, Link};
 use crate::event::{Event, Interrupt};
 use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
@@ -36,12 +36,10 @@ impl Stdio {
     /// binary, so the engine must not write text to stdout. An engine rebinds
     /// stdout to stderr for its other output.
     ///
-    /// Fails with [`OpenError::Busy`] if a `Stdio` over stdin already
-    /// exists in the process, and with [`OpenError::Io`] if the reader
-    /// thread does not start.
+    /// Fails with [`OpenError::Busy`] while another display reads stdin, and
+    /// with [`OpenError::Io`] if the reader thread does not start.
     pub fn new() -> Result<Self, OpenError> {
-        claim_stdin()?;
-        Self::with_streams(BufReader::new(io::stdin()), io::stdout()).map_err(OpenError::Io)
+        Self::with_streams(ClaimedStdin::claim()?, io::stdout()).map_err(OpenError::Io)
     }
 
     /// Talk over `reader` and `writer`, as a test does.
