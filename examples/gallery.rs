@@ -1,6 +1,7 @@
 //! Every kind of element of a `Scene`, one feature per cell, for a look at
 //! what a display or a renderer draws. The rotations and the dashes move,
-//! so a terminal redraws the frames. `q` or Escape ends it.
+//! so a terminal redraws the frames. `q` or Escape ends it and prints the
+//! frames per second.
 //!
 //! ```text
 //! cargo run --example gallery              # a window, or the terminal
@@ -109,11 +110,17 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
         .push_asset(BADGE, &badge_png(), Some("image/png"))
         .map_err(|e| e.to_string())?;
     let start = Instant::now();
+    let mut frames = 0u32;
+    let mut presenting = std::time::Duration::ZERO;
     loop {
         match display.wait_event(None) {
-            Ok(Event::Input(InputEvent::Vsync)) => display
-                .present(gallery(start.elapsed().as_secs_f32()))
-                .map_err(|e| e.to_string())?,
+            Ok(Event::Input(InputEvent::Vsync)) => {
+                let scene = gallery(start.elapsed().as_secs_f32());
+                let before = Instant::now();
+                display.present(scene).map_err(|e| e.to_string())?;
+                presenting += before.elapsed();
+                frames += 1;
+            }
             Ok(Event::Input(InputEvent::Key(k)))
                 if k.kind == KeyKind::Press && (k.key == "q" || k.key == key::ESCAPE) =>
             {
@@ -125,6 +132,13 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
         }
     }
     display.close();
+    // After the close, so the line goes to the main screen of a terminal.
+    let seconds = start.elapsed().as_secs_f64();
+    eprintln!(
+        "{frames} frames in {seconds:.1} s, {:.1} fps, {:.1} ms per present",
+        f64::from(frames) / seconds,
+        presenting.as_secs_f64() * 1000.0 / f64::from(frames.max(1))
+    );
     Ok(())
 }
 
