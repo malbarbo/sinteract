@@ -31,7 +31,9 @@ cargo clippy --all-targets
 cargo clippy --all-targets --no-default-features   # without the displays
 cargo test
 cargo build --target wasm32-unknown-unknown   # the part a browser client uses
+cargo clippy --all-targets --target wasm32-unknown-unknown
 cargo doc --no-deps                           # warning-free
+cargo doc --no-deps --target wasm32-unknown-unknown
 ```
 
 Tests live next to the code they test, in `#[cfg(test)]` modules. Run
