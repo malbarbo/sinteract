@@ -28,15 +28,28 @@ fn key_kind_from_wire(k: WKeyKind) -> KeyKind {
     }
 }
 
-/// Write the key into `b`.
-pub(super) fn write_key_event(mut b: wire_key_event::Builder<'_>, k: &KeyEvent) {
+/// Write the event into `b`.
+pub(super) fn write_input_event(b: input_event::Builder<'_>, ev: &InputEvent) {
+    match ev {
+        InputEvent::Key(k) => write_key_event(b.init_key(), k),
+        InputEvent::Mouse(m) => write_mouse_event(b.init_mouse(), m),
+        InputEvent::Resize { width, height } => {
+            write_resize_event(b.init_resize(), *width, *height)
+        }
+        InputEvent::Vsync => {
+            b.init_tick();
+        }
+    }
+}
+
+fn write_key_event(mut b: wire_key_event::Builder<'_>, k: &KeyEvent) {
     b.set_kind(key_kind_to_wire(k.kind));
     b.set_key(&*k.key);
     write_modifiers(b.reborrow().init_modifiers(), k.modifiers);
     b.set_repeat(k.repeat);
 }
 
-pub(super) fn write_mouse_event(mut b: wire_mouse_event::Builder<'_>, m: &MouseEvent) {
+fn write_mouse_event(mut b: wire_mouse_event::Builder<'_>, m: &MouseEvent) {
     b.set_x(m.x);
     b.set_y(m.y);
     write_modifiers(b.reborrow().init_modifiers(), m.modifiers);
@@ -54,7 +67,7 @@ pub(super) fn write_mouse_event(mut b: wire_mouse_event::Builder<'_>, m: &MouseE
     }
 }
 
-pub(super) fn write_resize_event(mut b: wire_resize_event::Builder<'_>, width: f32, height: f32) {
+fn write_resize_event(mut b: wire_resize_event::Builder<'_>, width: f32, height: f32) {
     b.set_width(width);
     b.set_height(height);
 }

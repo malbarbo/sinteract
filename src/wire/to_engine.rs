@@ -11,7 +11,7 @@ use crate::event::InputEvent;
 use crate::protocol_capnp::view_message;
 
 use super::Error;
-use super::event::{read_input_event, write_key_event, write_mouse_event, write_resize_event};
+use super::event::{read_input_event, write_input_event};
 use super::framing::{Player, Side, write_framed};
 use super::protocol::{ReadError, decode_root, read_next};
 
@@ -58,17 +58,10 @@ fn decode_message(msg: view_message::Reader<'_>) -> Result<Option<Message>, Erro
 
 fn input_message(ev: &InputEvent) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let msg = builder.init_root::<view_message::Builder>();
-    match ev {
-        InputEvent::Key(k) => write_key_event(msg.init_event().init_key(), k),
-        InputEvent::Mouse(m) => write_mouse_event(msg.init_event().init_mouse(), m),
-        InputEvent::Resize { width, height } => {
-            write_resize_event(msg.init_event().init_resize(), *width, *height)
-        }
-        InputEvent::Vsync => {
-            msg.init_event().init_tick();
-        }
-    }
+    write_input_event(
+        builder.init_root::<view_message::Builder>().init_event(),
+        ev,
+    );
     builder
 }
 
