@@ -1,6 +1,11 @@
-//! The messages from the view to the engine, in the `ViewMessage` union.
+//! The messages from the server to the engine, in the `ServerMessage`
+//! union.
 //!
-//! The view sends its input as events, and ends the session with a close.
+//! The server starts the session with the players, passes on the input of
+//! each view with its player, and says when a player joins or leaves.
+//! The server ends the session with a close. A view that talks to the
+//! engine with no server between them takes the role of the server, and
+//! sends its input with [`UNROUTED`].
 
 use std::io::{self, Read, Write};
 
@@ -8,58 +13,103 @@ use capnp::Word;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::event::InputEvent;
-use crate::protocol_capnp::view_message;
+use crate::protocol_capnp::server_message;
 
 use super::Error;
 use super::event::{read_input_event, write_input_event};
-use super::framing::{Player, Side, write_framed};
+use super::framing::{Player, Side, UNROUTED, write_framed};
 use super::protocol::{ReadError, decode_root, read_next};
 
-/// One message of the view, one variant per arm of `ViewMessage`. The arm
-/// `event` is `Input` here, so it does not clash with [`crate::event::Event`].
+/// One message of the server, one variant per arm of `ServerMessage`. The
+/// arm `event` is `Input` here, so it does not clash with
+/// [`crate::event::Event`]. The player of `Input`, `Join` and `Leave` is
+/// the one that [`read`] returns with the message.
 #[derive(Clone, Debug)]
 pub enum Message {
     Input(InputEvent),
     Close,
+    Start(Vec<Member>),
+    Join { nickname: String },
+    Leave,
 }
 
-/// Read the next message of the view, with the player it comes from.
+/// A player of the session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    /// The number of the player in the session, from 1.
+    pub player: Player,
+    pub nickname: String,
+}
+
+/// Read the next message of the server, with the player it is about.
 /// Returns `None` at the end of the stream. A message or an event of an arm
 /// from a newer schema is skipped, and the next one comes out.
 pub fn read(r: &mut impl Read) -> Result<Option<(Player, Message)>, ReadError> {
-    read_next(r, Side::View, decode)
+    read_next(r, Side::Server, decode)
 }
 
 /// Write the input `ev` of `player`.
 pub fn write_input(w: &mut impl Write, player: Player, ev: &InputEvent) -> io::Result<()> {
-    write_framed(w, Side::View, player, &input_message(ev))
+    write_framed(w, Side::Server, player, &input_message(ev))
 }
 
-/// Write the close of the session of `player`.
-pub fn write_close(w: &mut impl Write, player: Player) -> io::Result<()> {
-    write_framed(w, Side::View, player, &close_message())
+/// Write the close of the session.
+pub fn write_close(w: &mut impl Write) -> io::Result<()> {
+    write_framed(w, Side::Server, UNROUTED, &close_message())
+}
+
+/// Write the start of the session with `members`.
+pub fn write_start(w: &mut impl Write, members: &[Member]) -> io::Result<()> {
+    write_framed(w, Side::Server, UNROUTED, &start_message(members))
+}
+
+/// Write that `player` joined the session as `nickname`.
+pub fn write_join(w: &mut impl Write, player: Player, nickname: &str) -> io::Result<()> {
+    write_framed(w, Side::Server, player, &join_message(nickname))
+}
+
+/// Write that `player` left the session.
+pub fn write_leave(w: &mut impl Write, player: Player) -> io::Result<()> {
+    write_framed(w, Side::Server, player, &leave_message())
 }
 
 /// Decode the payload in `words` in place. `None` for a message or an event
 /// of an arm from a newer schema.
 pub(super) fn decode(words: &[Word]) -> Result<Option<Message>, Error> {
-    decode_root::<view_message::Owned, _>(words, decode_message)
+    decode_root::<server_message::Owned, _>(words, decode_message)
 }
 
-fn decode_message(msg: view_message::Reader<'_>) -> Result<Option<Message>, Error> {
+fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Error> {
     let Ok(which) = msg.which() else {
         return Ok(None);
     };
     match which {
-        view_message::Event(e) => Ok(read_input_event(e?)?.map(Message::Input)),
-        view_message::Close(_) => Ok(Some(Message::Close)),
+        server_message::Event(e) => Ok(read_input_event(e?)?.map(Message::Input)),
+        server_message::Close(_) => Ok(Some(Message::Close)),
+        server_message::Start(s) => {
+            let members = s?
+                .get_members()?
+                .iter()
+                .map(|m| {
+                    Ok(Member {
+                        player: m.get_player(),
+                        nickname: m.get_nickname()?.to_str()?.to_owned(),
+                    })
+                })
+                .collect::<Result<_, Error>>()?;
+            Ok(Some(Message::Start(members)))
+        }
+        server_message::Join(j) => Ok(Some(Message::Join {
+            nickname: j?.get_nickname()?.to_str()?.to_owned(),
+        })),
+        server_message::Leave(_) => Ok(Some(Message::Leave)),
     }
 }
 
 fn input_message(ev: &InputEvent) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     write_input_event(
-        builder.init_root::<view_message::Builder>().init_event(),
+        builder.init_root::<server_message::Builder>().init_event(),
         ev,
     );
     builder
@@ -67,7 +117,35 @@ fn input_message(ev: &InputEvent) -> MessageBuilder<HeapAllocator> {
 
 fn close_message() -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    builder.init_root::<view_message::Builder>().init_close();
+    builder.init_root::<server_message::Builder>().init_close();
+    builder
+}
+
+fn start_message(members: &[Member]) -> MessageBuilder<HeapAllocator> {
+    let mut builder = MessageBuilder::new_default();
+    let start = builder.init_root::<server_message::Builder>().init_start();
+    let len = u32::try_from(members.len()).expect("fewer than 2^32 players");
+    let mut list = start.init_members(len);
+    for (i, member) in (0..len).zip(members) {
+        let mut m = list.reborrow().get(i);
+        m.set_player(member.player);
+        m.set_nickname(&*member.nickname);
+    }
+    builder
+}
+
+fn join_message(nickname: &str) -> MessageBuilder<HeapAllocator> {
+    let mut builder = MessageBuilder::new_default();
+    builder
+        .init_root::<server_message::Builder>()
+        .init_join()
+        .set_nickname(nickname);
+    builder
+}
+
+fn leave_message() -> MessageBuilder<HeapAllocator> {
+    let mut builder = MessageBuilder::new_default();
+    builder.init_root::<server_message::Builder>().init_leave();
     builder
 }
 

@@ -88,7 +88,7 @@ fn main() -> ExitCode {
         }
     };
     if close {
-        let _ = to_engine::write_close(&mut to_engine, UNROUTED);
+        let _ = to_engine::write_close(&mut to_engine);
     }
     drop(to_engine);
     // The reader thread may wait on a full channel. Without the receiver

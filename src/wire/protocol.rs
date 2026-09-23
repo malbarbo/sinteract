@@ -1,8 +1,9 @@
-//! What the two directions of the session share: the error of a read and
-//! the loop that reads the next message.
+//! What the messages of the session share: the error of a read and the loop
+//! that reads the next message.
 //!
-//! The engine sends an `EngineMessage` and the view sends a `ViewMessage`.
-//! [`super::to_view`] and [`super::to_engine`] wrap the payloads of
+//! The engine sends an `EngineMessage`, a view sends a `ViewMessage` and
+//! the server sends a `ServerMessage`. [`super::to_view`],
+//! [`super::to_server`] and [`super::to_engine`] wrap the payloads of
 //! [`super::scene`] and [`super::event`] in them and unwrap them again, and
 //! read and write them with the envelope of [`super::framing`].
 

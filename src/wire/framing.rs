@@ -16,7 +16,7 @@
 //!
 //! The player routes a message between the engine and a server that
 //! serves several views, and a view behind the server never sees it. The
-//! server reads the header and passes the payload on untouched, so a view
+//! server puts the player of each view in the header itself, so a view
 //! cannot claim to be another player. A WebSocket, which frames its own
 //! messages, carries the payload alone and the version in its subprotocol,
 //! `sinteract.v1`.
@@ -61,12 +61,13 @@ impl Side {
     }
 }
 
-/// Who a message of the engine goes to, or who a message of the view comes
-/// from, when a server routes the messages of several views.
+/// Who a message of the engine goes to, or who a message of the server is
+/// about, when a server routes the messages of several views.
 pub type Player = u32;
 
 /// A message that no server routes: from the engine it goes to every view,
-/// and from the view it comes from the only one.
+/// and from the server it comes from the server itself or from the only
+/// view.
 pub const UNROUTED: Player = 0;
 
 /// The length of the header in front of each payload.

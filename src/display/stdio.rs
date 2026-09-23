@@ -145,8 +145,9 @@ impl Drop for Stdio {
 
 /// Read the messages of the peer into the queue until the stream or the
 /// session ends. The display serves one view, so it takes the input of
-/// every player as its own. [`to_engine::read`] skips a message or an event of an arm
-/// from a newer schema. A payload that does not decode goes into the queue
+/// every player as its own, and skips the players that join and leave.
+/// [`to_engine::read`] skips a message or an event of an arm from a newer
+/// schema. A payload that does not decode goes into the queue
 /// as [`Interrupt::Read`] and the loop goes on, since the framing already
 /// found where the next message starts.
 fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>) {
@@ -154,6 +155,7 @@ fn read_loop(mut reader: impl BufRead, tx: Sender, peer_closed: Arc<AtomicBool>)
         let ev = match to_engine::read(&mut reader) {
             Ok(None | Some((_, Message::Close))) => break,
             Ok(Some((_, Message::Input(ev)))) => ev,
+            Ok(Some((_, Message::Start(_) | Message::Join { .. } | Message::Leave))) => continue,
             Err(e @ ReadError::Payload(_)) => {
                 if tx.send_read_error(e).is_err() {
                     return;
@@ -179,7 +181,7 @@ mod tests {
     use super::*;
     use crate::display::Display;
     use crate::event::{InputEvent, KeyEvent as IrKeyEvent, KeyKind, Modifiers};
-    use crate::protocol_capnp::view_message;
+    use crate::protocol_capnp::server_message;
     use crate::scene::{Paint, PathStyle};
     use crate::wire::framing::{Side, header};
     use crate::wire::to_engine::{encode_close, encode_input};
@@ -209,17 +211,17 @@ mod tests {
         }
     }
 
-    /// `ev` as the view writes it.
+    /// `ev` as the server writes it.
     fn event(ev: &InputEvent) -> Vec<u8> {
         let mut out = Vec::new();
         to_engine::write_input(&mut out, UNROUTED, ev).unwrap();
         out
     }
 
-    /// `payload` in the envelope of the view, for a payload that
+    /// `payload` in the envelope of the server, for a payload that
     /// [`to_engine`] does not write.
     fn frame(payload: &[u8]) -> Vec<u8> {
-        let mut out = header(Side::View, UNROUTED, payload.len() as u32).to_vec();
+        let mut out = header(Side::Server, UNROUTED, payload.len() as u32).to_vec();
         out.extend_from_slice(payload);
         out
     }
@@ -341,13 +343,14 @@ mod tests {
 
     #[test]
     fn wait_event_skips_a_message_and_an_event_of_an_unknown_arm() {
-        let unknown_message = wire::with_unknown_view_value(&encode_close(), |m| wire::tag_of(m));
-        let unknown_event = wire::with_unknown_view_value(&encode_input(&InputEvent::Vsync), |m| {
-            let Ok(view_message::Event(e)) = m.which() else {
-                panic!("not an event");
-            };
-            wire::tag_of(e.unwrap())
-        });
+        let unknown_message = wire::with_unknown_server_value(&encode_close(), |m| wire::tag_of(m));
+        let unknown_event =
+            wire::with_unknown_server_value(&encode_input(&InputEvent::Vsync), |m| {
+                let Ok(server_message::Event(e)) = m.which() else {
+                    panic!("not an event");
+                };
+                wire::tag_of(e.unwrap())
+            });
         let mut stream = Vec::new();
         stream.extend_from_slice(&frame(&unknown_message));
         stream.extend_from_slice(&frame(&unknown_event));
@@ -369,16 +372,30 @@ mod tests {
     }
 
     #[test]
+    fn wait_event_skips_the_players() {
+        let mut stream = Vec::new();
+        let member = to_engine::Member {
+            player: 1,
+            nickname: "Ana".into(),
+        };
+        to_engine::write_start(&mut stream, &[member]).unwrap();
+        to_engine::write_join(&mut stream, 2, "Beto").unwrap();
+        to_engine::write_leave(&mut stream, 2).unwrap();
+        stream.extend_from_slice(&event(&InputEvent::Vsync));
+        assert!(matches!(input(&mut reading(stream)), InputEvent::Vsync));
+    }
+
+    #[test]
     fn a_close_of_the_peer_surfaces_as_close() {
         let mut stream = Vec::new();
-        to_engine::write_close(&mut stream, UNROUTED).unwrap();
+        to_engine::write_close(&mut stream).unwrap();
         let mut fr = reading(stream);
         assert!(closes(&mut fr));
     }
 
     #[test]
     fn missing_magic_is_an_error_not_a_panic() {
-        let mut bad = header(Side::View, UNROUTED, 0);
+        let mut bad = header(Side::Server, UNROUTED, 0);
         bad[..4].copy_from_slice(b"junk");
         assert!(breaks(&mut reading(bad.to_vec())));
     }

@@ -2,17 +2,20 @@
 //!
 //! [`scene`] and [`event`] convert the values of [`crate::scene`] and
 //! [`crate::event`] to and from the Cap'n Proto structs. Neither knows that
-//! a session exists. [`to_view`] and [`to_engine`] wrap the payloads in the
-//! message of their direction and unwrap them again, and own everything
-//! about the session. A private third module decodes a scene straight onto
-//! a renderer, for
+//! a session exists. [`to_view`], [`to_server`] and [`to_engine`] wrap the
+//! payloads in the message of their direction and unwrap them again, and
+//! own everything about the session. A private third module decodes a
+//! scene straight onto a renderer, for
 //! [`Renderer::render_stream`](crate::renderer::Renderer::render_stream).
 //!
-//! The engine runs the program and writes with [`to_view`]. The view draws
-//! the frames, sends the input and writes with [`to_engine`]. Each side
-//! reads with the module of the other. The generated bindings stay private,
-//! and the bytes are the standard `serialize::write_message` format, so
-//! every Cap'n Proto binding reads them.
+//! The engine runs the program and writes with [`to_view`]. A view draws
+//! the frames, sends the input and writes with [`to_server`]. The server
+//! owns the session, passes the input of the views on and writes with
+//! [`to_engine`], and so does a view that talks to the engine alone. Each
+//! side reads with the module of the side that writes to it. The generated
+//! bindings stay private, and the bytes are the standard
+//! `serialize::write_message` format, so every Cap'n Proto binding reads
+//! them.
 //!
 //! [`framing`] is below all of them. It wraps an encoded message in the
 //! envelope that a byte stream needs to tell one message from the next.
@@ -26,6 +29,7 @@ mod protocol;
 pub mod scene;
 mod stream;
 pub mod to_engine;
+pub mod to_server;
 pub mod to_view;
 
 pub use protocol::ReadError;
@@ -42,7 +46,7 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
 
 /// A payload is malformed. It says the scene, the event or the message is
 /// unusable, and never that the session is. An engine that gets one from
-/// [`to_engine::read`] drops the message and keeps the view. A value from a
+/// [`to_engine::read`] drops the message and keeps the session. A value from a
 /// newer schema and a float that is not finite are not errors, since the
 /// decoders skip what holds them.
 #[derive(Debug)]
@@ -140,6 +144,15 @@ pub(crate) fn with_unknown_engine_value(
     with_unknown_value::<crate::protocol_capnp::engine_message::Owned>(bytes, find)
 }
 
+/// [`with_unknown_value`] for the bytes of a `ServerMessage`.
+#[cfg(test)]
+pub(crate) fn with_unknown_server_value(
+    bytes: &[u8],
+    find: impl FnOnce(crate::protocol_capnp::server_message::Reader<'_>) -> *const u8,
+) -> Vec<u8> {
+    with_unknown_value::<crate::protocol_capnp::server_message::Owned>(bytes, find)
+}
+
 /// [`with_unknown_value`] for the bytes of a `ViewMessage`.
 #[cfg(test)]
 pub(crate) fn with_unknown_view_value(
@@ -233,7 +246,7 @@ mod tests {
         MouseEvent,
     };
     use crate::event_capnp::input_event;
-    use crate::protocol_capnp::{engine_message, view_message};
+    use crate::protocol_capnp::{engine_message, server_message};
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, LineCap, LineJoin, Paint, Path,
         PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
@@ -324,12 +337,12 @@ mod tests {
         matches!(to_view::decode(&words(bytes)), Ok(None))
     }
 
-    /// Decode a message of the view of an arm this schema knows, as
+    /// Decode a message of the server of an arm this schema knows, as
     /// [`to_engine::read`] does after the envelope.
     fn decode_event(bytes: &[u8]) -> Result<InputEvent, Error> {
         match to_engine::decode(&words(bytes))?.expect("an arm this schema knows") {
             to_engine::Message::Input(ev) => Ok(ev),
-            to_engine::Message::Close => panic!("got a close"),
+            other => panic!("got {other:?}"),
         }
     }
 
@@ -458,6 +471,60 @@ mod tests {
             to_engine::decode(&words(&to_engine::encode_close())),
             Ok(Some(to_engine::Message::Close))
         ));
+    }
+
+    #[test]
+    fn the_messages_of_a_view_round_trip_with_their_header() {
+        let mut stream = Vec::new();
+        to_server::write_input(&mut stream, &InputEvent::Vsync).unwrap();
+        to_server::write_close(&mut stream).unwrap();
+        assert_eq!(&stream[..4], b"SIV1");
+        let mut r = &stream[..];
+        assert!(matches!(
+            to_server::read(&mut r),
+            Ok(Some(to_server::Message::Input(InputEvent::Vsync)))
+        ));
+        assert!(matches!(
+            to_server::read(&mut r),
+            Ok(Some(to_server::Message::Close))
+        ));
+        assert!(matches!(to_server::read(&mut r), Ok(None)));
+    }
+
+    #[test]
+    fn a_message_of_a_view_of_an_unknown_arm_is_skipped() {
+        let bytes = with_unknown_view_value(&to_server::encode_close(), |m| tag_of(m));
+        assert!(matches!(to_server::decode(&words(&bytes)), Ok(None)));
+    }
+
+    #[test]
+    fn the_players_of_the_server_round_trip_with_their_header() {
+        let members = [
+            to_engine::Member {
+                player: 1,
+                nickname: "Ana".into(),
+            },
+            to_engine::Member {
+                player: 2,
+                nickname: "Beto".into(),
+            },
+        ];
+        let mut stream = Vec::new();
+        to_engine::write_start(&mut stream, &members).unwrap();
+        to_engine::write_join(&mut stream, 3, "Caio").unwrap();
+        to_engine::write_leave(&mut stream, 2).unwrap();
+        let mut r = &stream[..];
+        let mut next = || to_engine::read(&mut r).unwrap().expect("a message");
+        match next() {
+            (framing::UNROUTED, to_engine::Message::Start(got)) => assert_eq!(got, members),
+            other => panic!("got {other:?}"),
+        }
+        match next() {
+            (3, to_engine::Message::Join { nickname }) => assert_eq!(nickname, "Caio"),
+            other => panic!("got {other:?}"),
+        }
+        assert!(matches!(next(), (2, to_engine::Message::Leave)));
+        assert!(to_engine::read(&mut r).unwrap().is_none());
     }
 
     #[test]
@@ -681,8 +748,8 @@ mod tests {
 
     #[test]
     fn an_event_of_an_unknown_arm_is_skipped() {
-        let bytes = with_unknown_view_value(&encode_event(&InputEvent::Vsync), |m| {
-            let Ok(view_message::Event(e)) = m.which() else {
+        let bytes = with_unknown_server_value(&encode_event(&InputEvent::Vsync), |m| {
+            let Ok(server_message::Event(e)) = m.which() else {
                 panic!("not an event");
             };
             tag_of(e.unwrap())
@@ -769,8 +836,8 @@ mod tests {
             repeat: false,
         });
         // The kind is the u16 at byte 0 of the data of a KeyEvent.
-        let bytes = with_unknown_view_value(&encode_event(&key), |m| {
-            let Ok(view_message::Event(e)) = m.which() else {
+        let bytes = with_unknown_server_value(&encode_event(&key), |m| {
+            let Ok(server_message::Event(e)) = m.which() else {
                 panic!("not an event");
             };
             let Ok(input_event::Which::Key(k)) = e.unwrap().which() else {
@@ -793,8 +860,8 @@ mod tests {
         // The tag of the action is the u16 at byte 10 of the data of a
         // MouseEvent, and the button of a down is the u16 at byte 12.
         for offset in [10, 12] {
-            let bytes = with_unknown_view_value(&encode_event(&down), |m| {
-                let Ok(view_message::Event(e)) = m.which() else {
+            let bytes = with_unknown_server_value(&encode_event(&down), |m| {
+                let Ok(server_message::Event(e)) = m.which() else {
                     panic!("not an event");
                 };
                 let Ok(input_event::Which::Mouse(m)) = e.unwrap().which() else {

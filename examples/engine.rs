@@ -55,7 +55,7 @@ fn main() -> ExitCode {
                 KeyKind::Down | KeyKind::Up => {}
             },
             Err(Interrupt::Close) => break,
-            // A message the engine cannot read is a bug in the view, and
+            // A message the engine cannot read is a bug in the peer, and
             // the game goes on without that input. A read that broke ends
             // the session with the Close that follows it.
             Err(Interrupt::Read(e)) => eprintln!("engine: {e}"),

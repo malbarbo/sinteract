@@ -19,8 +19,8 @@
 //! ```
 //!
 //! The display decides when a `Vsync` arrives, with a timer in the
-//! terminal and in the window, rAF in the browser and the view on stdio. The
-//! engine derives a simulation tick from the time between two.
+//! terminal and in the window, rAF in the browser and the peer on stdio.
+//! The engine derives a simulation tick from the time between two.
 
 /// What happened, as `wait_event` delivers it.
 #[derive(Clone, Debug)]
