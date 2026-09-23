@@ -59,7 +59,9 @@ fn main() -> ExitCode {
             // the game goes on without that input. A read that broke ends
             // the session with the Close that follows it.
             Err(Interrupt::Read(e)) => eprintln!("engine: {e}"),
-            Ok(Event::Input(InputEvent::Mouse(_) | InputEvent::Resize { .. }))
+            Ok(Event::Input(
+                InputEvent::Mouse(_) | InputEvent::Resize { .. } | InputEvent::Pad(_),
+            ))
             | Err(Interrupt::Wake | Interrupt::Timeout) => {}
         }
     }

@@ -74,6 +74,36 @@ struct ResizeEvent {
     height @1 :Float32;
 }
 
+# The buttons of a pad, named as in the standard layout of the W3C
+# Gamepad API. a is the bottom button of the right cluster, b the right
+# one, x the left one and y the top one.
+enum PadButton {
+    up            @0;
+    down          @1;
+    left          @2;
+    right         @3;
+    a             @4;
+    b             @5;
+    x             @6;
+    y             @7;
+    leftShoulder  @8;
+    rightShoulder @9;
+    select        @10;
+    start         @11;
+}
+
+# The input of a gamepad or of a pad on the screen of the view.
+struct PadEvent {
+    union {
+        down         @0 :PadButton;
+        up           @1 :PadButton;
+        # The view found a pad, which sends the buttons from now on.
+        connected    @2 :Void;
+        # The view lost its pad.
+        disconnected @3 :Void;
+    }
+}
+
 # A reader skips an event whose arm it does not know, an event that holds a
 # value it does not know, such as a key kind, and an event that holds a
 # float that is not finite.
@@ -83,6 +113,7 @@ struct InputEvent {
         tick   @1 :Tick;
         mouse  @2 :MouseEvent;
         resize @3 :ResizeEvent;
+        pad    @4 :PadEvent;
     }
 }
 

@@ -10,6 +10,7 @@
 //!         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 //!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
+//!         Ok(Event::Input(InputEvent::Pad(p))) => on_pad(p),
 //!         Err(Interrupt::Wake) => on_wake(),
 //!         Err(Interrupt::Timeout) => on_tick(),
 //!         Err(Interrupt::Read(e)) => report(e),
@@ -60,6 +61,8 @@ pub enum InputEvent {
     },
     /// The surface can be repainted now.
     Vsync,
+    /// A button of a pad, or a pad that the view found or lost.
+    Pad(PadEvent),
 }
 
 /// A key that went down, repeats or came up.
@@ -230,6 +233,37 @@ impl MouseButtons {
     fn bit(button: MouseButton) -> u8 {
         1 << button as u8
     }
+}
+
+/// The input of a gamepad or of a pad on the screen of the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PadEvent {
+    Down(PadButton),
+    Up(PadButton),
+    /// The view found a pad, which sends the buttons from now on.
+    Connected,
+    /// The view lost its pad.
+    Disconnected,
+}
+
+/// A button of a pad, named as in the standard layout of the W3C Gamepad
+/// API. `A` is the bottom button of the right cluster, `B` the right one,
+/// `X` the left one and `Y` the top one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum PadButton {
+    Up = 0,
+    Down = 1,
+    Left = 2,
+    Right = 3,
+    A = 4,
+    B = 5,
+    X = 6,
+    Y = 7,
+    LeftShoulder = 8,
+    RightShoulder = 9,
+    Select = 10,
+    Start = 11,
 }
 
 /// The modifier keys held during an event.

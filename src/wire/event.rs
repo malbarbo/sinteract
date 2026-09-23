@@ -2,11 +2,12 @@
 
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
+    PadButton, PadEvent,
 };
 use crate::event_capnp::{
-    KeyKind as WKeyKind, MouseButton as WMouseButton, input_event, key_event as wire_key_event,
-    modifiers as wire_modifiers, mouse_event as wire_mouse_event,
-    resize_event as wire_resize_event,
+    KeyKind as WKeyKind, MouseButton as WMouseButton, PadButton as WPadButton, input_event,
+    key_event as wire_key_event, modifiers as wire_modifiers, mouse_event as wire_mouse_event,
+    pad_event as wire_pad_event, resize_event as wire_resize_event,
 };
 
 use super::scene::finite;
@@ -39,6 +40,7 @@ pub(super) fn write_input_event(b: input_event::Builder<'_>, ev: &InputEvent) {
         InputEvent::Vsync => {
             b.init_tick();
         }
+        InputEvent::Pad(p) => write_pad_event(b.init_pad(), *p),
     }
 }
 
@@ -82,6 +84,32 @@ fn mouse_button_to_wire(b: MouseButton) -> WMouseButton {
     }
 }
 
+fn write_pad_event(mut b: wire_pad_event::Builder<'_>, p: PadEvent) {
+    match p {
+        PadEvent::Down(button) => b.set_down(pad_button_to_wire(button)),
+        PadEvent::Up(button) => b.set_up(pad_button_to_wire(button)),
+        PadEvent::Connected => b.set_connected(()),
+        PadEvent::Disconnected => b.set_disconnected(()),
+    }
+}
+
+fn pad_button_to_wire(b: PadButton) -> WPadButton {
+    match b {
+        PadButton::Up => WPadButton::Up,
+        PadButton::Down => WPadButton::Down,
+        PadButton::Left => WPadButton::Left,
+        PadButton::Right => WPadButton::Right,
+        PadButton::A => WPadButton::A,
+        PadButton::B => WPadButton::B,
+        PadButton::X => WPadButton::X,
+        PadButton::Y => WPadButton::Y,
+        PadButton::LeftShoulder => WPadButton::LeftShoulder,
+        PadButton::RightShoulder => WPadButton::RightShoulder,
+        PadButton::Select => WPadButton::Select,
+        PadButton::Start => WPadButton::Start,
+    }
+}
+
 fn write_modifiers(mut b: wire_modifiers::Builder<'_>, m: Modifiers) {
     b.set_alt(m.alt);
     b.set_ctrl(m.ctrl);
@@ -119,6 +147,7 @@ fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEv
             finite(width.is_finite() && height.is_finite())?;
             InputEvent::Resize { width, height }
         }
+        Which::Pad(p) => InputEvent::Pad(read_pad_event(p?)?),
     })
 }
 
@@ -153,6 +182,33 @@ fn mouse_button_from_wire(b: WMouseButton) -> MouseButton {
         WMouseButton::Right => MouseButton::Right,
         WMouseButton::Back => MouseButton::Back,
         WMouseButton::Forward => MouseButton::Forward,
+    }
+}
+
+fn read_pad_event(r: wire_pad_event::Reader<'_>) -> Result<PadEvent, ValueError> {
+    use wire_pad_event::Which;
+    Ok(match r.which()? {
+        Which::Down(b) => PadEvent::Down(pad_button_from_wire(b?)),
+        Which::Up(b) => PadEvent::Up(pad_button_from_wire(b?)),
+        Which::Connected(()) => PadEvent::Connected,
+        Which::Disconnected(()) => PadEvent::Disconnected,
+    })
+}
+
+fn pad_button_from_wire(b: WPadButton) -> PadButton {
+    match b {
+        WPadButton::Up => PadButton::Up,
+        WPadButton::Down => PadButton::Down,
+        WPadButton::Left => PadButton::Left,
+        WPadButton::Right => PadButton::Right,
+        WPadButton::A => PadButton::A,
+        WPadButton::B => PadButton::B,
+        WPadButton::X => PadButton::X,
+        WPadButton::Y => PadButton::Y,
+        WPadButton::LeftShoulder => PadButton::LeftShoulder,
+        WPadButton::RightShoulder => PadButton::RightShoulder,
+        WPadButton::Select => PadButton::Select,
+        WPadButton::Start => PadButton::Start,
     }
 }
 

@@ -28,7 +28,7 @@ use crate::scene::Scene;
 ///         Ok(Event::Input(InputEvent::Vsync)) => fr.present(next_scene())?,
 ///         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 ///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
-///         Ok(Event::Input(InputEvent::Resize { .. })) => {}
+///         Ok(Event::Input(InputEvent::Resize { .. } | InputEvent::Pad(_))) => {}
 ///         Err(Interrupt::Wake | Interrupt::Timeout) => {}
 ///         Err(Interrupt::Read(e)) => eprintln!("{e}"),
 ///         Err(Interrupt::Close) => break,

@@ -243,7 +243,7 @@ mod tests {
     use super::*;
     use crate::event::{
         InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons,
-        MouseEvent,
+        MouseEvent, PadButton, PadEvent,
     };
     use crate::event_capnp::input_event;
     use crate::protocol_capnp::{engine_message, server_message};
@@ -444,6 +444,34 @@ mod tests {
             };
             match decode_event(&encode_event(&InputEvent::Mouse(mouse))).unwrap() {
                 InputEvent::Mouse(m) => assert_eq!(m, mouse),
+                other => panic!("got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn pad_event_round_trip() {
+        let buttons = [
+            PadButton::Up,
+            PadButton::Down,
+            PadButton::Left,
+            PadButton::Right,
+            PadButton::A,
+            PadButton::B,
+            PadButton::X,
+            PadButton::Y,
+            PadButton::LeftShoulder,
+            PadButton::RightShoulder,
+            PadButton::Select,
+            PadButton::Start,
+        ];
+        let events = buttons
+            .into_iter()
+            .flat_map(|b| [PadEvent::Down(b), PadEvent::Up(b)])
+            .chain([PadEvent::Connected, PadEvent::Disconnected]);
+        for pad in events {
+            match decode_event(&encode_event(&InputEvent::Pad(pad))).unwrap() {
+                InputEvent::Pad(p) => assert_eq!(p, pad),
                 other => panic!("got {other:?}"),
             }
         }
@@ -868,6 +896,25 @@ mod tests {
                     panic!("not a mouse event");
                 };
                 tag_of(m.unwrap()).wrapping_add(offset)
+            });
+            assert!(is_event_skipped(&bytes), "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn a_pad_event_of_an_unknown_action_or_button_is_skipped() {
+        let down = InputEvent::Pad(PadEvent::Down(PadButton::A));
+        // The button of a down is the u16 at byte 0 of the data of a
+        // PadEvent, and the tag of the union is the u16 at byte 2.
+        for offset in [0, 2] {
+            let bytes = with_unknown_server_value(&encode_event(&down), |m| {
+                let Ok(server_message::Event(e)) = m.which() else {
+                    panic!("not an event");
+                };
+                let Ok(input_event::Which::Pad(p)) = e.unwrap().which() else {
+                    panic!("not a pad event");
+                };
+                tag_of(p.unwrap()).wrapping_add(offset)
             });
             assert!(is_event_skipped(&bytes), "offset {offset}");
         }
