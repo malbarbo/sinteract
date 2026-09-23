@@ -2,7 +2,7 @@
 //! and hands out [`Sender`]s. Its input threads, the engine and any other
 //! thread push through a `Sender`, and `wait_event` pops from the `Inbox`,
 //! in the order of arrival. The queue is generic over the event it holds,
-//! so a display with players queues its own events.
+//! so a session with players queues its own events.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -372,13 +372,13 @@ impl Queued for Event {
 
     fn supersedes(&self, old: &Self) -> bool {
         let (Event::Input(new), Event::Input(old)) = (self, old);
-        supersedes(new, old)
+        input_supersedes(new, old)
     }
 }
 
 /// Returns `true` if `new` makes `old` worthless, `false` otherwise. Only
 /// the latest move of the mouse and the latest resize count.
-fn supersedes(new: &InputEvent, old: &InputEvent) -> bool {
+pub(crate) fn input_supersedes(new: &InputEvent, old: &InputEvent) -> bool {
     let is_move = |e: &InputEvent| {
         matches!(
             e,

@@ -57,8 +57,8 @@ pub enum Error {
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
-    /// A join, a leave or a member of a roster has player 0, which is not
-    /// a player of the session.
+    /// A join, a leave, a member of a roster or an input that needs a
+    /// player has player 0, which is not a player of the session.
     NoPlayer,
     /// A roster has a player twice.
     DuplicatePlayer(to_engine::DuplicatePlayer),

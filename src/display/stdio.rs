@@ -36,7 +36,8 @@ impl Stdio {
     /// binary, so the engine must not write text to stdout. An engine rebinds
     /// stdout to stderr for its other output.
     ///
-    /// Fails with [`OpenError::Busy`] while another display reads stdin, and
+    /// Fails with [`OpenError::Busy`] while a `Stdio` or a [`super::Room`]
+    /// reads stdin, and
     /// with [`OpenError::Io`] if the reader thread does not start.
     pub fn new() -> Result<Self, OpenError> {
         Self::with_streams(ClaimedStdin::claim()?, io::stdout()).map_err(OpenError::Io)

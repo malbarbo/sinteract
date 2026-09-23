@@ -1,5 +1,5 @@
-//! [`Link`], the pipe to a server that [`super::Stdio`] shares with the
-//! other displays that carry the protocol. A thread reads the messages of
+//! [`Link`], the pipe to a server that [`super::Stdio`] shares with
+//! [`super::Room`]. A thread reads the messages of
 //! the server into the queue, and the display writes its own messages
 //! through the link.
 
@@ -131,8 +131,8 @@ impl<E: Queued> Drop for Link<E> {
 }
 
 impl ClaimedStdin {
-    /// Claim stdin, or fail with [`OpenError::Busy`] if a reader of another
-    /// display holds it.
+    /// Claim stdin, or fail with [`OpenError::Busy`] if the reader of a
+    /// `Stdio` or a `Room` holds it.
     pub(super) fn claim() -> Result<Self, OpenError> {
         if STDIN_CLAIMED.swap(true, Ordering::AcqRel) {
             return Err(OpenError::Busy);

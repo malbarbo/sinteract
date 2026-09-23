@@ -12,7 +12,9 @@
 //! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
 //! in a winit window. [`stdio`] shows nothing. It writes the frames and
 //! reads the events as Cap'n Proto messages, for a server that runs the
-//! engine as a subprocess.
+//! engine as a subprocess. [`room`] does the same for a session with
+//! players, and is not a [`Display`], since its events and its frames
+//! carry a player.
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the
 //! window, and `open_native` needs both. Only `sixel` builds on wasm32. The
@@ -34,6 +36,8 @@ mod driver;
 mod inbox;
 #[cfg(not(target_arch = "wasm32"))]
 mod link;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod room;
 #[cfg(all(feature = "terminal", unix))]
 mod shm;
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,6 +57,8 @@ pub use driver::open_native;
 pub use driver::{Display, NoGraphics, OpenError, PresentError};
 #[cfg(not(target_arch = "wasm32"))]
 pub use inbox::{Closed, Sender};
+#[cfg(not(target_arch = "wasm32"))]
+pub use room::{Room, RoomEvent};
 #[cfg(not(target_arch = "wasm32"))]
 pub use stdio::Stdio;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
