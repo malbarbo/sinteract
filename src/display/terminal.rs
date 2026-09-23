@@ -28,7 +28,7 @@ use super::sixel;
 use crate::event::{Event, InputEvent, Interrupt, MouseEvent};
 use crate::renderer::pixmap::{Assets, PixmapRenderer};
 use crate::renderer::{AllocError, Renderer};
-use crate::scene::Scene;
+use crate::scene::{Rgba, Scene};
 use crate::wire::ReadError;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
@@ -38,8 +38,13 @@ const CELL_W_DEFAULT: u32 = 8;
 const CELL_H_DEFAULT: u32 = 16;
 
 /// Sixel has no transparency that keeps the previous frame, so a frame
-/// paints over this.
-const SIXEL_BACKGROUND: (u8, u8, u8) = (255, 255, 255);
+/// starts from this.
+const SIXEL_BACKGROUND: Rgba = Rgba {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 1.0,
+};
 
 /// What an engine adds to [`Terminal::open_with`].
 #[derive(Default)]
@@ -320,8 +325,15 @@ struct Canvas {
 
 impl Canvas {
     fn new(backend: Backend) -> Self {
+        let mut renderer = PixmapRenderer::default();
+        match backend {
+            Backend::Sixel => renderer.set_background(SIXEL_BACKGROUND),
+            // Kitty shows transparency, and a half-block cell reads a
+            // premultiplied pixel as the pixel over black.
+            Backend::Kitty | Backend::TextBlocks => {}
+        }
         Self {
-            renderer: PixmapRenderer::default(),
+            renderer,
             bytes: Vec::new(),
             painter: Painter::new(backend),
         }
@@ -393,7 +405,7 @@ impl Painter {
             }
             Painter::Sixel(encoder) => {
                 bytes.clear();
-                encoder.encode(pixmap, SIXEL_BACKGROUND, bytes)?;
+                encoder.encode(pixmap, bytes)?;
                 out.write_all(bytes)?;
                 placement.end(out)
             }
@@ -1446,6 +1458,24 @@ mod tests {
             .write_image(&mut out, &mut Vec::new(), &pixmap, placement)
             .expect("write ok");
         out
+    }
+
+    #[test]
+    fn only_a_sixel_canvas_draws_over_white() {
+        for (backend, _) in MARKS {
+            let mut canvas = Canvas::new(backend);
+            let pixmap = canvas.renderer.render(&Scene::new(4.0, 4.0)).unwrap();
+            let p = pixmap.pixels()[0];
+            let expected = match backend {
+                Backend::Sixel => [255, 255, 255, 255],
+                Backend::Kitty | Backend::TextBlocks => [0, 0, 0, 0],
+            };
+            assert_eq!(
+                [p.red(), p.green(), p.blue(), p.alpha()],
+                expected,
+                "{backend:?}"
+            );
+        }
     }
 
     #[test]
