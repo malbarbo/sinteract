@@ -112,6 +112,20 @@ pub fn read_framed(r: &mut impl Read, side: Side) -> io::Result<Option<(Player, 
     if !read_start(r, &mut header)? {
         return Ok(None);
     }
+    let (player, len) = parse_header(header, side)?;
+    let mut words = Word::allocate_zeroed_vec(len / size_of::<Word>());
+    r.read_exact(Word::words_to_bytes_mut(&mut words))?;
+    Ok(Some((player, words)))
+}
+
+/// The player and the length of the payload in `header`, for a reader that
+/// reads the stream itself, such as an async one. The checks are the ones
+/// of [`read_framed`]. A magic that is not the one of `side`, and a length
+/// that is not a whole number of words or exceeds the cap, are
+/// [`io::ErrorKind::InvalidData`]. The caller tells a stream that ends
+/// before the header from one that ends inside it, since an async
+/// `read_exact` reports both as [`io::ErrorKind::UnexpectedEof`].
+pub fn parse_header(header: [u8; HEADER_BYTES], side: Side) -> io::Result<(Player, usize)> {
     let [m0, m1, m2, m3, p0, p1, p2, p3, l0, l1, l2, l3] = header;
     check_magic([m0, m1, m2, m3], side)?;
     let len = u32::from_le_bytes([l0, l1, l2, l3]) as usize;
@@ -120,9 +134,7 @@ pub fn read_framed(r: &mut impl Read, side: Side) -> io::Result<Option<(Player, 
             "frame length {len} is not a whole number of words up to {MAX_FRAME_BYTES}"
         )));
     }
-    let mut words = Word::allocate_zeroed_vec(len / size_of::<Word>());
-    r.read_exact(Word::words_to_bytes_mut(&mut words))?;
-    Ok(Some((u32::from_le_bytes([p0, p1, p2, p3]), words)))
+    Ok((u32::from_le_bytes([p0, p1, p2, p3]), len))
 }
 
 /// The header in front of a payload of `len` bytes.
@@ -259,6 +271,14 @@ mod tests {
         let mut bytes = header_with(Side::View.magic(), 4);
         bytes.extend_from_slice(&[0; 4]);
         assert_eq!(read_error(&bytes).kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_header_parses_to_its_player_and_length() {
+        let header = header(Side::Engine, 7, 16);
+        assert_eq!(parse_header(header, Side::Engine).unwrap(), (7, 16));
+        let err = parse_header(header, Side::View).expect_err("an error");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]
