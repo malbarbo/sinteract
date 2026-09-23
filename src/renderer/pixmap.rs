@@ -97,6 +97,18 @@ impl PixmapRenderer {
         self.background = sk_color(color);
     }
 
+    /// Hand out the pixmap of the last render, and render the next frames
+    /// into `pixmap`. A render resizes `pixmap` when its size is wrong.
+    pub fn replace_pixmap(&mut self, pixmap: Pixmap) -> Pixmap {
+        // A pooled mask has the size of the pixmap that goes out, and the
+        // next render sees only the size of `pixmap`.
+        let size = |p: &Pixmap| (p.width(), p.height());
+        if size(&pixmap) != size(&self.pixmap) {
+            self.mask_pool.clear();
+        }
+        std::mem::replace(&mut self.pixmap, pixmap)
+    }
+
     /// The pixmap of the last render.
     pub fn into_pixmap(self) -> Pixmap {
         self.pixmap
@@ -796,6 +808,37 @@ mod tests {
         assert_eq!((pm.width(), pm.height()), (20, 20));
         assert_eq!(pixel_rgba(pm, 9, 9), (255, 0, 0, 255));
         assert_eq!(pixel_rgba(pm, 11, 11).3, 0);
+    }
+
+    #[test]
+    fn a_replaced_pixmap_holds_the_last_render_and_the_next_one_resizes() {
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 5.0, 5.0));
+        let mut r = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
+        r.render(&scene).expect("render");
+        let last = r.replace_pixmap(Pixmap::new(1, 1).expect("alloc"));
+        assert_eq!(pixel_rgba(&last, 2, 2), (255, 0, 0, 255));
+        let pm = r.render(&scene).expect("render");
+        assert_eq!((pm.width(), pm.height()), (10, 10));
+        assert_eq!(pixel_rgba(pm, 2, 2), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn a_clip_after_two_replaced_pixmaps_of_other_sizes_covers_the_frame() {
+        let clipped = |side: f32| {
+            let mut scene = Scene::new(side, side);
+            let mut clip_scope = scene.clip(square_clip(0.0, 0.0, side));
+            clip_scope.add_path(rect(solid(0, 0, 255), 0.0, 0.0, side, side));
+            drop(clip_scope);
+            scene
+        };
+        let mut r = PixmapRenderer::default();
+        r.render(&clipped(20.0)).expect("render");
+        let large = r.replace_pixmap(Pixmap::new(1, 1).expect("alloc"));
+        r.render(&clipped(10.0)).expect("render");
+        r.replace_pixmap(large);
+        let pm = r.render(&clipped(20.0)).expect("render");
+        assert_eq!(pixel_rgba(pm, 15, 15), (0, 0, 255, 255));
     }
 
     #[test]
