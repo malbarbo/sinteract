@@ -7,6 +7,8 @@
 //!
 //! - The Kitty graphics query, a 1×1 transparent image with id `N`. A
 //!   terminal that supports the protocol answers `\x1b_Gi=N;OK`.
+//! - On Unix, the same query with the image in a shared memory object. Only
+//!   a terminal on the same machine finds the object and answers OK.
 //! - DA1, `\x1b[c`. The reply lists the attributes, and `4` means Sixel.
 //! - `\x1b[16t`, the pixel size of a character cell.
 //! - `\x1b[?u`, the flags of the Kitty keyboard protocol. A terminal that
@@ -40,6 +42,10 @@ const QUERY: &str = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c\x1b[16t\x1
 /// id 31.
 const KITTY_OK: &[u8] = b"Gi=31;OK";
 
+/// The APC string of a terminal that read the image of the query of id 32
+/// from shared memory.
+const KITTY_SHM_OK: &[u8] = b"Gi=32;OK";
+
 #[derive(Default, Copy, Clone)]
 pub struct GraphicsCaps {
     pub kitty: bool,
@@ -52,6 +58,10 @@ pub struct GraphicsCaps {
     /// win32-input-mode, so it does not look at the reply.
     #[cfg(unix)]
     pub kitty_keyboard: bool,
+    /// The terminal reads a Kitty image from shared memory, which a
+    /// terminal on another machine, as over ssh, cannot.
+    #[cfg(unix)]
+    pub kitty_shm: bool,
 }
 
 static CACHED: OnceLock<GraphicsCaps> = OnceLock::new();
@@ -128,6 +138,8 @@ impl Replies {
             cell_px: self.found.cell_px,
             #[cfg(unix)]
             kitty_keyboard: self.found.kitty_keyboard,
+            #[cfg(unix)]
+            kitty_shm: self.found.kitty_shm,
         }
     }
 }
@@ -164,6 +176,7 @@ struct Found {
     sixel: bool,
     cell_px: Option<(u32, u32)>,
     kitty_keyboard: bool,
+    kitty_shm: bool,
     cpr: bool,
 }
 
@@ -201,6 +214,7 @@ impl vtparse::VTActor for Found {
 
     fn apc_dispatch(&mut self, data: Vec<u8>) {
         self.kitty |= data == KITTY_OK;
+        self.kitty_shm |= data == KITTY_SHM_OK;
     }
 
     fn print(&mut self, _: char) {}
@@ -225,8 +239,14 @@ impl vtparse::VTActor for Found {
 #[cfg(unix)]
 mod unix_impl {
     use super::*;
+    use std::ffi::CString;
     use std::io::{IsTerminal, Write};
     use std::os::fd::{AsRawFd, RawFd};
+
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as B64;
+
+    use crate::display::shm;
 
     pub fn probe() -> GraphicsCaps {
         let stdin = std::io::stdin();
@@ -238,21 +258,37 @@ mod unix_impl {
         let Some(_raw) = TermiosGuard::raw(fd) else {
             return GraphicsCaps::default();
         };
-        if stdout
-            .write_all(QUERY.as_bytes())
-            .and_then(|()| stdout.flush())
-            .is_err()
-        {
-            return GraphicsCaps::default();
-        }
-        read_replies(|wait, buf| {
-            let timeout_ms = wait.as_millis().min(i32::MAX as u128) as i32;
-            if !poll_readable(fd, timeout_ms) {
-                return None;
-            }
-            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-            usize::try_from(n).ok()
-        })
+        let shm_name = CString::new(format!("/sinteract-{:x}-probe", std::process::id()))
+            .expect("the name has no NUL");
+        // When the object cannot be created, the probe leaves out the
+        // shared memory query, and the terminal counts as one that does
+        // not read shared memory.
+        let shm_query = match shm::create(&shm_name, 4, |pixel| pixel.fill(0)) {
+            Ok(()) => format!(
+                "\x1b_Gi=32,s=1,v=1,a=q,t=s,f=32;{}\x1b\\",
+                B64.encode(shm_name.as_bytes())
+            ),
+            Err(_) => String::new(),
+        };
+        let written = stdout
+            .write_all(shm_query.as_bytes())
+            .and_then(|()| stdout.write_all(QUERY.as_bytes()))
+            .and_then(|()| stdout.flush());
+        let caps = match written {
+            Ok(()) => read_replies(|wait, buf| {
+                let timeout_ms = wait.as_millis().min(i32::MAX as u128) as i32;
+                if !poll_readable(fd, timeout_ms) {
+                    return None;
+                }
+                let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+                usize::try_from(n).ok()
+            }),
+            Err(_) => GraphicsCaps::default(),
+        };
+        // A terminal that read the object removed it. One that did not,
+        // such as a terminal over ssh, left it.
+        shm::unlink(&shm_name);
+        caps
     }
 
     /// Puts the tty in raw mode, so the replies arrive as bytes, and
@@ -575,6 +611,20 @@ mod tests {
     #[test]
     fn kitty_ok_in_buffer() {
         assert!(replies(b"junk\x1b_Gi=31;OK\x1b\\more").caps().kitty);
+    }
+
+    #[test]
+    fn kitty_shm_ok_is_its_own_reply() {
+        let found = replies(b"\x1b_Gi=32;OK\x1b\\").found;
+        assert!(found.kitty_shm);
+        assert!(!found.kitty);
+        assert!(!replies(b"\x1b_Gi=31;OK\x1b\\").found.kitty_shm);
+    }
+
+    #[test]
+    fn kitty_shm_enoent_is_not_ok() {
+        let r = replies(b"\x1b_Gi=32;ENOENT:no such shared memory\x1b\\");
+        assert!(!r.found.kitty_shm);
     }
 
     #[test]

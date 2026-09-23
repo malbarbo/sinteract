@@ -130,7 +130,7 @@ impl Terminal {
         };
         Ok(Self {
             inbox,
-            canvas: Canvas::new(backend),
+            canvas: Canvas::new(Painter::for_stdout(backend)),
             live: Some(Live { reader, claim }),
             frame_size: None,
             last: None,
@@ -293,7 +293,7 @@ impl Printer {
     pub fn new() -> Result<Self, NoGraphics> {
         let backend = pick_backend().ok_or(NoGraphics)?;
         Ok(Self {
-            canvas: Canvas::new(backend),
+            canvas: Canvas::new(Painter::for_stdout(backend)),
         })
     }
 
@@ -324,9 +324,9 @@ struct Canvas {
 }
 
 impl Canvas {
-    fn new(backend: Backend) -> Self {
+    fn new(painter: Painter) -> Self {
         let mut renderer = PixmapRenderer::default();
-        match backend {
+        match painter.backend() {
             Backend::Sixel => renderer.set_background(SIXEL_BACKGROUND),
             // Kitty shows transparency, and a half-block cell reads a
             // premultiplied pixel as the pixel over black.
@@ -335,7 +335,7 @@ impl Canvas {
         Self {
             renderer,
             bytes: Vec::new(),
-            painter: Painter::new(backend),
+            painter,
         }
     }
 
@@ -360,7 +360,7 @@ impl Canvas {
     reason = "a Canvas holds one Painter, so a smaller enum saves nothing"
 )]
 enum Painter {
-    Kitty,
+    Kitty(KittyMedium),
     Sixel(sixel::Encoder),
     /// The cells on screen, which a frame compares with its own and
     /// replaces. A print writes every cell and leaves them alone.
@@ -368,17 +368,28 @@ enum Painter {
 }
 
 impl Painter {
+    /// The painter of `backend`, which sends a Kitty image as a PNG.
     fn new(backend: Backend) -> Self {
         match backend {
-            Backend::Kitty => Painter::Kitty,
+            Backend::Kitty => Painter::Kitty(KittyMedium::Png),
             Backend::Sixel => Painter::Sixel(sixel::Encoder::new()),
             Backend::TextBlocks => Painter::TextBlocks(BlockScreen::default()),
         }
     }
 
+    /// The painter of `backend` for the terminal on stdout. It sends a
+    /// Kitty image through shared memory when the probe found that the
+    /// terminal reads it.
+    fn for_stdout(backend: Backend) -> Self {
+        match backend {
+            Backend::Kitty => Painter::Kitty(KittyMedium::for_stdout()),
+            Backend::Sixel | Backend::TextBlocks => Painter::new(backend),
+        }
+    }
+
     fn backend(&self) -> Backend {
         match self {
-            Painter::Kitty => Backend::Kitty,
+            Painter::Kitty(_) => Backend::Kitty,
             Painter::Sixel(_) => Backend::Sixel,
             Painter::TextBlocks(_) => Backend::TextBlocks,
         }
@@ -395,12 +406,16 @@ impl Painter {
         placement: Placement,
     ) -> io::Result<()> {
         match self {
-            Painter::Kitty => {
+            Painter::Kitty(medium) => {
                 let id = match placement {
                     Placement::Frame => Some(KITTY_ANIMATION_ID),
                     Placement::Still => None,
                 };
-                emit_kitty(out, pixmap, id, bytes)?;
+                match medium {
+                    KittyMedium::Png => emit_kitty(out, pixmap, id, bytes)?,
+                    #[cfg(unix)]
+                    KittyMedium::SharedMemory { next } => emit_kitty_shared(out, pixmap, id, next)?,
+                }
                 placement.end(out)
             }
             Painter::Sixel(encoder) => {
@@ -424,7 +439,7 @@ impl Painter {
             // The same id replaces the whole image in place, and a clear, or
             // a delete before the transmit, shows the cleared cells for one
             // refresh.
-            Painter::Kitty => Ok(()),
+            Painter::Kitty(_) => Ok(()),
             Painter::Sixel(_) => queue!(out, terminal::Clear(terminal::ClearType::All)),
             Painter::TextBlocks(screen) => {
                 queue!(out, terminal::Clear(terminal::ClearType::All))?;
@@ -452,6 +467,26 @@ impl Placement {
             Placement::Frame => Ok(()),
             Placement::Still => writeln!(out),
         }
+    }
+}
+
+/// How a Kitty image goes to the terminal.
+enum KittyMedium {
+    /// A PNG in the escapes, which reaches a terminal on another machine.
+    Png,
+    /// A shared memory object per image, which the terminal reads without a
+    /// decode. `next` numbers the object of the next image.
+    #[cfg(unix)]
+    SharedMemory { next: u64 },
+}
+
+impl KittyMedium {
+    fn for_stdout() -> Self {
+        #[cfg(unix)]
+        if super::term_query::graphics_caps().kitty_shm {
+            return KittyMedium::SharedMemory { next: 0 };
+        }
+        KittyMedium::Png
     }
 }
 
@@ -1210,6 +1245,50 @@ fn emit_kitty<W: Write>(
     w.write_all(buf)
 }
 
+/// Write the Kitty escape that shows `pixmap` at the cursor from a shared
+/// memory object, as [`emit_kitty`] does with a PNG, and flush it. The
+/// terminal reads the pixels in straight alpha and removes the object.
+/// `next` numbers the object, and a number that another object holds, such
+/// as one that a terminal has not read yet, gives way to the one after it.
+#[cfg(unix)]
+fn emit_kitty_shared<W: Write>(
+    w: &mut W,
+    pixmap: &Pixmap,
+    id: Option<u32>,
+    next: &mut u64,
+) -> io::Result<()> {
+    let len = pixmap.data().len();
+    let name = loop {
+        let name = std::ffi::CString::new(format!("/sinteract-{:x}-{next:x}", std::process::id()))
+            .expect("the name has no NUL");
+        *next += 1;
+        match super::shm::create(&name, len, |bytes| {
+            straight_alpha(pixmap.pixels(), bytes);
+        }) {
+            Ok(()) => break name,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    };
+    let written = write!(
+        w,
+        "\x1b_Ga=T,f=32,t=s,s={},v={},S={len},q=2",
+        pixmap.width(),
+        pixmap.height()
+    )
+    .and_then(|()| match id {
+        Some(id) => write!(w, ",i={id}"),
+        None => Ok(()),
+    })
+    .and_then(|()| write!(w, ";{}\x1b\\", B64.encode(name.as_bytes())))
+    .and_then(|()| w.flush());
+    // A terminal that never got the whole escape never reads the object.
+    if written.is_err() {
+        super::shm::unlink(&name);
+    }
+    written
+}
+
 /// Cuts a PNG into the chunks of the Kitty protocol as the encoder writes
 /// it, and appends each chunk to `buf` in base64 with its escape. Only the
 /// last chunk says `m=0`, so a full chunk waits for the next byte.
@@ -1457,7 +1536,7 @@ mod tests {
     #[test]
     fn a_printer_prints_nothing_while_a_session_holds_the_tty() {
         let mut printer = Printer {
-            canvas: Canvas::new(Backend::TextBlocks),
+            canvas: Canvas::new(Painter::new(Backend::TextBlocks)),
         };
         let claim = Claim::take().expect("no session runs in a test");
         assert!(matches!(
@@ -1489,7 +1568,7 @@ mod tests {
     #[test]
     fn only_a_sixel_canvas_draws_over_white() {
         for (backend, _) in MARKS {
-            let mut canvas = Canvas::new(backend);
+            let mut canvas = Canvas::new(Painter::new(backend));
             let pixmap = canvas.renderer.render(&Scene::new(4.0, 4.0)).unwrap();
             let p = pixmap.pixels()[0];
             let expected = match backend {
@@ -1502,6 +1581,63 @@ mod tests {
                 "{backend:?}"
             );
         }
+    }
+
+    /// Linux lists the shared memory objects under `/dev/shm`, where a
+    /// test reads them back.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_shared_kitty_image_holds_the_straight_pixels() {
+        let mut pixmap = solid(2, 1, 0, 0, 255);
+        pixmap.pixels_mut()[1] = tiny_skia::ColorU8::from_rgba(200, 100, 0, 128).premultiply();
+        let straight: Vec<u8> = pixmap
+            .pixels()
+            .iter()
+            .flat_map(|p| {
+                let c = p.demultiply();
+                [c.red(), c.green(), c.blue(), c.alpha()]
+            })
+            .collect();
+        let mut painter = Painter::Kitty(KittyMedium::SharedMemory { next: 0 });
+        let mut out = Vec::new();
+        for _ in 0..2 {
+            painter
+                .write_image(&mut out, &mut Vec::new(), &pixmap, Placement::Frame)
+                .unwrap();
+        }
+        let head = format!("\x1b_Ga=T,f=32,t=s,s=2,v=1,S=8,q=2,i={KITTY_ANIMATION_ID};");
+        let names: Vec<String> = out
+            .split(|&b| b == 0x1b)
+            .filter_map(|escape| escape.strip_prefix(&head.as_bytes()[1..]))
+            .map(|payload| String::from_utf8(B64.decode(payload).unwrap()).unwrap())
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert_ne!(names[0], names[1]);
+        for name in names {
+            let bytes = std::fs::read(format!("/dev/shm{name}")).unwrap();
+            super::super::shm::unlink(&std::ffi::CString::new(name).unwrap());
+            assert_eq!(bytes, straight);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_shared_kitty_image_skips_a_name_in_use() {
+        // Far from the numbers of the other test, which runs at the same
+        // time in the same process.
+        let first = 1 << 40;
+        let name = |n: u64| {
+            std::ffi::CString::new(format!("/sinteract-{:x}-{n:x}", std::process::id())).unwrap()
+        };
+        super::super::shm::create(&name(first), 1, |_| {}).unwrap();
+        let mut next = first;
+        let mut out = Vec::new();
+        emit_kitty_shared(&mut out, &solid(1, 1, 0, 0, 255), None, &mut next).unwrap();
+        super::super::shm::unlink(&name(first));
+        super::super::shm::unlink(&name(first + 1));
+        assert_eq!(next, first + 2);
+        let payload = B64.encode(name(first + 1).as_bytes());
+        assert!(out.ends_with(format!(";{payload}\x1b\\").as_bytes()));
     }
 
     #[test]
