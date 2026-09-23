@@ -43,9 +43,10 @@ pub fn write_close(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::View, UNROUTED, &close_message())
 }
 
-/// Decode `payload`. `None` for a message or an event of an arm from a
+/// Decode `payload`, a message with no envelope, such as one that came
+/// over a WebSocket. `None` for a message or an event of an arm from a
 /// newer schema.
-pub(super) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
+pub fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<view_message::Owned, _>(payload, decode_message)
 }
 

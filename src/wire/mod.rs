@@ -531,6 +531,16 @@ mod tests {
     }
 
     #[test]
+    fn a_message_of_a_view_decodes_without_its_header() {
+        let mut stream = Vec::new();
+        to_server::write_input(&mut stream, &InputEvent::Vsync).unwrap();
+        assert!(matches!(
+            to_server::decode(&stream[framing::HEADER_BYTES..]),
+            Ok(Some(to_server::Message::Input(InputEvent::Vsync)))
+        ));
+    }
+
+    #[test]
     fn a_message_of_a_view_of_an_unknown_arm_is_skipped() {
         let bytes = with_unknown_view_value(&to_server::encode_close(), |m| tag_of(m));
         assert!(matches!(to_server::decode(&bytes), Ok(None)));
