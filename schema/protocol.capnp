@@ -54,7 +54,8 @@ struct ViewMessage {
 # A player of the session.
 struct Member {
     # The number of the player in the session, from 1, which the header of
-    # a message about this player carries.
+    # a message about this player carries. A player is in the members of a
+    # start once.
     player   @0 :UInt32;
     nickname @1 :Text;
 }
@@ -64,12 +65,12 @@ struct Start {
     members @0 :List(Member);
 }
 
-# The player in the header joined the session.
+# The player in the header, from 1, joined the session.
 struct Join {
     nickname @0 :Text;
 }
 
-# The player in the header left the session. A struct and not a Void, so
+# The player in the header, from 1, left the session. A struct and not a Void, so
 # that a reason can join it as a field.
 struct Leave {}
 

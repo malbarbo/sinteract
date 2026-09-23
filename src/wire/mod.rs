@@ -44,7 +44,7 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
     bytes
 }
 
-/// A payload is malformed. It says the scene, the event or the message is
+/// A payload is malformed, or does not agree with its header. It says the scene, the event or the message is
 /// unusable, and never that the session is. An engine that gets one from
 /// [`to_engine::read`] drops the message and keeps the session. A value from a
 /// newer schema and a float that is not finite are not errors, since the
@@ -57,6 +57,11 @@ pub enum Error {
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
+    /// A join, a leave or a member of a roster has player 0, which is not
+    /// a player of the session.
+    NoPlayer,
+    /// A roster has a player twice.
+    DuplicatePlayer(to_engine::DuplicatePlayer),
 }
 
 impl std::fmt::Display for Error {
@@ -69,6 +74,8 @@ impl std::fmt::Display for Error {
                     "path verbs ({verbs} bytes) and coords ({coords} floats) disagree"
                 )
             }
+            Error::NoPlayer => write!(f, "a join, a leave or a member has player 0"),
+            Error::DuplicatePlayer(e) => write!(f, "{e}"),
         }
     }
 }
@@ -356,6 +363,17 @@ mod tests {
         )
     }
 
+    fn nonzero(n: u32) -> std::num::NonZeroU32 {
+        std::num::NonZeroU32::new(n).unwrap()
+    }
+
+    fn member(player: u32, nickname: &str) -> to_engine::Member {
+        to_engine::Member {
+            player: nonzero(player),
+            nickname: nickname.into(),
+        }
+    }
+
     /// `bytes` in the words that the decoder reads in place.
     fn words(bytes: &[u8]) -> Vec<capnp::Word> {
         let mut words = capnp::Word::allocate_zeroed_vec(bytes.len().div_ceil(8));
@@ -532,35 +550,83 @@ mod tests {
 
     #[test]
     fn the_players_of_the_server_round_trip_with_their_header() {
-        let members = [
-            to_engine::Member {
-                player: 1,
-                nickname: "Ana".into(),
-            },
-            to_engine::Member {
-                player: 2,
-                nickname: "Beto".into(),
-            },
-        ];
+        let roster = to_engine::Roster::new(vec![member(1, "Ana"), member(2, "Beto")]).unwrap();
         let mut stream = Vec::new();
-        to_engine::write_start(&mut stream, &members).unwrap();
-        to_engine::write_join(&mut stream, 3, "Caio").unwrap();
-        to_engine::write_leave(&mut stream, 2).unwrap();
+        to_engine::write_start(&mut stream, &roster).unwrap();
+        to_engine::write_join(&mut stream, nonzero(3), "Caio").unwrap();
+        to_engine::write_leave(&mut stream, nonzero(2)).unwrap();
         let mut r = &stream[..];
         let mut next = || to_engine::read(&mut r).unwrap().expect("a message");
         match next() {
-            to_engine::Message::Start(got) => assert_eq!(got, members),
+            to_engine::Message::Start(got) => assert_eq!(got, roster),
             other => panic!("got {other:?}"),
         }
         match next() {
-            to_engine::Message::Join {
-                player: 3,
-                nickname,
-            } => assert_eq!(nickname, "Caio"),
+            to_engine::Message::Join { player, nickname } => {
+                assert_eq!((player, nickname.as_str()), (nonzero(3), "Caio"));
+            }
             other => panic!("got {other:?}"),
         }
-        assert!(matches!(next(), to_engine::Message::Leave { player: 2 }));
+        match next() {
+            to_engine::Message::Leave { player } => assert_eq!(player, nonzero(2)),
+            other => panic!("got {other:?}"),
+        }
         assert!(to_engine::read(&mut r).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_roster_does_not_take_a_player_twice() {
+        let members = vec![member(1, "Ana"), member(2, "Beto"), member(1, "Caio")];
+        assert_eq!(
+            to_engine::Roster::new(members),
+            Err(to_engine::DuplicatePlayer(nonzero(1)))
+        );
+    }
+
+    #[test]
+    fn a_join_or_a_leave_of_player_0_is_an_error_and_the_session_goes_on() {
+        let mut join = Vec::new();
+        to_engine::write_join(&mut join, nonzero(3), "Caio").unwrap();
+        let mut leave = Vec::new();
+        to_engine::write_leave(&mut leave, nonzero(3)).unwrap();
+        let mut stream = Vec::new();
+        for mut message in [join, leave] {
+            message[4..8].fill(0);
+            stream.extend_from_slice(&message);
+        }
+        to_engine::write_close(&mut stream).unwrap();
+        let mut r = &stream[..];
+        for _ in 0..2 {
+            assert!(matches!(
+                to_engine::read(&mut r),
+                Err(ReadError::Payload(Error::NoPlayer))
+            ));
+        }
+        assert!(matches!(
+            to_engine::read(&mut r),
+            Ok(Some(to_engine::Message::Close))
+        ));
+    }
+
+    #[test]
+    fn a_start_with_player_0_or_a_player_twice_is_an_error() {
+        let start = |players: &[u32]| {
+            let mut builder = MessageBuilder::new_default();
+            let start = builder.init_root::<server_message::Builder>().init_start();
+            let mut list = start.init_members(players.len() as u32);
+            for (i, &p) in players.iter().enumerate() {
+                list.reborrow().get(i as u32).set_player(p);
+            }
+            words(&finish(builder))
+        };
+        assert!(matches!(
+            to_engine::decode(framing::UNROUTED, &start(&[1, 0])),
+            Err(Error::NoPlayer)
+        ));
+        assert!(matches!(
+            to_engine::decode(framing::UNROUTED, &start(&[2, 1, 2])),
+            Err(Error::DuplicatePlayer(to_engine::DuplicatePlayer(p))) if p == nonzero(2)
+        ));
     }
 
     #[test]

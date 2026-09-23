@@ -7,7 +7,9 @@
 //! engine with no server between them takes the role of the server, and
 //! sends its input with [`UNROUTED`].
 
+use std::collections::HashSet;
 use std::io::{self, Read, Write};
+use std::num::NonZeroU32;
 
 use capnp::Word;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
@@ -23,22 +25,68 @@ use super::protocol::{ReadError, decode_root, read_next};
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with
 /// [`crate::event::Event`]. The player comes from the header, and `Close`
-/// and `Start` are about the whole session.
+/// and `Start` are about the whole session. Player 0 is the server itself
+/// or the only view, so only `Input` has a player 0.
 #[derive(Clone, Debug)]
 pub enum Message {
-    Input { player: Player, event: InputEvent },
+    Input {
+        player: Player,
+        event: InputEvent,
+    },
     Close,
-    Start(Vec<Member>),
-    Join { player: Player, nickname: String },
-    Leave { player: Player },
+    Start(Roster),
+    Join {
+        player: NonZeroU32,
+        nickname: String,
+    },
+    Leave {
+        player: NonZeroU32,
+    },
 }
 
 /// A player of the session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Member {
-    /// The number of the player in the session, from 1.
-    pub player: Player,
+    /// The number of the player in the session.
+    pub player: NonZeroU32,
     pub nickname: String,
+}
+
+/// The players at the start of the session, each player once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Roster(Vec<Member>);
+
+/// Two members of a [`Roster`] have the same player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DuplicatePlayer(pub NonZeroU32);
+
+impl Roster {
+    /// The roster of `members`, or the first player that repeats.
+    pub fn new(members: Vec<Member>) -> Result<Roster, DuplicatePlayer> {
+        let mut seen = HashSet::with_capacity(members.len());
+        match members.iter().find(|m| !seen.insert(m.player)) {
+            Some(m) => Err(DuplicatePlayer(m.player)),
+            None => Ok(Roster(members)),
+        }
+    }
+
+    pub fn members(&self) -> &[Member] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for DuplicatePlayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "player {} is in the roster twice", self.0)
+    }
+}
+
+impl std::error::Error for DuplicatePlayer {}
+
+impl From<DuplicatePlayer> for Error {
+    fn from(e: DuplicatePlayer) -> Self {
+        Error::DuplicatePlayer(e)
+    }
 }
 
 /// Read the next message of the server. Returns `None` at the end of the
@@ -58,23 +106,25 @@ pub fn write_close(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::Server, UNROUTED, &close_message())
 }
 
-/// Write the start of the session with `members`.
-pub fn write_start(w: &mut impl Write, members: &[Member]) -> io::Result<()> {
-    write_framed(w, Side::Server, UNROUTED, &start_message(members))
+/// Write the start of the session with `roster`.
+pub fn write_start(w: &mut impl Write, roster: &Roster) -> io::Result<()> {
+    write_framed(w, Side::Server, UNROUTED, &start_message(roster.members()))
 }
 
 /// Write that `player` joined the session as `nickname`.
-pub fn write_join(w: &mut impl Write, player: Player, nickname: &str) -> io::Result<()> {
-    write_framed(w, Side::Server, player, &join_message(nickname))
+pub fn write_join(w: &mut impl Write, player: NonZeroU32, nickname: &str) -> io::Result<()> {
+    write_framed(w, Side::Server, player.get(), &join_message(nickname))
 }
 
 /// Write that `player` left the session.
-pub fn write_leave(w: &mut impl Write, player: Player) -> io::Result<()> {
-    write_framed(w, Side::Server, player, &leave_message())
+pub fn write_leave(w: &mut impl Write, player: NonZeroU32) -> io::Result<()> {
+    write_framed(w, Side::Server, player.get(), &leave_message())
 }
 
 /// Decode the payload in `words` in place, for `player` of the header.
-/// `None` for a message or an event of an arm from a newer schema.
+/// `None` for a message or an event of an arm from a newer schema. A join,
+/// a leave or a member of player 0, and a roster that repeats a player, are
+/// errors.
 pub(super) fn decode(player: Player, words: &[Word]) -> Result<Option<Message>, Error> {
     decode_root::<server_message::Owned, _>(words, |msg| decode_message(player, msg))
 }
@@ -97,19 +147,26 @@ fn decode_message(
                 .iter()
                 .map(|m| {
                     Ok(Member {
-                        player: m.get_player(),
+                        player: nonzero_player(m.get_player())?,
                         nickname: m.get_nickname()?.to_str()?.to_owned(),
                     })
                 })
                 .collect::<Result<_, Error>>()?;
-            Ok(Some(Message::Start(members)))
+            Ok(Some(Message::Start(Roster::new(members)?)))
         }
         server_message::Join(j) => Ok(Some(Message::Join {
-            player,
+            player: nonzero_player(player)?,
             nickname: j?.get_nickname()?.to_str()?.to_owned(),
         })),
-        server_message::Leave(_) => Ok(Some(Message::Leave { player })),
+        server_message::Leave(_) => Ok(Some(Message::Leave {
+            player: nonzero_player(player)?,
+        })),
     }
+}
+
+/// `player`, or [`Error::NoPlayer`] if it is 0.
+fn nonzero_player(player: Player) -> Result<NonZeroU32, Error> {
+    NonZeroU32::new(player).ok_or(Error::NoPlayer)
 }
 
 fn input_message(ev: &InputEvent) -> MessageBuilder<HeapAllocator> {
@@ -134,7 +191,7 @@ fn start_message(members: &[Member]) -> MessageBuilder<HeapAllocator> {
     let mut list = start.init_members(len);
     for (i, member) in (0..len).zip(members) {
         let mut m = list.reborrow().get(i);
-        m.set_player(member.player);
+        m.set_player(member.player.get());
         m.set_nickname(&*member.nickname);
     }
     builder

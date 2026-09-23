@@ -187,6 +187,7 @@ mod tests {
     use crate::wire::to_engine::{encode_close, encode_input};
     use crate::wire::{self, to_view};
     use std::io::{Cursor, PipeWriter};
+    use std::num::NonZeroU32;
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -374,13 +375,15 @@ mod tests {
     #[test]
     fn wait_event_skips_the_players() {
         let mut stream = Vec::new();
-        let member = to_engine::Member {
-            player: 1,
+        let ana = to_engine::Member {
+            player: NonZeroU32::MIN,
             nickname: "Ana".into(),
         };
-        to_engine::write_start(&mut stream, &[member]).unwrap();
-        to_engine::write_join(&mut stream, 2, "Beto").unwrap();
-        to_engine::write_leave(&mut stream, 2).unwrap();
+        let beto = NonZeroU32::new(2).unwrap();
+        let roster = to_engine::Roster::new(vec![ana]).unwrap();
+        to_engine::write_start(&mut stream, &roster).unwrap();
+        to_engine::write_join(&mut stream, beto, "Beto").unwrap();
+        to_engine::write_leave(&mut stream, beto).unwrap();
         stream.extend_from_slice(&event(&InputEvent::Vsync));
         assert!(matches!(input(&mut reading(stream)), InputEvent::Vsync));
     }
