@@ -8,7 +8,7 @@ use std::time::Instant;
 use super::inbox::Sender;
 use crate::event::{Event, Interrupt};
 use crate::renderer::AllocError;
-use crate::renderer::pixmap::AssetError;
+use crate::renderer::AssetError;
 use crate::scene::Scene;
 
 /// A session that shows scenes and delivers events. Opening is the

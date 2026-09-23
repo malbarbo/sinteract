@@ -76,6 +76,23 @@ impl std::fmt::Display for AllocError {
 
 impl std::error::Error for AllocError {}
 
+/// An asset that does not decode as a PNG. The decoder stays private, so
+/// the error does not depend on the renderer that decodes.
+#[derive(Debug)]
+pub struct AssetError(Box<dyn std::error::Error + Send + Sync>);
+
+impl std::fmt::Display for AssetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cannot decode the image as PNG: {}", self.0)
+    }
+}
+
+impl std::error::Error for AssetError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.0)
+    }
+}
+
 pub(crate) mod sealed {
     use crate::scene::{Bitmap, ClipPath, Element, Path, Text};
 

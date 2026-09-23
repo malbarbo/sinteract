@@ -3,7 +3,6 @@
 //! present the pixels.
 
 use std::collections::HashMap;
-use std::fmt;
 
 use tiny_skia::{
     Color as SkColor, FillRule as SkFillRule, FilterQuality, GradientStop as SkStop,
@@ -14,7 +13,7 @@ use tiny_skia::{
 
 use crate::outline::PathSink;
 use crate::renderer::{
-    AllocError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
+    AllocError, AssetError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, SpreadMode,
@@ -132,25 +131,9 @@ impl Assets {
     /// Decode the PNG in `blob` and keep it for the bitmaps of `id`, in place
     /// of the image that `id` named before.
     pub fn insert_png(&mut self, id: u32, blob: &[u8]) -> Result<(), AssetError> {
-        let image = Pixmap::decode_png(blob).map_err(AssetError)?;
+        let image = Pixmap::decode_png(blob).map_err(|e| AssetError(Box::new(e)))?;
         self.images.insert(id, image);
         Ok(())
-    }
-}
-
-/// An asset that does not decode as a PNG.
-#[derive(Debug)]
-pub struct AssetError(png::DecodingError);
-
-impl fmt::Display for AssetError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "cannot decode the image as PNG: {}", self.0)
-    }
-}
-
-impl std::error::Error for AssetError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
     }
 }
 
