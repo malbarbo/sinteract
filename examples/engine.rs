@@ -7,6 +7,11 @@
 //! target/debug/examples/view target/debug/examples/engine 200
 //! ```
 
+// The engine talks through `Stdio`, which wasm32 lacks. Without a `main`, the
+// empty crate needs `no_main`.
+#![cfg_attr(target_arch = "wasm32", no_main)]
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::process::ExitCode;
 use std::time::Instant;
 

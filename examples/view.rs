@@ -8,6 +8,11 @@
 //! target/debug/examples/view target/debug/examples/engine 200
 //! ```
 
+// The view opens a terminal or a window, which wasm32 lacks. Without a
+// `main`, the empty crate needs `no_main`.
+#![cfg_attr(target_arch = "wasm32", no_main)]
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::io::{BufReader, BufWriter, Read};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender};
