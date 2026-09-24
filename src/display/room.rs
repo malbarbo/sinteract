@@ -6,13 +6,13 @@
 //! The room reads with [`crate::wire::to_engine`] and writes with
 //! [`crate::wire::to_view`]. It differs from [`super::Stdio`], which reads
 //! one view, in three ways. Every event carries its player, a frame goes to
-//! one player or to all of them, and a clock of the room makes the Vsync,
-//! since each view has its own pace. The server keeps only the newest frame
-//! of a player whose connection is busy.
+//! one player or to all of them, and the Vsync comes from a tick of the
+//! server, since each view has its own pace. The server keeps only the
+//! newest frame of a player whose connection is busy.
 
 use std::io::{self, BufRead, Write};
 use std::num::NonZeroU32;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::driver::{OpenError, PresentError};
 use super::inbox::{Queued, Sender, input_supersedes};
@@ -36,8 +36,8 @@ pub struct Room {
 pub enum RoomEvent {
     /// Time to draw a frame for each player.
     Vsync,
-    /// The input of `player`. The room makes the Vsync, so `event` is never
-    /// [`InputEvent::Vsync`].
+    /// The input of `player`. The Vsync comes from a tick of the server, so
+    /// `event` is never [`InputEvent::Vsync`].
     Input {
         player: NonZeroU32,
         event: InputEvent,
@@ -53,40 +53,29 @@ pub enum RoomEvent {
 }
 
 impl Room {
-    /// Talk over the stdin and the stdout of the process, with a Vsync every
-    /// `vsync_period`. Blocks until the server starts the session, and
-    /// returns the room with the players of the start. The framing is
-    /// binary, so the engine must not write text to stdout.
+    /// Talk over the stdin and the stdout of the process. Blocks until the
+    /// server starts the session, and returns the room with the players of
+    /// the start. The framing is binary, so the engine must not write text
+    /// to stdout.
     ///
     /// Fails with [`OpenError::Busy`] while a [`super::Stdio`] or a `Room`
     /// reads stdin, and
     /// with [`OpenError::Io`] if the stream fails or ends before the start,
     /// if a message other than the start comes first, or if the reader
     /// thread does not start.
-    pub fn open(vsync_period: Duration) -> Result<(Self, Roster), OpenError> {
-        Self::with_streams(ClaimedStdin::claim()?, io::stdout(), vsync_period)
-            .map_err(OpenError::Io)
+    pub fn open() -> Result<(Self, Roster), OpenError> {
+        Self::with_streams(ClaimedStdin::claim()?, io::stdout()).map_err(OpenError::Io)
     }
 
     /// Talk over `reader` and `writer`, as a test does. Blocks until the
     /// start, as [`Room::open`] does.
-    pub fn with_streams<R, W>(
-        mut reader: R,
-        writer: W,
-        vsync_period: Duration,
-    ) -> io::Result<(Self, Roster)>
+    pub fn with_streams<R, W>(mut reader: R, writer: W) -> io::Result<(Self, Roster)>
     where
         R: BufRead + Send + 'static,
         W: Write + Send + 'static,
     {
         let roster = read_start(&mut reader)?;
-        let link = Link::new(
-            reader,
-            writer,
-            "sinteract-room",
-            Some(vsync_period),
-            read_event,
-        )?;
+        let link = Link::new(reader, writer, "sinteract-room", read_event)?;
         Ok((Self { link }, roster))
     }
 
@@ -192,24 +181,25 @@ fn read_start(reader: &mut impl BufRead) -> io::Result<Roster> {
         Ok(Some(Message::Join { .. })) => Err(invalid("a join")),
         Ok(Some(Message::Leave { .. })) => Err(invalid("a leave")),
         Ok(Some(Message::Close)) => Err(invalid("a close")),
+        Ok(Some(Message::Tick)) => Err(invalid("a tick")),
         Ok(None) => Err(io::ErrorKind::UnexpectedEof.into()),
         Err(ReadError::Broken(e)) => Err(e),
         Err(ReadError::Payload(e)) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
     }
 }
 
-/// The next event of the server. The room drops the Vsync of a view,
-/// since its clock makes every Vsync, and a start after the first one
-/// changes nothing.
+/// The next event of the server. A start after the first one changes
+/// nothing.
 fn read_event(reader: &mut impl BufRead) -> Result<Step<RoomEvent>, ReadError> {
     Ok(match to_engine::read(reader)? {
-        Some(Message::Input { player, event }) => match event {
-            InputEvent::Vsync => Step::Skip,
-            InputEvent::Key(_)
-            | InputEvent::Mouse(_)
-            | InputEvent::Resize { .. }
-            | InputEvent::Pad(_) => Step::Event(RoomEvent::Input { player, event }),
-        },
+        Some(Message::Input { player, event }) => {
+            assert!(
+                !matches!(event, InputEvent::Vsync),
+                "to_engine rejects an event that is a Vsync"
+            );
+            Step::Event(RoomEvent::Input { player, event })
+        }
+        Some(Message::Tick) => Step::Event(RoomEvent::Vsync),
         Some(Message::Join { player, nickname }) => {
             Step::Event(RoomEvent::Join { player, nickname })
         }
@@ -229,8 +219,6 @@ mod tests {
     use crate::wire::framing::{Side, header};
     use crate::wire::to_engine::Member;
     use std::io::{BufReader, Cursor, PipeWriter};
-
-    const HOUR: Duration = Duration::from_secs(3600);
 
     fn player(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).unwrap()
@@ -273,9 +261,9 @@ mod tests {
         out
     }
 
-    /// A room over `input`, which then ends, with a clock that fires once.
+    /// A room over `input`, which then ends.
     fn reading(input: Vec<u8>) -> Room {
-        Room::with_streams(Cursor::new(input), Vec::<u8>::new(), HOUR)
+        Room::with_streams(Cursor::new(input), Vec::<u8>::new())
             .unwrap()
             .0
     }
@@ -285,23 +273,13 @@ mod tests {
         let (r, mut w) = io::pipe().unwrap();
         w.write_all(&start()).unwrap();
         let written = SharedWriter::default();
-        let (room, _) = Room::with_streams(BufReader::new(r), written.clone(), HOUR).unwrap();
+        let (room, _) = Room::with_streams(BufReader::new(r), written.clone()).unwrap();
         (room, w, written)
-    }
-
-    /// The next event of `room` that is not the Vsync of the clock.
-    fn next(room: &mut Room) -> Result<RoomEvent, Interrupt> {
-        loop {
-            match room.wait_event(None) {
-                Ok(RoomEvent::Vsync) => continue,
-                other => return other,
-            }
-        }
     }
 
     #[test]
     fn open_returns_the_players_of_the_start() {
-        let (_, roster) = Room::with_streams(Cursor::new(start()), Vec::<u8>::new(), HOUR).unwrap();
+        let (_, roster) = Room::with_streams(Cursor::new(start()), Vec::<u8>::new()).unwrap();
         let names: Vec<_> = roster
             .members()
             .iter()
@@ -315,7 +293,7 @@ mod tests {
         let mut input = Vec::new();
         to_engine::write_input(&mut input, player(1), &key("a")).unwrap();
         input.extend_from_slice(&start());
-        let e = Room::with_streams(Cursor::new(input), Vec::<u8>::new(), HOUR)
+        let e = Room::with_streams(Cursor::new(input), Vec::<u8>::new())
             .err()
             .unwrap();
         assert_eq!(e.kind(), io::ErrorKind::InvalidData);
@@ -323,7 +301,7 @@ mod tests {
 
     #[test]
     fn open_fails_when_the_stream_ends_before_the_start() {
-        let e = Room::with_streams(Cursor::new(Vec::new()), Vec::<u8>::new(), HOUR)
+        let e = Room::with_streams(Cursor::new(Vec::new()), Vec::<u8>::new())
             .err()
             .unwrap();
         assert_eq!(e.kind(), io::ErrorKind::UnexpectedEof);
@@ -336,14 +314,14 @@ mod tests {
         to_engine::write_join(&mut input, player(3), "Caio").unwrap();
         to_engine::write_leave(&mut input, player(1)).unwrap();
         let mut room = reading(input);
-        match next(&mut room) {
+        match room.wait_event(None) {
             Ok(RoomEvent::Input {
                 player: p,
                 event: InputEvent::Key(k),
             }) => assert_eq!((p, k.key.as_str()), (player(2), "a")),
             other => panic!("got {other:?}"),
         }
-        match next(&mut room) {
+        match room.wait_event(None) {
             Ok(RoomEvent::Join {
                 player: p,
                 nickname,
@@ -353,17 +331,19 @@ mod tests {
             other => panic!("got {other:?}"),
         }
         assert!(matches!(
-            next(&mut room),
+            room.wait_event(None),
             Ok(RoomEvent::Leave { player: p }) if p == player(1)
         ));
-        assert!(matches!(next(&mut room), Err(Interrupt::Close)));
+        assert!(matches!(room.wait_event(None), Err(Interrupt::Close)));
     }
 
     #[test]
-    fn the_room_drops_the_vsync_of_a_view() {
-        let mut input = Vec::new();
-        to_engine::write_input(&mut input, player(1), &InputEvent::Vsync).unwrap();
-        assert!(matches!(read_event(&mut &input[..]), Ok(Step::Skip)));
+    fn a_tick_is_the_vsync() {
+        let mut input = start();
+        to_engine::write_tick(&mut input).unwrap();
+        let mut room = reading(input);
+        assert!(matches!(room.wait_event(None), Ok(RoomEvent::Vsync)));
+        assert!(matches!(room.wait_event(None), Err(Interrupt::Close)));
     }
 
     #[test]
@@ -375,11 +355,11 @@ mod tests {
         to_engine::write_input(&mut input, player(1), &key("b")).unwrap();
         let mut room = reading(input);
         assert!(matches!(
-            next(&mut room),
+            room.wait_event(None),
             Err(Interrupt::Read(ReadError::Payload(Error::NoPlayer)))
         ));
         assert!(matches!(
-            next(&mut room),
+            room.wait_event(None),
             Ok(RoomEvent::Input { player: p, .. }) if p == player(1)
         ));
     }

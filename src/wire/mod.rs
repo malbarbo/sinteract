@@ -61,6 +61,9 @@ pub enum Error {
     /// An event, a join, a leave or a member of a roster has player 0,
     /// which is not a player of the session.
     NoPlayer,
+    /// An event of a player is a Vsync, which only a tick of the server
+    /// carries.
+    PlayerVsync,
     /// A roster has a player twice.
     DuplicatePlayer(to_engine::DuplicatePlayer),
 }
@@ -76,6 +79,7 @@ impl std::fmt::Display for Error {
                 )
             }
             Error::NoPlayer => write!(f, "an event, a join, a leave or a member has player 0"),
+            Error::PlayerVsync => write!(f, "an event of a player is a Vsync"),
             Error::DuplicatePlayer(e) => write!(f, "{e}"),
         }
     }
@@ -519,18 +523,6 @@ mod tests {
     }
 
     #[test]
-    fn a_vsync_and_a_close_of_the_view_round_trip() {
-        assert!(matches!(
-            decode_event(&encode_event(&InputEvent::Vsync)),
-            Ok(InputEvent::Vsync)
-        ));
-        assert!(matches!(
-            to_engine::decode(&to_engine::encode_close()),
-            Ok(Some(to_engine::Message::Close))
-        ));
-    }
-
-    #[test]
     fn the_messages_of_a_view_round_trip_with_their_header() {
         let mut stream = Vec::new();
         to_server::write_input(&mut stream, &InputEvent::Vsync).unwrap();
@@ -614,6 +606,36 @@ mod tests {
     }
 
     #[test]
+    fn a_tick_round_trips_and_an_event_that_is_a_vsync_is_an_error() {
+        let mut stream = Vec::new();
+        to_engine::write_tick(&mut stream).unwrap();
+        let vsync = to_engine::encode_input(1, &InputEvent::Vsync);
+        stream.extend_from_slice(&framing::header(framing::Side::Server, vsync.len() as u32));
+        stream.extend_from_slice(&vsync);
+        to_engine::write_close(&mut stream).unwrap();
+        let mut r = &stream[..];
+        assert!(matches!(
+            to_engine::read(&mut r),
+            Ok(Some(to_engine::Message::Tick))
+        ));
+        assert!(matches!(
+            to_engine::read(&mut r),
+            Err(ReadError::Payload(Error::PlayerVsync))
+        ));
+        assert!(matches!(
+            to_engine::read(&mut r),
+            Ok(Some(to_engine::Message::Close))
+        ));
+    }
+
+    #[test]
+    fn write_input_refuses_a_vsync() {
+        let err = to_engine::write_input(&mut Vec::new(), nonzero(1), &InputEvent::Vsync)
+            .expect_err("an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
     fn a_roster_does_not_take_a_player_twice() {
         let members = vec![member(1, "Ana"), member(2, "Beto"), member(1, "Caio")];
         assert_eq!(
@@ -626,7 +648,13 @@ mod tests {
     fn an_event_a_join_or_a_leave_of_player_0_is_an_error_and_the_session_goes_on() {
         let mut stream = Vec::new();
         for payload in [
-            to_engine::encode_input(0, &InputEvent::Vsync),
+            to_engine::encode_input(
+                0,
+                &InputEvent::Resize {
+                    width: 1.0,
+                    height: 1.0,
+                },
+            ),
             to_engine::encode_join(0, "Caio"),
             to_engine::encode_leave(0),
         ] {

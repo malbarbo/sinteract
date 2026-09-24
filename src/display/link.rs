@@ -8,7 +8,7 @@ use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::driver::{OpenError, PresentError};
 use super::inbox::{Inbox, Queued, Sender};
@@ -58,14 +58,12 @@ static STDIN_CLAIMED: AtomicBool = AtomicBool::new(false);
 impl<E: Queued> Link<E> {
     /// Call `read` on `reader` from a thread named `name` until it returns
     /// [`Step::End`] or [`ReadError::Broken`], or the display closes. An
-    /// error of `read` goes into the queue as [`Interrupt::Read`]. The queue
-    /// makes a Vsync every `vsync_period`, or takes the Vsync from `read`
-    /// when `vsync_period` is `None`.
+    /// error of `read` goes into the queue as [`Interrupt::Read`], and the
+    /// Vsync comes from `read` too.
     pub(super) fn new<R, W>(
         reader: R,
         writer: W,
         name: &str,
-        vsync_period: Option<Duration>,
         read: impl FnMut(&mut R) -> Result<Step<E>, ReadError> + Send + 'static,
     ) -> io::Result<Self>
     where
@@ -73,7 +71,7 @@ impl<E: Queued> Link<E> {
         R: BufRead + Send + 'static,
         W: Write + Send + 'static,
     {
-        let inbox = Inbox::new(vsync_period);
+        let inbox = Inbox::new(None);
         let peer_closed = Arc::new(AtomicBool::new(false));
         let tx = inbox.sender();
         let flag = Arc::clone(&peer_closed);

@@ -94,14 +94,19 @@ struct Leave {
     player @0 :UInt32;
 }
 
-# Server to engine. A close and a start are about the whole session.
+# Server to engine. A close, a start and a tick are about the whole
+# session.
 struct ServerMessage {
     union {
+        # The input of a player, never a tick, since the server paces the
+        # engine for every player.
         event @0 :PlayerEvent;
         close @1 :Close;
         # The first message of the session.
         start @2 :Start;
         join  @3 :Join;
         leave @4 :Leave;
+        # Time for the engine to draw the next frames.
+        tick  @5 :Input.Tick;
     }
 }

@@ -49,7 +49,7 @@ impl Stdio {
         R: BufRead + Send + 'static,
         W: Write + Send + 'static,
     {
-        let link = Link::new(reader, writer, "sinteract-stdio", None, read_event)?;
+        let link = Link::new(reader, writer, "sinteract-stdio", read_event)?;
         Ok(Self { link })
     }
 }

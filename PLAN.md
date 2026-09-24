@@ -32,19 +32,19 @@ camada: `scene.capnp` para a cena, `event.capnp` para a entrada e
 `protocol.capnp` para a sessão. Cada lado escreve a sua própria raiz, com
 os braços abaixo.
 
-| quem escreve | raiz            | mágica | braços                                     |
-|--------------|-----------------|--------|--------------------------------------------|
-| engine       | `EngineMessage` | `SIE1` | `asset`, `frame`, `close`                  |
-| view         | `ViewMessage`   | `SIV1` | `event`, `close`                           |
-| servidor     | `ServerMessage` | `SIS1` | `event`, `close`, `start`, `join`, `leave` |
+| quem escreve | raiz            | mágica | braços                                             |
+|--------------|-----------------|--------|----------------------------------------------------|
+| engine       | `EngineMessage` | `SIE1` | `asset`, `frame`, `close`                          |
+| view         | `ViewMessage`   | `SIV1` | `event`, `close`                                   |
+| servidor     | `ServerMessage` | `SIS1` | `event`, `close`, `start`, `join`, `leave`, `tick` |
 
 Num pipe, cada mensagem vai atrás de um cabeçalho de 8 bytes: a mágica e o
 tamanho em `u32` LE. Num WebSocket vai só o payload, e a versão vai no
 subprotocolo `sinteract.v1`. O player é o número do jogador na partida, a
 partir de 1, e vai no primeiro campo do payload das mensagens que falam de
 um jogador: o `event`, o `join` e o `leave` do servidor e o `frame` da
-engine, em que o 0 quer dizer todos. O `start`, o `close` e o `asset` são da
-sessão inteira e não têm player, e a `ViewMessage` também não, porque o
+engine, em que o 0 quer dizer todos. O `start`, o `close`, o `tick` e o
+`asset` são da sessão inteira e não têm player, e a `ViewMessage` também não, porque o
 servidor sabe o player pela conexão.
 Uma view que fala com a engine sem servidor escreve `ViewMessage`, que a
 engine lê com o `Stdio`.
@@ -73,7 +73,10 @@ Regras da sessão com servidor:
   frame mais novo dele;
 - não há keep-alive no schema. O servidor usa o ping do WebSocket, guarda
   o lugar de quem caiu por uns 30 s e depois manda `leave`;
-- a view manda um `resize` como primeiro evento de cada conexão.
+- a view manda um `resize` como primeiro evento de cada conexão;
+- um timer do servidor manda o `tick`, que é o `Vsync` de todos os
+  jogadores, e o servidor não repassa o `Vsync` da view. A engine guarda
+  no máximo um `Vsync` na fila, então não acumula `tick`.
 
 O documento `sgleam/RUNTIME_PROTOCOL.md` descreve o servidor do Sarcade
 sobre esse protocolo, com um exemplo em Tokio.
@@ -83,8 +86,10 @@ sobre esse protocolo, com um exemplo em Tokio.
 `Display::wait_event(deadline)` devolve um `Event` ou um `Interrupt`
 (`Wake`, `Timeout`, `Read` ou `Close`). O ritmo vem de um evento `Vsync` na
 fila. O terminal e a janela fazem o próprio `Vsync`, o `Stdio` recebe o da
-view, e o `Room` tem um relógio e ignora o das views, porque cada view tem
-o seu ritmo. O loop do aluno é o mesmo em todos os modos:
+view, e o `Room` recebe o `tick` do servidor, que marca o ritmo de todos os
+jogadores, porque cada view tem o seu ritmo. Um `event` do servidor que é
+um `Vsync` é um erro de leitura. O loop do aluno é o mesmo em todos os
+modos:
 
 ```python
 while ev := wait_event():
@@ -158,8 +163,8 @@ Feito no sinteract:
 - o trait `Display`, com `Terminal`, `Window` e `Stdio`, as features
   `terminal` e `window`, e o `wait_event` com `Interrupt`;
 - a entrada com teclado, mouse, resize e pad de 12 botões;
-- o `Room`, com o relógio próprio e a fila que junta movimentos por
-  jogador;
+- o `Room`, com o `Vsync` do `tick` do servidor e a fila que junta
+  movimentos por jogador;
 - as funções do servidor: `framing::parse_header`, `to_server::decode` e
   `to_view::arm`;
 - a feature `render`, que um servidor desliga.

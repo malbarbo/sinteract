@@ -2,8 +2,9 @@
 //! union.
 //!
 //! The server starts the session with the players, passes on the input of
-//! each view with its player, and says when a player joins or leaves.
-//! The server ends the session with a close.
+//! each view with its player, and says when a player joins or leaves. A
+//! tick of the server paces the engine for every player, and the server
+//! ends the session with a close.
 
 use std::collections::HashSet;
 use std::io::{self, Read, Write};
@@ -21,16 +22,20 @@ use super::protocol::{ReadError, decode_root, read_next};
 
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with
-/// [`crate::event::Event`]. `Close` and `Start` are about the whole
+/// [`crate::event::Event`]. `Close`, `Start` and `Tick` are about the whole
 /// session.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// The input of `player`. The server sends every Vsync as a `Tick`, so
+    /// `event` is never [`InputEvent::Vsync`].
     Input {
         player: NonZeroU32,
         event: InputEvent,
     },
     Close,
     Start(Roster),
+    /// Time for the engine to draw the next frames.
+    Tick,
     Join {
         player: NonZeroU32,
         nickname: String,
@@ -92,14 +97,27 @@ pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
     read_next(r, Side::Server, decode)
 }
 
-/// Write the input `ev` of `player`.
+/// Write the input `ev` of `player`. A Vsync is not written, and the error
+/// is [`io::ErrorKind::InvalidInput`], since the server sends every Vsync
+/// with [`write_tick`].
 pub fn write_input(w: &mut impl Write, player: NonZeroU32, ev: &InputEvent) -> io::Result<()> {
+    if matches!(ev, InputEvent::Vsync) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a Vsync goes in a tick, not in the input of a player",
+        ));
+    }
     write_framed(w, Side::Server, &input_message(player.get(), ev))
 }
 
 /// Write the close of the session.
 pub fn write_close(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::Server, &close_message())
+}
+
+/// Write a tick, the Vsync of every player.
+pub fn write_tick(w: &mut impl Write) -> io::Result<()> {
+    write_framed(w, Side::Server, &tick_message())
 }
 
 /// Write the start of the session with `roster`.
@@ -118,8 +136,8 @@ pub fn write_leave(w: &mut impl Write, player: NonZeroU32) -> io::Result<()> {
 }
 
 /// Decode `payload`. `None` for a message or an event of an arm from a
-/// newer schema. An event, a join, a leave or a member of player 0, and a
-/// roster that repeats a player, are errors.
+/// newer schema. An event, a join, a leave or a member of player 0, an
+/// event that is a Vsync, and a roster that repeats a player, are errors.
 pub(super) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<server_message::Owned, _>(payload, decode_message)
 }
@@ -134,6 +152,9 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
             let Some(event) = read_input_event(e.get_event()?)? else {
                 return Ok(None);
             };
+            if matches!(event, InputEvent::Vsync) {
+                return Err(Error::PlayerVsync);
+            }
             Ok(Some(Message::Input {
                 player: nonzero_player(e.get_player())?,
                 event,
@@ -163,6 +184,7 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
         server_message::Leave(l) => Ok(Some(Message::Leave {
             player: nonzero_player(l?.get_player())?,
         })),
+        server_message::Tick(_) => Ok(Some(Message::Tick)),
     }
 }
 
@@ -182,6 +204,12 @@ fn input_message(player: u32, ev: &InputEvent) -> MessageBuilder<HeapAllocator> 
 fn close_message() -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     builder.init_root::<server_message::Builder>().init_close();
+    builder
+}
+
+fn tick_message() -> MessageBuilder<HeapAllocator> {
+    let mut builder = MessageBuilder::new_default();
+    builder.init_root::<server_message::Builder>().init_tick();
     builder
 }
 
@@ -232,10 +260,4 @@ pub(crate) fn encode_join(player: u32, nickname: &str) -> Vec<u8> {
 #[cfg(test)]
 pub(crate) fn encode_leave(player: u32) -> Vec<u8> {
     super::finish(leave_message(player))
-}
-
-/// Encode a close, with no envelope.
-#[cfg(test)]
-pub(crate) fn encode_close() -> Vec<u8> {
-    super::finish(close_message())
 }
