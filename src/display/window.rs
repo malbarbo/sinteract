@@ -93,7 +93,7 @@ impl Window {
             Ok(surface) => surface,
             Err(e) => {
                 drop(window);
-                lent.pump(&mut app, Some(Duration::ZERO));
+                lent.pump(&mut app, Duration::ZERO);
                 return Err(e);
             }
         };
@@ -127,7 +127,7 @@ impl super::Display for Window {
         // due, so the wait returns it without a pump, and the platform takes
         // a window that never answers for hung. So every call pumps once.
         if let Some(s) = self.session.as_mut()
-            && !s.lent.pump(&mut s.app, Some(Duration::ZERO))
+            && !s.lent.pump(&mut s.app, Duration::ZERO)
         {
             let _ = s.app.tx.send_close();
         }
@@ -139,7 +139,7 @@ impl super::Display for Window {
                 let Some(s) = session.as_mut() else {
                     return;
                 };
-                if !s.lent.pump(&mut s.app, Some(timeout)) {
+                if !s.lent.pump(&mut s.app, timeout) {
                     let _ = s.app.tx.send_close();
                 }
             });
@@ -188,7 +188,7 @@ impl super::Display for Window {
         drop(surface);
         drop(window);
         // Wayland, X11 and Windows destroy a window as the loop runs.
-        lent.pump(&mut app, Some(Duration::ZERO));
+        lent.pump(&mut app, Duration::ZERO);
     }
 }
 
@@ -326,7 +326,7 @@ impl Lent {
     ///
     /// The loop never calls `ActiveEventLoop::exit`, because `pump` does
     /// not clear the flag and the next window would find it set.
-    fn pump(&mut self, app: &mut App, timeout: Option<Duration>) -> bool {
+    fn pump(&mut self, app: &mut App, timeout: Duration) -> bool {
         if self.dead {
             return false;
         }
@@ -334,7 +334,7 @@ impl Lent {
             .event_loop
             .as_mut()
             .expect("the loop leaves only on drop");
-        if let PumpStatus::Exit(_) = event_loop.pump_app_events(timeout, app) {
+        if let PumpStatus::Exit(_) = event_loop.pump_app_events(Some(timeout), app) {
             self.dead = true;
         }
         !self.dead
@@ -349,7 +349,7 @@ impl Lent {
     ) -> Result<Rc<WinitWindow>, OpenError> {
         let deadline = Instant::now() + timeout;
         loop {
-            if !self.pump(app, Some(Duration::from_millis(16))) {
+            if !self.pump(app, Duration::from_millis(16)) {
                 return Err(OpenError::LoopEnded);
             }
             match app.created.take() {
