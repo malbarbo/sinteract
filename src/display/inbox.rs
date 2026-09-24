@@ -61,7 +61,16 @@ impl Sender {
         self.put(Msg::Redraw)
     }
 
+    /// Queue `ev`. The clock of the queue makes every Vsync.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ev` is a Vsync.
     pub(crate) fn send_input(&self, ev: InputEvent) -> Result<(), Closed> {
+        assert!(
+            !matches!(ev, InputEvent::Vsync),
+            "the clock of the queue makes every Vsync"
+        );
         self.send(Entry::Input(ev))
     }
 
@@ -175,7 +184,15 @@ impl Inbox {
 
     /// Queue `ev` ahead of every event, the first Vsync included, for what
     /// a display tells the engine as it opens.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ev` is a Vsync.
     pub(crate) fn send_first(&mut self, ev: InputEvent) {
+        assert!(
+            !matches!(ev, InputEvent::Vsync),
+            "the clock of the queue makes every Vsync"
+        );
         let now = Instant::now();
         // A Vsync goes out first only when it is strictly older.
         let at = self.clock.due.min(now);
@@ -270,16 +287,10 @@ impl Inbox {
         }
     }
 
-    /// Queue `item`. The clock makes every Vsync, so `push` drops a Vsync
-    /// from the channel.
-    ///
-    /// A move of the mouse or a resize replaces one of its kind at the back
-    /// of the queue, since only the latest one counts. A mouse at 1000 Hz
-    /// would flood an engine that runs at 60 Hz.
+    /// Queue `item`. A move of the mouse or a resize replaces one of its
+    /// kind at the back of the queue, since only the latest one counts. A
+    /// mouse at 1000 Hz would flood an engine that runs at 60 Hz.
     fn push(&mut self, item: Item) {
-        if matches!(item.entry, Entry::Input(InputEvent::Vsync)) {
-            return;
-        }
         if let Entry::Input(new) = &item.entry
             && let Some(back) = self.pending.back_mut()
             && let Entry::Input(old) = &back.entry
@@ -605,13 +616,17 @@ mod tests {
     }
 
     #[test]
-    fn the_clock_drops_a_vsync_from_the_channel() {
-        let period = Duration::from_millis(16);
-        let mut inbox = Inbox::new(period);
-        let t0 = Instant::now();
-        assert!(is_vsync(&inbox.pop(t0).unwrap()));
-        inbox.push(item(t0, InputEvent::Vsync));
-        assert!(inbox.pop(t0).is_none());
+    #[should_panic(expected = "the clock of the queue makes every Vsync")]
+    fn a_sender_refuses_a_vsync() {
+        let _ = Inbox::new(Duration::from_secs(1))
+            .sender()
+            .send_input(InputEvent::Vsync);
+    }
+
+    #[test]
+    #[should_panic(expected = "the clock of the queue makes every Vsync")]
+    fn send_first_refuses_a_vsync() {
+        Inbox::new(Duration::from_secs(1)).send_first(InputEvent::Vsync);
     }
 
     #[test]
