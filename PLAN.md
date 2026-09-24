@@ -58,7 +58,7 @@ Regras da sessão com servidor:
 - o `start` é a primeira mensagem, com os jogadores que já estão na sala, e
   pode vir vazio;
 - um jogador aparece uma vez no `start`, o número dele não se repete na
-  partida, e `join` e `leave` de player 0 são erro;
+  partida, e `event`, `join` e `leave` de player 0 são erro;
 - o `close` do servidor vai com player 0 e encerra a partida. Para tirar um
   jogador, o servidor fecha o WebSocket dele e manda `leave`;
 - a engine manda os assets com player 0, os `id`s valem para a partida
@@ -171,9 +171,6 @@ Falta:
 
 ## Pontos abertos
 
-- O comentário de `ServerMessage.event` diz que o player 0 é o servidor,
-  como num tick, mas o `Room` rejeita um evento de player 0, e
-  `to_engine::write_input` aceita um `u32` qualquer.
 - Um `close` do servidor com player diferente de 0 encerra a partida
   inteira sem aviso, e o `close` da engine com player N não tem sentido
   definido.

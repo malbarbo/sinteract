@@ -22,12 +22,11 @@ use super::protocol::{ReadError, decode_root, read_next};
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with
 /// [`crate::event::Event`]. The player comes from the header, and `Close`
-/// and `Start` are about the whole session. Player 0 is the server itself,
-/// so only `Input` has a player 0.
+/// and `Start` are about the whole session.
 #[derive(Clone, Debug)]
 pub enum Message {
     Input {
-        player: Player,
+        player: NonZeroU32,
         event: InputEvent,
     },
     Close,
@@ -94,8 +93,8 @@ pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
 }
 
 /// Write the input `ev` of `player`.
-pub fn write_input(w: &mut impl Write, player: Player, ev: &InputEvent) -> io::Result<()> {
-    write_framed(w, Side::Server, player, &input_message(ev))
+pub fn write_input(w: &mut impl Write, player: NonZeroU32, ev: &InputEvent) -> io::Result<()> {
+    write_framed(w, Side::Server, player.get(), &input_message(ev))
 }
 
 /// Write the close of the session.
@@ -119,8 +118,8 @@ pub fn write_leave(w: &mut impl Write, player: NonZeroU32) -> io::Result<()> {
 }
 
 /// Decode `payload`, for `player` of the header. `None` for a message or
-/// an event of an arm from a newer schema. A join, a leave or a member of
-/// player 0, and a roster that repeats a player, are errors.
+/// an event of an arm from a newer schema. An event, a join, a leave or a
+/// member of player 0, and a roster that repeats a player, are errors.
 pub(super) fn decode(player: Player, payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<server_message::Owned, _>(payload, |msg| decode_message(player, msg))
 }
@@ -134,7 +133,13 @@ fn decode_message(
     };
     match which {
         server_message::Event(e) => {
-            Ok(read_input_event(e?)?.map(|event| Message::Input { player, event }))
+            let Some(event) = read_input_event(e?)? else {
+                return Ok(None);
+            };
+            Ok(Some(Message::Input {
+                player: nonzero_player(player)?,
+                event,
+            }))
         }
         server_message::Close(_) => Ok(Some(Message::Close)),
         server_message::Start(s) => {

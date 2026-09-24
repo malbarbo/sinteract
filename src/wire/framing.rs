@@ -66,7 +66,7 @@ impl Side {
 pub type Player = u32;
 
 /// A message that no server routes. From the engine it goes to every view,
-/// from the server it comes from the server itself, and a view writes no
+/// from the server it is about the whole session, and a view writes no
 /// other player.
 pub const UNROUTED: Player = 0;
 

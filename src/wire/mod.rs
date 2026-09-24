@@ -58,8 +58,8 @@ pub enum Error {
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
-    /// A join, a leave, a member of a roster or an input that needs a
-    /// player has player 0, which is not a player of the session.
+    /// An event, a join, a leave or a member of a roster has player 0,
+    /// which is not a player of the session.
     NoPlayer,
     /// A roster has a player twice.
     DuplicatePlayer(to_engine::DuplicatePlayer),
@@ -75,7 +75,7 @@ impl std::fmt::Display for Error {
                     "path verbs ({verbs} bytes) and coords ({coords} floats) disagree"
                 )
             }
-            Error::NoPlayer => write!(f, "a join, a leave or a member has player 0"),
+            Error::NoPlayer => write!(f, "an event, a join, a leave or a member has player 0"),
             Error::DuplicatePlayer(e) => write!(f, "{e}"),
         }
     }
@@ -348,7 +348,7 @@ mod tests {
     /// Decode a message of the server of an arm this schema knows, as
     /// [`to_engine::read`] does after the envelope.
     fn decode_event(bytes: &[u8]) -> Result<InputEvent, Error> {
-        match to_engine::decode(framing::UNROUTED, bytes)?.expect("an arm this schema knows") {
+        match to_engine::decode(1, bytes)?.expect("an arm this schema knows") {
             to_engine::Message::Input { event, .. } => Ok(event),
             other => panic!("got {other:?}"),
         }
@@ -356,7 +356,7 @@ mod tests {
 
     /// Whether [`to_engine::read`] skips the payload in `bytes`.
     fn is_event_skipped(bytes: &[u8]) -> bool {
-        matches!(to_engine::decode(framing::UNROUTED, bytes), Ok(None))
+        matches!(to_engine::decode(1, bytes), Ok(None))
     }
 
     fn nonzero(n: u32) -> std::num::NonZeroU32 {
@@ -596,19 +596,21 @@ mod tests {
     }
 
     #[test]
-    fn a_join_or_a_leave_of_player_0_is_an_error_and_the_session_goes_on() {
+    fn an_event_a_join_or_a_leave_of_player_0_is_an_error_and_the_session_goes_on() {
+        let mut event = Vec::new();
+        to_engine::write_input(&mut event, nonzero(3), &InputEvent::Vsync).unwrap();
         let mut join = Vec::new();
         to_engine::write_join(&mut join, nonzero(3), "Caio").unwrap();
         let mut leave = Vec::new();
         to_engine::write_leave(&mut leave, nonzero(3)).unwrap();
         let mut stream = Vec::new();
-        for mut message in [join, leave] {
+        for mut message in [event, join, leave] {
             message[4..8].fill(0);
             stream.extend_from_slice(&message);
         }
         to_engine::write_close(&mut stream).unwrap();
         let mut r = &stream[..];
-        for _ in 0..2 {
+        for _ in 0..3 {
             assert!(matches!(
                 to_engine::read(&mut r),
                 Err(ReadError::Payload(Error::NoPlayer))
@@ -869,6 +871,11 @@ mod tests {
             tag_of(e.unwrap())
         });
         assert!(is_event_skipped(&bytes));
+        // The reader checks the player only for an event that it keeps.
+        assert!(matches!(
+            to_engine::decode(framing::UNROUTED, &bytes),
+            Ok(None)
+        ));
     }
 
     fn element_at(m: engine_message::Reader<'_>, i: u32) -> element::WhichReader<'_> {

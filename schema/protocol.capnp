@@ -76,8 +76,7 @@ struct Leave {}
 # Server to engine.
 struct ServerMessage {
     union {
-        # The input of the player in the header. Player 0 is the server
-        # itself, such as for a tick.
+        # The input of the player in the header, from 1.
         event @0 :Input.InputEvent;
         close @1 :Close;
         # The first message of the session.

@@ -21,7 +21,7 @@ use crate::event::{InputEvent, Interrupt};
 use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
 use crate::wire::to_engine::{self, Message, Roster};
-use crate::wire::{self, ReadError, to_view};
+use crate::wire::{ReadError, to_view};
 
 /// The engine side of a session with players. It shows nothing, and only
 /// carries the protocol.
@@ -200,22 +200,18 @@ fn read_start(reader: &mut impl BufRead) -> io::Result<Roster> {
     }
 }
 
-/// The next event of the server. An event of player 0 is an error. The
-/// room drops the Vsync of a view, since its clock makes every Vsync, and a
-/// start after the first one changes nothing.
+/// The next event of the server. The room drops the Vsync of a view,
+/// since its clock makes every Vsync, and a start after the first one
+/// changes nothing.
 fn read_event(reader: &mut impl BufRead) -> Result<Step<RoomEvent>, ReadError> {
     Ok(match to_engine::read(reader)? {
-        Some(Message::Input { player, event }) => {
-            let player =
-                NonZeroU32::new(player).ok_or(ReadError::Payload(wire::Error::NoPlayer))?;
-            match event {
-                InputEvent::Vsync => Step::Skip,
-                InputEvent::Key(_)
-                | InputEvent::Mouse(_)
-                | InputEvent::Resize { .. }
-                | InputEvent::Pad(_) => Step::Event(RoomEvent::Input { player, event }),
-            }
-        }
+        Some(Message::Input { player, event }) => match event {
+            InputEvent::Vsync => Step::Skip,
+            InputEvent::Key(_)
+            | InputEvent::Mouse(_)
+            | InputEvent::Resize { .. }
+            | InputEvent::Pad(_) => Step::Event(RoomEvent::Input { player, event }),
+        },
         Some(Message::Join { player, nickname }) => {
             Step::Event(RoomEvent::Join { player, nickname })
         }
@@ -231,6 +227,7 @@ mod tests {
     use crate::display::inbox::Inbox;
     use crate::display::link::SharedWriter;
     use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
+    use crate::wire::Error;
     use crate::wire::to_engine::Member;
     use std::io::{BufReader, Cursor, PipeWriter};
 
@@ -317,7 +314,7 @@ mod tests {
     #[test]
     fn open_fails_on_a_message_before_the_start() {
         let mut input = Vec::new();
-        to_engine::write_input(&mut input, 1, &key("a")).unwrap();
+        to_engine::write_input(&mut input, player(1), &key("a")).unwrap();
         input.extend_from_slice(&start());
         let e = Room::with_streams(Cursor::new(input), Vec::<u8>::new(), HOUR)
             .err()
@@ -336,7 +333,7 @@ mod tests {
     #[test]
     fn the_events_carry_their_player() {
         let mut input = start();
-        to_engine::write_input(&mut input, 2, &key("a")).unwrap();
+        to_engine::write_input(&mut input, player(2), &key("a")).unwrap();
         to_engine::write_join(&mut input, player(3), "Caio").unwrap();
         to_engine::write_leave(&mut input, player(1)).unwrap();
         let mut room = reading(input);
@@ -366,19 +363,22 @@ mod tests {
     #[test]
     fn the_room_drops_the_vsync_of_a_view() {
         let mut input = Vec::new();
-        to_engine::write_input(&mut input, 1, &InputEvent::Vsync).unwrap();
+        to_engine::write_input(&mut input, player(1), &InputEvent::Vsync).unwrap();
         assert!(matches!(read_event(&mut &input[..]), Ok(Step::Skip)));
     }
 
     #[test]
     fn an_event_of_player_0_is_a_read_error_and_the_session_goes_on() {
         let mut input = start();
-        to_engine::write_input(&mut input, UNROUTED, &InputEvent::Vsync).unwrap();
-        to_engine::write_input(&mut input, 1, &key("b")).unwrap();
+        let mut zeroed = Vec::new();
+        to_engine::write_input(&mut zeroed, player(1), &key("a")).unwrap();
+        zeroed[4..8].fill(0);
+        input.extend_from_slice(&zeroed);
+        to_engine::write_input(&mut input, player(1), &key("b")).unwrap();
         let mut room = reading(input);
         assert!(matches!(
             next(&mut room),
-            Err(Interrupt::Read(ReadError::Payload(wire::Error::NoPlayer)))
+            Err(Interrupt::Read(ReadError::Payload(Error::NoPlayer)))
         ));
         assert!(matches!(
             next(&mut room),
