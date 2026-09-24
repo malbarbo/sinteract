@@ -1,33 +1,42 @@
-//! A view for an engine that talks the protocol on stdio, such as
-//! `examples/engine.rs`. It runs the engine as a subprocess, shows its
-//! frames in the terminal or in a window, and sends it the Vsync and the
-//! keys. At the end it prints to stderr what the frames cost:
+//! A view for an engine that talks the protocol on fd 3 and fd 4, such as
+//! `examples/engine.rs`. It runs the engine as a subprocess and plays the
+//! part of the server for one player. It starts the session with player 1,
+//! shows the frames in the terminal or in a window, and sends a tick for
+//! each Vsync of the display and the input of the user as player 1. At the
+//! end it prints to stderr what the frames cost:
 //!
 //! ```text
 //! cargo build --examples
 //! target/debug/examples/view target/debug/examples/engine 200
 //! ```
 
-// The view opens a terminal or a window, which wasm32 lacks. Without a
+// The view hands the engine fd 3 and fd 4, which only unix has. Without a
 // `main`, the empty crate needs `no_main`.
-#![cfg_attr(target_arch = "wasm32", no_main)]
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg_attr(not(unix), no_main)]
+#![cfg(unix)]
 
-use std::io::{BufReader, BufWriter, Read};
-use std::process::{Command, ExitCode, Stdio};
+use std::io::{self, BufReader, BufWriter, PipeReader, PipeWriter, Read};
+use std::num::NonZeroU32;
+use std::os::fd::OwnedFd;
+use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
-use sinteract::event::{Event, Interrupt};
+use sinteract::event::{Event, InputEvent, Interrupt};
 use sinteract::scene::Scene;
+use sinteract::wire::ReadError;
+use sinteract::wire::to_engine::{self, Member, Roster};
 use sinteract::wire::to_view::{self, Message};
-use sinteract::wire::{ReadError, to_server};
 
 /// How many messages the reader thread holds before it waits for the loop,
 /// so an engine that draws faster than the view does not fill the memory.
 const BACKLOG: usize = 4;
+
+/// The one player of the session.
+const PLAYER: NonZeroU32 = NonZeroU32::MIN;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -35,20 +44,25 @@ fn main() -> ExitCode {
         eprintln!("usage: view ENGINE [ARGS...]");
         return ExitCode::FAILURE;
     };
-    let mut child = match Command::new(engine)
-        .args(engine_args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
+    let (mut child, to_engine, from_engine) = match spawn(engine, engine_args) {
+        Ok(spawned) => spawned,
         Err(e) => {
             eprintln!("view: cannot run {engine}: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let mut to_engine = BufWriter::new(child.stdin.take().expect("stdin is piped"));
-    let from_engine = BufReader::new(child.stdout.take().expect("stdout is piped"));
+    let mut to_engine = BufWriter::new(to_engine);
+    let from_engine = BufReader::new(from_engine);
+    let roster = Roster::new(vec![Member {
+        player: PLAYER,
+        nickname: "view".into(),
+    }])
+    .expect("one player");
+    if let Err(e) = to_engine::write_start(&mut to_engine, &roster) {
+        eprintln!("view: {e}");
+        let _ = child.kill();
+        return ExitCode::FAILURE;
+    }
 
     // The size of the scene is only known at the first frame, and the
     // engine sends no frame before a Vsync, which needs the display open.
@@ -70,16 +84,23 @@ fn main() -> ExitCode {
     let close = loop {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
-                if to_server::write_input(&mut to_engine, &ev).is_err() {
+                let sent = match ev {
+                    InputEvent::Vsync => to_engine::write_tick(&mut to_engine),
+                    InputEvent::Key(_)
+                    | InputEvent::Mouse(_)
+                    | InputEvent::Resize { .. }
+                    | InputEvent::Pad(_) => to_engine::write_input(&mut to_engine, PLAYER, &ev),
+                };
+                if sent.is_err() {
                     break false;
                 }
             }
             // The messages of the engine come through the channel, and the
             // reader thread wakes the loop after each one.
             Err(Interrupt::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
-                Session::Open => {}
-                Session::EngineClosed => break false,
-                Session::DisplayFailed => break true,
+                Drained::Open => {}
+                Drained::EngineClosed => break false,
+                Drained::DisplayFailed => break true,
             },
             Err(Interrupt::Close) => break true,
             Err(Interrupt::Read(e)) => eprintln!("view: {e}"),
@@ -87,7 +108,7 @@ fn main() -> ExitCode {
         }
     };
     if close {
-        let _ = to_server::write_close(&mut to_engine);
+        let _ = to_engine::write_close(&mut to_engine);
     }
     drop(to_engine);
     // The reader thread may wait on a full channel. Without the receiver
@@ -99,6 +120,34 @@ fn main() -> ExitCode {
     let _ = child.wait();
     stats.report();
     ExitCode::SUCCESS
+}
+
+/// Run `engine` with the session on fd 3 and fd 4, and return the ends of
+/// the view. The engine gets no stdin, since the terminal of the view reads
+/// the keys from it.
+fn spawn(engine: &str, args: &[String]) -> io::Result<(Child, PipeWriter, PipeReader)> {
+    let (engine_reads, to_engine) = io::pipe()?;
+    let (from_engine, engine_writes) = io::pipe()?;
+    // The command holds the ends of the engine and drops them at the end of
+    // the statement. A view that kept them would never see the end of the
+    // stream.
+    let child = Command::new(engine)
+        .args(args)
+        .env("SINTERACT_SESSION", "1")
+        .stdin(Stdio::null())
+        .fd_mappings(vec![
+            FdMapping {
+                parent_fd: OwnedFd::from(engine_reads),
+                child_fd: 3,
+            },
+            FdMapping {
+                parent_fd: OwnedFd::from(engine_writes),
+                child_fd: 4,
+            },
+        ])
+        .map_err(io::Error::other)?
+        .spawn()?;
+    Ok((child, to_engine, from_engine))
 }
 
 /// Pass each message of the engine to the loop and wake it. The end of the
@@ -124,7 +173,7 @@ fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Message>, wake: S
     }
 }
 
-enum Session {
+enum Drained {
     Open,
     /// The engine sent its close, so the view sends none back.
     EngineClosed,
@@ -136,9 +185,9 @@ enum Session {
 /// Act on the messages of the engine that arrived. The assets go to the
 /// display in order, and only the last frame is shown, since the ones
 /// before it are already stale.
-fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stats) -> Session {
+fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stats) -> Drained {
     let mut last: Option<Scene> = None;
-    let mut session = Session::Open;
+    let mut session = Drained::Open;
     for message in from_reader.try_iter() {
         match message {
             Message::Asset { id, blob, mime } => match fr.push_asset(id, &blob, mime.as_deref()) {
@@ -147,7 +196,7 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
                 Err(e @ PresentError::Asset(_)) => eprintln!("view: {e}"),
                 Err(e) => {
                     eprintln!("view: {e}");
-                    return Session::DisplayFailed;
+                    return Drained::DisplayFailed;
                 }
             },
             Message::Frame { scene, .. } => {
@@ -156,7 +205,7 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
                 }
             }
             Message::Close => {
-                session = Session::EngineClosed;
+                session = Drained::EngineClosed;
                 break;
             }
         }
@@ -165,7 +214,7 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
         let start = Instant::now();
         if let Err(e) = fr.present(scene) {
             eprintln!("view: {e}");
-            return Session::DisplayFailed;
+            return Drained::DisplayFailed;
         }
         stats.shown(start.elapsed());
     }

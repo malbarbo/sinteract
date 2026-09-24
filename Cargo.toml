@@ -75,6 +75,10 @@ softbuffer = { version = "0.4", optional = true, default-features = false, featu
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }
 
+# examples/view.rs hands the engine fd 3 and fd 4.
+[target.'cfg(unix)'.dev-dependencies]
+command-fds = "0.3"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", optional = true, features = [
     "Win32_Foundation",

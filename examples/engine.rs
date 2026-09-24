@@ -1,23 +1,28 @@
-//! An engine that runs a game and talks the protocol on stdin and stdout,
-//! for `examples/view.rs`. Balls bounce, and the arrows move a paddle. `q`
-//! ends the session from this side. The argument is the number of balls:
+//! An engine that runs a game and talks the protocol on fd 3 and fd 4, for
+//! `examples/view.rs`. Balls bounce, and the arrows of any player move a
+//! paddle. `q` ends the session from this side. The argument is the number
+//! of balls:
 //!
 //! ```text
 //! cargo build --examples
 //! target/debug/examples/view target/debug/examples/engine 200
 //! ```
 
-// The engine talks through `Stdio`, which wasm32 lacks. Without a `main`, the
-// empty crate needs `no_main`.
-#![cfg_attr(target_arch = "wasm32", no_main)]
-#![cfg(not(target_arch = "wasm32"))]
+// The view hands the engine fd 3 and fd 4, which only unix has. Without a
+// `main`, the empty crate needs `no_main`.
+#![cfg_attr(not(unix), no_main)]
+#![cfg(unix)]
 
+use std::fs::File;
+use std::io::BufWriter;
+use std::os::fd::FromRawFd;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use sinteract::display::{Display, Stdio};
-use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
+use sinteract::event::{InputEvent, KeyKind, key};
 use sinteract::scene::{Paint, PathStyle, Scene};
+use sinteract::session::{Session, SessionEvent};
+use sinteract::wire::to_view;
 
 const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 300.0;
@@ -27,45 +32,71 @@ fn main() -> ExitCode {
         .nth(1)
         .and_then(|n| n.parse().ok())
         .unwrap_or(1);
-    let mut fr = match Stdio::new() {
-        Ok(fr) => fr,
-        Err(e) => {
-            eprintln!("engine: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    if std::env::var_os("SINTERACT_SESSION").is_none() {
+        eprintln!("engine: run me from a view or a server, which open fd 3 and fd 4");
+        return ExitCode::FAILURE;
+    }
+    // SAFETY: SINTERACT_SESSION says that the parent opened fd 3 and fd 4
+    // for the session, and nothing else in this process uses them.
+    let (mut from_server, to_view) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
+    let mut to_view = BufWriter::new(to_view);
+    let mut session = Session::new();
     let mut game = Game::new(balls);
     let mut last = None;
-    loop {
-        match fr.wait_event(None) {
-            Ok(Event::Input(InputEvent::Vsync)) => {
+    // Whether the engine ends the session, which the server has to hear.
+    let close = loop {
+        let event = match session.wait(&mut from_server) {
+            Ok(event) => event,
+            Err(e) => {
+                eprintln!("engine: {e}");
+                break false;
+            }
+        };
+        match event {
+            SessionEvent::Vsync => {
                 let now = Instant::now();
                 let dt = last.map_or(0.0, |t: Instant| (now - t).as_secs_f32());
                 last = Some(now);
                 // A long pause would throw the balls through the walls.
                 game.step(dt.min(0.1));
-                if let Err(e) = fr.present(game.scene()) {
+                if let Err(e) = to_view::write_frame(&mut to_view, None, &game.scene()) {
                     eprintln!("engine: {e}");
-                    break;
+                    break false;
                 }
             }
-            Ok(Event::Input(InputEvent::Key(k))) => match k.kind {
-                KeyKind::Press if k.key == "q" => break,
+            SessionEvent::Input {
+                event: InputEvent::Key(k),
+                ..
+            } => match k.kind {
+                KeyKind::Press if k.key == "q" => break true,
                 KeyKind::Press => game.key(&k.key),
                 KeyKind::Down | KeyKind::Up => {}
             },
-            Err(Interrupt::Close) => break,
-            // A message the engine cannot read is a bug in the peer, and
-            // the game goes on without that input. A read that broke ends
-            // the session with the Close that follows it.
-            Err(Interrupt::Read(e)) => eprintln!("engine: {e}"),
-            Ok(Event::Input(
-                InputEvent::Mouse(_) | InputEvent::Resize { .. } | InputEvent::Pad(_),
-            ))
-            | Err(Interrupt::Wake | Interrupt::Timeout) => {}
+            // A message the engine cannot read is a bug in the server, and
+            // the game goes on without it.
+            SessionEvent::Error(e) => eprintln!("engine: {e}"),
+            SessionEvent::End(broken) => {
+                if let Some(e) = broken {
+                    eprintln!("engine: {e}");
+                }
+                break false;
+            }
+            SessionEvent::Start(_)
+            | SessionEvent::Join { .. }
+            | SessionEvent::Leave { .. }
+            | SessionEvent::Input {
+                event:
+                    InputEvent::Mouse(_)
+                    | InputEvent::Resize { .. }
+                    | InputEvent::Vsync
+                    | InputEvent::Pad(_),
+                ..
+            } => {}
         }
+    };
+    if close && let Err(e) = to_view::write_close(&mut to_view) {
+        eprintln!("engine: {e}");
     }
-    fr.close();
     ExitCode::SUCCESS
 }
 
