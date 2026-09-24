@@ -76,7 +76,7 @@ impl Window {
         let mut lent = Lent::take()?;
         let proxy = lent.event_loop().create_proxy();
         let mut inbox = Inbox::with_waker(
-            Some(Self::VSYNC_PERIOD),
+            Self::VSYNC_PERIOD,
             Some(Arc::new(move || {
                 let _ = proxy.send_event(());
             })),
@@ -139,7 +139,7 @@ impl super::Display for Window {
                 let Some(s) = session.as_mut() else {
                     return;
                 };
-                if !s.lent.pump(&mut s.app, timeout) {
+                if !s.lent.pump(&mut s.app, Some(timeout)) {
                     let _ = s.app.tx.send_close();
                 }
             });

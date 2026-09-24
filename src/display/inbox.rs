@@ -32,9 +32,9 @@ pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closed;
 
-/// An event that the queue holds. The queue keeps one Vsync from the
-/// channel, or waits for its clock, and delivers the Vsync with
-/// [`Queued::vsync`]. It drops what a newer event makes worthless.
+/// An event that the queue holds. The queue makes the Vsync with its
+/// clock and delivers it with [`Queued::vsync`]. It drops what a newer
+/// event makes worthless.
 pub(crate) trait Queued {
     /// The Vsync that the queue delivers.
     fn vsync() -> Self;
@@ -125,10 +125,9 @@ pub(crate) struct Inbox<E = Event> {
     tx: mpsc::Sender<Msg<E>>,
     wake: Option<Waker>,
     rx: mpsc::Receiver<Msg<E>>,
-    /// What left the channel and did not go out yet, oldest first, except
-    /// for a Vsync, which waits in `vsync`.
+    /// What left the channel and did not go out yet, oldest first.
     pending: VecDeque<Item<E>>,
-    vsync: Vsync,
+    clock: Clock,
     /// A redraw was requested and did not go out yet. Many requests make
     /// one redraw.
     redraw: bool,
@@ -164,27 +163,23 @@ pub(crate) enum Next<E = Event> {
 }
 
 impl<E: Queued> Inbox<E> {
-    /// A queue that makes a Vsync every `vsync_period`, or that takes them
-    /// from the channel when it is `None`.
+    /// A queue that makes a Vsync every `vsync_period`.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
-    pub(crate) fn new(vsync_period: Option<Duration>) -> Self {
+    pub(crate) fn new(vsync_period: Duration) -> Self {
         Self::with_waker(vsync_period, None)
     }
 
     /// A queue whose [`Sender`]s also call `wake` after they push.
-    pub(crate) fn with_waker(vsync_period: Option<Duration>, wake: Option<Waker>) -> Self {
+    pub(crate) fn with_waker(vsync_period: Duration, wake: Option<Waker>) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             tx,
             wake,
             rx,
             pending: VecDeque::new(),
-            vsync: match vsync_period {
-                Some(period) => Vsync::Clock {
-                    period,
-                    due: Instant::now(),
-                },
-                None => Vsync::Channel { arrived: None },
+            clock: Clock {
+                period: vsync_period,
+                due: Instant::now(),
             },
             redraw: false,
             closed: false,
@@ -214,7 +209,7 @@ impl<E: Queued> Inbox<E> {
     pub(crate) fn send_first(&mut self, ev: E) {
         let now = Instant::now();
         // A Vsync goes out first only when it is strictly older.
-        let at = self.vsync.at().map_or(now, |v| v.min(now));
+        let at = self.clock.due.min(now);
         self.pending.push_front(Item {
             at,
             entry: Entry::Input(ev),
@@ -244,16 +239,15 @@ impl<E: Queued> Inbox<E> {
     /// `deadline` of `None` waits for as long as it takes. A redraw goes
     /// out when no event is ready, so an engine that presents anyway skips it.
     ///
-    /// `block` waits for at most its timeout, or for as long as it takes
-    /// when the timeout is `None`, and a [`Sender`] wakes it. A display
-    /// that blocks on the channel passes [`Inbox::receive`].
+    /// `block` waits for at most its timeout, and a [`Sender`] wakes it. A
+    /// display that blocks on the channel passes [`Inbox::receive`].
     ///
-    /// A Vsync of the clock counts as arrived when it falls due, so input
+    /// A Vsync counts as arrived when it falls due, so input
     /// that arrived before it goes out first.
     pub(crate) fn wait_with(
         &mut self,
         deadline: Option<Instant>,
-        mut block: impl FnMut(&mut Self, Option<Duration>),
+        mut block: impl FnMut(&mut Self, Duration),
     ) -> Next<E> {
         loop {
             if let Some(ready) = self.poll() {
@@ -266,7 +260,7 @@ impl<E: Queued> Inbox<E> {
             if deadline.is_some_and(|d| now >= d) {
                 return Next::Ready(Err(Interrupt::Timeout));
             }
-            let timeout = self.wake_at(deadline).map(|t| t - now);
+            let timeout = self.wake_at(deadline) - now;
             block(self, timeout);
         }
     }
@@ -274,19 +268,12 @@ impl<E: Queued> Inbox<E> {
     /// Take the next message of the channel, or wait until `timeout`
     /// passes.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
-    pub(crate) fn receive(&mut self, timeout: Option<Duration>) {
-        let received = match timeout {
-            Some(t) => match self.rx.recv_timeout(t) {
-                Ok(msg) => Some(msg),
-                Err(RecvTimeoutError::Timeout) => return,
-                Err(RecvTimeoutError::Disconnected) => None,
-            },
-            None => self.rx.recv().ok(),
-        };
-        match received {
-            Some(msg) => self.take(msg),
+    pub(crate) fn receive(&mut self, timeout: Duration) {
+        match self.rx.recv_timeout(timeout) {
+            Ok(msg) => self.take(msg),
+            Err(RecvTimeoutError::Timeout) => {}
             // Only the receiver of a closed inbox disconnects.
-            None => self.closed = true,
+            Err(RecvTimeoutError::Disconnected) => self.closed = true,
         }
     }
 
@@ -302,13 +289,9 @@ impl<E: Queued> Inbox<E> {
     }
 
     /// When a wait until `deadline` has to stop and look again, the earlier
-    /// of `deadline` and the next Vsync. `None` waits for as long as it
-    /// takes.
-    fn wake_at(&self, deadline: Option<Instant>) -> Option<Instant> {
-        match (deadline, self.vsync.at()) {
-            (Some(d), Some(v)) => Some(d.min(v)),
-            (d, v) => d.or(v),
-        }
+    /// of `deadline` and the next Vsync.
+    fn wake_at(&self, deadline: Option<Instant>) -> Instant {
+        deadline.map_or(self.clock.due, |d| d.min(self.clock.due))
     }
 
     fn take(&mut self, msg: Msg<E>) {
@@ -318,18 +301,14 @@ impl<E: Queued> Inbox<E> {
         }
     }
 
-    /// Queue `item`. A Vsync from the channel waits in `vsync`, unless one
-    /// already waits, so an engine that falls behind gets one Vsync, not a
-    /// burst. A clock makes every Vsync, so it drops one from the channel.
+    /// Queue `item`. The clock makes every Vsync, so `push` drops a Vsync
+    /// from the channel.
     ///
     /// A move of the mouse or a resize replaces one of its kind at the back
     /// of the queue, past the independent events, since only the latest one
     /// counts. A mouse at 1000 Hz would flood an engine that runs at 60 Hz.
     fn push(&mut self, item: Item<E>) {
         if matches!(&item.entry, Entry::Input(ev) if ev.is_vsync()) {
-            if let Vsync::Channel { arrived } = &mut self.vsync {
-                arrived.get_or_insert(item.at);
-            }
             return;
         }
         if let Entry::Input(new) = &item.entry
@@ -362,13 +341,13 @@ impl<E: Queued> Inbox<E> {
         None
     }
 
-    /// The older of the front of `pending` and a Vsync that arrived by
-    /// `now`, or `None` when neither exists.
+    /// The older of the front of `pending` and a Vsync due by `now`, or
+    /// `None` when neither exists.
     fn pop(&mut self, now: Instant) -> Option<Result<E, Interrupt>> {
         let front = self.pending.front().map(|item| item.at);
-        let vsync = self.vsync.at().filter(|&at| at <= now);
-        if vsync.is_some_and(|v| front.is_none_or(|f| v < f)) {
-            self.vsync.deliver(now);
+        let due = self.clock.due;
+        if due <= now && front.is_none_or(|f| due < f) {
+            self.clock.deliver(now);
             return Some(Ok(E::vsync()));
         }
         Some(match self.pending.pop_front()?.entry {
@@ -403,39 +382,20 @@ impl Queued for Event {
     }
 }
 
-/// Where the Vsync events come from.
-enum Vsync {
-    /// A software clock, for a display without a platform Vsync.
-    Clock {
-        period: Duration,
-        /// When the next Vsync falls due. The first one is due at once.
-        due: Instant,
-    },
-    /// The channel.
-    Channel {
-        /// When the Vsync that waits arrived.
-        arrived: Option<Instant>,
-    },
+/// A software clock that makes the Vsync.
+struct Clock {
+    period: Duration,
+    /// When the next Vsync falls due. The first one is due at once.
+    due: Instant,
 }
 
-impl Vsync {
-    /// When the next Vsync counts as arrived, or `None` when none waits.
-    fn at(&self) -> Option<Instant> {
-        match *self {
-            Vsync::Clock { due, .. } => Some(due),
-            Vsync::Channel { arrived } => arrived,
-        }
-    }
-
+impl Clock {
     /// The Vsync went out at `now`. The clock keeps its beat, so a frame
     /// that took less than the period loses no time to the wait. An engine
     /// slower than the period gets the next Vsync at once, and the input
     /// that came before `now` still goes out ahead of it.
     fn deliver(&mut self, now: Instant) {
-        match self {
-            Vsync::Clock { period, due } => *due = (*due + *period).max(now),
-            Vsync::Channel { arrived } => *arrived = None,
-        }
+        self.due = (self.due + self.period).max(now);
     }
 }
 
@@ -477,9 +437,17 @@ mod tests {
         Some(Instant::now() + Duration::from_millis(20))
     }
 
+    /// A queue whose next Vsync is an hour away, for the tests of the
+    /// other events.
+    fn past_the_first_vsync() -> Inbox {
+        let mut inbox = Inbox::new(Duration::from_secs(3600));
+        assert!(is_vsync(&inbox.wait(None)));
+        inbox
+    }
+
     #[test]
     fn delivers_in_the_order_of_arrival() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.send_input(key("a")).unwrap();
         tx.wake().unwrap();
@@ -491,7 +459,7 @@ mod tests {
 
     #[test]
     fn a_damaged_message_keeps_its_place_and_the_queue_goes_on() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.send_input(key("a")).unwrap();
         tx.send_read_error(crate::wire::ReadError::Payload(
@@ -509,28 +477,13 @@ mod tests {
 
     #[test]
     fn times_out_when_nothing_arrives() {
-        let mut inbox: Inbox = Inbox::new(None);
-        assert!(is_timeout(&inbox.wait(soon())));
-    }
-
-    #[test]
-    fn keeps_one_vsync_from_the_channel() {
-        let mut inbox: Inbox = Inbox::new(None);
-        let tx = inbox.sender();
-        tx.send_input(InputEvent::Vsync).unwrap();
-        tx.send_input(key("a")).unwrap();
-        tx.send_input(InputEvent::Vsync).unwrap();
-        assert!(is_vsync(&inbox.wait(None)));
-        // The first Vsync went out, so the next one queues.
-        tx.send_input(InputEvent::Vsync).unwrap();
-        assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(is_vsync(&inbox.wait(None)));
+        let mut inbox = past_the_first_vsync();
         assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
     fn an_event_sent_first_goes_out_before_the_first_vsync() {
-        let mut inbox: Inbox = Inbox::new(Some(Duration::from_secs(60)));
+        let mut inbox: Inbox = Inbox::new(Duration::from_secs(60));
         inbox.sender().send_input(key("a")).unwrap();
         inbox.send_first(Event::Input(key("first")));
         assert_eq!(key_name(&inbox.wait(None)), Some("first"));
@@ -550,7 +503,7 @@ mod tests {
             })
         };
         let resize = |width| InputEvent::Resize { width, height: 1.0 };
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         for ev in [
             at(1.0),
@@ -578,7 +531,7 @@ mod tests {
 
     #[test]
     fn close_goes_out_in_order_and_stays() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.send_input(key("a")).unwrap();
         tx.send_close().unwrap();
@@ -590,7 +543,7 @@ mod tests {
 
     #[test]
     fn each_wake_goes_out_in_order() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.wake().unwrap();
         tx.send_input(key("a")).unwrap();
@@ -603,7 +556,7 @@ mod tests {
 
     #[test]
     fn a_sender_fails_once_close_goes_out() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.send_close().unwrap();
         assert!(is_close(&inbox.wait(None)));
@@ -612,7 +565,7 @@ mod tests {
 
     #[test]
     fn a_sender_fails_once_the_inbox_closes() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         inbox.close();
         assert_eq!(tx.send_close(), Err(Closed));
@@ -622,7 +575,7 @@ mod tests {
 
     #[test]
     fn a_redraw_goes_out_once_after_the_events() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.request_redraw().unwrap();
         tx.send_input(key("a")).unwrap();
@@ -635,14 +588,14 @@ mod tests {
 
     #[test]
     fn wait_skips_a_redraw() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         inbox.sender().request_redraw().unwrap();
         assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
     fn a_sender_on_another_thread_wakes_the_wait() {
-        let mut inbox: Inbox = Inbox::new(None);
+        let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(20));
@@ -654,14 +607,14 @@ mod tests {
 
     #[test]
     fn a_sender_fails_once_the_inbox_is_gone() {
-        let tx = Inbox::<Event>::new(None).sender();
+        let tx = past_the_first_vsync().sender();
         assert_eq!(tx.send_close(), Err(Closed));
     }
 
     #[test]
     fn the_clock_fires_at_once_and_then_after_a_period() {
         let period = Duration::from_millis(30);
-        let mut inbox: Inbox = Inbox::new(Some(period));
+        let mut inbox: Inbox = Inbox::new(period);
         let start = Instant::now();
         assert!(is_vsync(&inbox.wait(None)));
         assert!(is_timeout(&inbox.wait(Some(Instant::now()))));
@@ -679,7 +632,7 @@ mod tests {
     #[test]
     fn a_slow_engine_still_gets_the_input() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(Some(period));
+        let mut inbox: Inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         // A key arrives, and the engine comes back ten periods later.
@@ -692,7 +645,7 @@ mod tests {
     #[test]
     fn the_clock_keeps_its_beat_after_a_short_frame() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(Some(period));
+        let mut inbox: Inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         // The engine comes back a little after the Vsync was due.
@@ -704,7 +657,7 @@ mod tests {
     #[test]
     fn a_late_engine_gets_the_next_vsync_at_once() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(Some(period));
+        let mut inbox: Inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         let late = t0 + period * 3;
@@ -723,7 +676,7 @@ mod tests {
     #[test]
     fn the_clock_drops_a_vsync_from_the_channel() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(Some(period));
+        let mut inbox: Inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         inbox.push(item(t0, InputEvent::Vsync));
@@ -733,7 +686,7 @@ mod tests {
     #[test]
     fn a_vsync_due_before_the_input_goes_first() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(Some(period));
+        let mut inbox: Inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         inbox.push(item(t0 + period * 2, key("a")));

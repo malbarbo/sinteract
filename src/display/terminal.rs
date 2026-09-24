@@ -118,7 +118,7 @@ impl Terminal {
         install_panic_hook();
         let keys = execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
             .and_then(|()| KeyInput::start(stdin_tty));
-        let mut inbox = Inbox::new(Some(Self::VSYNC_PERIOD));
+        let mut inbox = Inbox::new(Self::VSYNC_PERIOD);
         let cell = cell_pixels();
         if let Some((width, height)) = terminal::size().ok().and_then(|s| scene_size(s, cell)) {
             inbox.send_first(Event::Input(InputEvent::Resize { width, height }));
