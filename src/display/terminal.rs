@@ -121,7 +121,7 @@ impl Terminal {
         let mut inbox = Inbox::new(Self::VSYNC_PERIOD);
         let cell = cell_pixels();
         if let Some((width, height)) = terminal::size().ok().and_then(|s| scene_size(s, cell)) {
-            inbox.send_first(Event::Input(InputEvent::Resize { width, height }));
+            inbox.send_first(InputEvent::Resize { width, height });
         }
         let cells = Arc::new(Mutex::new(CellMap::before_frames(backend, cell)));
         let reader = keys.and_then(|keys| {

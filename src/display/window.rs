@@ -88,7 +88,7 @@ impl Window {
         let mut app = App::new(inbox.sender_in_loop(), attrs);
         let window = lent.create_window(&mut app, Self::OPEN_TIMEOUT)?;
         let (width, height) = app.reported_size;
-        inbox.send_first(Event::Input(InputEvent::Resize { width, height }));
+        inbox.send_first(InputEvent::Resize { width, height });
         let surface = match new_surface(&window) {
             Ok(surface) => surface,
             Err(e) => {

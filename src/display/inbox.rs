@@ -19,8 +19,9 @@ use crate::event::{Event, InputEvent, Interrupt};
 /// The queue has no bound. Once the display closes or delivers
 /// [`Interrupt::Close`], every send returns [`Closed`]. A message sent after
 /// a Close that has not gone out yet is lost.
-pub struct Sender<E = Event> {
-    tx: mpsc::Sender<Msg<E>>,
+#[derive(Clone)]
+pub struct Sender {
+    tx: mpsc::Sender<Msg>,
     wake: Option<Waker>,
 }
 
@@ -32,23 +33,7 @@ pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closed;
 
-/// An event that the queue holds. The queue makes the Vsync with its
-/// clock and delivers it with [`Queued::vsync`]. It drops what a newer
-/// event makes worthless.
-pub(crate) trait Queued {
-    /// The Vsync that the queue delivers.
-    fn vsync() -> Self;
-    /// Returns `true` if the event is a Vsync, `false` otherwise.
-    fn is_vsync(&self) -> bool;
-    /// Returns `true` if `self` makes `old` worthless, `false` otherwise.
-    fn supersedes(&self, old: &Self) -> bool;
-    /// Returns `true` if the order between `self` and `other` does not
-    /// matter, `false` otherwise. An event that replaces an older one moves
-    /// ahead of the independent events between them.
-    fn independent(&self, other: &Self) -> bool;
-}
-
-impl<E> Sender<E> {
+impl Sender {
     /// Queue [`Interrupt::Close`], in order with the events. A Ctrl-C handler
     /// of the engine calls it to end a `wait_event` that blocks.
     pub fn send_close(&self) -> Result<(), Closed> {
@@ -60,10 +45,6 @@ impl<E> Sender<E> {
     /// at that channel.
     pub fn wake(&self) -> Result<(), Closed> {
         self.send(Entry::Wake)
-    }
-
-    pub(crate) fn send_event(&self, ev: E) -> Result<(), Closed> {
-        self.send(Entry::Input(ev))
     }
 
     /// Queue [`Interrupt::Read`], in order with the events. A reader that
@@ -80,35 +61,23 @@ impl<E> Sender<E> {
         self.put(Msg::Redraw)
     }
 
-    fn send(&self, entry: Entry<E>) -> Result<(), Closed> {
+    pub(crate) fn send_input(&self, ev: InputEvent) -> Result<(), Closed> {
+        self.send(Entry::Input(ev))
+    }
+
+    fn send(&self, entry: Entry) -> Result<(), Closed> {
         self.put(Msg::Item(Item {
             at: Instant::now(),
             entry,
         }))
     }
 
-    fn put(&self, msg: Msg<E>) -> Result<(), Closed> {
+    fn put(&self, msg: Msg) -> Result<(), Closed> {
         self.tx.send(msg).map_err(|_| Closed)?;
         if let Some(wake) = &self.wake {
             wake();
         }
         Ok(())
-    }
-}
-
-impl Sender<Event> {
-    pub(crate) fn send_input(&self, ev: InputEvent) -> Result<(), Closed> {
-        self.send_event(Event::Input(ev))
-    }
-}
-
-// A derive would ask for `E: Clone`, and the events never get cloned.
-impl<E> Clone for Sender<E> {
-    fn clone(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            wake: self.wake.clone(),
-        }
     }
 }
 
@@ -121,12 +90,12 @@ impl fmt::Display for Closed {
 impl std::error::Error for Closed {}
 
 /// The receiving end. It holds a sender of its own for [`Inbox::sender`].
-pub(crate) struct Inbox<E = Event> {
-    tx: mpsc::Sender<Msg<E>>,
+pub(crate) struct Inbox {
+    tx: mpsc::Sender<Msg>,
     wake: Option<Waker>,
-    rx: mpsc::Receiver<Msg<E>>,
+    rx: mpsc::Receiver<Msg>,
     /// What left the channel and did not go out yet, oldest first.
-    pending: VecDeque<Item<E>>,
+    pending: VecDeque<Item>,
     clock: Clock,
     /// A redraw was requested and did not go out yet. Many requests make
     /// one redraw.
@@ -136,19 +105,19 @@ pub(crate) struct Inbox<E = Event> {
     closed: bool,
 }
 
-enum Msg<E> {
-    Item(Item<E>),
+enum Msg {
+    Item(Item),
     Redraw,
 }
 
-struct Item<E> {
+struct Item {
     at: Instant,
-    entry: Entry<E>,
+    entry: Entry,
 }
 
 /// What waits in the queue for `wait_event`.
-enum Entry<E> {
-    Input(E),
+enum Entry {
+    Input(InputEvent),
     Wake,
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     Read(crate::wire::ReadError),
@@ -156,13 +125,13 @@ enum Entry<E> {
 }
 
 /// What [`Inbox::wait_with`] hands to the display.
-pub(crate) enum Next<E = Event> {
-    Ready(Result<E, Interrupt>),
+pub(crate) enum Next {
+    Ready(Result<Event, Interrupt>),
     /// Draw the last scene again, and wait again.
     Redraw,
 }
 
-impl<E: Queued> Inbox<E> {
+impl Inbox {
     /// A queue that makes a Vsync every `vsync_period`.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub(crate) fn new(vsync_period: Duration) -> Self {
@@ -186,7 +155,7 @@ impl<E: Queued> Inbox<E> {
         }
     }
 
-    pub(crate) fn sender(&self) -> Sender<E> {
+    pub(crate) fn sender(&self) -> Sender {
         Sender {
             tx: self.tx.clone(),
             wake: self.wake.clone(),
@@ -197,7 +166,7 @@ impl<E: Queued> Inbox<E> {
     /// the waker wakes. A wake from inside the loop only adds a turn with
     /// nothing to do.
     #[cfg(feature = "window")]
-    pub(crate) fn sender_in_loop(&self) -> Sender<E> {
+    pub(crate) fn sender_in_loop(&self) -> Sender {
         Sender {
             tx: self.tx.clone(),
             wake: None,
@@ -206,7 +175,7 @@ impl<E: Queued> Inbox<E> {
 
     /// Queue `ev` ahead of every event, the first Vsync included, for what
     /// a display tells the engine as it opens.
-    pub(crate) fn send_first(&mut self, ev: E) {
+    pub(crate) fn send_first(&mut self, ev: InputEvent) {
         let now = Instant::now();
         // A Vsync goes out first only when it is strictly older.
         let at = self.clock.due.min(now);
@@ -227,7 +196,7 @@ impl<E: Queued> Inbox<E> {
 
     /// [`Inbox::wait_with`] on the channel, with no redraw.
     #[cfg(test)]
-    fn wait(&mut self, deadline: Option<Instant>) -> Result<E, Interrupt> {
+    fn wait(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
         loop {
             if let Next::Ready(ready) = self.wait_with(deadline, Self::receive) {
                 return ready;
@@ -248,7 +217,7 @@ impl<E: Queued> Inbox<E> {
         &mut self,
         deadline: Option<Instant>,
         mut block: impl FnMut(&mut Self, Duration),
-    ) -> Next<E> {
+    ) -> Next {
         loop {
             if let Some(ready) = self.poll() {
                 return Next::Ready(ready);
@@ -278,7 +247,7 @@ impl<E: Queued> Inbox<E> {
     }
 
     /// The oldest entry that is ready, without blocking.
-    fn poll(&mut self) -> Option<Result<E, Interrupt>> {
+    fn poll(&mut self) -> Option<Result<Event, Interrupt>> {
         if self.closed {
             return Some(Err(Interrupt::Close));
         }
@@ -294,7 +263,7 @@ impl<E: Queued> Inbox<E> {
         deadline.map_or(self.clock.due, |d| d.min(self.clock.due))
     }
 
-    fn take(&mut self, msg: Msg<E>) {
+    fn take(&mut self, msg: Msg) {
         match msg {
             Msg::Item(item) => self.push(item),
             Msg::Redraw => self.redraw = true,
@@ -305,53 +274,35 @@ impl<E: Queued> Inbox<E> {
     /// from the channel.
     ///
     /// A move of the mouse or a resize replaces one of its kind at the back
-    /// of the queue, past the independent events, since only the latest one
-    /// counts. A mouse at 1000 Hz would flood an engine that runs at 60 Hz.
-    fn push(&mut self, item: Item<E>) {
-        if matches!(&item.entry, Entry::Input(ev) if ev.is_vsync()) {
+    /// of the queue, since only the latest one counts. A mouse at 1000 Hz
+    /// would flood an engine that runs at 60 Hz.
+    fn push(&mut self, item: Item) {
+        if matches!(item.entry, Entry::Input(InputEvent::Vsync)) {
             return;
         }
         if let Entry::Input(new) = &item.entry
-            && let Some(i) = self.superseded(new)
+            && let Some(back) = self.pending.back_mut()
+            && let Entry::Input(old) = &back.entry
+            && new.supersedes(old)
         {
             // The older time keeps its place before a Vsync.
-            self.pending
-                .get_mut(i)
-                .expect("an index of the queue")
-                .entry = item.entry;
+            back.entry = item.entry;
             return;
         }
         self.pending.push_back(item);
     }
 
-    /// The index of the event that `new` replaces, looking from the back
-    /// past the events independent of `new`.
-    fn superseded(&self, new: &E) -> Option<usize> {
-        for (i, item) in self.pending.iter().enumerate().rev() {
-            let Entry::Input(old) = &item.entry else {
-                return None;
-            };
-            if new.supersedes(old) {
-                return Some(i);
-            }
-            if !new.independent(old) {
-                return None;
-            }
-        }
-        None
-    }
-
     /// The older of the front of `pending` and a Vsync due by `now`, or
     /// `None` when neither exists.
-    fn pop(&mut self, now: Instant) -> Option<Result<E, Interrupt>> {
+    fn pop(&mut self, now: Instant) -> Option<Result<Event, Interrupt>> {
         let front = self.pending.front().map(|item| item.at);
         let due = self.clock.due;
         if due <= now && front.is_none_or(|f| due < f) {
             self.clock.deliver(now);
-            return Some(Ok(E::vsync()));
+            return Some(Ok(Event::Input(InputEvent::Vsync)));
         }
         Some(match self.pending.pop_front()?.entry {
-            Entry::Input(ev) => Ok(ev),
+            Entry::Input(ev) => Ok(Event::Input(ev)),
             Entry::Wake => Err(Interrupt::Wake),
             Entry::Read(e) => Err(Interrupt::Read(e)),
             Entry::Close => {
@@ -359,26 +310,6 @@ impl<E: Queued> Inbox<E> {
                 Err(Interrupt::Close)
             }
         })
-    }
-}
-
-impl Queued for Event {
-    fn vsync() -> Self {
-        Event::Input(InputEvent::Vsync)
-    }
-
-    fn is_vsync(&self) -> bool {
-        matches!(self, Event::Input(InputEvent::Vsync))
-    }
-
-    fn supersedes(&self, old: &Self) -> bool {
-        let (Event::Input(new), Event::Input(old)) = (self, old);
-        new.supersedes(old)
-    }
-
-    /// The events of one user keep their order.
-    fn independent(&self, _: &Self) -> bool {
-        false
     }
 }
 
@@ -483,9 +414,9 @@ mod tests {
 
     #[test]
     fn an_event_sent_first_goes_out_before_the_first_vsync() {
-        let mut inbox: Inbox = Inbox::new(Duration::from_secs(60));
+        let mut inbox = Inbox::new(Duration::from_secs(60));
         inbox.sender().send_input(key("a")).unwrap();
-        inbox.send_first(Event::Input(key("first")));
+        inbox.send_first(key("first"));
         assert_eq!(key_name(&inbox.wait(None)), Some("first"));
         assert!(is_vsync(&inbox.wait(None)));
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
@@ -614,7 +545,7 @@ mod tests {
     #[test]
     fn the_clock_fires_at_once_and_then_after_a_period() {
         let period = Duration::from_millis(30);
-        let mut inbox: Inbox = Inbox::new(period);
+        let mut inbox = Inbox::new(period);
         let start = Instant::now();
         assert!(is_vsync(&inbox.wait(None)));
         assert!(is_timeout(&inbox.wait(Some(Instant::now()))));
@@ -622,17 +553,17 @@ mod tests {
         assert!(start.elapsed() >= period);
     }
 
-    fn item(at: Instant, ev: InputEvent) -> Item<Event> {
+    fn item(at: Instant, ev: InputEvent) -> Item {
         Item {
             at,
-            entry: Entry::Input(Event::Input(ev)),
+            entry: Entry::Input(ev),
         }
     }
 
     #[test]
     fn a_slow_engine_still_gets_the_input() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(period);
+        let mut inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         // A key arrives, and the engine comes back ten periods later.
@@ -645,7 +576,7 @@ mod tests {
     #[test]
     fn the_clock_keeps_its_beat_after_a_short_frame() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(period);
+        let mut inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         // The engine comes back a little after the Vsync was due.
@@ -657,7 +588,7 @@ mod tests {
     #[test]
     fn a_late_engine_gets_the_next_vsync_at_once() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(period);
+        let mut inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         let late = t0 + period * 3;
@@ -676,7 +607,7 @@ mod tests {
     #[test]
     fn the_clock_drops_a_vsync_from_the_channel() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(period);
+        let mut inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         inbox.push(item(t0, InputEvent::Vsync));
@@ -686,7 +617,7 @@ mod tests {
     #[test]
     fn a_vsync_due_before_the_input_goes_first() {
         let period = Duration::from_millis(16);
-        let mut inbox: Inbox = Inbox::new(period);
+        let mut inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         inbox.push(item(t0 + period * 2, key("a")));
