@@ -9,6 +9,10 @@
 //! wasm32 too, except the system font lookup of `text`, which the
 //! `native-fonts` feature carries.
 //!
+//! [`session`] turns the bytes that a server writes to an engine into the
+//! events of the engine, with the rules of the protocol. It does no I/O of
+//! its own, so it builds on wasm32 too.
+//!
 //! The feature `render` carries the pixmap and PDF renderers and the Sixel
 //! encoder, and the displays turn it on. A server that only encodes and
 //! decodes messages leaves it out, and keeps the scene, the text, the SVG
@@ -27,6 +31,7 @@ pub mod event;
 mod outline;
 pub mod renderer;
 pub mod scene;
+pub mod session;
 pub mod text;
 pub mod wire;
 

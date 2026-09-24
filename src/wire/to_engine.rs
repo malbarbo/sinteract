@@ -138,7 +138,7 @@ pub fn write_leave(w: &mut impl Write, player: NonZeroU32) -> io::Result<()> {
 /// Decode `payload`. `None` for a message or an event of an arm from a
 /// newer schema. An event, a join, a leave or a member of player 0, an
 /// event that is a Vsync, and a roster that repeats a player, are errors.
-pub(super) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
+pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<server_message::Owned, _>(payload, decode_message)
 }
 
