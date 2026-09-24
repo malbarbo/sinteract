@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, InputEvent, Interrupt, MouseAction, MouseEvent};
+use crate::event::{Event, InputEvent, Interrupt};
 
 /// Pushes into the queue of a display from any thread, and wakes a
 /// `wait_event` that blocks on it. Get one from
@@ -395,29 +395,13 @@ impl Queued for Event {
 
     fn supersedes(&self, old: &Self) -> bool {
         let (Event::Input(new), Event::Input(old)) = (self, old);
-        input_supersedes(new, old)
+        new.supersedes(old)
     }
 
     /// The events of one user keep their order.
     fn independent(&self, _: &Self) -> bool {
         false
     }
-}
-
-/// Returns `true` if `new` makes `old` worthless, `false` otherwise. Only
-/// the latest move of the mouse and the latest resize count.
-pub(crate) fn input_supersedes(new: &InputEvent, old: &InputEvent) -> bool {
-    let is_move = |e: &InputEvent| {
-        matches!(
-            e,
-            InputEvent::Mouse(MouseEvent {
-                action: MouseAction::Move,
-                ..
-            })
-        )
-    };
-    let is_resize = |e: &InputEvent| matches!(e, InputEvent::Resize { .. });
-    (is_move(new) && is_move(old)) || (is_resize(new) && is_resize(old))
 }
 
 /// Where the Vsync events come from.
@@ -459,7 +443,7 @@ impl Vsync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{KeyEvent, KeyKind, Modifiers, MouseButtons};
+    use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
     use std::thread;
 
     fn key(name: &str) -> InputEvent {

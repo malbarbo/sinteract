@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 use std::time::Instant;
 
 use super::driver::{OpenError, PresentError};
-use super::inbox::{Queued, Sender, input_supersedes};
+use super::inbox::{Queued, Sender};
 use super::link::{ClaimedStdin, Link, Step};
 use crate::event::{InputEvent, Interrupt};
 use crate::scene::Scene;
@@ -137,7 +137,7 @@ impl Queued for RoomEvent {
                     player: old_player,
                     event: old,
                 },
-            ) => player == old_player && input_supersedes(event, old),
+            ) => player == old_player && event.supersedes(old),
             (
                 RoomEvent::Vsync
                 | RoomEvent::Input { .. }

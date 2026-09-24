@@ -65,6 +65,24 @@ pub enum InputEvent {
     Pad(PadEvent),
 }
 
+impl InputEvent {
+    /// Returns `true` if `self` makes `old` worthless, `false` otherwise.
+    /// Only the latest move of the mouse and the latest resize count.
+    pub fn supersedes(&self, old: &InputEvent) -> bool {
+        let is_move = |e: &InputEvent| {
+            matches!(
+                e,
+                InputEvent::Mouse(MouseEvent {
+                    action: MouseAction::Move,
+                    ..
+                })
+            )
+        };
+        let is_resize = |e: &InputEvent| matches!(e, InputEvent::Resize { .. });
+        (is_move(self) && is_move(old)) || (is_resize(self) && is_resize(old))
+    }
+}
+
 /// A key that went down, repeats or came up.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyEvent {
