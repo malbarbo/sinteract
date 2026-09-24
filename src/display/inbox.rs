@@ -33,11 +33,11 @@ pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closed;
 
-/// An event that the queue holds. The queue makes a Vsync of a clock with
-/// [`Queued::vsync`], keeps one Vsync from the channel and drops what a
-/// newer event makes worthless.
+/// An event that the queue holds. The queue keeps one Vsync from the
+/// channel, or waits for its clock, and delivers the Vsync with
+/// [`Queued::vsync`]. It drops what a newer event makes worthless.
 pub(crate) trait Queued {
-    /// The Vsync of a clock.
+    /// The Vsync that the queue delivers.
     fn vsync() -> Self;
     /// Returns `true` if the event is a Vsync, `false` otherwise.
     fn is_vsync(&self) -> bool;
