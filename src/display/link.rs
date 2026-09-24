@@ -14,7 +14,6 @@ use super::driver::{OpenError, PresentError};
 use super::inbox::{Inbox, Queued, Sender};
 use crate::event::Interrupt;
 use crate::wire::framing::UNROUTED;
-use crate::wire::to_engine::{self, Message};
 use crate::wire::{ReadError, to_view};
 
 /// The two ends of the session over a pipe, and the queue that the reader
@@ -35,6 +34,16 @@ pub(super) struct Link<E: Queued> {
 
 pub(super) type Writer = BufWriter<Box<dyn Write + Send>>;
 
+/// What the reader of a display makes of the next message of the peer.
+pub(super) enum Step<E> {
+    /// The event to queue.
+    Event(E),
+    /// A message that the display does not queue.
+    Skip,
+    /// The stream ended or carried the close of the peer.
+    End,
+}
+
 /// Stdin with the claim of the process on it. stdin belongs to the
 /// process, and a second reader would steal half of the messages. The
 /// claim ends when the reader drops it, at the end of the stream, at a
@@ -48,18 +57,17 @@ const WRITE_BUFFER_BYTES: usize = 64 * 1024;
 static STDIN_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 impl<E: Queued> Link<E> {
-    /// Read `reader` on a thread named `name`, and hand each message of the
-    /// server to `route`. `route` returns the event to queue, `None` to skip
-    /// the message, or an error that goes into the queue as
-    /// [`Interrupt::Read`]. A close of the server never reaches `route`,
-    /// since it ends the session. The queue makes a Vsync every
-    /// `vsync_period`, or takes it from `route` when it is `None`.
+    /// Call `read` on `reader` from a thread named `name` until it returns
+    /// [`Step::End`] or [`ReadError::Broken`], or the display closes. An
+    /// error of `read` goes into the queue as [`Interrupt::Read`]. The queue
+    /// makes a Vsync every `vsync_period`, or takes the Vsync from `read`
+    /// when `vsync_period` is `None`.
     pub(super) fn new<R, W>(
         reader: R,
         writer: W,
         name: &str,
         vsync_period: Option<Duration>,
-        route: impl Fn(Message) -> Result<Option<E>, ReadError> + Send + 'static,
+        read: impl FnMut(&mut R) -> Result<Step<E>, ReadError> + Send + 'static,
     ) -> io::Result<Self>
     where
         E: Send + 'static,
@@ -72,7 +80,7 @@ impl<E: Queued> Link<E> {
         let flag = Arc::clone(&peer_closed);
         thread::Builder::new().name(name.into()).spawn(move || {
             let mut reader = reader;
-            if !read_loop(&mut reader, tx, flag, route) {
+            if !read_loop(&mut reader, tx, flag, read) {
                 // The display closed while the stream goes on, so the
                 // reader keeps the claim on stdin for the process.
                 mem::forget(reader);
@@ -165,26 +173,20 @@ impl Drop for ClaimedStdin {
 
 /// Read the messages of the peer into the queue until the stream or the
 /// session ends. Returns `true` if the stream ended, broke or carried the
-/// close of the peer, `false` if the display closed first. [`to_engine::read`]
-/// skips a message or an event of an arm from a newer schema. A payload
-/// that does not decode goes into the queue as [`Interrupt::Read`] and the
-/// loop goes on, since the framing already found where the next message
-/// starts.
-fn read_loop<E>(
-    reader: &mut impl BufRead,
+/// close of the peer, `false` if the display closed first. A payload that
+/// does not decode goes into the queue as [`Interrupt::Read`] and the loop
+/// goes on, since the framing already found where the next message starts.
+fn read_loop<R, E>(
+    reader: &mut R,
     tx: Sender<E>,
     peer_closed: Arc<AtomicBool>,
-    route: impl Fn(Message) -> Result<Option<E>, ReadError>,
+    mut read: impl FnMut(&mut R) -> Result<Step<E>, ReadError>,
 ) -> bool {
     loop {
-        let routed = match to_engine::read(reader) {
-            Ok(None | Some(Message::Close)) => break,
-            Ok(Some(message)) => route(message),
-            Err(e) => Err(e),
-        };
-        let sent = match routed {
-            Ok(Some(ev)) => tx.send_event(ev),
-            Ok(None) => continue,
+        let sent = match read(reader) {
+            Ok(Step::Event(ev)) => tx.send_event(ev),
+            Ok(Step::Skip) => continue,
+            Ok(Step::End) => break,
             Err(e @ ReadError::Payload(_)) => tx.send_read_error(e),
             Err(e @ ReadError::Broken(_)) => {
                 let _ = tx.send_read_error(e);

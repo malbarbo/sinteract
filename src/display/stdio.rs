@@ -14,11 +14,11 @@ use std::time::Instant;
 
 use super::driver::{OpenError, PresentError};
 use super::inbox::Sender;
-use super::link::{ClaimedStdin, Link};
+use super::link::{ClaimedStdin, Link, Step};
 use crate::event::{Event, Interrupt};
 use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
-use crate::wire::to_engine::Message;
+use crate::wire::to_engine::{self, Message};
 use crate::wire::{ReadError, to_view};
 
 /// A display that shows nothing. The peer sends the Vsync events, and this
@@ -49,7 +49,7 @@ impl Stdio {
         R: BufRead + Send + 'static,
         W: Write + Send + 'static,
     {
-        let link = Link::new(reader, writer, "sinteract-stdio", None, route)?;
+        let link = Link::new(reader, writer, "sinteract-stdio", None, read_event)?;
         Ok(Self { link })
     }
 }
@@ -86,15 +86,15 @@ impl super::Display for Stdio {
 
 impl super::driver::sealed::Sealed for Stdio {}
 
-/// The event of a message of the server. The display serves one view, so
-/// it takes the input of every player as its own, and skips the players
-/// that join and leave.
-fn route(message: Message) -> Result<Option<Event>, ReadError> {
-    match message {
-        Message::Input { event, .. } => Ok(Some(Event::Input(event))),
-        Message::Start(_) | Message::Join { .. } | Message::Leave { .. } => Ok(None),
-        Message::Close => unreachable!("the link ends the session at a close"),
-    }
+/// The next event of the server. The display serves one view, so it takes
+/// the input of every player as its own, and skips the players that join
+/// and leave.
+fn read_event(reader: &mut impl BufRead) -> Result<Step<Event>, ReadError> {
+    Ok(match to_engine::read(reader)? {
+        Some(Message::Input { event, .. }) => Step::Event(Event::Input(event)),
+        Some(Message::Start(_) | Message::Join { .. } | Message::Leave { .. }) => Step::Skip,
+        None | Some(Message::Close) => Step::End,
+    })
 }
 
 #[cfg(test)]

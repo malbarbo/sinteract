@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use super::driver::{OpenError, PresentError};
 use super::inbox::{Queued, Sender, input_supersedes};
-use super::link::{ClaimedStdin, Link};
+use super::link::{ClaimedStdin, Link, Step};
 use crate::event::{InputEvent, Interrupt};
 use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
@@ -81,7 +81,13 @@ impl Room {
         W: Write + Send + 'static,
     {
         let roster = read_start(&mut reader)?;
-        let link = Link::new(reader, writer, "sinteract-room", Some(vsync_period), route)?;
+        let link = Link::new(
+            reader,
+            writer,
+            "sinteract-room",
+            Some(vsync_period),
+            read_event,
+        )?;
         Ok((Self { link }, roster))
     }
 
@@ -194,27 +200,29 @@ fn read_start(reader: &mut impl BufRead) -> io::Result<Roster> {
     }
 }
 
-/// The event of a message of the server. An event of player 0 is an error.
-/// The room drops the Vsync of a view, since its clock makes every Vsync,
-/// and a start after the first one changes nothing.
-fn route(message: Message) -> Result<Option<RoomEvent>, ReadError> {
-    match message {
-        Message::Input { player, event } => {
+/// The next event of the server. An event of player 0 is an error. The
+/// room drops the Vsync of a view, since its clock makes every Vsync, and a
+/// start after the first one changes nothing.
+fn read_event(reader: &mut impl BufRead) -> Result<Step<RoomEvent>, ReadError> {
+    Ok(match to_engine::read(reader)? {
+        Some(Message::Input { player, event }) => {
             let player =
                 NonZeroU32::new(player).ok_or(ReadError::Payload(wire::Error::NoPlayer))?;
-            Ok(match event {
-                InputEvent::Vsync => None,
+            match event {
+                InputEvent::Vsync => Step::Skip,
                 InputEvent::Key(_)
                 | InputEvent::Mouse(_)
                 | InputEvent::Resize { .. }
-                | InputEvent::Pad(_) => Some(RoomEvent::Input { player, event }),
-            })
+                | InputEvent::Pad(_) => Step::Event(RoomEvent::Input { player, event }),
+            }
         }
-        Message::Join { player, nickname } => Ok(Some(RoomEvent::Join { player, nickname })),
-        Message::Leave { player } => Ok(Some(RoomEvent::Leave { player })),
-        Message::Start(_) => Ok(None),
-        Message::Close => unreachable!("the link ends the session at a close"),
-    }
+        Some(Message::Join { player, nickname }) => {
+            Step::Event(RoomEvent::Join { player, nickname })
+        }
+        Some(Message::Leave { player }) => Step::Event(RoomEvent::Leave { player }),
+        Some(Message::Start(_)) => Step::Skip,
+        None | Some(Message::Close) => Step::End,
+    })
 }
 
 #[cfg(test)]
@@ -357,11 +365,9 @@ mod tests {
 
     #[test]
     fn the_room_drops_the_vsync_of_a_view() {
-        let vsync = Message::Input {
-            player: 1,
-            event: InputEvent::Vsync,
-        };
-        assert!(matches!(route(vsync), Ok(None)));
+        let mut input = Vec::new();
+        to_engine::write_input(&mut input, 1, &InputEvent::Vsync).unwrap();
+        assert!(matches!(read_event(&mut &input[..]), Ok(Step::Skip)));
     }
 
     #[test]
