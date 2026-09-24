@@ -3,9 +3,7 @@
 //!
 //! The server starts the session with the players, passes on the input of
 //! each view with its player, and says when a player joins or leaves.
-//! The server ends the session with a close. A view that talks to the
-//! engine with no server between them takes the role of the server, and
-//! sends its input with [`UNROUTED`].
+//! The server ends the session with a close.
 
 use std::collections::HashSet;
 use std::io::{self, Read, Write};
@@ -24,8 +22,8 @@ use super::protocol::{ReadError, decode_root, read_next};
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with
 /// [`crate::event::Event`]. The player comes from the header, and `Close`
-/// and `Start` are about the whole session. Player 0 is the server itself
-/// or the only view, so only `Input` has a player 0.
+/// and `Start` are about the whole session. Player 0 is the server itself,
+/// so only `Input` has a player 0.
 #[derive(Clone, Debug)]
 pub enum Message {
     Input {

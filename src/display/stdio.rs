@@ -1,12 +1,13 @@
-//! [`Stdio`] talks the wire protocol over stdin and stdout. A game server
-//! runs the engine (`spython --server`, `sgleam --server`) as a
-//! subprocess, writes the input of the view to its stdin and reads
-//! [`Scene`] frames from its stdout.
+//! [`Stdio`] talks the wire protocol over stdin and stdout with one view
+//! and no server. The view runs the engine as a subprocess, as
+//! `examples/view.rs` does, writes its input to the stdin of the engine and
+//! reads [`Scene`] frames from the stdout of the engine. A game server talks to a
+//! [`super::Room`] instead.
 //!
 //! The display is the engine side of the session. It writes with
-//! [`crate::wire::to_view`] and reads with [`crate::wire::to_engine`], and
-//! each message goes inside the envelope of [`crate::wire::framing`]. It
-//! serves one view, so its messages go to
+//! [`crate::wire::to_view`] and reads the messages of the view with
+//! [`crate::wire::to_server`], and each message goes inside the envelope of
+//! [`crate::wire::framing`]. It serves one view, so its messages go to
 //! [`UNROUTED`].
 
 use std::io::{self, BufRead, Write};
@@ -18,7 +19,7 @@ use super::link::{ClaimedStdin, Link, Step};
 use crate::event::{Event, Interrupt};
 use crate::scene::Scene;
 use crate::wire::framing::UNROUTED;
-use crate::wire::to_engine::{self, Message};
+use crate::wire::to_server::{self, Message};
 use crate::wire::{ReadError, to_view};
 
 /// A display that shows nothing. The peer sends the Vsync events, and this
@@ -86,13 +87,10 @@ impl super::Display for Stdio {
 
 impl super::driver::sealed::Sealed for Stdio {}
 
-/// The next event of the server. The display serves one view, so it takes
-/// the input of every player as its own, and skips the players that join
-/// and leave.
+/// The next event of the view.
 fn read_event(reader: &mut impl BufRead) -> Result<Step<Event>, ReadError> {
-    Ok(match to_engine::read(reader)? {
-        Some(Message::Input { event, .. }) => Step::Event(Event::Input(event)),
-        Some(Message::Start(_) | Message::Join { .. } | Message::Leave { .. }) => Step::Skip,
+    Ok(match to_server::read(reader)? {
+        Some(Message::Input(event)) => Step::Event(Event::Input(event)),
         None | Some(Message::Close) => Step::End,
     })
 }
@@ -103,28 +101,27 @@ mod tests {
     use crate::display::Display;
     use crate::display::link::SharedWriter;
     use crate::event::{InputEvent, KeyEvent as IrKeyEvent, KeyKind, Modifiers};
-    use crate::protocol_capnp::server_message;
+    use crate::protocol_capnp::view_message;
     use crate::scene::{Paint, PathStyle};
-    use crate::wire::framing::{Side, header};
-    use crate::wire::to_engine::{self, encode_close, encode_input};
-    use crate::wire::{self, to_view};
+    use crate::wire::framing::{HEADER_BYTES, Side, header};
+    use crate::wire::to_server::encode_close;
+    use crate::wire::{self, to_engine, to_view};
     use std::io::{BufReader, Cursor, PipeWriter};
-    use std::num::NonZeroU32;
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
-    /// `ev` as the server writes it.
+    /// `ev` as the view writes it.
     fn event(ev: &InputEvent) -> Vec<u8> {
         let mut out = Vec::new();
-        to_engine::write_input(&mut out, UNROUTED, ev).unwrap();
+        to_server::write_input(&mut out, ev).unwrap();
         out
     }
 
-    /// `payload` in the envelope of the server, for a payload that
-    /// [`to_engine`] does not write.
+    /// `payload` in the envelope of the view, for a payload that
+    /// [`to_server`] does not write.
     fn frame(payload: &[u8]) -> Vec<u8> {
-        let mut out = header(Side::Server, UNROUTED, payload.len() as u32).to_vec();
+        let mut out = header(Side::View, UNROUTED, payload.len() as u32).to_vec();
         out.extend_from_slice(payload);
         out
     }
@@ -246,10 +243,10 @@ mod tests {
 
     #[test]
     fn wait_event_skips_a_message_and_an_event_of_an_unknown_arm() {
-        let unknown_message = wire::with_unknown_server_value(&encode_close(), |m| wire::tag_of(m));
+        let unknown_message = wire::with_unknown_view_value(&encode_close(), |m| wire::tag_of(m));
         let unknown_event =
-            wire::with_unknown_server_value(&encode_input(&InputEvent::Vsync), |m| {
-                let Ok(server_message::Event(e)) = m.which() else {
+            wire::with_unknown_view_value(&event(&InputEvent::Vsync)[HEADER_BYTES..], |m| {
+                let Ok(view_message::Event(e)) = m.which() else {
                     panic!("not an event");
                 };
                 wire::tag_of(e.unwrap())
@@ -275,34 +272,26 @@ mod tests {
     }
 
     #[test]
-    fn wait_event_skips_the_players() {
-        let mut stream = Vec::new();
-        let ana = to_engine::Member {
-            player: NonZeroU32::MIN,
-            nickname: "Ana".into(),
-        };
-        let beto = NonZeroU32::new(2).unwrap();
-        let roster = to_engine::Roster::new(vec![ana]).unwrap();
-        to_engine::write_start(&mut stream, &roster).unwrap();
-        to_engine::write_join(&mut stream, beto, "Beto").unwrap();
-        to_engine::write_leave(&mut stream, beto).unwrap();
-        stream.extend_from_slice(&event(&InputEvent::Vsync));
-        assert!(matches!(input(&mut reading(stream)), InputEvent::Vsync));
-    }
-
-    #[test]
     fn a_close_of_the_peer_surfaces_as_close() {
         let mut stream = Vec::new();
-        to_engine::write_close(&mut stream).unwrap();
+        to_server::write_close(&mut stream).unwrap();
         let mut fr = reading(stream);
         assert!(closes(&mut fr));
     }
 
     #[test]
     fn missing_magic_is_an_error_not_a_panic() {
-        let mut bad = header(Side::Server, UNROUTED, 0);
+        let mut bad = header(Side::View, UNROUTED, 0);
         bad[..4].copy_from_slice(b"junk");
         assert!(breaks(&mut reading(bad.to_vec())));
+    }
+
+    #[test]
+    fn a_message_of_a_server_ends_the_session() {
+        let mut stream = Vec::new();
+        to_engine::write_close(&mut stream).unwrap();
+        stream.extend_from_slice(&event(&InputEvent::Vsync));
+        assert!(breaks(&mut reading(stream)));
     }
 
     #[test]

@@ -4,8 +4,8 @@
 //! for each player.
 //!
 //! The room reads with [`crate::wire::to_engine`] and writes with
-//! [`crate::wire::to_view`], as [`super::Stdio`] does. It differs from
-//! `Stdio` in three ways. Every event carries its player, a frame goes to
+//! [`crate::wire::to_view`]. It differs from [`super::Stdio`], which reads
+//! one view, in three ways. Every event carries its player, a frame goes to
 //! one player or to all of them, and a clock of the room makes the Vsync,
 //! since each view has its own pace. The server keeps only the newest frame
 //! of a player whose connection is busy.

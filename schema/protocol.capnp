@@ -8,8 +8,7 @@
 # Each writer has its own root, EngineMessage from the engine,
 # ViewMessage from a view and ServerMessage from the server, so no side can
 # receive a message that only another side sends. The engine reads the
-# server alone. A view that talks to the engine with no server between
-# them writes ServerMessage.
+# server, or the one view when no server sits between them.
 #
 # This file is the source of truth for the session. The same rules as
 # scene.capnp apply. See its header for how to regenerate the bindings.
@@ -43,7 +42,7 @@ struct EngineMessage {
     }
 }
 
-# View to server.
+# View to server, or to the engine when no server sits between them.
 struct ViewMessage {
     union {
         event @0 :Input.InputEvent;
@@ -78,8 +77,7 @@ struct Leave {}
 struct ServerMessage {
     union {
         # The input of the player in the header. Player 0 is the server
-        # itself, such as for a tick, or the only view when no server sits
-        # between the view and the engine.
+        # itself, such as for a tick.
         event @0 :Input.InputEvent;
         close @1 :Close;
         # The first message of the session.

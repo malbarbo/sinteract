@@ -11,8 +11,8 @@
 //! win32-input-mode of Windows Terminal, [`sixel`] encodes a pixmap for the
 //! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
 //! in a winit window. [`stdio`] shows nothing. It writes the frames and
-//! reads the events as Cap'n Proto messages, for a server that runs the
-//! engine as a subprocess. [`room`] does the same for a session with
+//! reads the events as Cap'n Proto messages, for a view that runs the
+//! engine as a subprocess. [`room`] does the same for a server with
 //! players, and is not a [`Display`], since its events and its frames
 //! carry a player.
 //!

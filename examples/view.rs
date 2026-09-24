@@ -22,9 +22,8 @@ use std::time::{Duration, Instant};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
 use sinteract::scene::Scene;
-use sinteract::wire::framing::UNROUTED;
 use sinteract::wire::to_view::{self, Message};
-use sinteract::wire::{ReadError, to_engine};
+use sinteract::wire::{ReadError, to_server};
 
 /// How many messages the reader thread holds before it waits for the loop,
 /// so an engine that draws faster than the view does not fill the memory.
@@ -71,7 +70,7 @@ fn main() -> ExitCode {
     let close = loop {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
-                if to_engine::write_input(&mut to_engine, UNROUTED, &ev).is_err() {
+                if to_server::write_input(&mut to_engine, &ev).is_err() {
                     break false;
                 }
             }
@@ -88,7 +87,7 @@ fn main() -> ExitCode {
         }
     };
     if close {
-        let _ = to_engine::write_close(&mut to_engine);
+        let _ = to_server::write_close(&mut to_engine);
     }
     drop(to_engine);
     // The reader thread may wait on a full channel. Without the receiver

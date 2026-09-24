@@ -1,7 +1,7 @@
-//! [`Link`], the pipe to a server that [`super::Stdio`] shares with
-//! [`super::Room`]. A thread reads the messages of
-//! the server into the queue, and the display writes its own messages
-//! through the link.
+//! [`Link`] is the pipe that [`super::Stdio`] and [`super::Room`] share. It
+//! goes to the peer of the engine, a view or a server. A thread reads the
+//! messages of the peer into the queue, and the display writes its own
+//! messages through the link.
 
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::mem;

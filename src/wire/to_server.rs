@@ -1,9 +1,9 @@
 //! The messages from a view to the server, in the `ViewMessage` union.
 //!
 //! The view sends its input as events, and ends the session with a close.
-//! The server passes the input on to the engine with [`super::to_engine`],
-//! and a view that talks to the engine with no server between them writes
-//! with [`super::to_engine`] too.
+//! The server passes the input on to the engine with [`super::to_engine`].
+//! An engine that talks to one view with no server between them reads the
+//! messages of the view with this module.
 
 use std::io::{self, Read, Write};
 
@@ -28,7 +28,8 @@ pub enum Message {
 /// Read the next message of a view. Returns `None` at the end of the
 /// stream. A message or an event of an arm from a newer schema is skipped,
 /// and the next one comes out. The server knows the player of a view from
-/// its connection, so the player in the header does not count.
+/// its connection, and an engine with one view has no player to read, so
+/// the player in the header does not count.
 pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
     read_next(r, Side::View, |_, payload| decode(payload))
 }

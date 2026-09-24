@@ -11,10 +11,11 @@
 //! The engine runs the program and writes with [`to_view`]. A view draws
 //! the frames, sends the input and writes with [`to_server`]. The server
 //! owns the session, passes the input of the views on and writes with
-//! [`to_engine`], and so does a view that talks to the engine alone. Each
-//! side reads with the module of the side that writes to it. The generated
-//! bindings stay private, and the bytes are the standard
-//! `serialize::write_message` format, so every Cap'n Proto binding reads
+//! [`to_engine`]. Each side reads with the module of the side that writes
+//! to it. An engine with one view and no server between them reads with
+//! [`to_server`]. The generated bindings stay private, and the bytes are
+//! the standard `serialize::write_message` format, so every Cap'n Proto
+//! binding reads
 //! them.
 //!
 //! [`framing`] is below all of them. It wraps an encoded message in the

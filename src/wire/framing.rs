@@ -35,11 +35,11 @@ use capnp::serialize;
 pub enum Side {
     /// Runs the program and sends the frames.
     Engine,
-    /// Draws the frames and sends the input.
+    /// Draws the frames and sends the input, to the server or to an engine
+    /// with no server between them.
     View,
     /// Owns the session. It passes the input of the views to the engine and
-    /// tells the engine who plays. A view that talks to the engine alone
-    /// takes this side.
+    /// tells the engine who plays.
     Server,
 }
 
@@ -65,9 +65,9 @@ impl Side {
 /// about, when a server routes the messages of several views.
 pub type Player = u32;
 
-/// A message that no server routes: from the engine it goes to every view,
-/// and from the server it comes from the server itself or from the only
-/// view.
+/// A message that no server routes. From the engine it goes to every view,
+/// from the server it comes from the server itself, and a view writes no
+/// other player.
 pub const UNROUTED: Player = 0;
 
 /// The length of the header in front of each payload.

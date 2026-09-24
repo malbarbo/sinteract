@@ -42,8 +42,8 @@ Num pipe, cada mensagem vai atrás de um cabeçalho de 12 bytes: a mágica, o
 player em `u32` LE e o tamanho em `u32` LE. O player é o número do jogador
 na partida, a partir de 1, e o 0 quer dizer todos, ou a sessão inteira. Num
 WebSocket vai só o payload, e a versão vai no subprotocolo `sinteract.v1`.
-Uma view que fala com a engine sem servidor escreve `ServerMessage` com
-player 0.
+Uma view que fala com a engine sem servidor escreve `ViewMessage`, que a
+engine lê com o `Stdio`.
 
 Um leitor pula a mensagem, o elemento ou o evento de um braço que não
 conhece, e o valor de enum ou o byte de verbo que não conhece. Uma paint de
