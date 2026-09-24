@@ -2,8 +2,6 @@
 //!
 //! The view sends its input as events, and ends the session with a close.
 //! The server passes the input on to the engine with [`super::to_engine`].
-//! An engine that talks to one view with no server between them reads the
-//! messages of the view with this module.
 
 use std::io::{self, Read, Write};
 

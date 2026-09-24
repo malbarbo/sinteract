@@ -1,8 +1,8 @@
 //! Where a scene goes out and where the input comes back.
 //!
-//! [`Display`] is what an engine (spython, sgleam) drives. [`Terminal`],
-//! [`Window`] and [`Stdio`] implement it, and the engine runs one loop over
-//! whichever it opened.
+//! [`Display`] is what an engine (spython, sgleam) drives. [`Terminal`] and
+//! [`Window`] implement it, and the engine runs one loop over whichever it
+//! opened.
 //!
 //! [`terminal`] shows a pixmap through Kitty, Sixel or half-blocks,
 //! `term_query` probes what the terminal supports, `shm` hands a Kitty image
@@ -10,11 +10,8 @@
 //! keys, with or without the keyboard protocol of Kitty or the
 //! win32-input-mode of Windows Terminal, [`sixel`] encodes a pixmap for the
 //! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
-//! in a winit window. [`stdio`] shows nothing. It writes the frames and
-//! reads the events as Cap'n Proto messages, for a view that runs the
-//! engine as a subprocess. [`room`] does the same for a server with
-//! players, and is not a [`Display`], since its events and its frames
-//! carry a player.
+//! in a winit window. An engine in a session with a server reads with
+//! [`crate::session`] and writes with [`crate::wire::to_view`] instead.
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the
 //! window, and `open_native` needs both. Only `sixel`, with the feature
@@ -32,18 +29,18 @@
 #[cfg(feature = "render")]
 pub mod sixel;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(
+    any(feature = "terminal", feature = "window"),
+    not(target_arch = "wasm32")
+))]
 mod driver;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(
+    any(feature = "terminal", feature = "window"),
+    not(target_arch = "wasm32")
+))]
 mod inbox;
-#[cfg(not(target_arch = "wasm32"))]
-mod link;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod room;
 #[cfg(all(feature = "terminal", unix))]
 mod shm;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod stdio;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 mod term_query;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
@@ -55,14 +52,16 @@ pub mod window;
 
 #[cfg(all(feature = "terminal", feature = "window", not(target_arch = "wasm32")))]
 pub use driver::open_native;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(
+    any(feature = "terminal", feature = "window"),
+    not(target_arch = "wasm32")
+))]
 pub use driver::{Display, NoGraphics, OpenError, PresentError};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(
+    any(feature = "terminal", feature = "window"),
+    not(target_arch = "wasm32")
+))]
 pub use inbox::{Closed, Sender};
-#[cfg(not(target_arch = "wasm32"))]
-pub use room::{Room, RoomEvent};
-#[cfg(not(target_arch = "wasm32"))]
-pub use stdio::Stdio;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 pub use terminal::{PrintError, Printer, Terminal, TerminalOptions};
 #[cfg(all(feature = "window", not(target_arch = "wasm32")))]

@@ -41,15 +41,15 @@ it keeps them from one print to the next.
 
 For an animation, a `Display` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `Event`s. A frame that
-does not reach the display comes back as a `PresentError`, and a message of
-the peer that does not decode comes back as an `Interrupt`, both with the error
-that caused them. The library writes nothing to stderr and ends no session
-on its own, so the program chooses the words and decides whether to stop. A
-`Sender` wakes it from another thread with a close or a bare wake. The same
-loop runs over stdio, where the frames go to a view as Cap'n Proto messages
-and the input comes back. The schema is in `schema/`, one file for the
-drawing, one for the input and one for the session, and `PLAN.md` describes
-the server and client modes.
+does not reach the display comes back as a `PresentError`, and a read of the
+terminal that fails comes back as an `Interrupt`, both with the error that
+caused them. The library writes nothing to stderr and ends no session on its
+own, so the program chooses the words and decides whether to stop. A
+`Sender` wakes it from another thread with a close or a bare wake. In a
+session with a server, the engine reads the input of the players with a
+`Session` and writes its frames as Cap'n Proto messages. The schema is in
+`schema/`, one file for the drawing, one for the input and one for the
+session, and `PLAN.md` describes the server and client modes.
 
 The scene, the rasterizer, the text measuring and the PDF and SVG writers
 build on `wasm32`, so a view in a browser can paint a scene without native

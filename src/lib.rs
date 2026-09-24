@@ -19,9 +19,8 @@
 //! renderer and the codec.
 //!
 //! [`display`] shows a scene and reads the input back, through the
-//! terminal, a winit window or stdin and stdout. Only the Sixel encoder of
-//! it builds on wasm32. The rest needs threads, a tty, a window or platform
-//! FFI.
+//! terminal or a winit window. Only the Sixel encoder of it builds on
+//! wasm32. The rest needs threads, a tty, a window or platform FFI.
 
 // A test that fails on an unwrap reports the failure well enough.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::indexing_slicing))]

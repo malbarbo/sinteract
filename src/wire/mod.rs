@@ -12,11 +12,9 @@
 //! the frames, sends the input and writes with [`to_server`]. The server
 //! owns the session, passes the input of the views on and writes with
 //! [`to_engine`]. Each side reads with the module of the side that writes
-//! to it. An engine with one view and no server between them reads with
-//! [`to_server`]. The generated bindings stay private, and the bytes are
-//! the standard `serialize::write_message` format, so every Cap'n Proto
-//! binding reads
-//! them.
+//! to it. The generated bindings stay private, and the bytes are the
+//! standard `serialize::write_message` format, so every Cap'n Proto binding
+//! reads them.
 //!
 //! [`framing`] is below all of them. It wraps an encoded message in the
 //! envelope that a byte stream needs to tell one message from the next.
@@ -46,10 +44,10 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
 }
 
 /// A payload is malformed. It says the scene, the event or the message is
-/// unusable, and never that the session is. An engine that gets one from
-/// [`to_engine::read`] drops the message and keeps the session. A value
-/// from a newer schema and a float that is not finite are not errors,
-/// since the decoders skip what holds them.
+/// unusable, and never that the session is. A [`crate::session::Session`]
+/// that gets one reports it as a [`crate::session::SessionError::Payload`]
+/// and keeps the session. A value from a newer schema and a float that is
+/// not finite are not errors, since the decoders skip what holds them.
 #[derive(Debug)]
 pub enum Error {
     /// Cap'n Proto rejected the bytes as malformed, truncated, or of the

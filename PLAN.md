@@ -4,10 +4,10 @@
 
 O sinteract é a biblioteca gráfica do spython e do sgleam. Além do jogo
 local, ela serve a dois modos novos. No modo servidor, o spython ou o sgleam
-roda como subprocesso de um servidor de jogos, lê a entrada no stdin e
-escreve os frames no stdout, e o estado do jogo nunca sai do processo. No
-modo cliente, uma view recebe os frames pela rede, desenha e manda a
-entrada, sem rodar engine. O jogo local continua como está para o aluno.
+roda como subprocesso de um servidor de jogos, lê a sessão no descritor 3
+e escreve os frames no descritor 4, e o estado do jogo nunca sai do
+processo. No modo cliente, uma view recebe os frames pela rede, desenha e
+manda a entrada, sem rodar engine. O jogo local continua como está para o aluno.
 
 ## Modos
 
@@ -15,7 +15,7 @@ Cada host é um binário só, com o modo escolhido na linha de comando:
 
 ```
 spython jogo.py              local: engine e terminal ou janela
-spython --server jogo.py     servidor: engine num Room, stdin e stdout
+spython --server jogo.py     servidor: engine numa Session, fds 3 e 4
 spython --client URL         cliente: view sem engine
 ```
 
@@ -44,10 +44,8 @@ subprotocolo `sinteract.v1`. O player é o número do jogador na partida, a
 partir de 1, e vai no primeiro campo do payload das mensagens que falam de
 um jogador: o `event`, o `join` e o `leave` do servidor e o `frame` da
 engine, em que o 0 quer dizer todos. O `start`, o `close`, o `tick` e o
-`asset` são da sessão inteira e não têm player, e a `ViewMessage` também não, porque o
-servidor sabe o player pela conexão.
-Uma view que fala com a engine sem servidor escreve `ViewMessage`, que a
-engine lê com o `Stdio`.
+`asset` são da sessão inteira e não têm player, e a `ViewMessage` também
+não, porque o servidor sabe o player pela conexão.
 
 Um leitor pula a mensagem, o elemento ou o evento de um braço que não
 conhece, e o valor de enum ou o byte de verbo que não conhece. Uma paint de
@@ -85,11 +83,10 @@ sobre esse protocolo, com um exemplo em Tokio.
 
 `Display::wait_event(deadline)` devolve um `Event` ou um `Interrupt`
 (`Wake`, `Timeout`, `Read` ou `Close`). O ritmo vem de um evento `Vsync` na
-fila. O terminal e a janela fazem o próprio `Vsync`, o `Stdio` recebe o da
-view, e o `Room` recebe o `tick` do servidor, que marca o ritmo de todos os
-jogadores, porque cada view tem o seu ritmo. Um `event` do servidor que é
-um `Vsync` é um erro de leitura. O loop do aluno é o mesmo em todos os
-modos:
+fila. O terminal e a janela fazem o próprio `Vsync`, e a `Session` recebe o
+`tick` do servidor, que marca o ritmo de todos os jogadores, porque cada
+view tem o seu ritmo. Um `event` do servidor que é um `Vsync` é um erro de
+leitura. O loop do aluno é o mesmo em todos os modos:
 
 ```python
 while ev := wait_event():
@@ -111,13 +108,15 @@ mesma face.
 
 ## Engine
 
-`Display` é um trait selado, implementado por `Terminal`, `Window` e
-`Stdio`, e `open_native` escolhe a janela ou o terminal. O `Room` é o lado
-da engine numa sessão com jogadores. Ele não é um `Display`, porque o
-evento e o frame levam o jogador: `wait_event` entrega um `RoomEvent`, e há
-`present_to` e `present_all`. `Room::open` espera o `start` e devolve os
-jogadores. Um host roda o jogo local num `Display` e o modo servidor num
-`Room`, e um adaptador liga o jogo de um jogador só ao jogador 1.
+`Display` é um trait selado, implementado por `Terminal` e `Window`, e
+`open_native` escolhe a janela ou o terminal. A `Session` é o lado da
+engine numa sessão com servidor. Ela não faz E/S. O host lhe dá os bytes
+que leu, com `feed`, ou chama `wait` sobre um `Read`, como o descritor 3,
+e ela devolve os eventos com o jogador, sempre com no máximo um `Vsync` na
+fila. A engine
+escreve os frames no descritor 4 com `to_view`. Um host roda o jogo local
+num `Display` e o modo servidor numa `Session`, e um adaptador liga o jogo
+de um jogador só ao jogador 1.
 
 ## Dependências do servidor
 
@@ -140,12 +139,11 @@ crates juntos, já que a versão do protocolo está no schema.
 ## Hosts
 
 No spython, o `cli` ganha `--server` e `--client`, a engine recebe um
-`Display` ou um `Room` em vez de chamar `host::*`, o `host/native.rs` some
-em favor de `open_native`, e o `world.py` passa ao loop de `wait_event`. O
-`image.py` passa `style`, `family` e `weight`. O sgleam faz o mesmo. No
-modo servidor, os dois guardam o descritor 1 para o protocolo e apontam o
-`print` do aluno para o stderr, já que um texto no stdout encerra a
-partida.
+`Display` ou uma `Session` em vez de chamar `host::*`, o `host/native.rs`
+some em favor de `open_native`, e o `world.py` passa ao loop de
+`wait_event`. O `image.py` passa `style`, `family` e `weight`. O sgleam faz
+o mesmo. No modo servidor, o protocolo passa pelos descritores 3 e 4,
+então o `print` do aluno no stdout não atrapalha a partida.
 
 No simplecode, o `env.ts` ganha `wait_event` com `Atomics.wait`, o canal de
 teclas vira canal de entrada com o `Vsync`, e o Worker escreve o frame num
@@ -160,10 +158,10 @@ Feito no sinteract:
 - o schema em três arquivos e o `wire` em camadas, com leitura tolerante a
   schema mais novo;
 - o protocolo por direção, com os três lados e o player no payload;
-- o trait `Display`, com `Terminal`, `Window` e `Stdio`, as features
-  `terminal` e `window`, e o `wait_event` com `Interrupt`;
+- o trait `Display`, com `Terminal` e `Window`, as features `terminal` e
+  `window`, e o `wait_event` com `Interrupt`;
 - a entrada com teclado, mouse, resize e pad de 12 botões;
-- o `Room`, com o `Vsync` do `tick` do servidor e a fila que junta
+- a `Session`, com o `Vsync` do `tick` do servidor e a fila que junta
   movimentos por jogador;
 - as funções do servidor: `framing::parse_header`, `to_server::decode` e
   `to_view::arm`;
@@ -171,7 +169,7 @@ Feito no sinteract:
 
 Falta:
 
-- a migração do spython e do sgleam para `Display` e `Room`, e os modos
+- a migração do spython e do sgleam para `Display` e `Session`, e os modos
   `--server` e `--client`;
 - o lado do navegador no simplecode, e a escolha entre SVG feito no
   servidor e um decodificador que desenha num canvas;

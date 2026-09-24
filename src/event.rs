@@ -20,13 +20,14 @@
 //! ```
 //!
 //! The display decides when a `Vsync` arrives, with a timer in the
-//! terminal and in the window, rAF in the browser and the peer on stdio.
-//! The engine derives a simulation tick from the time between two.
+//! terminal and in the window and rAF in the browser. In a session, the
+//! tick of the server arrives as a `SessionEvent::Vsync`. The engine
+//! derives a simulation tick from the time between two.
 
 /// What happened, as `wait_event` delivers it.
 #[derive(Clone, Debug)]
 pub enum Event {
-    /// From the user, the platform or the peer.
+    /// From the user or the platform.
     Input(InputEvent),
 }
 
@@ -39,12 +40,10 @@ pub enum Interrupt {
     Wake,
     /// The deadline passed with nothing to deliver.
     Timeout,
-    /// A read from the tty or from the peer failed. `ReadError::Payload`
-    /// skipped one message and the session goes on, and `ReadError::Broken`
-    /// ends it, with a `Close` right after.
+    /// A read from the tty failed, and a `Close` comes right after.
     Read(crate::wire::ReadError),
-    /// The user, the platform or the peer ended the session, or the display
-    /// closed. Every wait from now on returns it.
+    /// The user or the platform ended the session, or the display closed.
+    /// Every wait from now on returns it.
     Close,
 }
 

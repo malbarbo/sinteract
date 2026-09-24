@@ -75,14 +75,12 @@ pub(super) mod sealed {
 /// Why a frame or an asset did not reach the display.
 #[derive(Debug)]
 pub enum PresentError {
-    /// The session ended, at [`Display::close`] or because the peer stopped
-    /// reading. [`Display::wait_event`] also reports it, as
-    /// [`Interrupt::Close`].
+    /// The session ended at [`Display::close`]. [`Display::wait_event`]
+    /// also reports it, as [`Interrupt::Close`].
     Closed,
     /// Rasterizing the scene failed.
     Alloc(AllocError),
-    /// A write to the terminal or to the peer failed. Part of the frame may
-    /// have arrived.
+    /// A write to the terminal failed. Part of the frame may have arrived.
     Io(io::Error),
     /// The surface of the window refused the frame.
     Platform(String),
@@ -160,8 +158,7 @@ pub fn open_native(
 /// Why a display did not open.
 #[derive(Debug)]
 pub enum OpenError {
-    /// Another session holds the resource of the process: the terminal, the
-    /// event loop of the windows or stdin.
+    /// Another session holds the terminal or the event loop of the windows.
     Busy,
     /// The terminal shows neither Kitty, Sixel nor truecolor.
     NoGraphics,
@@ -234,7 +231,6 @@ impl From<NoGraphics> for OpenError {
     }
 }
 
-#[cfg(any(feature = "terminal", feature = "window"))]
 pub(super) const fn period_from_hz(hz: u32) -> std::time::Duration {
     std::time::Duration::from_nanos(1_000_000_000 / hz as u64)
 }

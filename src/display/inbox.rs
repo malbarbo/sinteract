@@ -1,8 +1,7 @@
 //! The queue behind every [`super::Display`]. A display owns an [`Inbox`]
 //! and hands out [`Sender`]s. Its input threads, the engine and any other
 //! thread push through a `Sender`, and `wait_event` pops from the `Inbox`,
-//! in the order of arrival. The queue is generic over the event it holds,
-//! so a session with players queues its own events.
+//! in the order of arrival.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -69,6 +68,7 @@ impl<E> Sender<E> {
 
     /// Queue [`Interrupt::Read`], in order with the events. A reader that
     /// sends a `ReadError::Broken` sends a close right after.
+    #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub(crate) fn send_read_error(&self, e: crate::wire::ReadError) -> Result<(), Closed> {
         self.send(Entry::Read(e))
     }
@@ -76,7 +76,6 @@ impl<E> Sender<E> {
     /// Ask the display to draw the last scene again, as after a resize.
     /// The request never reaches the engine. Only the terminal and the
     /// window redraw.
-    #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
     pub(crate) fn request_redraw(&self) -> Result<(), Closed> {
         self.put(Msg::Redraw)
     }
@@ -98,7 +97,6 @@ impl<E> Sender<E> {
 }
 
 impl Sender<Event> {
-    #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
     pub(crate) fn send_input(&self, ev: InputEvent) -> Result<(), Closed> {
         self.send_event(Event::Input(ev))
     }
@@ -141,7 +139,6 @@ pub(crate) struct Inbox<E = Event> {
 
 enum Msg<E> {
     Item(Item<E>),
-    #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
     Redraw,
 }
 
@@ -154,6 +151,7 @@ struct Item<E> {
 enum Entry<E> {
     Input(E),
     Wake,
+    #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     Read(crate::wire::ReadError),
     Close,
 }
@@ -168,6 +166,7 @@ pub(crate) enum Next<E = Event> {
 impl<E: Queued> Inbox<E> {
     /// A queue that makes a Vsync every `vsync_period`, or that takes them
     /// from the channel when it is `None`.
+    #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub(crate) fn new(vsync_period: Option<Duration>) -> Self {
         Self::with_waker(vsync_period, None)
     }
@@ -212,7 +211,6 @@ impl<E: Queued> Inbox<E> {
 
     /// Queue `ev` ahead of every event, the first Vsync included, for what
     /// a display tells the engine as it opens.
-    #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
     pub(crate) fn send_first(&mut self, ev: E) {
         let now = Instant::now();
         // A Vsync goes out first only when it is strictly older.
@@ -232,9 +230,9 @@ impl<E: Queued> Inbox<E> {
         self.redraw = false;
     }
 
-    /// [`Inbox::wait_with`] on the channel, for a display that has nothing
-    /// to redraw.
-    pub(crate) fn wait(&mut self, deadline: Option<Instant>) -> Result<E, Interrupt> {
+    /// [`Inbox::wait_with`] on the channel, with no redraw.
+    #[cfg(test)]
+    fn wait(&mut self, deadline: Option<Instant>) -> Result<E, Interrupt> {
         loop {
             if let Next::Ready(ready) = self.wait_with(deadline, Self::receive) {
                 return ready;
@@ -275,6 +273,7 @@ impl<E: Queued> Inbox<E> {
 
     /// Take the next message of the channel, or wait until `timeout`
     /// passes.
+    #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub(crate) fn receive(&mut self, timeout: Option<Duration>) {
         let received = match timeout {
             Some(t) => match self.rx.recv_timeout(t) {
@@ -412,7 +411,7 @@ enum Vsync {
         /// When the next Vsync falls due. The first one is due at once.
         due: Instant,
     },
-    /// The channel, as on stdio.
+    /// The channel.
     Channel {
         /// When the Vsync that waits arrived.
         arrived: Option<Instant>,

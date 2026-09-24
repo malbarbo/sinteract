@@ -18,10 +18,9 @@ render = ["dep:tiny-skia", "dep:png", "dep:pdf-writer", "dep:icy_sixel"]
 # families. The query needs a font directory, so wasm32 leaves it out even
 # when the feature is on.
 native-fonts = ["dep:fontdb"]
-# The displays that show a scene. With both off, `Stdio` is the only
-# display, and a build that only talks stdio, such as a server, drops
-# crossterm, winit and softbuffer. `open_native` needs both, since it falls
-# back from the window to the terminal.
+# The displays that show a scene. A build with both off, such as a server,
+# has no display and drops crossterm, winit and softbuffer. `open_native`
+# needs both, since it falls back from the window to the terminal.
 terminal = [
     "render",
     "dep:crossterm",
