@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 use super::driver::{OpenError, PresentError};
 use super::inbox::{Inbox, Queued, Sender};
 use crate::event::Interrupt;
-use crate::wire::framing::UNROUTED;
 use crate::wire::{ReadError, to_view};
 
 /// The two ends of the session over a pipe, and the queue that the reader
@@ -125,7 +124,7 @@ impl<E: Queued> Link<E> {
             return;
         }
         if !self.peer_closed.load(Ordering::Acquire) {
-            let _ = to_view::write_close(&mut self.writer, UNROUTED);
+            let _ = to_view::write_close(&mut self.writer);
         }
         self.closed = true;
         self.inbox.close();

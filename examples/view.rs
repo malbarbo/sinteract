@@ -106,7 +106,7 @@ fn main() -> ExitCode {
 fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Message>, wake: Sender) {
     loop {
         let message = match to_view::read(&mut from_engine) {
-            Ok(Some((_, message))) => message,
+            Ok(Some(message)) => message,
             Ok(None) => Message::Close,
             Err(ReadError::Payload(e)) => {
                 eprintln!("view: skipping a message that does not decode: {e}");
@@ -150,7 +150,7 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
                     return Session::DisplayFailed;
                 }
             },
-            Message::Frame(scene) => {
+            Message::Frame { scene, .. } => {
                 if last.replace(scene).is_some() {
                     stats.skipped += 1;
                 }

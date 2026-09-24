@@ -38,10 +38,14 @@ os braços abaixo.
 | view         | `ViewMessage`   | `SIV1` | `event`, `close`                           |
 | servidor     | `ServerMessage` | `SIS1` | `event`, `close`, `start`, `join`, `leave` |
 
-Num pipe, cada mensagem vai atrás de um cabeçalho de 12 bytes: a mágica, o
-player em `u32` LE e o tamanho em `u32` LE. O player é o número do jogador
-na partida, a partir de 1, e o 0 quer dizer todos, ou a sessão inteira. Num
-WebSocket vai só o payload, e a versão vai no subprotocolo `sinteract.v1`.
+Num pipe, cada mensagem vai atrás de um cabeçalho de 8 bytes: a mágica e o
+tamanho em `u32` LE. Num WebSocket vai só o payload, e a versão vai no
+subprotocolo `sinteract.v1`. O player é o número do jogador na partida, a
+partir de 1, e vai no primeiro campo do payload das mensagens que falam de
+um jogador: o `event`, o `join` e o `leave` do servidor e o `frame` da
+engine, em que o 0 quer dizer todos. O `start`, o `close` e o `asset` são da
+sessão inteira e não têm player, e a `ViewMessage` também não, porque o
+servidor sabe o player pela conexão.
 Uma view que fala com a engine sem servidor escreve `ViewMessage`, que a
 engine lê com o `Stdio`.
 
@@ -59,10 +63,10 @@ Regras da sessão com servidor:
   pode vir vazio;
 - um jogador aparece uma vez no `start`, o número dele não se repete na
   partida, e `event`, `join` e `leave` de player 0 são erro;
-- o `close` do servidor vai com player 0 e encerra a partida. Para tirar um
-  jogador, o servidor fecha o WebSocket dele e manda `leave`;
-- a engine manda os assets com player 0, os `id`s valem para a partida
-  toda, e o servidor guarda todos para quem entrar depois;
+- o `close` do servidor encerra a partida. Para tirar um jogador, o
+  servidor fecha o WebSocket dele e manda `leave`;
+- os `id`s dos assets valem para a partida toda, e o servidor guarda todos
+  para quem entrar depois;
 - um frame para um jogador que saiu é descartado em silêncio, porque a
   engine pode tê-lo escrito antes de ler o `leave`;
 - enquanto o WebSocket de um jogador está ocupado, o servidor guarda só o
@@ -150,7 +154,7 @@ Feito no sinteract:
 - a cena, os três renderers e o texto com as doze fontes;
 - o schema em três arquivos e o `wire` em camadas, com leitura tolerante a
   schema mais novo;
-- o protocolo por direção, com os três lados e o player no cabeçalho;
+- o protocolo por direção, com os três lados e o player no payload;
 - o trait `Display`, com `Terminal`, `Window` e `Stdio`, as features
   `terminal` e `window`, e o `wait_event` com `Interrupt`;
 - a entrada com teclado, mouse, resize e pad de 12 botões;
@@ -171,9 +175,6 @@ Falta:
 
 ## Pontos abertos
 
-- Um `close` do servidor com player diferente de 0 encerra a partida
-  inteira sem aviso, e o `close` da engine com player N não tem sentido
-  definido.
 - O caminho do SVG no servidor precisa de `to_view::decode` público.
 - Os bytes que sobram depois de uma mensagem são aceitos.
 - O que sobrou do item A da revisão: `seq`, `Error` e `Hello`.

@@ -15,7 +15,7 @@ use capnp::serialize;
 use capnp::traits::Owned;
 
 use super::Error;
-use super::framing::{Player, Side, read_framed};
+use super::framing::{Side, read_framed};
 
 /// Reading a message fails in two ways, and only the second leaves the
 /// session usable.
@@ -48,20 +48,19 @@ impl std::error::Error for ReadError {
 }
 
 /// Read the messages that `side` wrote until `decode` returns one. `decode`
-/// gets the player of the header with the payload, and returns `None` for
-/// a message of an arm from a newer schema, which `read_next` skips. `None`
-/// at the end of the stream.
+/// returns `None` for a message of an arm from a newer schema, which
+/// `read_next` skips. `None` at the end of the stream.
 pub(super) fn read_next<T>(
     r: &mut impl Read,
     side: Side,
-    decode: impl Fn(Player, &[u8]) -> Result<Option<T>, Error>,
+    decode: impl Fn(&[u8]) -> Result<Option<T>, Error>,
 ) -> Result<Option<T>, ReadError> {
     loop {
-        let Some((player, words)) = read_framed(r, side).map_err(ReadError::Broken)? else {
+        let Some(words) = read_framed(r, side).map_err(ReadError::Broken)? else {
             return Ok(None);
         };
         let payload = Word::words_to_bytes(&words);
-        if let Some(message) = decode(player, payload).map_err(ReadError::Payload)? {
+        if let Some(message) = decode(payload).map_err(ReadError::Payload)? {
             return Ok(Some(message));
         }
     }

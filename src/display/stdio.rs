@@ -7,8 +7,8 @@
 //! The display is the engine side of the session. It writes with
 //! [`crate::wire::to_view`] and reads the messages of the view with
 //! [`crate::wire::to_server`], and each message goes inside the envelope of
-//! [`crate::wire::framing`]. It serves one view, so its messages go to
-//! [`UNROUTED`].
+//! [`crate::wire::framing`]. It serves one view, so a frame names no
+//! player.
 
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
@@ -18,7 +18,6 @@ use super::inbox::Sender;
 use super::link::{ClaimedStdin, Link, Step};
 use crate::event::{Event, Interrupt};
 use crate::scene::Scene;
-use crate::wire::framing::UNROUTED;
 use crate::wire::to_server::{self, Message};
 use crate::wire::{ReadError, to_view};
 
@@ -58,8 +57,7 @@ impl Stdio {
 impl super::Display for Stdio {
     /// Send a frame and flush, so the peer sees it at once.
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        self.link
-            .send(|w| to_view::write_frame(w, UNROUTED, &scene))
+        self.link.send(|w| to_view::write_frame(w, None, &scene))
     }
 
     /// The events of the peer and of the [`Sender`]s, in the order of
@@ -75,8 +73,7 @@ impl super::Display for Stdio {
     /// Send the asset to the view, which answers nothing, so a success
     /// says that the asset went out and not that the view drew it.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) -> Result<(), PresentError> {
-        self.link
-            .send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime))
+        self.link.send(|w| to_view::write_asset(w, id, blob, mime))
     }
 
     /// Tell the peer that the session ended, unless the peer ended it.
@@ -121,7 +118,7 @@ mod tests {
     /// `payload` in the envelope of the view, for a payload that
     /// [`to_server`] does not write.
     fn frame(payload: &[u8]) -> Vec<u8> {
-        let mut out = header(Side::View, UNROUTED, payload.len() as u32).to_vec();
+        let mut out = header(Side::View, payload.len() as u32).to_vec();
         out.extend_from_slice(payload);
         out
     }
@@ -163,8 +160,10 @@ mod tests {
 
     fn decode_messages(mut buf: &[u8]) -> Vec<to_view::Message> {
         let mut out = Vec::new();
-        while let Some((player, m)) = to_view::read(&mut buf).expect("decode") {
-            assert_eq!(player, UNROUTED);
+        while let Some(m) = to_view::read(&mut buf).expect("decode") {
+            if let to_view::Message::Frame { player, .. } = &m {
+                assert_eq!(*player, None);
+            }
             out.push(m);
         }
         out
@@ -187,7 +186,7 @@ mod tests {
         }
         fr.present(scene).expect("the frame goes out");
         match &decode_messages(&written.bytes())[..] {
-            [to_view::Message::Frame(d)] => {
+            [to_view::Message::Frame { scene: d, .. }] => {
                 assert_eq!(d.width(), 10.0);
                 assert!(!d.elements().is_empty());
             }
@@ -281,7 +280,7 @@ mod tests {
 
     #[test]
     fn missing_magic_is_an_error_not_a_panic() {
-        let mut bad = header(Side::View, UNROUTED, 0);
+        let mut bad = header(Side::View, 0);
         bad[..4].copy_from_slice(b"junk");
         assert!(breaks(&mut reading(bad.to_vec())));
     }
@@ -297,7 +296,7 @@ mod tests {
     #[test]
     fn a_message_of_another_engine_ends_the_session() {
         let mut stream = Vec::new();
-        to_view::write_close(&mut stream, UNROUTED).unwrap();
+        to_view::write_close(&mut stream).unwrap();
         stream.extend_from_slice(&event(&InputEvent::Vsync));
         assert!(breaks(&mut reading(stream)));
     }
@@ -310,7 +309,10 @@ mod tests {
         fr.present(Scene::new(8.0, 8.0))
             .expect("the frame goes out");
         match &decode_messages(&written.bytes())[..] {
-            [to_view::Message::Asset { .. }, to_view::Message::Frame(_)] => {}
+            [
+                to_view::Message::Asset { .. },
+                to_view::Message::Frame { .. },
+            ] => {}
             other => panic!("expected an Asset and a Frame, got {other:?}"),
         }
     }

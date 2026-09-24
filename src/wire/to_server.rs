@@ -14,7 +14,7 @@ use crate::protocol_capnp::view_message;
 
 use super::Error;
 use super::event::{read_input_event, write_input_event};
-use super::framing::{Side, UNROUTED, write_framed};
+use super::framing::{Side, write_framed};
 use super::protocol::{ReadError, decode_root, read_next};
 
 /// One message of the view, one variant per arm of `ViewMessage`. The arm
@@ -27,21 +27,19 @@ pub enum Message {
 
 /// Read the next message of a view. Returns `None` at the end of the
 /// stream. A message or an event of an arm from a newer schema is skipped,
-/// and the next one comes out. The server knows the player of a view from
-/// its connection, and an engine with one view has no player to read, so
-/// the player in the header does not count.
+/// and the next one comes out.
 pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
-    read_next(r, Side::View, |_, payload| decode(payload))
+    read_next(r, Side::View, decode)
 }
 
 /// Write the input `ev`.
 pub fn write_input(w: &mut impl Write, ev: &InputEvent) -> io::Result<()> {
-    write_framed(w, Side::View, UNROUTED, &input_message(ev))
+    write_framed(w, Side::View, &input_message(ev))
 }
 
 /// Write the close of the session.
 pub fn write_close(w: &mut impl Write) -> io::Result<()> {
-    write_framed(w, Side::View, UNROUTED, &close_message())
+    write_framed(w, Side::View, &close_message())
 }
 
 /// Decode `payload`, a message with no envelope, such as one that came

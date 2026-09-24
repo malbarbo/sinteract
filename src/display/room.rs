@@ -19,7 +19,6 @@ use super::inbox::{Queued, Sender, input_supersedes};
 use super::link::{ClaimedStdin, Link, Step};
 use crate::event::{InputEvent, Interrupt};
 use crate::scene::Scene;
-use crate::wire::framing::UNROUTED;
 use crate::wire::to_engine::{self, Message, Roster};
 use crate::wire::{ReadError, to_view};
 
@@ -94,12 +93,12 @@ impl Room {
     /// Send `scene` to `player`, and flush.
     pub fn present_to(&mut self, player: NonZeroU32, scene: &Scene) -> Result<(), PresentError> {
         self.link
-            .send(|w| to_view::write_frame(w, player.get(), scene))
+            .send(|w| to_view::write_frame(w, Some(player), scene))
     }
 
     /// Send `scene` to every player, and flush.
     pub fn present_all(&mut self, scene: &Scene) -> Result<(), PresentError> {
-        self.link.send(|w| to_view::write_frame(w, UNROUTED, scene))
+        self.link.send(|w| to_view::write_frame(w, None, scene))
     }
 
     /// The events of the server and of the [`Sender`]s, in the order of
@@ -121,8 +120,7 @@ impl Room {
         blob: &[u8],
         mime: Option<&str>,
     ) -> Result<(), PresentError> {
-        self.link
-            .send(|w| to_view::write_asset(w, UNROUTED, id, blob, mime))
+        self.link.send(|w| to_view::write_asset(w, id, blob, mime))
     }
 
     /// Tell the server that the session ended, unless the server ended it.
@@ -228,6 +226,7 @@ mod tests {
     use crate::display::link::SharedWriter;
     use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
     use crate::wire::Error;
+    use crate::wire::framing::{Side, header};
     use crate::wire::to_engine::Member;
     use std::io::{BufReader, Cursor, PipeWriter};
 
@@ -370,9 +369,8 @@ mod tests {
     #[test]
     fn an_event_of_player_0_is_a_read_error_and_the_session_goes_on() {
         let mut input = start();
-        let mut zeroed = Vec::new();
-        to_engine::write_input(&mut zeroed, player(1), &key("a")).unwrap();
-        zeroed[4..8].fill(0);
+        let zeroed = to_engine::encode_input(0, &key("a"));
+        input.extend_from_slice(&header(Side::Server, zeroed.len() as u32));
         input.extend_from_slice(&zeroed);
         to_engine::write_input(&mut input, player(1), &key("b")).unwrap();
         let mut room = reading(input);
@@ -478,13 +476,16 @@ mod tests {
         let bytes = written.bytes();
         let mut r = &bytes[..];
         let mut next = || to_view::read(&mut r).unwrap().expect("a message");
-        assert!(matches!(next(), (2, to_view::Message::Frame(_))));
-        assert!(matches!(next(), (UNROUTED, to_view::Message::Frame(_))));
         assert!(matches!(
             next(),
-            (UNROUTED, to_view::Message::Asset { id: 7, .. })
+            to_view::Message::Frame { player: Some(p), .. } if p == player(2)
         ));
-        assert!(matches!(next(), (UNROUTED, to_view::Message::Close)));
+        assert!(matches!(
+            next(),
+            to_view::Message::Frame { player: None, .. }
+        ));
+        assert!(matches!(next(), to_view::Message::Asset { id: 7, .. }));
+        assert!(matches!(next(), to_view::Message::Close));
     }
 
     #[test]
