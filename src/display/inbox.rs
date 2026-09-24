@@ -363,6 +363,23 @@ mod tests {
         }
     }
 
+    fn move_to(x: f32) -> InputEvent {
+        InputEvent::Mouse(MouseEvent {
+            action: MouseAction::Move,
+            x,
+            y: 0.0,
+            modifiers: Modifiers::default(),
+            buttons: MouseButtons::default(),
+        })
+    }
+
+    fn mouse_x(ready: &Result<Event, Interrupt>) -> f32 {
+        match ready {
+            Ok(Event::Input(InputEvent::Mouse(m))) => m.x,
+            other => panic!("got {other:?}"),
+        }
+    }
+
     fn is_vsync(ready: &Result<Event, Interrupt>) -> bool {
         matches!(ready, Ok(Event::Input(InputEvent::Vsync)))
     }
@@ -435,40 +452,39 @@ mod tests {
 
     #[test]
     fn a_move_or_a_resize_replaces_one_of_its_kind_at_the_back() {
-        let at = |x| {
-            InputEvent::Mouse(MouseEvent {
-                action: MouseAction::Move,
-                x,
-                y: 0.0,
-                modifiers: Modifiers::default(),
-                buttons: MouseButtons::default(),
-            })
-        };
         let resize = |width| InputEvent::Resize { width, height: 1.0 };
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         for ev in [
-            at(1.0),
-            at(2.0),
+            move_to(1.0),
+            move_to(2.0),
             key("a"),
-            at(3.0),
+            move_to(3.0),
             resize(1.0),
             resize(2.0),
         ] {
             tx.send_input(ev).unwrap();
         }
-        let x = |e| match e {
-            Ok(Event::Input(InputEvent::Mouse(m))) => m.x,
-            other => panic!("got {other:?}"),
-        };
-        assert_eq!(x(inbox.wait(None)), 2.0);
+        assert_eq!(mouse_x(&inbox.wait(None)), 2.0);
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert_eq!(x(inbox.wait(None)), 3.0);
+        assert_eq!(mouse_x(&inbox.wait(None)), 3.0);
         assert!(matches!(
             inbox.wait(None),
             Ok(Event::Input(InputEvent::Resize { width: 2.0, .. }))
         ));
         assert!(is_timeout(&inbox.wait(soon())));
+    }
+
+    #[test]
+    fn a_move_before_a_wake_stays() {
+        let mut inbox = past_the_first_vsync();
+        let tx = inbox.sender();
+        tx.send_input(move_to(1.0)).unwrap();
+        tx.wake().unwrap();
+        tx.send_input(move_to(2.0)).unwrap();
+        assert_eq!(mouse_x(&inbox.wait(None)), 1.0);
+        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
+        assert_eq!(mouse_x(&inbox.wait(None)), 2.0);
     }
 
     #[test]
