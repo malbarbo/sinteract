@@ -228,6 +228,7 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
                 }
             }
             Message::Hello(_) => eprintln!("view: skipping a hello after the first one"),
+            Message::Forget(_) => {}
         }
     }
     if let Some(scene) = last {

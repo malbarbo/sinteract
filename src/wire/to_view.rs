@@ -1,10 +1,11 @@
 //! The messages from the engine to the view, in the `EngineMessage` union.
 //!
 //! The engine says first how many players the game takes, in a hello for
-//! the server. Then it uploads each bitmap once as an asset, before the
-//! frames that draw it, and sends a frame per repaint, for one player or
+//! the server. Then it uploads each bitmap as an asset, before the first
+//! frame that draws it, and sends a frame per repaint, for one player or
 //! for all of them. The engine ends the session with the end of its
-//! stream.
+//! stream. The server adds a forget for a view, when the view no longer
+//! needs an asset.
 
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
@@ -34,6 +35,8 @@ pub enum Message {
         scene: Scene,
     },
     Hello(PlayerRange),
+    /// The view drops the asset of this id. Only a server sends it.
+    Forget(u32),
 }
 
 /// The arm of a message of the engine, with the player of a frame. A
@@ -47,6 +50,7 @@ pub enum Arm {
         player: Option<NonZeroU32>,
     },
     Hello(PlayerRange),
+    Forget(u32),
 }
 
 /// The fewest and the most players that a game takes, from 1.
@@ -121,6 +125,7 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
                 player: NonZeroU32::new(f?.get_player()),
             },
             engine_message::Hello(h) => Arm::Hello(read_hello(h?)?),
+            engine_message::Forget(id) => Arm::Forget(id),
         }))
     })
 }
@@ -159,6 +164,7 @@ fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Er
             }))
         }
         engine_message::Hello(h) => Ok(Some(Message::Hello(read_hello(h?)?))),
+        engine_message::Forget(id) => Ok(Some(Message::Forget(id))),
     }
 }
 
@@ -183,6 +189,14 @@ fn hello_message(players: PlayerRange) -> MessageBuilder<HeapAllocator> {
     builder
 }
 
+fn forget_message(id: u32) -> MessageBuilder<HeapAllocator> {
+    let mut builder = MessageBuilder::new_default();
+    builder
+        .init_root::<engine_message::Builder>()
+        .set_forget(id);
+    builder
+}
+
 fn asset_message(id: u32, blob: &[u8], mime: Option<&str>) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let mut asset = builder.init_root::<engine_message::Builder>().init_asset();
@@ -192,6 +206,12 @@ fn asset_message(id: u32, blob: &[u8], mime: Option<&str>) -> MessageBuilder<Hea
         asset.set_mime(m);
     }
     builder
+}
+
+/// Encode that the asset `id` is gone, with no envelope, as a server sends
+/// it to a view.
+pub fn encode_forget(id: u32) -> Vec<u8> {
+    super::finish(forget_message(id))
 }
 
 /// Encode a scene as a frame for every player, with no envelope.

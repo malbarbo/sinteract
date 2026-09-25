@@ -373,6 +373,7 @@ impl ServerCore {
                     Phase::Closing | Phase::Over => {}
                 },
                 Ok(Some(Arm::Asset)) => self.assets.push(payload),
+                Ok(Some(Arm::Forget(_))) => {}
                 Ok(Some(Arm::Frame { player: None })) => {
                     for seat in self.seats.values_mut() {
                         seat.frame = Some(payload.clone());
@@ -743,6 +744,7 @@ mod tests {
                             None => format!("frame all {}", scene.width()),
                         },
                         to_view::Message::Hello(_) => "hello".into(),
+                        to_view::Message::Forget(id) => format!("forget {id}"),
                     });
                 }
                 Next::Idle => {

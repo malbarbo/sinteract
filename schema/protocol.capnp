@@ -44,7 +44,9 @@ struct Hello {
     maxPlayers @1 :UInt32;
 }
 
-# Engine to view, through the server. An asset goes to every player.
+# Engine to view, through the server. An asset goes to every player. The
+# engine sends an asset before the first frame that draws it, and the
+# server keeps it for the views while the room has room for it.
 struct EngineMessage {
     union {
         # One per bitmap, before the frames that draw it.
@@ -54,6 +56,9 @@ struct EngineMessage {
         # The first message of the engine, and only once. It goes to the
         # server, which starts the session if the game takes its players.
         hello @2 :Hello;
+        # From the server to a view, which drops the asset of this id,
+        # since no frame of the view draws it. An engine never sends it.
+        forget @3 :UInt32;
     }
 }
 

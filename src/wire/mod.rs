@@ -555,6 +555,22 @@ mod tests {
             to_view::arm(&hello(2, 4)).unwrap(),
             Some(to_view::Arm::Hello(players))
         );
+        assert_eq!(
+            to_view::arm(&to_view::encode_forget(7)).unwrap(),
+            Some(to_view::Arm::Forget(7))
+        );
+    }
+
+    #[test]
+    fn a_forget_round_trips_with_its_id() {
+        assert!(matches!(
+            decode(&to_view::encode_forget(9)).unwrap(),
+            Message::Forget(9)
+        ));
+        assert!(matches!(
+            decode(&to_view::encode_forget(u32::MAX)).unwrap(),
+            Message::Forget(u32::MAX)
+        ));
     }
 
     /// A hello from `min` to `max`, with no envelope, even when that is not
