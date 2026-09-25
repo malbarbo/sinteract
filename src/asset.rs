@@ -683,20 +683,20 @@ struct Entry {
     seen: u64,
 }
 
-/// `png`, of `width` by `height`, shrunk to at most [`MAX_IMAGE_PIXELS`]
-/// with its ratio, or an error if it has more than [`MAX_SHRINK_PIXELS`]
-/// or does not decode.
+/// The image in `blob`, of `width` by `height`, shrunk to at most
+/// [`MAX_IMAGE_PIXELS`] with its ratio, as a PNG, or an error if it has
+/// more than [`MAX_SHRINK_PIXELS`] or does not decode.
 #[cfg(feature = "render")]
-fn shrink(png: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
+fn shrink(blob: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
     if u64::from(width) * u64::from(height) > MAX_SHRINK_PIXELS {
         return Err(AssetError::TooManyPixels { width, height });
     }
-    shrink_to(png, shrunk_size(width, height, MAX_IMAGE_PIXELS))
+    shrink_to(blob, MAX_IMAGE_PIXELS)
 }
 
 /// Without the renderer, an image over the limit cannot shrink.
 #[cfg(not(feature = "render"))]
-fn shrink(_png: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
+fn shrink(_blob: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
     Err(AssetError::TooManyPixels { width, height })
 }
 
@@ -712,12 +712,15 @@ fn shrunk_size(width: u32, height: u32, pixels: u64) -> (u32, u32) {
     (to_width, to_height)
 }
 
-/// `png` drawn at `size`, which is smaller, as a PNG. Each halving
-/// averages four pixels, which a single scale of a large ratio would skip,
-/// and a last scale reaches the size.
+/// The image in `blob` drawn at the largest size with its ratio and at
+/// most `pixels`, as a PNG. The size is the one after the EXIF orientation
+/// of a JPEG, and the PNG is the way up. Each halving averages four
+/// pixels, which a single scale of a large ratio would skip, and a last
+/// scale reaches the size.
 #[cfg(feature = "render")]
-fn shrink_to(png: &[u8], (width, height): (u32, u32)) -> Result<Vec<u8>, AssetError> {
-    let mut image = tiny_skia::Pixmap::decode_png(png).map_err(|_| AssetError::Unsupported)?;
+fn shrink_to(blob: &[u8], pixels: u64) -> Result<Vec<u8>, AssetError> {
+    let mut image = decode(blob, MAX_SHRINK_PIXELS).map_err(|_| AssetError::Unsupported)?;
+    let (width, height) = shrunk_size(image.width(), image.height(), pixels);
     while image.width() / 2 >= width && image.height() / 2 >= height {
         image = scaled(&image, image.width() / 2, image.height() / 2);
     }
@@ -885,12 +888,28 @@ mod tests {
                 tiny_skia::ColorU8::from_rgba(0, 0, 255, 255).premultiply()
             };
         }
-        let png = shrink_to(&stripes.encode_png().unwrap(), (6, 3)).unwrap();
-        assert_eq!(png_size(&png), Some((6, 3)));
+        let png = shrink_to(&stripes.encode_png().unwrap(), 18).unwrap();
+        assert_eq!(image_size(&png), Some((6, 3)));
         let small = tiny_skia::Pixmap::decode_png(&png).unwrap();
         let pixel = small.pixel(3, 1).unwrap();
         assert!((100..=155).contains(&pixel.red()), "{pixel:?}");
         assert!((100..=155).contains(&pixel.blue()), "{pixel:?}");
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_turned_jpeg_shrinks_to_a_png_the_way_up() {
+        let jpeg = red_blue(image::ImageFormat::Jpeg);
+        let mut turned = jpeg[..2].to_vec();
+        turned.extend_from_slice(&exif(true, 6));
+        turned.extend_from_slice(&jpeg[2..]);
+        let png = shrink_to(&turned, 32).unwrap();
+        assert_eq!(
+            head(&png).map(|h| (h.format, h.size)),
+            Some((Format::Png, (4, 8)))
+        );
+        let small = tiny_skia::Pixmap::decode_png(&png).unwrap();
+        assert!(small.pixel(2, 1).unwrap().red() > 200);
     }
 
     #[cfg(feature = "render")]
