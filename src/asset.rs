@@ -6,7 +6,9 @@
 //! bytes a pixel, and a small PNG can hold a large image. It also counts
 //! the bytes, which the server keeps and sends to each view.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::num::NonZeroU32;
 
 /// The most pixels of one image, 2048 by 2048.
 pub const MAX_IMAGE_PIXELS: u64 = 2048 * 2048;
@@ -18,6 +20,105 @@ pub const MAX_LIVE_PIXELS: u64 = 8 * MAX_IMAGE_PIXELS;
 /// The most bytes of the live assets of a room. It is under the cap of the
 /// framing, so any asset under it fits in a message.
 pub const MAX_LIVE_BYTES: u64 = 48 << 20;
+
+/// The live assets of a room, under the limits. [`Cache::asset`] keeps a
+/// new asset, and drops the ones that the frames used longest ago when it
+/// does not fit. [`Cache::frame`] says which assets a frame draws. An asset
+/// that the last frame of some player draws stays, as does one that came
+/// after the last frame, since the next frame draws it.
+#[derive(Debug, Default)]
+pub struct Cache {
+    live: BTreeMap<u32, Live>,
+    /// The ids that the last frame of each player draws, with 0 for the
+    /// last frame for every player.
+    shown: BTreeMap<u32, BTreeSet<u32>>,
+    load: Load,
+    /// How many frames came.
+    frames: u64,
+}
+
+impl Cache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns `true` if the asset `id` is live, `false` otherwise.
+    pub fn contains(&self, id: u32) -> bool {
+        self.live.contains_key(&id)
+    }
+
+    /// Keep the asset `id`, which is not live, and return the ids of the
+    /// assets that it drops to fit, the ones that the frames used longest
+    /// ago first. Returns [`AssetError::Full`] and changes nothing if the
+    /// asset does not fit even without every asset that may go.
+    pub fn asset(&mut self, id: u32, footprint: Footprint) -> Result<Vec<u32>, AssetError> {
+        assert!(
+            !self.contains(id),
+            "Cache::asset takes an id that is not live"
+        );
+        let shown: BTreeSet<u32> = self.shown.values().flatten().copied().collect();
+        let mut may_go: Vec<(u64, u32)> = self
+            .live
+            .iter()
+            .filter(|(id, live)| !shown.contains(id) && live.used < self.frames)
+            .map(|(&id, live)| (live.used, id))
+            .collect();
+        may_go.sort_unstable();
+        let mut load = self.load;
+        let mut dropped = Vec::new();
+        let mut may_go = may_go.into_iter();
+        let load = loop {
+            match load.with(footprint) {
+                Ok(load) => break load,
+                Err(e) => {
+                    let Some((_, gone)) = may_go.next() else {
+                        return Err(e);
+                    };
+                    let footprint = self
+                        .live
+                        .get(&gone)
+                        .expect("may_go holds live ids")
+                        .footprint;
+                    load = load.without(footprint);
+                    dropped.push(gone);
+                }
+            }
+        };
+        for gone in &dropped {
+            self.live.remove(gone);
+        }
+        self.load = load;
+        self.live.insert(
+            id,
+            Live {
+                footprint,
+                used: self.frames,
+            },
+        );
+        Ok(dropped)
+    }
+
+    /// Say that a frame for `player`, or for every player when `player` is
+    /// `None`, draws the assets of `ids`. An id that is not live changes
+    /// nothing.
+    pub fn frame(&mut self, player: Option<NonZeroU32>, ids: BTreeSet<u32>) {
+        for id in &ids {
+            if let Some(live) = self.live.get_mut(id) {
+                live.used = self.frames;
+            }
+        }
+        match player {
+            None => {
+                self.shown.clear();
+                self.shown.insert(0, ids);
+            }
+            Some(player) => {
+                self.shown.insert(player.get(), ids);
+            }
+        }
+        self.frames += 1;
+    }
+}
 
 /// What an asset counts toward the limits of a room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +228,15 @@ pub fn png_size(blob: &[u8]) -> Option<(u32, u32)> {
     (width > 0 && height > 0).then_some((width, height))
 }
 
+/// A live asset of a [`Cache`].
+#[derive(Debug)]
+struct Live {
+    footprint: Footprint,
+    /// The count of frames when a frame last drew the asset, or when it
+    /// came. One that came after the last frame has the count of frames.
+    used: u64,
+}
+
 /// The first 24 bytes of a PNG of `width` by `height`, all that
 /// [`png_size`] reads.
 #[cfg(test)]
@@ -140,6 +250,76 @@ pub(crate) fn png_head(width: u32, height: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The footprint of the largest image, eight of which fill a room.
+    fn largest() -> Footprint {
+        Footprint::new(Some((2048, 2048)), 1).unwrap()
+    }
+
+    fn ids(ids: &[u32]) -> BTreeSet<u32> {
+        ids.iter().copied().collect()
+    }
+
+    /// A cache with the eight largest assets 0 to 7, and a frame that
+    /// draws none of them.
+    fn full() -> Cache {
+        let mut cache = Cache::new();
+        for id in 0..8 {
+            assert_eq!(cache.asset(id, largest()), Ok(vec![]));
+        }
+        cache.frame(None, ids(&[]));
+        cache
+    }
+
+    #[test]
+    fn a_full_cache_drops_the_asset_that_the_frames_used_longest_ago() {
+        let mut cache = full();
+        cache.frame(None, ids(&[0, 3]));
+        cache.frame(None, ids(&[5]));
+        cache.frame(None, ids(&[]));
+        assert_eq!(cache.asset(8, largest()), Ok(vec![1]));
+        assert_eq!(cache.asset(9, largest()), Ok(vec![2]));
+        cache.frame(None, ids(&[8, 9]));
+        assert_eq!(cache.asset(10, largest()), Ok(vec![4]));
+        assert_eq!(cache.asset(11, largest()), Ok(vec![6]));
+        assert_eq!(cache.asset(12, largest()), Ok(vec![7]));
+        assert_eq!(cache.asset(13, largest()), Ok(vec![0]));
+        assert!(!cache.contains(0));
+        assert!(cache.contains(3));
+    }
+
+    #[test]
+    fn an_asset_on_a_screen_or_for_the_next_frame_stays() {
+        let mut cache = full();
+        cache.frame(None, ids(&[0, 1]));
+        cache.frame(NonZeroU32::new(2), ids(&[2, 3]));
+        cache.frame(NonZeroU32::new(1), ids(&[4, 5]));
+        // The frame for every player may still be on the screen of a player
+        // with no frame of its own.
+        assert_eq!(cache.asset(8, largest()), Ok(vec![6]));
+        assert_eq!(cache.asset(9, largest()), Ok(vec![7]));
+        // Every other asset is on a screen or came after the last frame.
+        assert!(matches!(
+            cache.asset(10, largest()),
+            Err(AssetError::Full { .. })
+        ));
+        assert!(!cache.contains(10));
+        cache.frame(None, ids(&[8]));
+        assert_eq!(cache.asset(10, largest()), Ok(vec![0]));
+    }
+
+    #[test]
+    fn an_asset_that_fits_drops_nothing_and_one_too_large_changes_nothing() {
+        let mut cache = Cache::new();
+        let small = Footprint::new(Some((10, 10)), 100).unwrap();
+        assert_eq!(cache.asset(1, small), Ok(vec![]));
+        cache.frame(None, ids(&[]));
+        let heavy = Footprint::new(Some((1, 1)), MAX_LIVE_BYTES as usize).unwrap();
+        assert!(cache.asset(2, heavy).is_ok_and(|gone| gone == [1]));
+        cache.frame(None, ids(&[2]));
+        assert!(cache.asset(3, small).is_err());
+        assert!(cache.contains(2) && !cache.contains(3));
+    }
 
     #[test]
     fn the_size_comes_from_the_header_of_a_png() {
