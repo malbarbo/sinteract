@@ -11,7 +11,9 @@
 //!
 //! [`session`] turns the bytes that a server writes to an engine into the
 //! events of the engine, with the rules of the protocol. It does no I/O of
-//! its own, so it builds on wasm32 too.
+//! its own, so it builds on wasm32 too. [`server`] holds the rules of a
+//! room for the server, from the players to the messages for the engine,
+//! also with no I/O.
 //!
 //! The feature `render` carries the pixmap and PDF renderers and the Sixel
 //! encoder, and the displays turn it on. A server that only encodes and
@@ -30,6 +32,7 @@ pub mod event;
 mod outline;
 pub mod renderer;
 pub mod scene;
+pub mod server;
 pub mod session;
 pub mod text;
 pub mod wire;

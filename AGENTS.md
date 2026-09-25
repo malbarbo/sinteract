@@ -16,7 +16,9 @@ stream needs.
 
 `session.rs` is the engine side of a session. It turns the bytes from the
 server into the events of the engine, with the rules of the protocol. It
-does no I/O of its own, so it builds on wasm32.
+does no I/O of its own, so it builds on wasm32. `server.rs` is the server
+side. It holds the rules of a room, from the players and the timer of the
+host to the messages for the engine, also with no I/O.
 
 `display/` shows a scene and reads the input back. `driver.rs` holds the
 sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind
@@ -148,7 +150,8 @@ The subject says what the change does to the code, in one line:
 
 - A prefix for the module, then a lowercase sentence: `scene:`, `renderer:`,
   `wire:`, `pixmap:`, `pdf:`, `terminal:`, `window:`, `text:`,
-  `display:`, `docs:`, and `all:` when it crosses them.
+  `display:`, `session:`, `server:`, `docs:`, and `all:` when it crosses
+  them.
 - Imperative or present, active voice. `pixmap: keep a pool of clip masks`.
 - Name the concrete thing that changed and what happened to it. A type, a
   function, a field, a message. The reader should know what to look for in
