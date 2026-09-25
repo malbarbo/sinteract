@@ -25,11 +25,12 @@
 //! thread, and after each call it sends what waits for every view and for
 //! the engine.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use crate::asset::{AssetError, Cache, Footprint};
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
     PadButton, PadEvent,
@@ -56,9 +57,16 @@ pub struct ServerCore {
     to_engine: Vec<u8>,
     /// The bytes of the engine that do not make a whole message yet.
     from_engine: Vec<u8>,
-    /// The assets of the engine, in its order. Each view gets all of them.
-    assets: Vec<Arc<[u8]>>,
+    /// The messages of the live assets, by id, as a view gets them.
+    assets: Assets,
+    /// Which assets are live, under the limits of the room.
+    cache: Cache,
+    /// The ids of the assets that the cache dropped before the start, for
+    /// the lost that follows the start.
+    lost_before_start: Vec<u32>,
 }
+
+type Assets = BTreeMap<u32, Arc<[u8]>>;
 
 /// The connection of a view to the seat of a player. A connect gives the
 /// seat a new generation, so the old connection of the seat, which may
@@ -102,6 +110,15 @@ pub enum EngineError {
     NoHello,
     /// A hello came after the first one. The core drops it and goes on.
     SecondHello,
+    /// The asset `id` is not a PNG or is larger than an image can be. The
+    /// core drops it and goes on.
+    Asset { id: u32, error: AssetError },
+    /// An asset came for an id that names a live asset. The core drops it
+    /// and goes on.
+    LiveId(u32),
+    /// A forget came from the engine, which never sends one. The core drops
+    /// it and goes on.
+    Forget(u32),
 }
 
 /// Why [`ServerCore::start`] did not start the room.
@@ -139,6 +156,9 @@ impl std::fmt::Display for EngineError {
             EngineError::Broken(e) => write!(f, "broken stream: {e}"),
             EngineError::NoHello => f.write_str("the first message is not a hello"),
             EngineError::SecondHello => f.write_str("a hello came after the first one"),
+            EngineError::Asset { id, error } => write!(f, "asset {id}: {error}"),
+            EngineError::LiveId(id) => write!(f, "an asset came for the live id {id}"),
+            EngineError::Forget(id) => write!(f, "a forget of {id} came from the engine"),
         }
     }
 }
@@ -148,7 +168,11 @@ impl std::error::Error for EngineError {
         match self {
             EngineError::Payload(e) => Some(e),
             EngineError::Broken(e) => Some(e),
-            EngineError::NoHello | EngineError::SecondHello => None,
+            EngineError::Asset { error, .. } => Some(error),
+            EngineError::NoHello
+            | EngineError::SecondHello
+            | EngineError::LiveId(_)
+            | EngineError::Forget(_) => None,
         }
     }
 }
@@ -200,7 +224,9 @@ impl ServerCore {
             phase: Phase::Waiting,
             to_engine: Vec::new(),
             from_engine: Vec::new(),
-            assets: Vec::new(),
+            assets: Assets::new(),
+            cache: Cache::new(),
+            lost_before_start: Vec::new(),
         }
     }
 
@@ -245,6 +271,9 @@ impl ServerCore {
         let roster = Roster::new(members).expect("a map has each player once");
         to_engine::write_start(&mut self.to_engine, &roster).expect(UNDER_THE_CAP);
         self.phase = Phase::Playing;
+        for id in std::mem::take(&mut self.lost_before_start) {
+            self.lose(id);
+        }
         Ok(())
     }
 
@@ -263,17 +292,19 @@ impl ServerCore {
     /// A connection of a view to the seat of `player`, or `None` if the
     /// room has no such seat, as before the start, or is over. The host checks the token of the
     /// player first. The old connection of the seat gets [`Next::Gone`],
-    /// and the new one gets every asset and the newest frame. The engine
-    /// gets an `Up` for each key and button that the old view held, since
-    /// the old view may never have left.
+    /// and the new one starts with no asset and gets the newest frame. The
+    /// engine gets an `Up` for each key and button that the old view held,
+    /// since the old view may never have left.
     pub fn connect(&mut self, player: NonZeroU32) -> Option<Conn> {
         if self.phase == Phase::Over {
             return None;
         }
         self.release_held(player);
         let seat = new_generation(&mut self.seats, player)?;
-        seat.assets_sent = 0;
         seat.frame_sent = false;
+        seat.target = None;
+        seat.has.clear();
+        seat.shown.clear();
         Some(Conn {
             player,
             generation: seat.generation,
@@ -334,11 +365,14 @@ impl ServerCore {
     }
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
-    /// message too. The first message is the hello. Then an asset goes to
-    /// every view, and a frame to its player, or to every player. Before
-    /// the start a frame has no player, and is dropped. A broken stream ends the room, and the
-    /// core ignores what comes after the end. Returns what went wrong, in
-    /// the order of the stream.
+    /// message too. The first message is the hello. Then the core keeps an
+    /// asset under the limits of the room, and drops the assets that the
+    /// frames used longest ago to fit it, with a lost to the engine for
+    /// each. A frame goes to its player, or to every player, with the
+    /// assets that it draws. Before the start a frame has no player, and is
+    /// dropped. A broken stream ends the room, and the core ignores what
+    /// comes after the end. Returns what went wrong, in the order of the
+    /// stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
         let mut errors = Vec::new();
         if self.phase == Phase::Over {
@@ -372,20 +406,15 @@ impl ServerCore {
                     // A room that closed before the hello never starts.
                     Phase::Closing | Phase::Over => {}
                 },
-                Ok(Some(Arm::Asset { .. })) => self.assets.push(payload),
-                Ok(Some(Arm::Forget(_))) => {}
-                Ok(Some(Arm::Frame { player: None })) => {
-                    for seat in self.seats.values_mut() {
-                        seat.frame = Some(payload.clone());
-                        seat.frame_sent = false;
+                Ok(Some(Arm::Asset { id, size, bytes })) => {
+                    if let Err(e) = self.keep_asset(id, size, bytes, payload) {
+                        errors.push(e);
                     }
                 }
-                Ok(Some(Arm::Frame {
-                    player: Some(player),
-                })) => {
-                    if let Some(seat) = self.seats.get_mut(&player) {
-                        seat.frame = Some(payload);
-                        seat.frame_sent = false;
+                Ok(Some(Arm::Forget(id))) => errors.push(EngineError::Forget(id)),
+                Ok(Some(Arm::Frame { player })) => {
+                    if let Err(e) = self.keep_frame(player, payload) {
+                        errors.push(EngineError::Payload(e));
                     }
                 }
                 Ok(None) => {}
@@ -408,22 +437,44 @@ impl ServerCore {
         broken
     }
 
-    /// The next message for the view of `conn`. The assets come first, so
-    /// an asset arrives before the frame that draws it. Then comes the
-    /// newest frame that the view has not got, and a view that falls behind
-    /// skips the frames in between. When the room is over, the view gets
-    /// [`Next::Gone`] after its last frame, as does an old connection.
+    /// The next message for the view of `conn`. The view gets the newest
+    /// frame that it has not got, after the assets of the frame that the
+    /// view lacks. The core keeps that frame as
+    /// the next one of the view until the view gets it, so a view that falls
+    /// behind skips the frames in between and still gets a frame now and
+    /// then. The view gets a forget for an asset that is neither in the
+    /// assets of the frame on its screen nor in those of its next frame.
+    /// When the room is over, the view gets [`Next::Gone`] after its last
+    /// frame, as does an old connection.
     pub fn next_for(&mut self, conn: Conn) -> Next {
         let Some(seat) = seat_of(&mut self.seats, conn) else {
             return Next::Gone;
         };
-        if let Some(asset) = self.assets.get(seat.assets_sent) {
-            seat.assets_sent += 1;
-            return Next::Send(asset.clone());
-        }
-        if let Some(frame) = seat.frame.as_ref().filter(|_| !seat.frame_sent) {
+        if seat.target.is_none() && !seat.frame_sent {
+            seat.target = seat.frame.clone();
             seat.frame_sent = true;
-            return Next::Send(frame.clone());
+        }
+        let needs = |id: &u32| {
+            seat.shown.contains(id)
+                || seat
+                    .target
+                    .as_ref()
+                    .is_some_and(|t| t.assets.contains_key(id))
+        };
+        if let Some(&id) = seat.has.iter().find(|id| !needs(id)) {
+            seat.has.remove(&id);
+            return Next::Send(to_view::encode_forget(id).into());
+        }
+        if let Some(target) = seat.target.take() {
+            if let Some((&id, asset)) = target.assets.iter().find(|(id, _)| !seat.has.contains(id))
+            {
+                seat.has.insert(id);
+                let payload = asset.clone();
+                seat.target = Some(target);
+                return Next::Send(payload);
+            }
+            seat.shown = target.assets.keys().copied().collect();
+            return Next::Send(target.frame);
         }
         match self.phase {
             Phase::Waiting | Phase::Ready(_) | Phase::Playing | Phase::Closing => Next::Idle,
@@ -435,6 +486,82 @@ impl ServerCore {
     /// cannot write all of them keeps the rest in `buf` for the next write.
     pub fn take_engine_output(&mut self, buf: &mut Vec<u8>) {
         buf.append(&mut self.to_engine);
+    }
+
+    /// Keep the asset `id`, and drop the ones that it takes the place of,
+    /// or refuse it if the id is live or the image is too large. An asset
+    /// that does not fit beside the ones on the screens is lost at once.
+    fn keep_asset(
+        &mut self,
+        id: u32,
+        size: Option<(u32, u32)>,
+        bytes: usize,
+        payload: Arc<[u8]>,
+    ) -> Result<(), EngineError> {
+        if self.cache.contains(id) {
+            return Err(EngineError::LiveId(id));
+        }
+        let footprint =
+            Footprint::new(size, bytes).map_err(|error| EngineError::Asset { id, error })?;
+        match self.cache.asset(id, footprint) {
+            Ok(dropped) => {
+                self.assets.insert(id, payload);
+                for gone in dropped {
+                    self.assets.remove(&gone);
+                    self.lose(gone);
+                }
+            }
+            Err(_) => self.lose(id),
+        }
+        Ok(())
+    }
+
+    /// Keep the frame in `payload` for `player`, or for every player when
+    /// `player` is `None`, with the assets that it draws. A frame for no
+    /// seat reaches no screen, so it changes nothing.
+    fn keep_frame(
+        &mut self,
+        player: Option<NonZeroU32>,
+        payload: Arc<[u8]>,
+    ) -> Result<(), wire::Error> {
+        let seats = match player {
+            None => self.seats.len(),
+            Some(player) => usize::from(self.seats.contains_key(&player)),
+        };
+        if seats == 0 {
+            return Ok(());
+        }
+        let ids = to_view::bitmap_ids(&payload)?;
+        let assets: Assets = ids
+            .iter()
+            .filter_map(|id| Some((*id, self.assets.get(id)?.clone())))
+            .collect();
+        self.cache.frame(player, ids);
+        let shot = Shot {
+            frame: payload,
+            assets: Arc::new(assets),
+        };
+        for (_, seat) in self
+            .seats
+            .iter_mut()
+            .filter(|(p, _)| player.is_none_or(|player| **p == player))
+        {
+            seat.frame = Some(shot.clone());
+            seat.frame_sent = false;
+        }
+        Ok(())
+    }
+
+    /// Tell the engine that the asset `id` is gone. Before the start, the
+    /// lost waits for the start, which comes first.
+    fn lose(&mut self, id: u32) {
+        match self.phase {
+            Phase::Playing => {
+                to_engine::write_lost(&mut self.to_engine, id).expect(UNDER_THE_CAP);
+            }
+            Phase::Waiting | Phase::Ready(_) => self.lost_before_start.push(id),
+            Phase::Closing | Phase::Over => {}
+        }
     }
 
     /// Send the engine an `Up` for each key and button that the view of
@@ -477,11 +604,24 @@ struct Seat {
     /// What the view holds down, as the engine saw it.
     held: Held,
     /// The newest frame for the player, kept for the next connect.
-    frame: Option<Arc<[u8]>>,
-    /// Whether the view got `frame`.
+    frame: Option<Shot>,
+    /// Whether the view got `frame`, or waits for it as `target`.
     frame_sent: bool,
-    /// How many of the assets of the room the view got.
-    assets_sent: usize,
+    /// The next frame of the view, until the view has its assets and it.
+    target: Option<Shot>,
+    /// The ids of the assets that the view has.
+    has: BTreeSet<u32>,
+    /// The ids of the assets of the frame on the screen of the view.
+    shown: BTreeSet<u32>,
+}
+
+/// A frame, with the assets that it draws, as they were at its arrival. The
+/// frame keeps them for a view that has not got them, after the cache drops
+/// them.
+#[derive(Clone, Debug)]
+struct Shot {
+    frame: Arc<[u8]>,
+    assets: Arc<Assets>,
 }
 
 impl Seat {
@@ -493,7 +633,9 @@ impl Seat {
             held: Held::default(),
             frame: None,
             frame_sent: false,
-            assets_sent: 0,
+            target: None,
+            has: BTreeSet::new(),
+            shown: BTreeSet::new(),
         }
     }
 }
@@ -610,7 +752,7 @@ fn clean_nickname(nickname: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Scene;
+    use crate::scene::{Bitmap, Scene};
     use crate::session::{Session, SessionEvent};
 
     /// A core with a session that reads what the core writes, which also
@@ -718,15 +860,39 @@ mod tests {
     /// A frame of width `width` for `player`, or for every player, with
     /// its envelope.
     fn frame(player: u32, width: f32) -> Vec<u8> {
+        drawing(player, width, &[])
+    }
+
+    /// A frame like [`frame`] that draws the bitmaps of `ids`.
+    fn drawing(player: u32, width: f32, ids: &[u32]) -> Vec<u8> {
+        let mut scene = Scene::new(width, 1.0);
+        for &id in ids {
+            scene.bitmap(Bitmap {
+                id,
+                ..Bitmap::default()
+            });
+        }
         let mut out = Vec::new();
-        to_view::write_frame(&mut out, NonZeroU32::new(player), &Scene::new(width, 1.0)).unwrap();
+        to_view::write_frame(&mut out, NonZeroU32::new(player), &scene).unwrap();
+        out
+    }
+
+    /// An asset of a PNG of `side` by `side`, with its envelope.
+    fn asset_of(id: u32, side: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        to_view::write_asset(&mut out, id, &crate::asset::png_head(side, side), None).unwrap();
         out
     }
 
     fn asset(id: u32) -> Vec<u8> {
-        let mut out = Vec::new();
-        to_view::write_asset(&mut out, id, &[1, 2, 3], None).unwrap();
-        out
+        asset_of(id, 1)
+    }
+
+    /// The eight largest assets from `first`, which fill a room.
+    fn fill(first: u32) -> Vec<u8> {
+        (first..first + 8)
+            .flat_map(|id| asset_of(id, 2048))
+            .collect()
     }
 
     /// Everything that waits for the view of `conn`, in a short form, up to
@@ -734,29 +900,32 @@ mod tests {
     fn sent(core: &mut ServerCore, conn: Conn) -> Vec<String> {
         let mut out = Vec::new();
         loop {
-            match core.next_for(conn) {
-                Next::Send(payload) => {
-                    let mut framed = framing::header(Side::Engine, payload.len() as u32).to_vec();
-                    framed.extend_from_slice(&payload);
-                    out.push(match to_view::read(&mut &framed[..]).unwrap().unwrap() {
-                        to_view::Message::Asset { id, .. } => format!("asset {id}"),
-                        to_view::Message::Frame { player, scene } => match player {
-                            Some(p) => format!("frame {p} {}", scene.width()),
-                            None => format!("frame all {}", scene.width()),
-                        },
-                        to_view::Message::Hello(_) => "hello".into(),
-                        to_view::Message::Forget(id) => format!("forget {id}"),
-                    });
-                }
-                Next::Idle => {
-                    out.push("idle".into());
-                    return out;
-                }
-                Next::Gone => {
-                    out.push("gone".into());
-                    return out;
-                }
+            let next = one(core, conn);
+            let last = next == "idle" || next == "gone";
+            out.push(next);
+            if last {
+                return out;
             }
+        }
+    }
+
+    /// The next message for the view of `conn`, in a short form.
+    fn one(core: &mut ServerCore, conn: Conn) -> String {
+        let payload = match core.next_for(conn) {
+            Next::Send(payload) => payload,
+            Next::Idle => return "idle".into(),
+            Next::Gone => return "gone".into(),
+        };
+        let mut framed = framing::header(Side::Engine, payload.len() as u32).to_vec();
+        framed.extend_from_slice(&payload);
+        match to_view::read(&mut &framed[..]).unwrap().unwrap() {
+            to_view::Message::Asset { id, .. } => format!("asset {id}"),
+            to_view::Message::Frame { player, scene } => match player {
+                Some(p) => format!("frame {p} {}", scene.width()),
+                None => format!("frame all {}", scene.width()),
+            },
+            to_view::Message::Hello(_) => "hello".into(),
+            to_view::Message::Forget(id) => format!("forget {id}"),
         }
     }
 
@@ -908,18 +1077,22 @@ mod tests {
     }
 
     #[test]
-    fn a_view_gets_the_assets_then_its_newest_frame() {
+    fn a_view_gets_the_assets_of_its_newest_frame_then_the_frame() {
         let (mut room, conns) = Room::playing(&["Ana", "Beto"]);
         let core = &mut room.core;
         let mut stream = frame(0, 1.0);
         stream.extend_from_slice(&asset(7));
-        stream.extend_from_slice(&frame(1, 2.0));
-        stream.extend_from_slice(&frame(0, 3.0));
-        stream.extend_from_slice(&frame(2, 4.0));
+        stream.extend_from_slice(&asset(8));
+        stream.extend_from_slice(&drawing(1, 2.0, &[8]));
+        stream.extend_from_slice(&drawing(0, 3.0, &[7]));
+        stream.extend_from_slice(&drawing(2, 4.0, &[7, 8]));
         assert!(core.from_engine(&stream).is_empty());
         assert_eq!(sent(core, conns[0]), ["asset 7", "frame all 3", "idle"]);
-        assert_eq!(sent(core, conns[1]), ["asset 7", "frame 2 4", "idle"]);
-        core.from_engine(&frame(1, 5.0));
+        assert_eq!(
+            sent(core, conns[1]),
+            ["asset 7", "asset 8", "frame 2 4", "idle"]
+        );
+        core.from_engine(&drawing(1, 5.0, &[7]));
         assert_eq!(sent(core, conns[0]), ["frame 1 5", "idle"]);
         assert_eq!(sent(core, conns[1]), ["idle"]);
     }
@@ -929,17 +1102,144 @@ mod tests {
         let mut core = ServerCore::new();
         let mut stream = hello(2, 2);
         stream.extend_from_slice(&asset(1));
-        stream.extend_from_slice(&frame(0, 9.0));
+        stream.extend_from_slice(&drawing(0, 9.0, &[1]));
         core.from_engine(&stream);
         core.start(&["Ana", "Beto"]).unwrap();
         // An asset before the start stays, and a frame is dropped.
         let beto = core.connect(player(2)).unwrap();
-        assert_eq!(sent(&mut core, beto), ["asset 1", "idle"]);
-        let mut stream = frame(0, 1.0);
+        assert_eq!(sent(&mut core, beto), ["idle"]);
+        let mut stream = drawing(0, 1.0, &[1]);
         stream.extend_from_slice(&frame(2, 2.0));
         core.from_engine(&stream);
         let ana = core.connect(player(1)).unwrap();
         assert_eq!(sent(&mut core, ana), ["asset 1", "frame all 1", "idle"]);
+    }
+
+    #[test]
+    fn a_forget_goes_to_a_view_after_the_frame_that_stops_drawing_the_asset() {
+        let (mut room, conns) = Room::playing(&["Ana"]);
+        let core = &mut room.core;
+        let mut stream = asset(1);
+        stream.extend_from_slice(&drawing(1, 1.0, &[1]));
+        core.from_engine(&stream);
+        assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1 1", "idle"]);
+        let mut stream = asset(2);
+        stream.extend_from_slice(&drawing(1, 2.0, &[1, 2]));
+        stream.extend_from_slice(&drawing(1, 3.0, &[2]));
+        assert!(core.from_engine(&stream).is_empty());
+        assert_eq!(
+            sent(core, conns[0]),
+            ["asset 2", "frame 1 3", "forget 1", "idle"]
+        );
+        // The asset stays in the room, and comes back with a frame that
+        // draws it.
+        core.from_engine(&drawing(1, 4.0, &[1]));
+        assert_eq!(
+            sent(core, conns[0]),
+            ["asset 1", "frame 1 4", "forget 2", "idle"]
+        );
+    }
+
+    #[test]
+    fn a_slow_view_gets_a_frame_now_and_then_while_each_frame_brings_an_asset() {
+        let (mut room, conns) = Room::playing(&["Ana"]);
+        let core = &mut room.core;
+        let mut got = Vec::new();
+        for i in 1..=12 {
+            let mut stream = asset(i);
+            stream.extend_from_slice(&drawing(1, i as f32, &[i]));
+            assert!(core.from_engine(&stream).is_empty());
+            // The view takes one message for each frame of the engine.
+            got.push(one(core, conns[0]));
+        }
+        let frames = got.iter().filter(|m| m.starts_with("frame")).count();
+        assert!(frames >= 3, "{got:?}");
+    }
+
+    #[test]
+    fn a_view_that_connects_again_gets_what_its_frame_draws_and_no_forget() {
+        let (mut room, conns) = Room::playing(&["Ana"]);
+        let core = &mut room.core;
+        let mut stream = asset(1);
+        stream.extend_from_slice(&drawing(1, 1.0, &[1]));
+        core.from_engine(&stream);
+        assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1 1", "idle"]);
+        let mut stream = asset(2);
+        stream.extend_from_slice(&drawing(1, 2.0, &[2]));
+        core.from_engine(&stream);
+        let again = core.connect(player(1)).unwrap();
+        assert_eq!(sent(core, again), ["asset 2", "frame 1 2", "idle"]);
+        core.from_engine(&drawing(1, 3.0, &[2]));
+        assert_eq!(sent(core, again), ["frame 1 3", "idle"]);
+    }
+
+    #[test]
+    fn a_full_room_drops_the_asset_that_the_frames_used_longest_ago() {
+        let (mut room, conns) = Room::playing(&["Ana"]);
+        let mut stream = fill(1);
+        stream.extend_from_slice(&drawing(1, 1.0, &[3]));
+        stream.extend_from_slice(&drawing(1, 2.0, &[]));
+        stream.extend_from_slice(&asset(9));
+        stream.extend_from_slice(&drawing(1, 3.0, &[9, 3]));
+        assert!(room.core.from_engine(&stream).is_empty());
+        assert_eq!(room.events(), ["lost 1"]);
+        assert_eq!(
+            sent(&mut room.core, conns[0]),
+            ["asset 3", "asset 9", "frame 1 3", "idle"]
+        );
+    }
+
+    #[test]
+    fn an_asset_that_does_not_fit_beside_the_screens_is_lost_at_once() {
+        let (mut room, conns) = Room::playing(&["Ana"]);
+        let mut stream = fill(1);
+        stream.extend_from_slice(&drawing(1, 1.0, &[1, 2, 3, 4, 5, 6, 7, 8]));
+        stream.extend_from_slice(&asset(9));
+        stream.extend_from_slice(&drawing(1, 2.0, &[9]));
+        assert!(room.core.from_engine(&stream).is_empty());
+        assert_eq!(room.events(), ["lost 9"]);
+        // The frame goes without the image.
+        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1 2", "idle"]);
+    }
+
+    #[test]
+    fn a_lost_before_the_start_follows_the_start() {
+        let mut room = Room::new();
+        let mut stream = hello(1, 1);
+        stream.extend_from_slice(&fill(1));
+        stream.extend_from_slice(&asset(9));
+        assert!(room.core.from_engine(&stream).is_empty());
+        assert!(room.events().is_empty());
+        room.core.start(&["Ana"]).unwrap();
+        assert_eq!(room.events(), ["start 1 Ana", "lost 9"]);
+    }
+
+    #[test]
+    fn a_bad_asset_and_a_forget_of_the_engine_are_errors_and_the_room_goes_on() {
+        let (mut room, _) = Room::playing(&["Ana"]);
+        let mut stream = asset_of(1, 2049);
+        to_view::write_asset(&mut stream, 2, b"GIF89a", None).unwrap();
+        stream.extend_from_slice(&asset(3));
+        stream.extend_from_slice(&asset(3));
+        let forget = to_view::encode_forget(3);
+        stream.extend_from_slice(&framing::header(Side::Engine, forget.len() as u32));
+        stream.extend_from_slice(&forget);
+        assert!(matches!(
+            room.core.from_engine(&stream)[..],
+            [
+                EngineError::Asset {
+                    id: 1,
+                    error: AssetError::TooManyPixels { .. }
+                },
+                EngineError::Asset {
+                    id: 2,
+                    error: AssetError::NotPng
+                },
+                EngineError::LiveId(3),
+                EngineError::Forget(3),
+            ]
+        ));
+        assert!(!room.core.is_over());
     }
 
     #[test]
@@ -954,7 +1254,7 @@ mod tests {
         core.start(&["Ana"]).unwrap();
         let ana = core.connect(player(1)).unwrap();
         let mut stream = asset(1);
-        stream.extend_from_slice(&frame(1, 2.0));
+        stream.extend_from_slice(&drawing(1, 2.0, &[1]));
         feed(&mut core, &stream);
         assert_eq!(sent(&mut core, ana), ["asset 1", "frame 1 2", "idle"]);
     }
@@ -988,18 +1288,18 @@ mod tests {
     }
 
     #[test]
-    fn a_view_that_connects_again_gets_every_asset_and_the_newest_frame_again() {
+    fn a_view_that_connects_again_gets_the_assets_and_the_newest_frame_again() {
         let (mut room, conns) = Room::playing(&["Ana"]);
         let core = &mut room.core;
         let mut stream = asset(1);
-        stream.extend_from_slice(&frame(1, 2.0));
+        stream.extend_from_slice(&drawing(1, 2.0, &[1]));
         core.from_engine(&stream);
         assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1 2", "idle"]);
         core.leave(conns[0]);
         let again = core.connect(player(1)).unwrap();
         assert_eq!(sent(core, again), ["asset 1", "frame 1 2", "idle"]);
         core.from_engine(&frame(0, 3.0));
-        assert_eq!(sent(core, again), ["frame all 3", "idle"]);
+        assert_eq!(sent(core, again), ["frame all 3", "forget 1", "idle"]);
     }
 
     #[test]
