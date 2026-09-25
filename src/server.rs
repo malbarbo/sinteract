@@ -1233,7 +1233,7 @@ mod tests {
                 },
                 EngineError::Asset {
                     id: 2,
-                    error: AssetError::NotPng
+                    error: AssetError::Unsupported
                 },
                 EngineError::LiveId(3),
                 EngineError::Forget(3),

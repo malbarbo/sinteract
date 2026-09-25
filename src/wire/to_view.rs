@@ -13,7 +13,7 @@ use std::num::NonZeroU32;
 
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
-use crate::asset::png_size;
+use crate::asset::image_size;
 use crate::protocol_capnp::{engine_message, hello};
 use crate::scene::Scene;
 
@@ -48,8 +48,8 @@ pub enum Arm {
     /// An asset, with what the limits of [`crate::asset`] count.
     Asset {
         id: u32,
-        /// The size from the header of the PNG, or `None` if the blob is
-        /// not a PNG.
+        /// The size from the header of the image, or `None` if the blob is
+        /// not an image that a view decodes.
         size: Option<(u32, u32)>,
         /// The length of the blob.
         bytes: usize,
@@ -134,7 +134,7 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
                 let blob = a.get_blob()?;
                 Arm::Asset {
                     id: a.get_id(),
-                    size: png_size(blob),
+                    size: image_size(blob),
                     bytes: blob.len(),
                 }
             }

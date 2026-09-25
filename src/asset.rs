@@ -4,7 +4,7 @@
 //! server, and in a local host for its display.
 //!
 //! A limit counts the pixels, since each view decodes an asset to four
-//! bytes a pixel, and a small PNG can hold a large image. It also counts
+//! bytes a pixel, and a small file can hold a large image. It also counts
 //! the bytes, which the server keeps and sends to each view.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -53,26 +53,35 @@ impl Assets {
         Self::default()
     }
 
-    /// The image in `png`, with its id, or an error if it is not a PNG. An
-    /// image with more than [`MAX_IMAGE_PIXELS`] shrinks to fit, with the
-    /// feature `render`, up to [`MAX_SHRINK_PIXELS`], and is an error past
-    /// that or without the feature.
-    pub fn image(&mut self, png: &[u8]) -> Result<Asset, AssetError> {
-        if let Some(&id) = self.ids.get(png) {
+    /// The image in `blob`, with its id, or an error if it is not a PNG, a
+    /// JPEG, a GIF or a WebP. An image with more than [`MAX_IMAGE_PIXELS`]
+    /// shrinks to fit, with the feature `render`, up to
+    /// [`MAX_SHRINK_PIXELS`], and is an error past that or without the
+    /// feature. The size of the asset is the size on the screen, after the
+    /// EXIF orientation of a JPEG.
+    pub fn image(&mut self, blob: &[u8]) -> Result<Asset, AssetError> {
+        if let Some(&id) = self.ids.get(blob) {
             let entry = self.images.get_mut(&id).expect("an id names an image");
             entry.seen = self.frames;
             return Ok(entry.asset);
         }
-        let source = Arc::<[u8]>::from(png);
-        let (width, height) = png_size(png).ok_or(AssetError::NotPng)?;
+        let source = Arc::<[u8]>::from(blob);
+        let head = head(blob).ok_or(AssetError::Unsupported)?;
+        let (width, height) = head.size;
         let (png, size) = if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-            let shrunk = shrink(png, width, height)?;
-            let size = png_size(&shrunk).expect("the shrunk image is a PNG");
+            let shrunk = shrink(blob, width, height)?;
+            let size = image_size(&shrunk).expect("the shrunk image is a PNG");
             (Arc::from(shrunk), size)
         } else {
             (source.clone(), (width, height))
         };
         Footprint::new(Some(size), png.len())?;
+        // The student sees the image the way up that its EXIF gives.
+        let (width, height) = if head.turned() {
+            (height, width)
+        } else {
+            (width, height)
+        };
         let id = self.next_id;
         self.next_id = id
             .checked_add(1)
@@ -262,16 +271,16 @@ pub struct Footprint {
 }
 
 impl Footprint {
-    /// The footprint of `blob`, or an error if it is not a PNG or has more
-    /// than [`MAX_IMAGE_PIXELS`].
+    /// The footprint of `blob`, or an error if it is not a PNG, a JPEG, a
+    /// GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
     pub fn of(blob: &[u8]) -> Result<Footprint, AssetError> {
-        Footprint::new(png_size(blob), blob.len())
+        Footprint::new(image_size(blob), blob.len())
     }
 
-    /// The footprint of a blob of `bytes` bytes whose PNG header gives
-    /// `size`, as [`png_size`] reads it.
+    /// The footprint of a blob of `bytes` bytes whose header gives `size`,
+    /// as [`image_size`] reads it.
     pub fn new(size: Option<(u32, u32)>, bytes: usize) -> Result<Footprint, AssetError> {
-        let (width, height) = size.ok_or(AssetError::NotPng)?;
+        let (width, height) = size.ok_or(AssetError::Unsupported)?;
         let pixels = u64::from(width) * u64::from(height);
         if pixels > MAX_IMAGE_PIXELS {
             return Err(AssetError::TooManyPixels { width, height });
@@ -319,8 +328,9 @@ impl Load {
 /// Why an asset breaks the limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssetError {
-    /// The blob does not start as a PNG does. A view decodes only PNG.
-    NotPng,
+    /// The blob does not start as a PNG, a JPEG, a GIF or a WebP does,
+    /// which are the formats that a view decodes.
+    Unsupported,
     /// The image has more than [`MAX_IMAGE_PIXELS`].
     TooManyPixels { width: u32, height: u32 },
     /// The live assets of the room would hold these many pixels and bytes,
@@ -331,7 +341,9 @@ pub enum AssetError {
 impl fmt::Display for AssetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AssetError::NotPng => f.write_str("the image is not a PNG"),
+            AssetError::Unsupported => {
+                f.write_str("the image is not a PNG, a JPEG, a GIF or a WebP")
+            }
             AssetError::TooManyPixels { width, height } => write!(
                 f,
                 "the image of {width}x{height} has more than {MAX_IMAGE_PIXELS} pixels"
@@ -347,19 +359,249 @@ impl fmt::Display for AssetError {
 
 impl std::error::Error for AssetError {}
 
-/// The width and the height from the header of the PNG in `blob`, or
-/// `None` if `blob` does not start with the signature and the header of a
-/// PNG, or gives a width or a height of 0. It reads 24 bytes and decodes
+/// The width and the height from the header of the image in `blob`, or
+/// `None` if `blob` is not a PNG, a JPEG, a GIF or a WebP, or gives a
+/// width or a height of 0. It is the size that a decoder allocates, before
+/// the EXIF orientation of a JPEG turns it. It reads the header and decodes
 /// nothing.
-pub fn png_size(blob: &[u8]) -> Option<(u32, u32)> {
-    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
-    // The header is the first chunk, 13 bytes long.
+pub fn image_size(blob: &[u8]) -> Option<(u32, u32)> {
+    head(blob).map(|head| head.size)
+}
+
+/// The format of an image, from its first bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Format {
+    Png,
+    Jpeg,
+    Gif,
+    WebP,
+}
+
+/// What the header of an image says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Head {
+    pub(crate) format: Format,
+    /// The width and the height, both above 0.
+    pub(crate) size: (u32, u32),
+    /// The EXIF orientation of a JPEG, from 1 to 8, and 1 for any other
+    /// format.
+    pub(crate) orientation: u8,
+}
+
+impl Head {
+    /// Returns `true` if the orientation swaps the width and the height,
+    /// `false` otherwise.
+    pub(crate) fn turned(self) -> bool {
+        self.orientation >= 5
+    }
+}
+
+/// The header of the image in `blob`, or `None` if `blob` is not a PNG, a
+/// JPEG, a GIF or a WebP, or gives a width or a height of 0.
+pub(crate) fn head(blob: &[u8]) -> Option<Head> {
+    let (format, size, orientation) = if blob.starts_with(PNG_SIGNATURE) {
+        (Format::Png, png_size(blob)?, 1)
+    } else if blob.starts_with(b"\xff\xd8") {
+        let (size, orientation) = jpeg_head(blob)?;
+        (Format::Jpeg, size, orientation)
+    } else if blob.starts_with(b"GIF87a") || blob.starts_with(b"GIF89a") {
+        (Format::Gif, gif_size(blob)?, 1)
+    } else if blob.get(..4) == Some(b"RIFF") && blob.get(8..12) == Some(b"WEBP") {
+        (Format::WebP, webp_size(blob)?, 1)
+    } else {
+        return None;
+    };
+    (size.0 > 0 && size.1 > 0).then_some(Head {
+        format,
+        size,
+        orientation,
+    })
+}
+
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// The size from the IHDR of a PNG, the first chunk.
+fn png_size(blob: &[u8]) -> Option<(u32, u32)> {
     const HEADER: &[u8] = b"\0\0\0\x0dIHDR";
-    let rest = blob.strip_prefix(SIGNATURE)?.strip_prefix(HEADER)?;
-    let (width, rest) = rest.split_first_chunk::<4>()?;
-    let (height, _) = rest.split_first_chunk::<4>()?;
-    let (width, height) = (u32::from_be_bytes(*width), u32::from_be_bytes(*height));
-    (width > 0 && height > 0).then_some((width, height))
+    let rest = blob.strip_prefix(PNG_SIGNATURE)?.strip_prefix(HEADER)?;
+    let width = u32::from_be_bytes(array(rest, 0)?);
+    let height = u32::from_be_bytes(array(rest, 4)?);
+    Some((width, height))
+}
+
+/// The size from the frame header of a JPEG, and its EXIF orientation. The
+/// walk goes over every segment up to the scan, as a decoder does. A
+/// second frame header is an error, and the last EXIF segment wins.
+fn jpeg_head(blob: &[u8]) -> Option<((u32, u32), u8)> {
+    let mut size = None;
+    let mut orientation = 1;
+    let mut at = 2;
+    loop {
+        if *blob.get(at)? != 0xff {
+            return None;
+        }
+        // A marker may follow any number of fill bytes.
+        while *blob.get(at)? == 0xff {
+            at += 1;
+        }
+        let marker = *blob.get(at)?;
+        at += 1;
+        match marker {
+            // TEM and RST0 to RST7 have no length.
+            0x01 | 0xd0..=0xd7 => continue,
+            // The scan starts, or the image ends.
+            0xda | 0xd9 => break,
+            _ => {}
+        }
+        let len = usize::from(u16::from_be_bytes(array(blob, at)?));
+        let segment = blob.get(at.checked_add(2)?..at.checked_add(len)?)?;
+        match marker {
+            // SOF0 to SOF15. C4, C8 and CC are DHT, JPG and DAC.
+            0xc0..=0xcf if !matches!(marker, 0xc4 | 0xc8 | 0xcc) => {
+                if size.is_some() {
+                    return None;
+                }
+                let height = u16::from_be_bytes(array(segment, 1)?);
+                let width = u16::from_be_bytes(array(segment, 3)?);
+                size = Some((u32::from(width), u32::from(height)));
+            }
+            0xe1 => {
+                if let Some(tiff) = segment.strip_prefix(b"Exif\0\0") {
+                    orientation = exif_orientation(tiff).unwrap_or(1);
+                }
+            }
+            _ => {}
+        }
+        at += len;
+    }
+    Some((size?, orientation))
+}
+
+/// The orientation tag of the first IFD of the TIFF in `tiff`, or `None`
+/// if there is none. As a decoder does, the tag counts only with the type
+/// SHORT, a count of 1 and a value from 1 to 8.
+fn exif_orientation(tiff: &[u8]) -> Option<u8> {
+    const ORIENTATION: u16 = 0x0112;
+    const SHORT: u16 = 3;
+    let big = match tiff.get(..4)? {
+        b"MM\0*" => true,
+        b"II*\0" => false,
+        _ => return None,
+    };
+    let u16_at = |at: usize| {
+        let b = array(tiff, at)?;
+        Some(if big {
+            u16::from_be_bytes(b)
+        } else {
+            u16::from_le_bytes(b)
+        })
+    };
+    let u32_at = |at: usize| {
+        let b = array(tiff, at)?;
+        Some(if big {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        })
+    };
+    let ifd = usize::try_from(u32_at(4)?).ok()?;
+    let entries = u16_at(ifd)?;
+    for i in 0..usize::from(entries) {
+        // Each entry is 12 bytes, after the count of 2 bytes.
+        let entry = ifd.checked_add(2 + 12 * i)?;
+        if u16_at(entry)? == ORIENTATION {
+            let (kind, count, value) = (u16_at(entry + 2)?, u32_at(entry + 4)?, u16_at(entry + 8)?);
+            return (kind == SHORT && count == 1 && (1..=8).contains(&value))
+                .then(|| u8::try_from(value).expect("the value is at most 8"));
+        }
+    }
+    None
+}
+
+/// The size of a GIF, the larger of its logical screen and of the extent
+/// of its first image on it. A decoder draws the first image into a buffer
+/// of the screen, but an image past the screen takes its own buffer, and a
+/// browser may not clip it.
+fn gif_size(blob: &[u8]) -> Option<(u32, u32)> {
+    let screen_width = u16::from_le_bytes(array(blob, 6)?);
+    let screen_height = u16::from_le_bytes(array(blob, 8)?);
+    let flags = *blob.get(10)?;
+    let mut at = 13;
+    if flags & 0x80 != 0 {
+        // The global color table, of 2^(n+1) colors of 3 bytes.
+        at += 3 << ((flags & 7) + 1);
+    }
+    loop {
+        match *blob.get(at)? {
+            // An extension: the introducer, the label, then sub-blocks up
+            // to one of length 0.
+            0x21 => {
+                at += 2;
+                loop {
+                    let len = usize::from(*blob.get(at)?);
+                    at += 1 + len;
+                    if len == 0 {
+                        break;
+                    }
+                }
+            }
+            // The descriptor of the first image.
+            0x2c => {
+                let [left, top, width, height] =
+                    [1, 3, 5, 7].map(|offset| array(blob, at + offset).map(u16::from_le_bytes));
+                let right = u32::from(left?) + u32::from(width?);
+                let bottom = u32::from(top?) + u32::from(height?);
+                return Some((
+                    right.max(u32::from(screen_width)),
+                    bottom.max(u32::from(screen_height)),
+                ));
+            }
+            // The trailer, or damage, before any image.
+            _ => return None,
+        }
+    }
+}
+
+/// The size of a WebP, from its first chunk. A lossy image starts with
+/// VP8, a lossless one with VP8L, and one with more, such as alpha or an
+/// animation, with VP8X and the size of its canvas.
+fn webp_size(blob: &[u8]) -> Option<(u32, u32)> {
+    let payload = blob.get(20..)?;
+    match blob.get(12..16)? {
+        b"VP8 " => {
+            // The frame tag, then the start code.
+            if payload.get(3..6)? != [0x9d, 0x01, 0x2a] {
+                return None;
+            }
+            // The top two bits of each are the scale, which a decoder
+            // ignores.
+            let width = u16::from_le_bytes(array(payload, 6)?) & 0x3fff;
+            let height = u16::from_le_bytes(array(payload, 8)?) & 0x3fff;
+            Some((u32::from(width), u32::from(height)))
+        }
+        b"VP8L" => {
+            if *payload.first()? != 0x2f {
+                return None;
+            }
+            // 14 bits of the width less 1, then 14 of the height less 1.
+            let bits = u32::from_le_bytes(array(payload, 1)?);
+            Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
+        }
+        b"VP8X" => {
+            // The flags take 4 bytes, then 24 bits of each side less 1.
+            let side = |at: usize| {
+                let [a, b, c] = array(payload, at)?;
+                Some(u32::from_le_bytes([a, b, c, 0]) + 1)
+            };
+            Some((side(4)?, side(7)?))
+        }
+        _ => None,
+    }
+}
+
+/// The `N` bytes of `blob` from `at`, or `None` past its end.
+fn array<const N: usize>(blob: &[u8], at: usize) -> Option<[u8; N]> {
+    blob.get(at..)?.first_chunk().copied()
 }
 
 /// A live asset of a [`Cache`].
@@ -375,7 +617,7 @@ struct Live {
 #[derive(Debug)]
 struct Entry {
     asset: Asset,
-    /// The PNG from the front end, which finds the image again.
+    /// The image from the front end, which finds the image again.
     source: Arc<[u8]>,
     /// The PNG that goes out, which is `source` unless it shrank.
     png: Arc<[u8]>,
@@ -419,7 +661,7 @@ fn shrunk_size(width: u32, height: u32, pixels: u64) -> (u32, u32) {
 /// and a last scale reaches the size.
 #[cfg(feature = "render")]
 fn shrink_to(png: &[u8], (width, height): (u32, u32)) -> Result<Vec<u8>, AssetError> {
-    let mut image = tiny_skia::Pixmap::decode_png(png).map_err(|_| AssetError::NotPng)?;
+    let mut image = tiny_skia::Pixmap::decode_png(png).map_err(|_| AssetError::Unsupported)?;
     while image.width() / 2 >= width && image.height() / 2 >= height {
         image = scaled(&image, image.width() / 2, image.height() / 2);
     }
@@ -456,7 +698,7 @@ fn add_bitmap_ids(elements: &[Element], ids: &mut BTreeSet<u32>) {
 }
 
 /// The first 24 bytes of a PNG of `width` by `height`, all that
-/// [`png_size`] reads.
+/// [`image_size`] reads.
 #[cfg(test)]
 pub(crate) fn png_head(width: u32, height: u32) -> Vec<u8> {
     let mut head = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
@@ -544,7 +786,7 @@ mod tests {
     #[test]
     fn an_image_that_is_not_a_png_or_is_too_large_gets_no_id() {
         let mut assets = Assets::new();
-        assert_eq!(assets.image(b"GIF89a"), Err(AssetError::NotPng));
+        assert_eq!(assets.image(b"GIF89a"), Err(AssetError::Unsupported));
         assert_eq!(
             assets.image(&png_head(8193, 8193)),
             Err(AssetError::TooManyPixels {
@@ -569,7 +811,10 @@ mod tests {
     fn an_image_over_the_limit_goes_to_the_renderer_to_shrink() {
         // The header of a large image, with no pixels to decode.
         let mut assets = Assets::new();
-        assert_eq!(assets.image(&png_head(2049, 2048)), Err(AssetError::NotPng));
+        assert_eq!(
+            assets.image(&png_head(2049, 2048)),
+            Err(AssetError::Unsupported)
+        );
     }
 
     #[cfg(feature = "render")]
@@ -683,13 +928,168 @@ mod tests {
 
     #[test]
     fn the_size_comes_from_the_header_of_a_png() {
-        assert_eq!(png_size(&png_head(640, 480)), Some((640, 480)));
-        assert_eq!(png_size(&png_head(640, 480)[..23]), None);
-        assert_eq!(png_size(&png_head(0, 480)), None);
-        assert_eq!(png_size(b"\xff\xd8\xff\xe0 a JPEG and more bytes"), None);
+        assert_eq!(image_size(&png_head(640, 480)), Some((640, 480)));
+        assert_eq!(image_size(&png_head(640, 480)[..23]), None);
+        assert_eq!(image_size(&png_head(0, 480)), None);
         let mut other_chunk = png_head(640, 480);
         other_chunk[12..16].copy_from_slice(b"IDAT");
-        assert_eq!(png_size(&other_chunk), None);
+        assert_eq!(image_size(&other_chunk), None);
+    }
+
+    #[test]
+    fn the_size_comes_from_the_frame_header_of_a_jpeg() {
+        let jpeg = jpeg_head_of(&[app(0xe0, b"JFIF\0"), sof(640, 480)]);
+        assert_eq!(
+            head(&jpeg).map(|h| (h.format, h.size)),
+            Some((Format::Jpeg, (640, 480)))
+        );
+        // Fill bytes before a marker, and a segment that has no length.
+        let mut filled = jpeg[..2].to_vec();
+        filled.extend_from_slice(b"\xff\xff\xd0");
+        filled.extend_from_slice(&jpeg[2..]);
+        assert_eq!(image_size(&filled), Some((640, 480)));
+        assert_eq!(image_size(&jpeg[..jpeg.len() - 3]), None);
+        assert_eq!(image_size(&jpeg_head_of(&[sof(640, 480), sof(8, 8)])), None);
+        assert_eq!(image_size(&jpeg_head_of(&[sof(640, 0)])), None);
+        // A DHT has a marker of the range of the frame headers.
+        assert_eq!(image_size(&jpeg_head_of(&[app(0xc4, &[0; 8])])), None);
+    }
+
+    #[test]
+    fn the_orientation_of_a_jpeg_comes_from_its_last_exif() {
+        let turned = jpeg_head_of(&[exif(true, 6), sof(640, 480)]);
+        let head = head(&turned).unwrap();
+        assert_eq!((head.size, head.orientation), ((640, 480), 6));
+        assert!(head.turned());
+        let little = jpeg_head_of(&[exif(false, 8), sof(640, 480)]);
+        assert_eq!(super::head(&little).unwrap().orientation, 8);
+        let last = jpeg_head_of(&[exif(true, 6), sof(640, 480), exif(true, 3)]);
+        assert_eq!(super::head(&last).unwrap().orientation, 3);
+        let wrong = jpeg_head_of(&[exif(true, 9), sof(640, 480)]);
+        assert_eq!(super::head(&wrong).unwrap().orientation, 1);
+    }
+
+    #[test]
+    fn a_turned_jpeg_has_the_size_on_the_screen_and_the_footprint_of_the_file() {
+        let jpeg = jpeg_head_of(&[exif(true, 6), sof(640, 480)]);
+        let asset = Assets::new().image(&jpeg).unwrap();
+        assert_eq!((asset.width, asset.height), (480, 640));
+        assert_eq!(Footprint::of(&jpeg).map(|f| f.pixels), Ok(640 * 480));
+    }
+
+    #[test]
+    fn the_size_of_a_gif_covers_its_screen_and_its_first_image() {
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&[64, 0, 32, 0, 0x80, 0, 0]);
+        // A global color table of 2 colors.
+        gif.extend_from_slice(&[0; 6]);
+        // A graphic control extension.
+        gif.extend_from_slice(&[0x21, 0xf9, 4, 0, 0, 0, 0, 0]);
+        let mut inside = gif.clone();
+        inside.extend_from_slice(&[0x2c, 0, 0, 0, 0, 8, 0, 8, 0, 0]);
+        assert_eq!(
+            head(&inside).map(|h| (h.format, h.size)),
+            Some((Format::Gif, (64, 32)))
+        );
+        let mut past = gif.clone();
+        past.extend_from_slice(&[0x2c, 60, 0, 0, 0, 100, 0, 8, 0, 0]);
+        assert_eq!(image_size(&past), Some((160, 32)));
+        gif.push(0x3b);
+        assert_eq!(image_size(&gif), None);
+    }
+
+    #[test]
+    fn the_size_of_a_webp_comes_from_its_first_chunk() {
+        let lossy = webp(
+            b"VP8 ",
+            &[0, 0, 0, 0x9d, 0x01, 0x2a, 0x80, 0xc2, 0xe0, 0x01],
+        );
+        assert_eq!(
+            head(&lossy).map(|h| (h.format, h.size)),
+            Some((Format::WebP, (640, 480)))
+        );
+        let bits: u32 = 639 | (479 << 14);
+        let mut lossless = vec![0x2f];
+        lossless.extend_from_slice(&bits.to_le_bytes());
+        assert_eq!(image_size(&webp(b"VP8L", &lossless)), Some((640, 480)));
+        let extended = webp(b"VP8X", &[0x10, 0, 0, 0, 0x7f, 0x02, 0, 0xdf, 0x01, 0]);
+        assert_eq!(image_size(&extended), Some((640, 480)));
+        assert_eq!(image_size(&webp(b"VP8 ", &[0, 0, 0, 0, 0, 0])), None);
+        assert_eq!(image_size(&webp(b"ALPH", &[0; 10])), None);
+    }
+
+    /// A JPEG of the start marker and `segments`, up to the scan.
+    fn jpeg_head_of(segments: &[Vec<u8>]) -> Vec<u8> {
+        let mut jpeg = b"\xff\xd8".to_vec();
+        for segment in segments {
+            jpeg.extend_from_slice(segment);
+        }
+        jpeg.extend_from_slice(b"\xff\xda\0\x02");
+        jpeg
+    }
+
+    /// A segment of `marker` that holds `data`.
+    fn app(marker: u8, data: &[u8]) -> Vec<u8> {
+        let mut segment = vec![0xff, marker];
+        let len = u16::try_from(data.len() + 2).unwrap();
+        segment.extend_from_slice(&len.to_be_bytes());
+        segment.extend_from_slice(data);
+        segment
+    }
+
+    /// A baseline frame header of `width` by `height`, with one component.
+    fn sof(width: u16, height: u16) -> Vec<u8> {
+        let mut data = vec![8];
+        data.extend_from_slice(&height.to_be_bytes());
+        data.extend_from_slice(&width.to_be_bytes());
+        data.extend_from_slice(&[1, 1, 0x11, 0]);
+        app(0xc0, &data)
+    }
+
+    /// An EXIF segment whose first IFD has a tag of the software and the
+    /// orientation, in big or little endian.
+    fn exif(big: bool, orientation: u16) -> Vec<u8> {
+        let u16b = |v: u16| {
+            if big {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let u32b = |v: u32| {
+            if big {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let mut data = b"Exif\0\0".to_vec();
+        data.extend_from_slice(if big { b"MM\0*" } else { b"II*\0" });
+        data.extend_from_slice(&u32b(8));
+        data.extend_from_slice(&u16b(2));
+        // The software, an ASCII string of 4 bytes that fits in the entry.
+        data.extend_from_slice(&u16b(0x0131));
+        data.extend_from_slice(&u16b(2));
+        data.extend_from_slice(&u32b(4));
+        data.extend_from_slice(b"abc\0");
+        data.extend_from_slice(&u16b(0x0112));
+        data.extend_from_slice(&u16b(3));
+        data.extend_from_slice(&u32b(1));
+        data.extend_from_slice(&u16b(orientation));
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(&u32b(0));
+        app(0xe1, &data)
+    }
+
+    /// A WebP whose first chunk is `fourcc` with `payload`.
+    fn webp(fourcc: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut webp = b"RIFF".to_vec();
+        webp.extend_from_slice(&u32::try_from(payload.len() + 12).unwrap().to_le_bytes());
+        webp.extend_from_slice(b"WEBP");
+        webp.extend_from_slice(fourcc);
+        webp.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+        webp.extend_from_slice(payload);
+        webp
     }
 
     #[test]
@@ -710,7 +1110,7 @@ mod tests {
         );
         // A product of two large sides does not wrap.
         assert!(Footprint::of(&png_head(u32::MAX, u32::MAX)).is_err());
-        assert_eq!(Footprint::of(b"GIF89a"), Err(AssetError::NotPng));
+        assert_eq!(Footprint::of(b"GIF89a"), Err(AssetError::Unsupported));
     }
 
     #[test]
