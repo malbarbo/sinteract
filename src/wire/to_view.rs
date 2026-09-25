@@ -2,7 +2,7 @@
 //!
 //! The engine uploads each bitmap once as an asset, before the frames that
 //! draw it, and sends a frame per repaint, for one player or for all of
-//! them. Either side ends the session with a close.
+//! them. The engine ends the session with the end of its stream.
 
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
@@ -18,7 +18,7 @@ use super::protocol::{ReadError, decode_root, read_next};
 use super::scene::{read_scene, write_scene};
 
 /// One message of the engine, one variant per arm of `EngineMessage`. An
-/// asset and a close go to every player.
+/// asset goes to every player.
 #[derive(Clone, Debug)]
 pub enum Message {
     Asset {
@@ -31,7 +31,6 @@ pub enum Message {
         player: Option<NonZeroU32>,
         scene: Scene,
     },
-    Close,
 }
 
 /// The arm of a message of the engine, with the player of a frame. A
@@ -44,7 +43,6 @@ pub enum Arm {
     Frame {
         player: Option<NonZeroU32>,
     },
-    Close,
 }
 
 /// Read the next message of the engine. Returns `None` at the end of the
@@ -69,11 +67,6 @@ pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8], mime: Option<&str>)
     write_framed(w, Side::Engine, &asset_message(id, blob, mime))
 }
 
-/// Write the close of the session.
-pub fn write_close(w: &mut impl Write) -> io::Result<()> {
-    write_framed(w, Side::Engine, &close_message())
-}
-
 /// The arm of `payload`, a message with no envelope, without a decode of
 /// the scene of a frame. `None` for an arm from a newer schema.
 pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
@@ -86,7 +79,6 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
             engine_message::Frame(f) => Arm::Frame {
                 player: NonZeroU32::new(f?.get_player()),
             },
-            engine_message::Close(_) => Arm::Close,
         }))
     })
 }
@@ -124,7 +116,6 @@ fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Er
                 scene: read_scene(f.get_scene()?)?,
             }))
         }
-        engine_message::Close(_) => Ok(Some(Message::Close)),
     }
 }
 
@@ -147,12 +138,6 @@ fn asset_message(id: u32, blob: &[u8], mime: Option<&str>) -> MessageBuilder<Hea
     builder
 }
 
-fn close_message() -> MessageBuilder<HeapAllocator> {
-    let mut builder = MessageBuilder::new_default();
-    builder.init_root::<engine_message::Builder>().init_close();
-    builder
-}
-
 /// Encode a scene as a frame for every player, with no envelope.
 #[cfg(test)]
 pub(crate) fn encode_frame(scene: &Scene) -> Vec<u8> {
@@ -169,9 +154,4 @@ pub(crate) fn encode_frame_to(player: Option<NonZeroU32>, scene: &Scene) -> Vec<
 #[cfg(test)]
 pub(crate) fn encode_asset(id: u32, blob: &[u8], mime: Option<&str>) -> Vec<u8> {
     super::finish(asset_message(id, blob, mime))
-}
-
-/// Encode the close of the session, with no envelope.
-pub(crate) fn encode_close() -> Vec<u8> {
-    super::finish(close_message())
 }

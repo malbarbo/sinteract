@@ -12,8 +12,8 @@
 //! `notify_one` after each call that leaves output, since a
 //! `notify_waiters` is lost when the task is not waiting yet. It wakes the
 //! tasks of the views with a `watch` of the whole room after
-//! `from_engine`, `engine_ended`, `leave` and `from_view`, and each task
-//! of a view subscribes before its first `next_for`. The page runs on one
+//! `from_engine`, `engine_ended` and `leave`, and each task of a view
+//! subscribes before its first `next_for`. The page runs on one
 //! thread, and after each call it sends what waits for every view and for
 //! the engine.
 
@@ -34,7 +34,7 @@ use crate::wire::to_view::{self, Arm};
 ///
 /// The room waits in the lobby until [`ServerCore::start`], then plays until
 /// [`ServerCore::close`], and is over when the engine ends. Only a playing
-/// room writes to the engine, apart from the close.
+/// room writes to the engine.
 #[derive(Debug)]
 pub struct ServerCore {
     /// A number never returns, so a late message for a player who left
@@ -180,15 +180,13 @@ impl ServerCore {
                 lobby_size: None,
                 frame: self.frame_for_all.clone(),
                 assets_sent: 0,
-                close_sent: false,
             },
         );
         Conn(player)
     }
 
-    /// Free the seat of `conn`. In the game the engine gets a leave. The
-    /// close of the view and the drop of its socket may both call it, so a
-    /// second call does nothing.
+    /// Free the seat of `conn`, when its WebSocket closes. In the game the
+    /// engine gets a leave. A second call does nothing.
     pub fn leave(&mut self, conn: Conn) {
         if self.seats.remove(&conn.0).is_some() && self.phase == Phase::Playing {
             to_engine::write_leave(&mut self.to_engine, conn.0).expect(UNDER_THE_CAP);
@@ -231,12 +229,13 @@ impl ServerCore {
         }
     }
 
-    /// Tell the engine to end, once. The engine may still send its last
-    /// frames.
+    /// Stop writing to the engine, and drop what the host has not taken.
+    /// The host then closes the pipe of the engine, and the end of the pipe
+    /// tells the engine to end. The engine may still send its last frames.
     pub fn close(&mut self) {
         match self.phase {
             Phase::Lobby | Phase::Playing => {
-                to_engine::write_close(&mut self.to_engine).expect(UNDER_THE_CAP);
+                self.to_engine = Vec::new();
                 self.phase = Phase::Closing;
             }
             Phase::Closing | Phase::Over => {}
@@ -249,18 +248,15 @@ impl ServerCore {
         self.phase == Phase::Over
     }
 
-    /// Take a message that the view of `conn` sent with no envelope, such as
-    /// one that came over a WebSocket. An event goes to [`Self::input`],
-    /// and the close of the view to [`Self::leave`]. A message of an arm
-    /// from a newer schema is dropped.
+    /// Take a message that the view of `conn` sent over its WebSocket, and
+    /// pass its event to [`Self::input`]. A message from a newer schema is
+    /// dropped.
     pub fn from_view(&mut self, conn: Conn, payload: &[u8]) -> Result<(), ViewError> {
         if payload.len() > MAX_VIEW_BYTES {
             return Err(ViewError::TooLong(payload.len()));
         }
-        match to_server::decode(payload).map_err(ViewError::Payload)? {
-            Some(to_server::Message::Input(event)) => self.input(conn, &event),
-            Some(to_server::Message::Close) => self.leave(conn),
-            None => {}
+        if let Some(event) = to_server::decode(payload).map_err(ViewError::Payload)? {
+            self.input(conn, &event);
         }
         Ok(())
     }
@@ -293,10 +289,9 @@ impl ServerCore {
     /// Take the next bytes of the engine. They may end anywhere, inside a
     /// message too. An asset goes to every view, and a frame to its player,
     /// or to every player. A frame for a player who left is dropped, since
-    /// the engine may write it before it reads the leave. The close of the
-    /// engine and a broken stream end the room, and the core ignores what
-    /// comes after the end. Returns what went wrong, in the order of the
-    /// stream.
+    /// the engine may write it before it reads the leave. A broken stream
+    /// ends the room, and the core ignores what comes after the end.
+    /// Returns what went wrong, in the order of the stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
         let mut errors = Vec::new();
         if self.phase == Phase::Over {
@@ -333,10 +328,6 @@ impl ServerCore {
                         seat.frame = Some(payload);
                     }
                 }
-                Ok(Some(Arm::Close)) => {
-                    self.end();
-                    return errors;
-                }
                 Ok(None) => {}
                 Err(e) => errors.push(EngineError::Payload(e)),
             }
@@ -361,8 +352,8 @@ impl ServerCore {
     /// an asset arrives before the frame that draws it. Then comes the
     /// newest frame that the view has not got, and a view that falls behind
     /// skips the frames in between. When the room is over, the view gets
-    /// the close of the engine after its last frame, and then
-    /// [`Next::Gone`], as does the view of a player who left.
+    /// [`Next::Gone`] after its last frame, as does the view of a player
+    /// who left.
     pub fn next_for(&mut self, conn: Conn) -> Next {
         let Some(seat) = self.seats.get_mut(&conn.0) else {
             return Next::Gone;
@@ -376,11 +367,7 @@ impl ServerCore {
         }
         match self.phase {
             Phase::Lobby | Phase::Playing | Phase::Closing => Next::Idle,
-            Phase::Over if seat.close_sent => Next::Gone,
-            Phase::Over => {
-                seat.close_sent = true;
-                Next::Send(to_view::encode_close().into())
-            }
+            Phase::Over => Next::Gone,
         }
     }
 
@@ -415,7 +402,6 @@ struct Seat {
     frame: Option<Arc<[u8]>>,
     /// How many of the assets of the room the view got.
     assets_sent: usize,
-    close_sent: bool,
 }
 
 /// Whether the room waits for its start, plays, told the engine to end, or
@@ -492,7 +478,7 @@ mod tests {
                     SessionEvent::Join { player, nickname } => format!("join {player} {nickname}"),
                     SessionEvent::Leave { player } => format!("leave {player}"),
                     SessionEvent::Error(e) => format!("error {e}"),
-                    SessionEvent::End(None) => "close".into(),
+                    SessionEvent::End(None) => "end".into(),
                     SessionEvent::End(Some(e)) => format!("broken {e}"),
                 })
                 .collect()
@@ -526,12 +512,6 @@ mod tests {
         out
     }
 
-    fn engine_close() -> Vec<u8> {
-        let mut out = Vec::new();
-        to_view::write_close(&mut out).unwrap();
-        out
-    }
-
     /// Everything that waits for the view of `conn`, in a short form, up to
     /// the first `Idle` or `Gone`.
     fn sent(core: &mut ServerCore, conn: Conn) -> Vec<String> {
@@ -547,7 +527,6 @@ mod tests {
                             Some(p) => format!("frame {p} {}", scene.width()),
                             None => format!("frame all {}", scene.width()),
                         },
-                        to_view::Message::Close => "close".into(),
                     });
                 }
                 Next::Idle => {
@@ -597,25 +576,27 @@ mod tests {
     }
 
     #[test]
-    fn the_close_goes_once_and_nothing_follows() {
+    fn the_close_drops_what_the_host_has_not_taken_and_nothing_follows() {
         let mut room = Room::new();
         let ana = room.core.join("Ana");
         room.core.start();
+        assert_eq!(room.events(), ["start 1 Ana"]);
+        room.core.tick();
         room.core.close();
         room.core.close();
         room.core.tick();
         room.core.join("Beto");
         room.core.leave(ana);
         assert!(!room.core.start());
-        assert_eq!(room.events(), ["start 1 Ana", "close"]);
+        assert!(room.events().is_empty());
     }
 
     #[test]
-    fn a_close_in_the_lobby_ends_the_engine() {
+    fn a_room_closed_in_the_lobby_never_starts() {
         let mut room = Room::new();
         room.core.close();
         assert!(!room.core.start());
-        assert_eq!(room.events(), ["close"]);
+        assert!(room.events().is_empty());
     }
 
     #[test]
@@ -628,7 +609,7 @@ mod tests {
     #[test]
     fn the_output_goes_after_what_the_buffer_holds() {
         let mut core = ServerCore::new();
-        core.close();
+        core.start();
         let mut buf = b"rest".to_vec();
         core.take_engine_output(&mut buf);
         assert_eq!(&buf[..4], b"rest");
@@ -668,20 +649,6 @@ mod tests {
     }
 
     #[test]
-    fn the_close_of_a_view_is_a_leave() {
-        let mut room = Room::new();
-        let ana = room.core.join("Ana");
-        room.core.start();
-        room.core
-            .from_view(ana, &to_server::encode_close())
-            .unwrap();
-        room.core.input(ana, &key("a"));
-        room.core.close();
-        room.core.input(ana, &key("a"));
-        assert_eq!(room.events(), ["start 1 Ana", "leave 1", "close"]);
-    }
-
-    #[test]
     fn a_message_of_a_view_that_is_too_long_or_does_not_decode_is_an_error() {
         let mut core = ServerCore::new();
         let ana = core.join("Ana");
@@ -701,8 +668,9 @@ mod tests {
         let mut room = Room::new();
         let ana = room.core.join("Ana");
         room.core.start();
-        let unknown =
-            wire::with_unknown_view_value(&to_server::encode_input(&key("a")), |m| wire::tag_of(m));
+        let unknown = wire::with_unknown_view_value(&to_server::encode_input(&key("a")), |m| {
+            wire::tag_of(m.get_event().unwrap())
+        });
         room.core.from_view(ana, &unknown).unwrap();
         assert_eq!(room.events(), ["start 1 Ana"]);
     }
@@ -752,21 +720,19 @@ mod tests {
     }
 
     #[test]
-    fn the_close_of_the_engine_goes_after_the_last_frame_and_ends_the_room() {
+    fn the_end_of_the_engine_ends_the_room_after_the_last_frame() {
         let mut room = Room::new();
         let ana = room.core.join("Ana");
         room.core.start();
         room.core.tick();
-        let mut stream = frame(0, 1.0);
-        stream.extend_from_slice(&engine_close());
-        stream.extend_from_slice(&frame(0, 2.0));
-        room.core.from_engine(&stream);
+        room.core.from_engine(&frame(0, 1.0));
+        assert!(room.core.engine_ended().is_none());
         assert!(room.core.is_over());
         room.core.tick();
-        room.core.from_engine(&frame(0, 3.0));
+        room.core.from_engine(&frame(0, 2.0));
         assert!(room.core.engine_ended().is_none());
         assert!(room.events().is_empty());
-        assert_eq!(sent(&mut room.core, ana), ["frame all 1", "close", "gone"]);
+        assert_eq!(sent(&mut room.core, ana), ["frame all 1", "gone"]);
         assert_eq!(sent(&mut room.core, ana), ["gone"]);
     }
 
@@ -803,7 +769,7 @@ mod tests {
         let errors = core.from_engine(&stream);
         assert!(matches!(errors[..], [EngineError::Broken(_)]));
         assert!(core.is_over());
-        assert_eq!(sent(&mut core, ana), ["frame all 1", "close", "gone"]);
+        assert_eq!(sent(&mut core, ana), ["frame all 1", "gone"]);
     }
 
     #[test]
@@ -825,6 +791,6 @@ mod tests {
         assert!(core.engine_ended().is_none());
         assert!(core.is_over());
         let ana = core.join("Ana");
-        assert_eq!(sent(&mut core, ana), ["frame all 1", "close", "gone"]);
+        assert_eq!(sent(&mut core, ana), ["frame all 1", "gone"]);
     }
 }

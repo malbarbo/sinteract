@@ -103,20 +103,23 @@ fn aligned_copy(payload: &[u8]) -> Vec<Word> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::to_view::{self, Message, encode_close};
+    use super::super::to_view::{self, Message, encode_asset};
 
     #[test]
     fn a_payload_that_does_not_start_on_a_word_decodes() {
-        let close = encode_close();
-        let (buffer, start) = unaligned(&close);
-        let payload = &buffer[start..start + close.len()];
-        assert!(matches!(to_view::decode(payload), Ok(Some(Message::Close))));
+        let asset = encode_asset(7, &[1, 2, 3], None);
+        let (buffer, start) = unaligned(&asset);
+        let payload = &buffer[start..start + asset.len()];
+        assert!(matches!(
+            to_view::decode(payload),
+            Ok(Some(Message::Asset { id: 7, .. }))
+        ));
     }
 
     #[test]
     fn a_payload_that_is_not_whole_words_is_an_error_on_both_paths() {
-        let close = encode_close();
-        let cut = &close[..close.len() - 3];
+        let asset = encode_asset(7, &[1, 2, 3], None);
+        let cut = &asset[..asset.len() - 3];
         assert!(to_view::decode(cut).is_err());
         let (buffer, start) = unaligned(cut);
         assert!(to_view::decode(&buffer[start..start + cut.len()]).is_err());

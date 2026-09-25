@@ -19,7 +19,7 @@ use std::io::{self, BufReader, BufWriter, PipeReader, PipeWriter, Read};
 use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::process::{Child, Command, ExitCode, Stdio};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -80,8 +80,7 @@ fn main() -> ExitCode {
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
     let mut stats = Stats::default();
-    // Whether the view closes the session, which the engine has to hear.
-    let close = loop {
+    loop {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
                 let sent = match ev {
@@ -92,24 +91,21 @@ fn main() -> ExitCode {
                     | InputEvent::Pad(_) => to_engine::write_input(&mut to_engine, PLAYER, &ev),
                 };
                 if sent.is_err() {
-                    break false;
+                    break;
                 }
             }
             // The messages of the engine come through the channel, and the
             // reader thread wakes the loop after each one.
             Err(Interrupt::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
                 Drained::Open => {}
-                Drained::EngineClosed => break false,
-                Drained::DisplayFailed => break true,
+                Drained::EngineEnded | Drained::DisplayFailed => break,
             },
-            Err(Interrupt::Close) => break true,
+            Err(Interrupt::Close) => break,
             Err(Interrupt::Read(e)) => eprintln!("view: {e}"),
             Err(Interrupt::Timeout) => {}
         }
-    };
-    if close {
-        let _ = to_engine::write_close(&mut to_engine);
     }
+    // The end of fd 3 tells the engine to end.
     drop(to_engine);
     // The reader thread may wait on a full channel. Without the receiver
     // its send fails and it lets go of the pipe, so an engine that still
@@ -150,35 +146,36 @@ fn spawn(engine: &str, args: &[String]) -> io::Result<(Child, PipeWriter, PipeRe
     Ok((child, to_engine, from_engine))
 }
 
-/// Pass each message of the engine to the loop and wake it. The end of the
-/// stream is a close, as the engine had sent one.
+/// Pass each message of the engine to the loop and wake it. At the end of
+/// the stream the channel closes, and a last wake tells the loop.
 fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Message>, wake: Sender) {
     loop {
         let message = match to_view::read(&mut from_engine) {
             Ok(Some(message)) => message,
-            Ok(None) => Message::Close,
+            Ok(None) => break,
             Err(ReadError::Payload(e)) => {
                 eprintln!("view: skipping a message that does not decode: {e}");
                 continue;
             }
             Err(ReadError::Broken(e)) => {
                 eprintln!("view: read error: {e}");
-                Message::Close
+                break;
             }
         };
-        let last = matches!(message, Message::Close);
-        if to_loop.send(message).is_err() || wake.wake().is_err() || last {
+        if to_loop.send(message).is_err() || wake.wake().is_err() {
             return;
         }
     }
+    drop(to_loop);
+    let _ = wake.wake();
 }
 
 enum Drained {
     Open,
-    /// The engine sent its close, so the view sends none back.
-    EngineClosed,
+    /// The stream of the engine ended.
+    EngineEnded,
     /// The display of the view failed, and the engine hears nothing of it
-    /// until the view closes the session.
+    /// until the view closes fd 3.
     DisplayFailed,
 }
 
@@ -188,7 +185,15 @@ enum Drained {
 fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stats) -> Drained {
     let mut last: Option<Scene> = None;
     let mut session = Drained::Open;
-    for message in from_reader.try_iter() {
+    loop {
+        let message = match from_reader.try_recv() {
+            Ok(message) => message,
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => {
+                session = Drained::EngineEnded;
+                break;
+            }
+        };
         match message {
             Message::Asset { id, blob, mime } => match fr.push_asset(id, &blob, mime.as_deref()) {
                 Ok(()) => {}
@@ -203,10 +208,6 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
                 if last.replace(scene).is_some() {
                     stats.skipped += 1;
                 }
-            }
-            Message::Close => {
-                session = Drained::EngineClosed;
-                break;
             }
         }
     }

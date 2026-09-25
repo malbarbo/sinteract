@@ -57,10 +57,10 @@ pub enum SessionEvent {
     Leave { player: NonZeroU32 },
     /// The session dropped a message that broke a rule, and goes on.
     Error(SessionError),
-    /// The server closed the session, or the stream ended. It is the last
-    /// event. The error is `Some` when the stream broke, with a header that
-    /// is not one of the server or with the end inside a message, since
-    /// the session cannot find the next message.
+    /// The stream ended, which is how the server ends the session. It is
+    /// the last event. The error is `Some` when the stream broke, with a
+    /// header that is not one of the server or with the end inside a
+    /// message, since the session cannot find the next message.
     End(Option<io::Error>),
 }
 
@@ -189,7 +189,6 @@ impl Session {
     /// Turn `message` into an event, by the state of the session.
     fn receive(&mut self, message: Message) {
         let event = match (self.state, message) {
-            (State::BeforeStart | State::Started, Message::Close) => return self.finish(None),
             (State::BeforeStart, Message::Start(roster)) => {
                 self.state = State::Started;
                 SessionEvent::Start(roster)
@@ -387,13 +386,14 @@ mod tests {
         input(&mut stream, 2, &key("a"));
         to_engine::write_join(&mut stream, player(3), "Caio").unwrap();
         to_engine::write_leave(&mut stream, player(1)).unwrap();
-        to_engine::write_close(&mut stream).unwrap();
         let mut session = Session::new();
         let mut events = Vec::new();
         for byte in &stream {
             session.feed(std::slice::from_ref(byte));
             events.extend(names(&mut session));
         }
+        session.end();
+        events.extend(names(&mut session));
         assert_eq!(
             events,
             [
@@ -493,11 +493,9 @@ mod tests {
     }
 
     #[test]
-    fn a_close_before_the_start_is_the_end() {
-        let mut stream = Vec::new();
-        to_engine::write_close(&mut stream).unwrap();
+    fn the_end_before_the_start_is_the_end() {
         let mut session = Session::new();
-        session.feed(&stream);
+        session.end();
         assert_eq!(names(&mut session), ["end"]);
     }
 
@@ -550,11 +548,10 @@ mod tests {
     }
 
     #[test]
-    fn nothing_comes_after_the_close() {
-        let mut stream = Vec::new();
-        to_engine::write_close(&mut stream).unwrap();
-        stream.extend_from_slice(&tick());
-        let mut session = started(&stream);
+    fn nothing_comes_after_the_end() {
+        let mut session = started(&[]);
+        session.end();
+        session.feed(&tick());
         assert_eq!(names(&mut session), ["end"]);
         session.end();
         assert!(session.next_event().is_none());

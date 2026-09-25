@@ -43,13 +43,14 @@ fn main() -> ExitCode {
     let mut session = Session::new();
     let mut game = Game::new(balls);
     let mut last = None;
-    // Whether the engine ends the session, which the server has to hear.
-    let close = loop {
+    // The end of fd 4, when the engine exits, ends the session for the
+    // server.
+    loop {
         let event = match session.wait(&mut from_server) {
             Ok(event) => event,
             Err(e) => {
                 eprintln!("engine: {e}");
-                break false;
+                break;
             }
         };
         match event {
@@ -61,14 +62,14 @@ fn main() -> ExitCode {
                 game.step(dt.min(0.1));
                 if let Err(e) = to_view::write_frame(&mut to_view, None, &game.scene()) {
                     eprintln!("engine: {e}");
-                    break false;
+                    break;
                 }
             }
             SessionEvent::Input {
                 event: InputEvent::Key(k),
                 ..
             } => match k.kind {
-                KeyKind::Press if k.key == "q" => break true,
+                KeyKind::Press if k.key == "q" => break,
                 KeyKind::Press => game.key(&k.key),
                 KeyKind::Down | KeyKind::Up => {}
             },
@@ -79,7 +80,7 @@ fn main() -> ExitCode {
                 if let Some(e) = broken {
                     eprintln!("engine: {e}");
                 }
-                break false;
+                break;
             }
             SessionEvent::Start(_)
             | SessionEvent::Join { .. }
@@ -93,9 +94,6 @@ fn main() -> ExitCode {
                 ..
             } => {}
         }
-    };
-    if close && let Err(e) = to_view::write_close(&mut to_view) {
-        eprintln!("engine: {e}");
     }
     ExitCode::SUCCESS
 }

@@ -249,14 +249,14 @@ pub(crate) fn with_float(bytes: &[u8], from: f32, to: f32) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::to_view::{Message, encode_asset, encode_close, encode_frame};
+    use super::to_view::{Message, encode_asset, encode_frame};
     use super::*;
     use crate::event::{
         InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons,
         MouseEvent, PadButton, PadEvent,
     };
     use crate::event_capnp::input_event;
-    use crate::protocol_capnp::{engine_message, server_message};
+    use crate::protocol_capnp::{engine_message, server_message, view_message};
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, LineCap, LineJoin, Paint, Path,
         PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
@@ -542,28 +542,31 @@ mod tests {
         );
         let asset = to_view::encode_asset(1, &[0; 4], None);
         assert_eq!(to_view::arm(&asset).unwrap(), Some(to_view::Arm::Asset));
-        let close = to_view::encode_close();
-        assert_eq!(to_view::arm(&close).unwrap(), Some(to_view::Arm::Close));
-        let unknown = with_unknown_engine_value(&close, |m| tag_of(m));
+        let unknown = with_unknown_engine_value(&asset, |m| tag_of(m));
         assert_eq!(to_view::arm(&unknown).unwrap(), None);
         assert!(to_view::arm(&[0; 8]).is_err());
     }
 
     #[test]
-    fn the_messages_of_a_view_round_trip() {
+    fn a_message_of_a_view_round_trips() {
         assert!(matches!(
             to_server::decode(&to_server::encode_input(&InputEvent::Vsync)),
-            Ok(Some(to_server::Message::Input(InputEvent::Vsync)))
-        ));
-        assert!(matches!(
-            to_server::decode(&to_server::encode_close()),
-            Ok(Some(to_server::Message::Close))
+            Ok(Some(InputEvent::Vsync))
         ));
     }
 
     #[test]
-    fn a_message_of_a_view_of_an_unknown_arm_is_skipped() {
-        let bytes = with_unknown_view_value(&to_server::encode_close(), |m| tag_of(m));
+    fn a_message_of_a_view_with_no_event_is_skipped() {
+        let mut builder = MessageBuilder::new_default();
+        builder.init_root::<view_message::Builder>();
+        assert!(matches!(to_server::decode(&finish(builder)), Ok(None)));
+    }
+
+    #[test]
+    fn a_message_of_a_view_with_an_event_of_an_unknown_arm_is_skipped() {
+        let bytes = with_unknown_view_value(&to_server::encode_input(&InputEvent::Vsync), |m| {
+            tag_of(m.get_event().unwrap())
+        });
         assert!(matches!(to_server::decode(&bytes), Ok(None)));
     }
 
@@ -600,7 +603,7 @@ mod tests {
         let vsync = to_engine::encode_input(1, &InputEvent::Vsync);
         stream.extend_from_slice(&framing::header(framing::Side::Server, vsync.len() as u32));
         stream.extend_from_slice(&vsync);
-        to_engine::write_close(&mut stream).unwrap();
+        to_engine::write_tick(&mut stream).unwrap();
         let mut r = &stream[..];
         assert!(matches!(
             read_server(&mut r),
@@ -612,7 +615,7 @@ mod tests {
         ));
         assert!(matches!(
             read_server(&mut r),
-            Ok(Some(to_engine::Message::Close))
+            Ok(Some(to_engine::Message::Tick))
         ));
     }
 
@@ -652,7 +655,7 @@ mod tests {
             ));
             stream.extend_from_slice(&payload);
         }
-        to_engine::write_close(&mut stream).unwrap();
+        to_engine::write_tick(&mut stream).unwrap();
         let mut r = &stream[..];
         for _ in 0..3 {
             assert!(matches!(
@@ -662,7 +665,7 @@ mod tests {
         }
         assert!(matches!(
             read_server(&mut r),
-            Ok(Some(to_engine::Message::Close))
+            Ok(Some(to_engine::Message::Tick))
         ));
     }
 
@@ -703,12 +706,6 @@ mod tests {
             }
             other => panic!("got {other:?}"),
         }
-    }
-
-    #[test]
-    fn close_message_round_trips() {
-        let bytes = encode_close();
-        assert!(matches!(decode(&bytes).unwrap(), Message::Close));
     }
 
     #[test]
@@ -902,7 +899,7 @@ mod tests {
 
     #[test]
     fn a_message_of_an_unknown_arm_is_skipped() {
-        let bytes = with_unknown_engine_value(&encode_close(), |m| tag_of(m));
+        let bytes = with_unknown_engine_value(&encode_asset(1, &[], None), |m| tag_of(m));
         assert!(is_skipped(&bytes));
     }
 

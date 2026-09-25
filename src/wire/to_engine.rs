@@ -4,7 +4,7 @@
 //! The server starts the session with the players, passes on the input of
 //! each view with its player, and says when a player joins or leaves. A
 //! tick of the server paces the engine for every player, and the server
-//! ends the session with a close.
+//! ends the session with the end of its stream.
 
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -22,7 +22,7 @@ use super::protocol::decode_root;
 
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with
-/// [`crate::event::Event`]. `Close`, `Start` and `Tick` are about the whole
+/// [`crate::event::Event`]. `Start` and `Tick` are about the whole
 /// session.
 #[derive(Clone, Debug)]
 pub enum Message {
@@ -32,7 +32,6 @@ pub enum Message {
         player: NonZeroU32,
         event: InputEvent,
     },
-    Close,
     Start(Roster),
     /// Time for the engine to draw the next frames.
     Tick,
@@ -103,11 +102,6 @@ pub fn write_input(w: &mut impl Write, player: NonZeroU32, ev: &InputEvent) -> i
     write_framed(w, Side::Server, &input_message(player.get(), ev))
 }
 
-/// Write the close of the session.
-pub fn write_close(w: &mut impl Write) -> io::Result<()> {
-    write_framed(w, Side::Server, &close_message())
-}
-
 /// Write a tick, the Vsync of every player.
 pub fn write_tick(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::Server, &tick_message())
@@ -153,7 +147,6 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
                 event,
             }))
         }
-        server_message::Close(_) => Ok(Some(Message::Close)),
         server_message::Start(s) => {
             let members = s?
                 .get_members()?
@@ -191,12 +184,6 @@ fn input_message(player: u32, ev: &InputEvent) -> MessageBuilder<HeapAllocator> 
     let mut event = builder.init_root::<server_message::Builder>().init_event();
     event.set_player(player);
     write_input_event(event.init_event(), ev);
-    builder
-}
-
-fn close_message() -> MessageBuilder<HeapAllocator> {
-    let mut builder = MessageBuilder::new_default();
-    builder.init_root::<server_message::Builder>().init_close();
     builder
 }
 
