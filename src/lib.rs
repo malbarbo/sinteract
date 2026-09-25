@@ -9,6 +9,8 @@
 //! wasm32 too, except the system font lookup of `text`, which the
 //! `native-fonts` feature carries.
 //!
+//! [`asset`] holds the limits on the images of a room.
+//!
 //! [`session`] turns the bytes that a server writes to an engine into the
 //! events of the engine, with the rules of the protocol. It does no I/O of
 //! its own, so it builds on wasm32 too. [`server`] holds the rules of a
@@ -27,6 +29,7 @@
 // A test that fails on an unwrap reports the failure well enough.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::indexing_slicing))]
 
+pub mod asset;
 pub mod display;
 pub mod event;
 mod outline;
