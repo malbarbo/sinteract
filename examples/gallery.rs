@@ -146,7 +146,7 @@ fn print() -> Result<(), String> {
     let mut printer = Printer::new().map_err(|e| e.to_string())?;
     printer
         .assets_mut()
-        .insert_png(BADGE, &badge_png())
+        .insert(BADGE, &badge_png())
         .map_err(|e| e.to_string())?;
     printer.print(&gallery(STILL)).map_err(|e| e.to_string())
 }
@@ -156,7 +156,7 @@ fn png() -> Result<(), String> {
         PixmapRenderer::new(2.0, WIDTH, HEIGHT).ok_or("the pixmap does not allocate")?;
     renderer
         .assets_mut()
-        .insert_png(BADGE, &badge_png())
+        .insert(BADGE, &badge_png())
         .map_err(|e| e.to_string())?;
     let pixmap = renderer
         .render(&gallery(STILL))

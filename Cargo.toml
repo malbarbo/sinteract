@@ -12,7 +12,7 @@ default = ["native-fonts", "render", "terminal", "window"]
 # The pixmap and PDF renderers and the Sixel encoder. Without it, a server
 # that only encodes and decodes messages keeps the scene, the text, the SVG
 # renderer and the codec.
-render = ["dep:tiny-skia", "dep:png", "dep:pdf-writer", "dep:icy_sixel"]
+render = ["dep:tiny-skia", "dep:png", "dep:image", "dep:pdf-writer", "dep:icy_sixel"]
 # Look up a family the embedded fonts do not cover among the fonts installed
 # on the system. Turning it off drops fontdb and leaves only the embedded
 # families. The query needs a font directory, so wasm32 leaves it out even
@@ -49,6 +49,9 @@ icy_sixel = { git = "https://github.com/malbarbo/icy_sixel", rev = "b2dcf9a0e2d1
 # terminal reads a PNG fifty times faster than the raw pixels, which arrive
 # in base64.
 png = { version = "0.18", optional = true }
+# Decodes an asset of any of the formats that asset::image_size reads. All
+# four decoders are pure Rust, so they build on wasm too.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 fontdb = { version = "0.23", optional = true }

@@ -218,12 +218,12 @@ impl super::Display for Terminal {
         self.inbox.sender()
     }
 
-    /// Decode the asset as a PNG.
+    /// Decode the asset as a PNG, a JPEG, a GIF or a WebP.
     fn push_asset(&mut self, id: u32, blob: &[u8]) -> Result<(), PresentError> {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }
-        self.renderer.assets_mut().insert_png(id, blob)?;
+        self.renderer.assets_mut().insert(id, blob)?;
         Ok(())
     }
 

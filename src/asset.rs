@@ -599,6 +599,62 @@ fn webp_size(blob: &[u8]) -> Option<(u32, u32)> {
     }
 }
 
+/// The pixels of the image in `blob`, premultiplied, the way up that the
+/// EXIF of a JPEG gives, or an error if it does not decode or has more
+/// than `max_pixels`. The decoder allocates no more than the size in the
+/// header, which [`Footprint`] counts, and its own buffers stay under four
+/// bytes a pixel of `max_pixels`.
+#[cfg(feature = "render")]
+pub(crate) fn decode(
+    blob: &[u8],
+    max_pixels: u64,
+) -> Result<tiny_skia::Pixmap, Box<dyn std::error::Error + Send + Sync>> {
+    use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
+
+    let head = head(blob).ok_or(AssetError::Unsupported)?;
+    let (width, height) = head.size;
+    if u64::from(width) * u64::from(height) > max_pixels {
+        return Err(AssetError::TooManyPixels { width, height }.into());
+    }
+    let format = match head.format {
+        Format::Png => ImageFormat::Png,
+        Format::Jpeg => ImageFormat::Jpeg,
+        Format::Gif => ImageFormat::Gif,
+        Format::WebP => ImageFormat::WebP,
+    };
+    let mut reader = ImageReader::with_format(std::io::Cursor::new(blob), format);
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(max_pixels * 4);
+    reader.limits(limits);
+    let decoder = reader.into_decoder()?;
+    // The limits bound the buffers of the decoder but not the image, whose
+    // size comes from the decoder. A decoder that reads the header in its
+    // own way must not allocate past what the header gave.
+    let (w, h) = decoder.dimensions();
+    if w > width || h > height {
+        return Err(
+            format!("the image of {w}x{h} is larger than its header of {width}x{height}").into(),
+        );
+    }
+    let mut image = DynamicImage::from_decoder(decoder)?;
+    // A PNG or a WebP may hold an EXIF too, but the size of the asset, and
+    // a browser, turn only a JPEG.
+    if let Some(orientation) = image::metadata::Orientation::from_exif(head.orientation) {
+        image.apply_orientation(orientation);
+    }
+    let size = tiny_skia::IntSize::from_wh(image.width(), image.height())
+        .ok_or("the image has no pixels")?;
+    let mut pixels = image.into_rgba8().into_raw();
+    for [r, g, b, a] in pixels.as_chunks_mut::<4>().0 {
+        let alpha = u16::from(*a);
+        for c in [r, g, b] {
+            *c = u8::try_from((u16::from(*c) * alpha + 127) / 255)
+                .expect("a premultiplied channel is at most its alpha");
+        }
+    }
+    Ok(tiny_skia::Pixmap::from_vec(pixels, size).expect("the pixels fill the size"))
+}
+
 /// The `N` bytes of `blob` from `at`, or `None` past its end.
 fn array<const N: usize>(blob: &[u8], at: usize) -> Option<[u8; N]> {
     blob.get(at..)?.first_chunk().copied()
@@ -1016,6 +1072,63 @@ mod tests {
         assert_eq!(image_size(&extended), Some((640, 480)));
         assert_eq!(image_size(&webp(b"VP8 ", &[0, 0, 0, 0, 0, 0])), None);
         assert_eq!(image_size(&webp(b"ALPH", &[0; 10])), None);
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn each_format_decodes_to_its_pixels() {
+        for format in [
+            image::ImageFormat::Png,
+            image::ImageFormat::Jpeg,
+            image::ImageFormat::Gif,
+            image::ImageFormat::WebP,
+        ] {
+            let pixmap = decode(&red_blue(format), MAX_IMAGE_PIXELS).unwrap();
+            assert_eq!((pixmap.width(), pixmap.height()), (16, 8), "{format:?}");
+            let red = pixmap.pixel(2, 4).unwrap();
+            let blue = pixmap.pixel(13, 4).unwrap();
+            // A JPEG loses a little.
+            assert!(red.red() > 230 && red.blue() < 25, "{format:?} {red:?}");
+            assert!(blue.blue() > 230 && blue.red() < 25, "{format:?} {blue:?}");
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_jpeg_decodes_the_way_up_of_its_exif() {
+        let jpeg = red_blue(image::ImageFormat::Jpeg);
+        let mut turned = jpeg[..2].to_vec();
+        turned.extend_from_slice(&exif(true, 6));
+        turned.extend_from_slice(&jpeg[2..]);
+        let pixmap = decode(&turned, MAX_IMAGE_PIXELS).unwrap();
+        assert_eq!((pixmap.width(), pixmap.height()), (8, 16));
+        // A quarter turn clockwise puts the red left half on top.
+        assert!(pixmap.pixel(4, 2).unwrap().red() > 230);
+        assert!(pixmap.pixel(4, 13).unwrap().blue() > 230);
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn an_image_that_breaks_the_header_or_the_limit_does_not_decode() {
+        let png = red_blue(image::ImageFormat::Png);
+        assert!(decode(&png, 16 * 8).is_ok());
+        assert!(decode(&png, 16 * 8 - 1).is_err());
+        assert!(decode(&png[..png.len() - 8], MAX_IMAGE_PIXELS).is_err());
+        assert!(decode(b"GIF89a", MAX_IMAGE_PIXELS).is_err());
+    }
+
+    /// An image of 16 by 8 in `format`, red on the left half and blue on
+    /// the right.
+    #[cfg(feature = "render")]
+    fn red_blue(format: image::ImageFormat) -> Vec<u8> {
+        let image = image::RgbImage::from_fn(16, 8, |x, _| {
+            image::Rgb(if x < 8 { [255, 0, 0] } else { [0, 0, 255] })
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut out, format)
+            .unwrap();
+        out.into_inner()
     }
 
     /// A JPEG of the start marker and `segments`, up to the scan.

@@ -11,6 +11,7 @@ use tiny_skia::{
     Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
+use crate::asset::MAX_IMAGE_PIXELS;
 use crate::outline::PathSink;
 use crate::renderer::{
     AllocError, AssetError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
@@ -128,10 +129,11 @@ pub struct Assets {
 }
 
 impl Assets {
-    /// Decode the PNG in `blob` and keep it for the bitmaps of `id`, in place
+    /// Decode the image in `blob`, a PNG, a JPEG, a GIF or a WebP of at most
+    /// [`MAX_IMAGE_PIXELS`], and keep it for the bitmaps of `id`, in place
     /// of the image that `id` named before.
-    pub fn insert_png(&mut self, id: u32, blob: &[u8]) -> Result<(), AssetError> {
-        let image = Pixmap::decode_png(blob).map_err(|e| AssetError(Box::new(e)))?;
+    pub fn insert(&mut self, id: u32, blob: &[u8]) -> Result<(), AssetError> {
+        let image = crate::asset::decode(blob, MAX_IMAGE_PIXELS).map_err(AssetError)?;
         self.images.insert(id, image);
         Ok(())
     }
@@ -795,9 +797,9 @@ mod tests {
     }
 
     #[test]
-    fn insert_png_refuses_what_is_not_a_png() {
+    fn insert_refuses_what_is_not_a_png() {
         let mut assets = Assets::default();
-        assert!(assets.insert_png(1, b"GIF89a").is_err());
+        assert!(assets.insert(1, b"GIF89a").is_err());
     }
 
     #[test]
@@ -807,7 +809,7 @@ mod tests {
             .expect("alloc")
             .encode_png()
             .expect("encode");
-        assets.insert_png(1, &png).expect("a PNG decodes");
+        assets.insert(1, &png).expect("a PNG decodes");
         assets.remove(2);
         assert!(assets.images.contains_key(&1));
         assets.remove(1);
@@ -824,7 +826,7 @@ mod tests {
         ]);
         let mut r = PixmapRenderer::new(1.0, 20.0, 10.0).expect("alloc");
         r.assets_mut()
-            .insert_png(1, &png.encode_png().expect("encode"))
+            .insert(1, &png.encode_png().expect("encode"))
             .expect("a PNG decodes");
         let rect = RotatedRect {
             cx: 10.0,
