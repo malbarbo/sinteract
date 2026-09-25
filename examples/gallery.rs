@@ -701,7 +701,7 @@ fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
         h,
         angle_deg: 0.0,
     };
-    s.bitmap(Bitmap::fit(BADGE, BADGE_SIZE.0, BADGE_SIZE.1, mirrored));
+    s.bitmap(Bitmap::fit(BADGE, mirrored));
     let flipped = RotatedRect {
         cx: x + 40.0,
         cy: y + 104.0,
@@ -709,7 +709,7 @@ fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
         h: -h,
         angle_deg: 0.0,
     };
-    s.bitmap(Bitmap::fit(BADGE, BADGE_SIZE.0, BADGE_SIZE.1, flipped));
+    s.bitmap(Bitmap::fit(BADGE, flipped));
 }
 
 fn families(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -749,7 +749,7 @@ fn badge(cx: f32, cy: f32, scale: f32, angle_deg: f32) -> Bitmap {
         h: h as f32 * scale,
         angle_deg,
     };
-    Bitmap::fit(BADGE, w, h, rect)
+    Bitmap::fit(BADGE, rect)
 }
 
 /// A text at its natural size in `fill`, centred on `(cx, cy)` and rotated

@@ -324,11 +324,9 @@ mod tests {
                 underline: true,
                 ..text
             });
-            // 64×64 asset, mirrored horizontally, rotated 90°, centred at (70, 40).
+            // An asset mirrored horizontally, rotated 90°, centred at (70, 40).
             clip.bitmap(Bitmap::fit(
                 7,
-                64,
-                64,
                 RotatedRect {
                     cx: 70.0,
                     cy: 40.0,
@@ -953,8 +951,6 @@ mod tests {
             clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
             clip.bitmap(Bitmap::fit(
                 7,
-                4,
-                4,
                 RotatedRect {
                     cx: 5.0,
                     cy: 5.0,

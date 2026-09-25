@@ -570,9 +570,10 @@ fn all_finite(values: &[f32]) -> bool {
 
 /// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
 /// the wire, and the renderer resolves it to pixels. `transform` maps the
-/// image to the canvas in the convention of [`Text::transform`], with the
-/// origin at the center of the image, as the origin of a [`Text`] is at the
-/// center of its box. [`Bitmap::fit`] computes it for a [`RotatedRect`].
+/// unit square centred on the origin, which the image fills whatever its
+/// size, to the canvas in the convention of [`Text::transform`]. So the
+/// place of a bitmap does not depend on the pixels of its image.
+/// [`Bitmap::fit`] computes it for a [`RotatedRect`].
 #[derive(Clone, Copy, Debug)]
 pub struct Bitmap {
     pub id: u32,
@@ -589,13 +590,11 @@ impl Default for Bitmap {
 }
 
 impl Bitmap {
-    /// The bitmap of the asset `id`, an image of `img_w` by `img_h` pixels,
-    /// drawn into `rect`. An empty image gets a translation to the center of
-    /// `rect`.
-    pub fn fit(id: u32, img_w: u32, img_h: u32, rect: RotatedRect) -> Self {
+    /// The bitmap of the asset `id`, drawn into `rect`.
+    pub fn fit(id: u32, rect: RotatedRect) -> Self {
         Self {
             id,
-            transform: rect.affine(img_w as f32, img_h as f32),
+            transform: rect.affine(1.0, 1.0),
         }
     }
 
@@ -1536,7 +1535,7 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_fit_puts_the_center_of_the_image_at_the_center_of_the_rect() {
+    fn bitmap_fit_puts_the_unit_square_on_the_rect() {
         let rect = RotatedRect {
             cx: 70.0,
             cy: 40.0,
@@ -1544,11 +1543,11 @@ mod tests {
             h: 16.0,
             angle_deg: 90.0,
         };
-        let bitmap = Bitmap::fit(7, 64, 32, rect);
+        let bitmap = Bitmap::fit(7, rect);
         assert_eq!(bitmap.id, 7);
         let m = bitmap.transform;
         assert_eq!(apply_affine(m, 0.0, 0.0), (70.0, 40.0));
-        let (x, y) = apply_affine(m, 32.0, 16.0);
+        let (x, y) = apply_affine(m, 0.5, 0.5);
         assert!(
             (x - 62.0).abs() < 1e-4 && (y - 24.0).abs() < 1e-4,
             "{x}, {y}"
@@ -1643,7 +1642,7 @@ mod tests {
             transform: [1.0, 0.0, 0.0, 1.0, inf, 0.0],
             ..text
         });
-        scene.bitmap(Bitmap::fit(1, 8, 8, a_unit_rect(nan)));
+        scene.bitmap(Bitmap::fit(1, a_unit_rect(nan)));
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
     }
 

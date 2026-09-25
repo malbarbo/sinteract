@@ -143,7 +143,7 @@ pub struct Asset {
 impl Asset {
     /// The bitmap of the image, drawn into `rect`.
     pub fn fit(self, rect: RotatedRect) -> Bitmap {
-        Bitmap::fit(self.id, self.width, self.height, rect)
+        Bitmap::fit(self.id, rect)
     }
 }
 

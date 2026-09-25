@@ -243,9 +243,10 @@ impl Canvas for PixmapRenderer {
         };
         let (w, h) = (image.width() as f32, image.height() as f32);
         let [a, b, c, d, e, f] = bitmap.transform;
-        // The transform puts the center of the image at the origin, and the
+        // The transform takes the unit square centred on the origin, and the
         // pixmap starts at its top left corner.
         let transform = Transform::from_translate(-w / 2.0, -h / 2.0)
+            .post_scale(1.0 / w, 1.0 / h)
             .post_concat(Transform::from_row(a, b, c, d, e, f))
             .post_concat(self.base);
         let reach = SkRect::from_xywh(0.0, 0.0, w, h)
@@ -767,7 +768,7 @@ mod tests {
             h: 10.0,
             angle_deg: 0.0,
         };
-        r.draw_bitmap(&Bitmap::fit(id, 2, 1, rect));
+        r.draw_bitmap(&Bitmap::fit(id, rect));
         r.into_pixmap()
     }
 
