@@ -23,12 +23,10 @@ using Input = import "event.capnp";
 # pipe or the close of a WebSocket, which also covers a writer that
 # crashes.
 
+# The format of the image comes from the first bytes of the blob.
 struct AssetMsg {
     id   @0 :UInt32;
     blob @1 :Data;
-    # MIME hint such as "image/png". A renderer sniffs the blob when it is
-    # empty.
-    mime @2 :Text;
 }
 
 # A repaint for one player or for all of them.

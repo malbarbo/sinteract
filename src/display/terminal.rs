@@ -218,13 +218,8 @@ impl super::Display for Terminal {
         self.inbox.sender()
     }
 
-    /// Decode the asset as a PNG, whatever `mime` says.
-    fn push_asset(
-        &mut self,
-        id: u32,
-        blob: &[u8],
-        _mime: Option<&str>,
-    ) -> Result<(), PresentError> {
+    /// Decode the asset as a PNG.
+    fn push_asset(&mut self, id: u32, blob: &[u8]) -> Result<(), PresentError> {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }

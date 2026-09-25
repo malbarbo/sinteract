@@ -219,4 +219,3 @@ Falta:
 - Um asset vai para todos os jogadores, então um jogador vê no DevTools a
   imagem que só outro jogador desenha. O asset pode ganhar um `player` no
   fim, como o frame.
-- O campo `mime` do asset sobrou, já que uma view só decodifica PNG.

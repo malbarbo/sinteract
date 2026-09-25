@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn a_payload_that_does_not_start_on_a_word_decodes() {
-        let asset = encode_asset(7, &[1, 2, 3], None);
+        let asset = encode_asset(7, &[1, 2, 3]);
         let (buffer, start) = unaligned(&asset);
         let payload = &buffer[start..start + asset.len()];
         assert!(matches!(
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn a_payload_that_is_not_whole_words_is_an_error_on_both_paths() {
-        let asset = encode_asset(7, &[1, 2, 3], None);
+        let asset = encode_asset(7, &[1, 2, 3]);
         let cut = &asset[..asset.len() - 3];
         assert!(to_view::decode(cut).is_err());
         let (buffer, start) = unaligned(cut);

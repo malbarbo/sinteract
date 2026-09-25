@@ -29,7 +29,6 @@ pub enum Message {
     Asset {
         id: u32,
         blob: Vec<u8>,
-        mime: Option<String>,
     },
     /// A frame for `player`, or for every player when `player` is `None`.
     Frame {
@@ -117,8 +116,8 @@ pub fn write_hello(w: &mut impl Write, players: PlayerRange) -> io::Result<()> {
 }
 
 /// Write a bitmap upload as an asset.
-pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8], mime: Option<&str>) -> io::Result<()> {
-    write_framed(w, Side::Engine, &asset_message(id, blob, mime))
+pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
+    write_framed(w, Side::Engine, &asset_message(id, blob))
 }
 
 /// The arm of `payload`, a message with no envelope, without a decode of
@@ -174,18 +173,9 @@ fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Er
     match which {
         engine_message::Asset(a) => {
             let a = a?;
-            let blob = a.get_blob()?.to_vec();
-            let mime = match a.get_mime() {
-                Ok(t) => {
-                    let s = t.to_str()?.to_owned();
-                    if s.is_empty() { None } else { Some(s) }
-                }
-                Err(_) => None,
-            };
             Ok(Some(Message::Asset {
                 id: a.get_id(),
-                blob,
-                mime,
+                blob: a.get_blob()?.to_vec(),
             }))
         }
         engine_message::Frame(f) => {
@@ -229,14 +219,11 @@ fn forget_message(id: u32) -> MessageBuilder<HeapAllocator> {
     builder
 }
 
-fn asset_message(id: u32, blob: &[u8], mime: Option<&str>) -> MessageBuilder<HeapAllocator> {
+fn asset_message(id: u32, blob: &[u8]) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let mut asset = builder.init_root::<engine_message::Builder>().init_asset();
     asset.set_id(id);
     asset.set_blob(blob);
-    if let Some(m) = mime {
-        asset.set_mime(m);
-    }
     builder
 }
 
@@ -260,6 +247,6 @@ pub(crate) fn encode_frame_to(player: Option<NonZeroU32>, scene: &Scene) -> Vec<
 
 /// Encode a bitmap upload as an asset, with no envelope.
 #[cfg(test)]
-pub(crate) fn encode_asset(id: u32, blob: &[u8], mime: Option<&str>) -> Vec<u8> {
-    super::finish(asset_message(id, blob, mime))
+pub(crate) fn encode_asset(id: u32, blob: &[u8]) -> Vec<u8> {
+    super::finish(asset_message(id, blob))
 }

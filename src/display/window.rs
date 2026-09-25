@@ -158,13 +158,8 @@ impl super::Display for Window {
         self.inbox.sender()
     }
 
-    /// Decode the asset as a PNG, whatever `mime` says.
-    fn push_asset(
-        &mut self,
-        id: u32,
-        blob: &[u8],
-        _mime: Option<&str>,
-    ) -> Result<(), PresentError> {
+    /// Decode the asset as a PNG.
+    fn push_asset(&mut self, id: u32, blob: &[u8]) -> Result<(), PresentError> {
         let Some(session) = self.session.as_mut() else {
             return Err(PresentError::Closed);
         };

@@ -231,7 +231,7 @@ fn drain(
             }
         };
         match message {
-            Message::Asset { id, blob, mime } => {
+            Message::Asset { id, blob } => {
                 if cache.contains(id) {
                     eprintln!("view: skipping asset {id}, which is live");
                     continue;
@@ -255,7 +255,7 @@ fn drain(
                 if !cache.contains(id) {
                     continue;
                 }
-                match fr.push_asset(id, &blob, mime.as_deref()) {
+                match fr.push_asset(id, &blob) {
                     Ok(()) => {}
                     // The rest of the frame still draws.
                     Err(e @ PresentError::Asset(_)) => eprintln!("view: {e}"),

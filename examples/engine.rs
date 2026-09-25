@@ -112,7 +112,7 @@ fn draw(game: &Game, assets: &mut Assets, to_view: &mut impl Write) -> io::Resul
     let paddle = assets.image(&game.paddle_png()).map_err(io::Error::other)?;
     let scene = game.scene(paddle);
     for (id, png) in assets.frame(&scene) {
-        to_view::write_asset(to_view, id, &png, None)?;
+        to_view::write_asset(to_view, id, &png)?;
     }
     to_view::write_frame(to_view, None, &scene)
 }

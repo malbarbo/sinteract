@@ -880,7 +880,7 @@ mod tests {
     /// An asset of a PNG of `side` by `side`, with its envelope.
     fn asset_of(id: u32, side: u32) -> Vec<u8> {
         let mut out = Vec::new();
-        to_view::write_asset(&mut out, id, &crate::asset::png_head(side, side), None).unwrap();
+        to_view::write_asset(&mut out, id, &crate::asset::png_head(side, side)).unwrap();
         out
     }
 
@@ -1218,7 +1218,7 @@ mod tests {
     fn a_bad_asset_and_a_forget_of_the_engine_are_errors_and_the_room_goes_on() {
         let (mut room, _) = Room::playing(&["Ana"]);
         let mut stream = asset_of(1, 2049);
-        to_view::write_asset(&mut stream, 2, b"GIF89a", None).unwrap();
+        to_view::write_asset(&mut stream, 2, b"GIF89a").unwrap();
         stream.extend_from_slice(&asset(3));
         stream.extend_from_slice(&asset(3));
         let forget = to_view::encode_forget(3);

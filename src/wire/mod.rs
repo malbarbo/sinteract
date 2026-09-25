@@ -543,7 +543,7 @@ mod tests {
                 player: Some(nonzero(2))
             })
         );
-        let asset = to_view::encode_asset(1, &[0; 4], None);
+        let asset = to_view::encode_asset(1, &[0; 4]);
         assert_eq!(
             to_view::arm(&asset).unwrap(),
             Some(to_view::Arm::Asset {
@@ -552,7 +552,7 @@ mod tests {
                 bytes: 4
             })
         );
-        let png = to_view::encode_asset(2, &crate::asset::png_head(3, 5), None);
+        let png = to_view::encode_asset(2, &crate::asset::png_head(3, 5));
         assert_eq!(
             to_view::arm(&png).unwrap(),
             Some(to_view::Arm::Asset {
@@ -597,7 +597,7 @@ mod tests {
         let ids = to_view::bitmap_ids(&encode_frame(&scene)).unwrap();
         assert_eq!(ids.into_iter().collect::<Vec<_>>(), [3, 9]);
         assert!(to_view::bitmap_ids(&encode_frame(&sample_scene())).is_ok());
-        let asset = encode_asset(1, &[0; 4], None);
+        let asset = encode_asset(1, &[0; 4]);
         assert!(to_view::bitmap_ids(&asset).unwrap().is_empty());
         assert!(to_view::bitmap_ids(&[0; 8]).is_err());
     }
@@ -777,16 +777,11 @@ mod tests {
     #[test]
     fn asset_round_trip_carries_payload() {
         let blob: Vec<u8> = (0u8..=255).collect();
-        let bytes = encode_asset(42, &blob, Some("image/png"));
+        let bytes = encode_asset(42, &blob);
         match decode(&bytes).unwrap() {
-            Message::Asset {
-                id,
-                blob: out,
-                mime,
-            } => {
+            Message::Asset { id, blob: out } => {
                 assert_eq!(id, 42);
                 assert_eq!(out, blob);
-                assert_eq!(mime.as_deref(), Some("image/png"));
             }
             other => panic!("got {other:?}"),
         }
@@ -981,7 +976,7 @@ mod tests {
 
     #[test]
     fn a_message_of_an_unknown_arm_is_skipped() {
-        let bytes = with_unknown_engine_value(&encode_asset(1, &[], None), |m| tag_of(m));
+        let bytes = with_unknown_engine_value(&encode_asset(1, &[]), |m| tag_of(m));
         assert!(is_skipped(&bytes));
     }
 

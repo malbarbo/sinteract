@@ -107,7 +107,7 @@ fn main() -> ExitCode {
 
 fn run(mut display: Box<dyn Display>) -> Result<(), String> {
     display
-        .push_asset(BADGE, &badge_png(), Some("image/png"))
+        .push_asset(BADGE, &badge_png())
         .map_err(|e| e.to_string())?;
     let start = Instant::now();
     let mut frames = 0u32;
