@@ -372,7 +372,7 @@ impl ServerCore {
                     // A room that closed before the hello never starts.
                     Phase::Closing | Phase::Over => {}
                 },
-                Ok(Some(Arm::Asset)) => self.assets.push(payload),
+                Ok(Some(Arm::Asset { .. })) => self.assets.push(payload),
                 Ok(Some(Arm::Forget(_))) => {}
                 Ok(Some(Arm::Frame { player: None })) => {
                     for seat in self.seats.values_mut() {

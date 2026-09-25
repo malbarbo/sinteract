@@ -12,6 +12,7 @@ use std::num::NonZeroU32;
 
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
+use crate::asset::png_size;
 use crate::protocol_capnp::{engine_message, hello};
 use crate::scene::Scene;
 
@@ -44,7 +45,15 @@ pub enum Message {
 /// came.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Arm {
-    Asset,
+    /// An asset, with what the limits of [`crate::asset`] count.
+    Asset {
+        id: u32,
+        /// The size from the header of the PNG, or `None` if the blob is
+        /// not a PNG.
+        size: Option<(u32, u32)>,
+        /// The length of the blob.
+        bytes: usize,
+    },
     /// A frame for `player`, or for every player when `player` is `None`.
     Frame {
         player: Option<NonZeroU32>,
@@ -112,7 +121,7 @@ pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8], mime: Option<&str>)
 }
 
 /// The arm of `payload`, a message with no envelope, without a decode of
-/// the scene of a frame. `None` for an arm from a newer schema. A hello
+/// the scene of a frame or of the image of an asset. `None` for an arm from a newer schema. A hello
 /// whose players are not a [`PlayerRange`] is an error.
 pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
     decode_root::<engine_message::Owned, _>(payload, |msg| {
@@ -120,7 +129,15 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
             return Ok(None);
         };
         Ok(Some(match which {
-            engine_message::Asset(_) => Arm::Asset,
+            engine_message::Asset(a) => {
+                let a = a?;
+                let blob = a.get_blob()?;
+                Arm::Asset {
+                    id: a.get_id(),
+                    size: png_size(blob),
+                    bytes: blob.len(),
+                }
+            }
             engine_message::Frame(f) => Arm::Frame {
                 player: NonZeroU32::new(f?.get_player()),
             },

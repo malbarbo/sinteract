@@ -546,7 +546,23 @@ mod tests {
             })
         );
         let asset = to_view::encode_asset(1, &[0; 4], None);
-        assert_eq!(to_view::arm(&asset).unwrap(), Some(to_view::Arm::Asset));
+        assert_eq!(
+            to_view::arm(&asset).unwrap(),
+            Some(to_view::Arm::Asset {
+                id: 1,
+                size: None,
+                bytes: 4
+            })
+        );
+        let png = to_view::encode_asset(2, &crate::asset::png_head(3, 5), None);
+        assert_eq!(
+            to_view::arm(&png).unwrap(),
+            Some(to_view::Arm::Asset {
+                id: 2,
+                size: Some((3, 5)),
+                bytes: 24
+            })
+        );
         let unknown = with_unknown_engine_value(&asset, |m| tag_of(m));
         assert_eq!(to_view::arm(&unknown).unwrap(), None);
         assert!(to_view::arm(&[0; 8]).is_err());
