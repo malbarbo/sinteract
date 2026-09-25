@@ -578,6 +578,33 @@ mod tests {
     }
 
     #[test]
+    fn the_bitmap_ids_of_a_frame_come_without_a_decode_of_the_scene() {
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.bitmap(Bitmap {
+            id: 3,
+            ..Bitmap::default()
+        });
+        let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
+            .line_to(5.0, 0.0)
+            .line_to(5.0, 5.0)
+            .build();
+        scene.clip(clip).bitmap(Bitmap {
+            id: 9,
+            ..Bitmap::default()
+        });
+        scene.bitmap(Bitmap {
+            id: 3,
+            ..Bitmap::default()
+        });
+        let ids = to_view::bitmap_ids(&encode_frame(&scene)).unwrap();
+        assert_eq!(ids.into_iter().collect::<Vec<_>>(), [3, 9]);
+        assert!(to_view::bitmap_ids(&encode_frame(&sample_scene())).is_ok());
+        let asset = encode_asset(1, &[0; 4], None);
+        assert!(to_view::bitmap_ids(&asset).unwrap().is_empty());
+        assert!(to_view::bitmap_ids(&[0; 8]).is_err());
+    }
+
+    #[test]
     fn a_forget_round_trips_with_its_id() {
         assert!(matches!(
             decode(&to_view::encode_forget(9)).unwrap(),

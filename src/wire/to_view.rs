@@ -7,6 +7,7 @@
 //! stream. The server adds a forget for a view, when the view no longer
 //! needs an asset.
 
+use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
@@ -19,7 +20,7 @@ use crate::scene::Scene;
 use super::Error;
 use super::framing::{Side, write_framed};
 use super::protocol::{ReadError, decode_root, read_next};
-use super::scene::{read_scene, write_scene};
+use super::scene::{read_bitmap_ids, read_scene, write_scene};
 
 /// One message of the engine, one variant per arm of `EngineMessage`. An
 /// asset goes to every player.
@@ -145,6 +146,20 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
             engine_message::Forget(id) => Arm::Forget(id),
         }))
     })
+}
+
+/// The ids of the bitmaps that the frame in `payload`, a message with no
+/// envelope, draws, with no decode of the rest of the scene. A message that
+/// is not a frame draws none.
+pub fn bitmap_ids(payload: &[u8]) -> Result<BTreeSet<u32>, Error> {
+    decode_root::<engine_message::Owned, _>(payload, |msg| {
+        let mut ids = BTreeSet::new();
+        if let Ok(engine_message::Frame(f)) = msg.which() {
+            read_bitmap_ids(f?.get_scene()?, &mut ids)?;
+        }
+        Ok(Some(ids))
+    })
+    .map(|ids| ids.unwrap_or_default())
 }
 
 /// Decode `payload`. `None` for a message of an arm from a newer schema.

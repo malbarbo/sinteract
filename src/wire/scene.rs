@@ -4,6 +4,8 @@
 //! a builder or a reader for the `Scene` struct of the schema, so the same
 //! functions serve a frame inside a session and a scene on its own.
 
+use std::collections::BTreeSet;
+
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LineCap,
     LineJoin, Paint, Path, PathStyle, Rgba, Scene, Segment, SegmentKind, Segments, SpreadMode,
@@ -557,6 +559,35 @@ fn read_element_list(
     list.iter()
         .filter_map(|node| read_element(node).transpose())
         .collect()
+}
+
+/// Add to `ids` the id of each bitmap of the scene in `r`, and in what a
+/// clip holds, with no decode of the rest. An element of an arm from a
+/// newer schema holds no bitmap.
+pub(super) fn read_bitmap_ids(
+    r: wire_scene::Reader<'_>,
+    ids: &mut BTreeSet<u32>,
+) -> Result<(), Error> {
+    if r.has_elements() {
+        add_bitmap_ids(r.get_elements()?, ids)?;
+    }
+    Ok(())
+}
+
+fn add_bitmap_ids(
+    list: capnp::struct_list::Reader<'_, element::Owned>,
+    ids: &mut BTreeSet<u32>,
+) -> Result<(), Error> {
+    for node in list {
+        match node.which() {
+            Ok(element::Which::Bitmap(b)) => {
+                ids.insert(b?.get_id());
+            }
+            Ok(element::Which::Clipped(c)) => add_bitmap_ids(c?.get_elements()?, ids)?,
+            Ok(element::Which::Path(_) | element::Which::Text(_)) | Err(_) => {}
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn read_scene(r: wire_scene::Reader<'_>) -> Result<Scene, Error> {
