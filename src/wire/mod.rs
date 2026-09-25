@@ -11,10 +11,11 @@
 //! The engine runs the program and writes with [`to_view`]. A view draws
 //! the frames, sends the input and writes with [`to_server`]. The server
 //! owns the session, passes the input of the views on and writes with
-//! [`to_engine`]. Each side reads with the module of the side that writes
-//! to it. The generated bindings stay private, and the bytes are the
-//! standard `serialize::write_message` format, so every Cap'n Proto binding
-//! reads them.
+//! [`to_engine`]. A view and the server read with the module of the side
+//! that writes to them, and the engine reads with
+//! [`Session`](crate::session::Session). The generated bindings stay
+//! private, and the bytes are the standard `serialize::write_message`
+//! format, so every Cap'n Proto binding reads them.
 //!
 //! [`framing`] is below all of them. It wraps an encoded message in the
 //! envelope that a byte stream needs to tell one message from the next.
@@ -352,7 +353,7 @@ mod tests {
     }
 
     /// Decode a message of the server of an arm this schema knows, as
-    /// [`to_engine::read`] does after the envelope.
+    /// [`Session`](crate::session::Session) does after the envelope.
     fn decode_event(bytes: &[u8]) -> Result<InputEvent, Error> {
         match to_engine::decode(bytes)?.expect("an arm this schema knows") {
             to_engine::Message::Input { event, .. } => Ok(event),
@@ -360,9 +361,14 @@ mod tests {
         }
     }
 
-    /// Whether [`to_engine::read`] skips the payload in `bytes`.
+    /// Whether [`Session`](crate::session::Session) skips the payload in
+    /// `bytes`.
     fn is_event_skipped(bytes: &[u8]) -> bool {
         matches!(to_engine::decode(bytes), Ok(None))
+    }
+
+    fn read_server(r: &mut &[u8]) -> Result<Option<to_engine::Message>, ReadError> {
+        protocol::read_next(r, framing::Side::Server, to_engine::decode)
     }
 
     fn nonzero(n: u32) -> std::num::NonZeroU32 {
@@ -585,7 +591,7 @@ mod tests {
         to_engine::write_join(&mut stream, nonzero(3), "Caio").unwrap();
         to_engine::write_leave(&mut stream, nonzero(2)).unwrap();
         let mut r = &stream[..];
-        let mut next = || to_engine::read(&mut r).unwrap().expect("a message");
+        let mut next = || read_server(&mut r).unwrap().expect("a message");
         match next() {
             to_engine::Message::Start(got) => assert_eq!(got, roster),
             other => panic!("got {other:?}"),
@@ -600,7 +606,7 @@ mod tests {
             to_engine::Message::Leave { player } => assert_eq!(player, nonzero(2)),
             other => panic!("got {other:?}"),
         }
-        assert!(to_engine::read(&mut r).unwrap().is_none());
+        assert!(read_server(&mut r).unwrap().is_none());
     }
 
     #[test]
@@ -613,15 +619,15 @@ mod tests {
         to_engine::write_close(&mut stream).unwrap();
         let mut r = &stream[..];
         assert!(matches!(
-            to_engine::read(&mut r),
+            read_server(&mut r),
             Ok(Some(to_engine::Message::Tick))
         ));
         assert!(matches!(
-            to_engine::read(&mut r),
+            read_server(&mut r),
             Err(ReadError::Payload(Error::PlayerVsync))
         ));
         assert!(matches!(
-            to_engine::read(&mut r),
+            read_server(&mut r),
             Ok(Some(to_engine::Message::Close))
         ));
     }
@@ -666,12 +672,12 @@ mod tests {
         let mut r = &stream[..];
         for _ in 0..3 {
             assert!(matches!(
-                to_engine::read(&mut r),
+                read_server(&mut r),
                 Err(ReadError::Payload(Error::NoPlayer))
             ));
         }
         assert!(matches!(
-            to_engine::read(&mut r),
+            read_server(&mut r),
             Ok(Some(to_engine::Message::Close))
         ));
     }

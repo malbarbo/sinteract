@@ -7,7 +7,7 @@
 //! ends the session with a close.
 
 use std::collections::HashSet;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::num::NonZeroU32;
 
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
@@ -18,7 +18,7 @@ use crate::protocol_capnp::server_message;
 use super::Error;
 use super::event::{read_input_event, write_input_event};
 use super::framing::{Side, write_framed};
-use super::protocol::{ReadError, decode_root, read_next};
+use super::protocol::decode_root;
 
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with
@@ -88,13 +88,6 @@ impl From<DuplicatePlayer> for Error {
     fn from(e: DuplicatePlayer) -> Self {
         Error::DuplicatePlayer(e)
     }
-}
-
-/// Read the next message of the server. Returns `None` at the end of the
-/// stream. A message or an event of an arm from a newer schema is skipped,
-/// and the next one comes out.
-pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
-    read_next(r, Side::Server, decode)
 }
 
 /// Write the input `ev` of `player`. A Vsync is not written, and the error
