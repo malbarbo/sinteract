@@ -1,8 +1,9 @@
 //! A view for an engine that talks the protocol on fd 3 and fd 4, such as
 //! `examples/engine.rs`. It runs the engine as a subprocess and plays the
-//! part of the server for one player. It starts the session with player 1,
-//! shows the frames in the terminal or in a window, and sends a tick for
-//! each Vsync of the display and the input of the user as player 1. At the
+//! part of the server for one player. At the hello of the engine it starts
+//! the session with player 1, shows the frames in the terminal or in a
+//! window, and sends a tick for each Vsync of the display and the input of
+//! the user as player 1. At the
 //! end it prints to stderr what the frames cost:
 //!
 //! ```text
@@ -52,7 +53,24 @@ fn main() -> ExitCode {
         }
     };
     let mut to_engine = BufWriter::new(to_engine);
-    let from_engine = BufReader::new(from_engine);
+    let mut from_engine = BufReader::new(from_engine);
+    match to_view::read(&mut from_engine) {
+        Ok(Some(Message::Hello(takes))) if takes.contains(1) => {}
+        Ok(Some(Message::Hello(takes))) => {
+            eprintln!(
+                "view: the game takes from {} to {} players, not 1",
+                takes.min(),
+                takes.max()
+            );
+            let _ = child.kill();
+            return ExitCode::FAILURE;
+        }
+        other => {
+            eprintln!("view: the first message of the engine is not a hello: {other:?}");
+            let _ = child.kill();
+            return ExitCode::FAILURE;
+        }
+    }
     let roster = Roster::new(vec![Member {
         player: PLAYER,
         nickname: "view".into(),
@@ -209,8 +227,7 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
                     stats.skipped += 1;
                 }
             }
-            // The engine writes no hello yet.
-            Message::Hello(_) => {}
+            Message::Hello(_) => eprintln!("view: skipping a hello after the first one"),
         }
     }
     if let Some(scene) = last {

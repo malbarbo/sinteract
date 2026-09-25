@@ -1,7 +1,7 @@
 //! An engine that runs a game and talks the protocol on fd 3 and fd 4, for
 //! `examples/view.rs`. Balls bounce, and the arrows of any player move a
-//! paddle. `q` ends the session from this side. The argument is the number
-//! of balls:
+//! paddle, for 1 to 8 players. `q` ends the session from this side. The
+//! argument is the number of balls:
 //!
 //! ```text
 //! cargo build --examples
@@ -22,7 +22,7 @@ use std::time::Instant;
 use sinteract::event::{InputEvent, KeyKind, key};
 use sinteract::scene::{Paint, PathStyle, Scene};
 use sinteract::session::{Session, SessionEvent};
-use sinteract::wire::to_view;
+use sinteract::wire::to_view::{self, PlayerRange};
 
 const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 300.0;
@@ -40,6 +40,11 @@ fn main() -> ExitCode {
     // for the session, and nothing else in this process uses them.
     let (mut from_server, to_view) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
     let mut to_view = BufWriter::new(to_view);
+    let players = PlayerRange::new(1, 8).expect("1 to 8 is a range");
+    if let Err(e) = to_view::write_hello(&mut to_view, players) {
+        eprintln!("engine: {e}");
+        return ExitCode::FAILURE;
+    }
     let mut session = Session::new();
     let mut game = Game::new(balls);
     let mut last = None;
