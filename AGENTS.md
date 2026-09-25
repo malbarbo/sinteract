@@ -14,6 +14,10 @@ the schema structs and know nothing of a session, `wire/protocol.rs` owns
 the `Message` envelope, and `wire/framing.rs` owns the envelope that a byte
 stream needs.
 
+`session.rs` is the engine side of a session. It turns the bytes from the
+server into the events of the engine, with the rules of the protocol. It
+does no I/O of its own, so it builds on wasm32.
+
 `display/` shows a scene and reads the input back. `driver.rs` holds the
 sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind
 `wait_event`, `terminal.rs` and `window.rs` are the two displays, and
