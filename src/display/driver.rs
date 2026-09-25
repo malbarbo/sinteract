@@ -64,6 +64,12 @@ pub trait Display: sealed::Sealed {
     /// [`present`](Display::present) of a scene that names `id`.
     fn push_asset(&mut self, id: u32, blob: &[u8], mime: Option<&str>) -> Result<(), PresentError>;
 
+    /// Drop the bitmap of `id`. Call it after the
+    /// [`present`](Display::present) of a scene that no longer names `id`,
+    /// since a resize draws the last scene again. An `id` with no bitmap, or
+    /// a display after [`close`](Display::close), does nothing.
+    fn forget_asset(&mut self, id: u32);
+
     /// End the session. A second call does nothing, and drop calls it.
     fn close(&mut self);
 }

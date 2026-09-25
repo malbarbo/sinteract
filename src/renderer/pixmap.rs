@@ -135,6 +135,11 @@ impl Assets {
         self.images.insert(id, image);
         Ok(())
     }
+
+    /// Drop the image of `id`, if there is one.
+    pub fn remove(&mut self, id: u32) {
+        self.images.remove(&id);
+    }
 }
 
 impl Canvas for PixmapRenderer {
@@ -727,6 +732,20 @@ mod tests {
     fn insert_png_refuses_what_is_not_a_png() {
         let mut assets = Assets::default();
         assert!(assets.insert_png(1, b"GIF89a").is_err());
+    }
+
+    #[test]
+    fn remove_drops_the_image_of_an_id() {
+        let mut assets = Assets::default();
+        let png = Pixmap::new(1, 1)
+            .expect("alloc")
+            .encode_png()
+            .expect("encode");
+        assets.insert_png(1, &png).expect("a PNG decodes");
+        assets.remove(2);
+        assert!(assets.images.contains_key(&1));
+        assets.remove(1);
+        assert!(assets.images.is_empty());
     }
 
     /// Keep a PNG of two pixels, red on the left and blue on the right, as

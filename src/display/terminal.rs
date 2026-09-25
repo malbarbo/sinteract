@@ -232,6 +232,10 @@ impl super::Display for Terminal {
         Ok(())
     }
 
+    fn forget_asset(&mut self, id: u32) {
+        self.renderer.assets_mut().remove(id);
+    }
+
     /// Stop the reader thread, wait for the frame that the writer holds,
     /// and leave the alt screen and raw mode.
     fn close(&mut self) {

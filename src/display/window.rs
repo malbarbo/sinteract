@@ -172,6 +172,12 @@ impl super::Display for Window {
         Ok(())
     }
 
+    fn forget_asset(&mut self, id: u32) {
+        if let Some(session) = self.session.as_mut() {
+            session.renderer.assets_mut().remove(id);
+        }
+    }
+
     /// Destroy the window and give the event loop back.
     fn close(&mut self) {
         let Some(Session {
