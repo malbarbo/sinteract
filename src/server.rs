@@ -9,7 +9,10 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 
+use crate::event::InputEvent;
+use crate::wire;
 use crate::wire::to_engine::{self, Member, Roster};
+use crate::wire::to_server;
 
 /// The rules of a room, from the players and the timer of the host to the
 /// messages for the engine.
@@ -39,11 +42,44 @@ impl Conn {
     }
 }
 
+/// Why [`ServerCore::from_view`] dropped a message of a view.
+#[derive(Debug)]
+pub enum ViewError {
+    /// The message has more bytes than [`MAX_VIEW_BYTES`].
+    TooLong(usize),
+    /// The message does not decode.
+    Payload(wire::Error),
+}
+
+impl std::fmt::Display for ViewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ViewError::TooLong(len) => {
+                write!(f, "message of {len} bytes exceeds cap {MAX_VIEW_BYTES}")
+            }
+            ViewError::Payload(e) => write!(f, "message does not decode: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ViewError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ViewError::Payload(e) => Some(e),
+            ViewError::TooLong(_) => None,
+        }
+    }
+}
+
+/// The cap on a message of a view. Input is small, and the cap keeps what
+/// the core writes for the engine under the cap of the framing.
+pub const MAX_VIEW_BYTES: usize = 64 * 1024;
+
 /// The cap on a nickname, in bytes of UTF-8.
 const MAX_NICKNAME_BYTES: usize = 64;
 
 /// A message for the engine is far below the cap of the framing, since the
-/// nicknames have a cap.
+/// nicknames and the messages of the views have a cap.
 const UNDER_THE_CAP: &str = "a message for the engine is under the cap of the framing";
 
 impl ServerCore {
@@ -70,7 +106,13 @@ impl ServerCore {
         if self.phase == Phase::Playing {
             to_engine::write_join(&mut self.to_engine, player, &nickname).expect(UNDER_THE_CAP);
         }
-        self.seats.insert(player, Seat { nickname });
+        self.seats.insert(
+            player,
+            Seat {
+                nickname,
+                lobby_size: None,
+            },
+        );
         Conn(player)
     }
 
@@ -85,7 +127,8 @@ impl ServerCore {
 
     /// Returns `true` if the room goes from the lobby to the game, `false`
     /// otherwise, as for a second click on start. The engine gets a start
-    /// with the players of the seats.
+    /// with the players of the seats, then the last resize of each view in
+    /// the lobby.
     pub fn start(&mut self) -> bool {
         match self.phase {
             Phase::Lobby => {}
@@ -101,6 +144,12 @@ impl ServerCore {
             .collect();
         let roster = Roster::new(members).expect("a map has each player once");
         to_engine::write_start(&mut self.to_engine, &roster).expect(UNDER_THE_CAP);
+        for (&player, seat) in &mut self.seats {
+            if let Some((width, height)) = seat.lobby_size.take() {
+                let event = InputEvent::Resize { width, height };
+                to_engine::write_input(&mut self.to_engine, player, &event).expect(UNDER_THE_CAP);
+            }
+        }
         self.phase = Phase::Playing;
         true
     }
@@ -124,6 +173,47 @@ impl ServerCore {
         }
     }
 
+    /// Take a message that the view of `conn` sent with no envelope, such as
+    /// one that came over a WebSocket. An event goes to [`Self::input`],
+    /// and the close of the view to [`Self::leave`]. A message of an arm
+    /// from a newer schema is dropped.
+    pub fn from_view(&mut self, conn: Conn, payload: &[u8]) -> Result<(), ViewError> {
+        if payload.len() > MAX_VIEW_BYTES {
+            return Err(ViewError::TooLong(payload.len()));
+        }
+        match to_server::decode(payload).map_err(ViewError::Payload)? {
+            Some(to_server::Message::Input(event)) => self.input(conn, &event),
+            Some(to_server::Message::Close) => self.leave(conn),
+            None => {}
+        }
+        Ok(())
+    }
+
+    /// Pass `event` of the view of `conn` to the engine, in the game. The
+    /// tick paces the engine, so a Vsync of the view is dropped. In the
+    /// lobby the engine has not started, and the room keeps only the size
+    /// of the last resize, for the start. The input of a player who left is
+    /// dropped.
+    pub fn input(&mut self, conn: Conn, event: &InputEvent) {
+        let Some(seat) = self.seats.get_mut(&conn.0) else {
+            return;
+        };
+        if matches!(event, InputEvent::Vsync) {
+            return;
+        }
+        match self.phase {
+            Phase::Lobby => {
+                if let InputEvent::Resize { width, height } = *event {
+                    seat.lobby_size = Some((width, height));
+                }
+            }
+            Phase::Playing => {
+                to_engine::write_input(&mut self.to_engine, conn.0, event).expect(UNDER_THE_CAP);
+            }
+            Phase::Closing => {}
+        }
+    }
+
     /// Move the messages for the engine to the end of `buf`. A host that
     /// cannot write all of them keeps the rest in `buf` for the next write.
     pub fn take_engine_output(&mut self, buf: &mut Vec<u8>) {
@@ -141,6 +231,8 @@ impl Default for ServerCore {
 #[derive(Debug)]
 struct Seat {
     nickname: String,
+    /// The size of the last resize in the lobby, for the start.
+    lobby_size: Option<(f32, f32)>,
 }
 
 /// Whether the room waits for its start, plays, or told the engine to end.
@@ -167,7 +259,9 @@ fn clean_nickname(nickname: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::{KeyEvent, KeyKind, Modifiers};
     use crate::session::{Session, SessionEvent};
+    use crate::wire::framing::HEADER_BYTES;
 
     /// A core with a session that reads what the core writes, which also
     /// checks that the core writes nothing that a session rejects.
@@ -201,7 +295,15 @@ mod tests {
                         format!("start {}", members.join(", "))
                     }
                     SessionEvent::Vsync => "tick".into(),
-                    SessionEvent::Input { player, event } => format!("{player} {event:?}"),
+                    SessionEvent::Input { player, event } => match event {
+                        InputEvent::Key(k) => format!("{player} key {}", k.key),
+                        InputEvent::Resize { width, height } => {
+                            format!("{player} resize {width}x{height}")
+                        }
+                        InputEvent::Mouse(_) | InputEvent::Vsync | InputEvent::Pad(_) => {
+                            format!("{player} {event:?}")
+                        }
+                    },
                     SessionEvent::Join { player, nickname } => format!("join {player} {nickname}"),
                     SessionEvent::Leave { player } => format!("leave {player}"),
                     SessionEvent::Error(e) => format!("error {e}"),
@@ -210,6 +312,26 @@ mod tests {
                 })
                 .collect()
         }
+    }
+
+    fn key(name: &str) -> InputEvent {
+        InputEvent::Key(KeyEvent {
+            kind: KeyKind::Press,
+            key: name.into(),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        })
+    }
+
+    fn resize(width: f32, height: f32) -> InputEvent {
+        InputEvent::Resize { width, height }
+    }
+
+    /// `event` as a view sends it over a WebSocket.
+    fn from_view(event: &InputEvent) -> Vec<u8> {
+        let mut out = Vec::new();
+        to_server::write_input(&mut out, event).unwrap();
+        out.split_off(HEADER_BYTES)
     }
 
     #[test]
@@ -286,5 +408,71 @@ mod tests {
         let mut again = Vec::new();
         core.take_engine_output(&mut again);
         assert!(again.is_empty());
+    }
+
+    #[test]
+    fn the_input_of_a_view_goes_with_its_player() {
+        let mut room = Room::new();
+        let ana = room.core.join("Ana");
+        let beto = room.core.join("Beto");
+        room.core.start();
+        room.core.from_view(beto, &from_view(&key("b"))).unwrap();
+        room.core.input(ana, &key("a"));
+        room.core.input(ana, &InputEvent::Vsync);
+        assert_eq!(room.events(), ["start 1 Ana, 2 Beto", "2 key b", "1 key a"]);
+    }
+
+    #[test]
+    fn the_lobby_keeps_the_last_resize_for_the_start() {
+        let mut room = Room::new();
+        let ana = room.core.join("Ana");
+        let beto = room.core.join("Beto");
+        room.core.input(ana, &resize(10.0, 10.0));
+        room.core.input(ana, &key("a"));
+        room.core.input(ana, &resize(20.0, 30.0));
+        room.core.input(beto, &key("b"));
+        room.core.start();
+        assert_eq!(room.events(), ["start 1 Ana, 2 Beto", "1 resize 20x30"]);
+        room.core.input(ana, &resize(40.0, 50.0));
+        assert_eq!(room.events(), ["1 resize 40x50"]);
+    }
+
+    #[test]
+    fn the_close_of_a_view_is_a_leave() {
+        let mut room = Room::new();
+        let ana = room.core.join("Ana");
+        room.core.start();
+        room.core
+            .from_view(ana, &to_server::encode_close())
+            .unwrap();
+        room.core.input(ana, &key("a"));
+        room.core.close();
+        room.core.input(ana, &key("a"));
+        assert_eq!(room.events(), ["start 1 Ana", "leave 1", "close"]);
+    }
+
+    #[test]
+    fn a_message_of_a_view_that_is_too_long_or_does_not_decode_is_an_error() {
+        let mut core = ServerCore::new();
+        let ana = core.join("Ana");
+        let long = vec![0; MAX_VIEW_BYTES + 1];
+        assert!(matches!(
+            core.from_view(ana, &long),
+            Err(ViewError::TooLong(_))
+        ));
+        assert!(matches!(
+            core.from_view(ana, b"junk"),
+            Err(ViewError::Payload(_))
+        ));
+    }
+
+    #[test]
+    fn a_message_of_an_unknown_arm_is_dropped() {
+        let mut room = Room::new();
+        let ana = room.core.join("Ana");
+        room.core.start();
+        let unknown = wire::with_unknown_view_value(&from_view(&key("a")), |m| wire::tag_of(m));
+        room.core.from_view(ana, &unknown).unwrap();
+        assert_eq!(room.events(), ["start 1 Ana"]);
     }
 }
