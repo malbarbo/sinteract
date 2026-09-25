@@ -27,7 +27,10 @@ use std::io;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use crate::event::InputEvent;
+use crate::event::{
+    InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
+    PadButton, PadEvent,
+};
 use crate::wire;
 use crate::wire::framing::{self, Side};
 use crate::wire::to_engine::{self, Member, Roster};
@@ -189,6 +192,7 @@ impl ServerCore {
                 nickname: clean_nickname(nickname),
                 generation: 0,
                 lobby_size: None,
+                held: Held::default(),
                 frame: self.frame_for_all.clone(),
                 frame_sent: false,
                 assets_sent: 0,
@@ -202,7 +206,8 @@ impl ServerCore {
 
     /// Say that the WebSocket of `conn` closed. In the lobby the player
     /// loses the seat. After the start the seat stays, and its input and
-    /// frames stop until a reconnect. A second call, and a call for an old
+    /// frames stop until a reconnect. The engine gets an `Up` for each key
+    /// and button that the view held. A second call, and a call for an old
     /// connection of the seat, do nothing.
     pub fn leave(&mut self, conn: Conn) {
         if seat_of(&mut self.seats, conn).is_none() {
@@ -211,6 +216,7 @@ impl ServerCore {
         if self.phase == Phase::Lobby {
             self.seats.remove(&conn.player);
         } else {
+            self.release_held(conn.player);
             new_generation(&mut self.seats, conn.player);
         }
     }
@@ -218,11 +224,14 @@ impl ServerCore {
     /// A new connection to the seat of `player`, or `None` if the room has
     /// no such seat or is over. The host checks the token of the player
     /// first. The old connection of the seat gets [`Next::Gone`], and the
-    /// new one gets every asset and the newest frame again.
+    /// new one gets every asset and the newest frame again. The engine gets
+    /// an `Up` for each key and button that the old view held, since the
+    /// old view may never have left.
     pub fn reconnect(&mut self, player: NonZeroU32) -> Option<Conn> {
         if self.phase == Phase::Over {
             return None;
         }
+        self.release_held(player);
         let seat = new_generation(&mut self.seats, player)?;
         seat.assets_sent = 0;
         seat.frame_sent = false;
@@ -319,6 +328,7 @@ impl ServerCore {
                 }
             }
             Phase::Playing => {
+                seat.held.track(event);
                 to_engine::write_input(&mut self.to_engine, conn.player, event)
                     .expect(UNDER_THE_CAP);
             }
@@ -419,6 +429,21 @@ impl ServerCore {
         buf.append(&mut self.to_engine);
     }
 
+    /// Send the engine an `Up` for each key and button that the view of
+    /// `player` holds, since a view that drops never sends them.
+    fn release_held(&mut self, player: NonZeroU32) {
+        let Some(seat) = self.seats.get_mut(&player) else {
+            return;
+        };
+        let released = seat.held.release();
+        if self.phase != Phase::Playing {
+            return;
+        }
+        for event in &released {
+            to_engine::write_input(&mut self.to_engine, player, event).expect(UNDER_THE_CAP);
+        }
+    }
+
     /// End the room. The engine no longer reads, so the messages for it
     /// are dropped.
     fn end(&mut self) {
@@ -443,12 +468,80 @@ struct Seat {
     generation: u32,
     /// The size of the last resize in the lobby, for the start.
     lobby_size: Option<(f32, f32)>,
+    /// What the view holds down, as the engine saw it.
+    held: Held,
     /// The newest frame for the player, kept for a reconnect.
     frame: Option<Arc<[u8]>>,
     /// Whether the view got `frame`.
     frame_sent: bool,
     /// How many of the assets of the room the view got.
     assets_sent: usize,
+}
+
+/// The keys and the buttons that a view holds down.
+#[derive(Debug, Default)]
+struct Held {
+    /// Each key by the name from its `Down`. An `Up` with another name, as
+    /// after a Shift, leaves the key here, and the engine later gets one
+    /// `Up` too many, which does no harm. A missing `Up` does.
+    keys: Vec<String>,
+    /// The last position of the mouse and the buttons that it holds.
+    mouse: (f32, f32, MouseButtons),
+    pad: Vec<PadButton>,
+}
+
+impl Held {
+    fn track(&mut self, event: &InputEvent) {
+        match event {
+            InputEvent::Key(k) => match k.kind {
+                KeyKind::Down if !self.keys.contains(&k.key) => self.keys.push(k.key.clone()),
+                KeyKind::Up => self.keys.retain(|key| *key != k.key),
+                KeyKind::Down | KeyKind::Press => {}
+            },
+            InputEvent::Mouse(m) => self.mouse = (m.x, m.y, m.buttons),
+            InputEvent::Pad(PadEvent::Down(b)) if !self.pad.contains(b) => self.pad.push(*b),
+            InputEvent::Pad(PadEvent::Up(b)) => self.pad.retain(|p| p != b),
+            InputEvent::Pad(_) | InputEvent::Resize { .. } | InputEvent::Vsync => {}
+        }
+    }
+
+    /// An `Up` for each key and button, which leaves nothing held.
+    fn release(&mut self) -> Vec<InputEvent> {
+        let mut ups: Vec<InputEvent> = self
+            .keys
+            .drain(..)
+            .map(|key| {
+                InputEvent::Key(KeyEvent {
+                    kind: KeyKind::Up,
+                    key,
+                    modifiers: Modifiers::default(),
+                    repeat: false,
+                })
+            })
+            .collect();
+        let (x, y, mut buttons) = self.mouse;
+        for button in [
+            MouseButton::Left,
+            MouseButton::Middle,
+            MouseButton::Right,
+            MouseButton::Back,
+            MouseButton::Forward,
+        ] {
+            if buttons.contains(button) {
+                buttons = buttons.without(button);
+                ups.push(InputEvent::Mouse(MouseEvent {
+                    action: MouseAction::Up(button),
+                    x,
+                    y,
+                    modifiers: Modifiers::default(),
+                    buttons,
+                }));
+            }
+        }
+        self.mouse.2 = buttons;
+        ups.extend(self.pad.drain(..).map(|b| InputEvent::Pad(PadEvent::Up(b))));
+        ups
+    }
 }
 
 /// Whether the room waits for its start, plays, told the engine to end, or
@@ -495,7 +588,6 @@ fn clean_nickname(nickname: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{KeyEvent, KeyKind, Modifiers};
     use crate::scene::Scene;
     use crate::session::{Session, SessionEvent};
 
@@ -532,7 +624,18 @@ mod tests {
                     }
                     SessionEvent::Vsync => "tick".into(),
                     SessionEvent::Input { player, event } => match event {
+                        InputEvent::Key(k) if k.kind == KeyKind::Up => {
+                            format!("{player} up {}", k.key)
+                        }
                         InputEvent::Key(k) => format!("{player} key {}", k.key),
+                        InputEvent::Mouse(MouseEvent {
+                            action: MouseAction::Up(b),
+                            x,
+                            y,
+                            buttons,
+                            ..
+                        }) => format!("{player} mouse up {b:?} {x},{y} {buttons:?}"),
+                        InputEvent::Pad(PadEvent::Up(b)) => format!("{player} pad up {b:?}"),
                         InputEvent::Resize { width, height } => {
                             format!("{player} resize {width}x{height}")
                         }
@@ -546,6 +649,25 @@ mod tests {
                 })
                 .collect()
         }
+    }
+
+    fn key_as(kind: KeyKind, name: &str) -> InputEvent {
+        InputEvent::Key(KeyEvent {
+            kind,
+            key: name.into(),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        })
+    }
+
+    fn mouse(action: MouseAction, x: f32, buttons: MouseButtons) -> InputEvent {
+        InputEvent::Mouse(MouseEvent {
+            action,
+            x,
+            y: 0.0,
+            modifiers: Modifiers::default(),
+            buttons,
+        })
     }
 
     fn key(name: &str) -> InputEvent {
@@ -852,6 +974,57 @@ mod tests {
             };
             assert_eq!(room.events(), expected);
         }
+    }
+
+    #[test]
+    fn a_leave_in_the_game_releases_what_the_view_held() {
+        let mut room = Room::new();
+        let ana = room.core.join("Ana").unwrap();
+        room.core.start();
+        let left = MouseButtons::default().with(MouseButton::Left);
+        let both = left.with(MouseButton::Right);
+        for event in [
+            key_as(KeyKind::Down, "a"),
+            key_as(KeyKind::Down, "ArrowRight"),
+            key_as(KeyKind::Up, "a"),
+            mouse(MouseAction::Down(MouseButton::Left), 1.0, left),
+            mouse(MouseAction::Down(MouseButton::Right), 2.0, both),
+            mouse(MouseAction::Move, 3.0, both),
+            InputEvent::Pad(PadEvent::Down(PadButton::A)),
+            InputEvent::Pad(PadEvent::Down(PadButton::B)),
+            InputEvent::Pad(PadEvent::Up(PadButton::B)),
+        ] {
+            room.core.input(ana, &event);
+        }
+        room.events();
+        room.core.leave(ana);
+        assert_eq!(
+            room.events(),
+            [
+                "1 up ArrowRight",
+                format!(
+                    "1 mouse up Left 3,0 {:?}",
+                    MouseButtons::default().with(MouseButton::Right)
+                )
+                .as_str(),
+                format!("1 mouse up Right 3,0 {:?}", MouseButtons::default()).as_str(),
+                "1 pad up A",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reconnect_releases_what_the_old_view_held_once() {
+        let mut room = Room::new();
+        let ana = room.core.join("Ana").unwrap();
+        room.core.start();
+        room.core.input(ana, &key_as(KeyKind::Down, "a"));
+        room.events();
+        let again = room.core.reconnect(ana.player()).unwrap();
+        assert_eq!(room.events(), ["1 up a"]);
+        room.core.leave(ana);
+        room.core.leave(again);
+        assert!(room.events().is_empty());
     }
 
     #[test]

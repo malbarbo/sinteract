@@ -72,6 +72,9 @@ Regras da sessão com servidor:
   token de volta recebe o mesmo player, todos os assets e o frame mais
   novo. A conexão antiga, se ainda parece viva, não recebe nem muda mais
   nada;
+- quando uma view cai ou é trocada por outra, o servidor manda à engine
+  um `Up` para cada tecla e botão que ela segurava, como a janela faz ao
+  perder o foco;
 - os `id`s dos assets valem para a partida toda, e o servidor guarda todos
   para quem entrar depois;
 - enquanto o WebSocket de um jogador está ocupado, o servidor guarda só o
