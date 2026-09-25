@@ -67,6 +67,11 @@ Regras da sessão com servidor:
   do pipe ou o close do WebSocket, que também cobre quem quebra. Para
   encerrar a partida, o servidor fecha o fd 3 da engine. Um jogador cujo
   WebSocket fecha continua na partida, parado, e a engine não fica sabendo;
+- quem cai volta ao mesmo lugar. No `join`, o servidor dá ao jogador um
+  token, que a página guarda no `sessionStorage`, e uma conexão que traz o
+  token de volta recebe o mesmo player, todos os assets e o frame mais
+  novo. A conexão antiga, se ainda parece viva, não recebe nem muda mais
+  nada;
 - os `id`s dos assets valem para a partida toda, e o servidor guarda todos
   para quem entrar depois;
 - enquanto o WebSocket de um jogador está ocupado, o servidor guarda só o

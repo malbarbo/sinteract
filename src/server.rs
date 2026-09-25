@@ -8,12 +8,17 @@
 //! engine to [`ServerCore::from_engine`], and asks
 //! [`ServerCore::next_for`] what to send to each view.
 //!
+//! A player whose view drops comes back with [`ServerCore::reconnect`]. The
+//! host gives each player a token of its own at the join, such as 16
+//! random bytes that the page keeps in its `sessionStorage`, and calls
+//! `reconnect` for a connection that brings the token back.
+//!
 //! A host with tasks wakes the task that writes to the engine with a
 //! `notify_one` after each call that leaves output, since a
 //! `notify_waiters` is lost when the task is not waiting yet. It wakes the
 //! tasks of the views with a `watch` of the whole room after
-//! `from_engine`, `engine_ended` and `leave`, and each task of a view
-//! subscribes before its first `next_for`. The page runs on one
+//! `from_engine`, `engine_ended`, `leave` and `reconnect`, and each task of
+//! a view subscribes before its first `next_for`. The page runs on one
 //! thread, and after each call it sends what waits for every view and for
 //! the engine.
 
@@ -54,14 +59,19 @@ pub struct ServerCore {
     frame_for_all: Option<Arc<[u8]>>,
 }
 
-/// The connection of a view to the seat of a player.
+/// The connection of a view to the seat of a player. A reconnect gives the
+/// seat a new generation, so the old connection of the seat, which may
+/// still look alive to the host, gets nothing and changes nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Conn(NonZeroU32);
+pub struct Conn {
+    player: NonZeroU32,
+    generation: u32,
+}
 
 impl Conn {
     /// The player of the seat.
     pub fn player(self) -> NonZeroU32 {
-        self.0
+        self.player
     }
 }
 
@@ -177,24 +187,49 @@ impl ServerCore {
             player,
             Seat {
                 nickname: clean_nickname(nickname),
-                connected: true,
+                generation: 0,
                 lobby_size: None,
                 frame: self.frame_for_all.clone(),
+                frame_sent: false,
                 assets_sent: 0,
             },
         );
-        Some(Conn(player))
+        Some(Conn {
+            player,
+            generation: 0,
+        })
     }
 
     /// Say that the WebSocket of `conn` closed. In the lobby the player
     /// loses the seat. After the start the seat stays, and its input and
-    /// frames stop. A second call does nothing.
+    /// frames stop until a reconnect. A second call, and a call for an old
+    /// connection of the seat, do nothing.
     pub fn leave(&mut self, conn: Conn) {
-        if self.phase == Phase::Lobby {
-            self.seats.remove(&conn.0);
-        } else if let Some(seat) = self.seats.get_mut(&conn.0) {
-            seat.connected = false;
+        if seat_of(&mut self.seats, conn).is_none() {
+            return;
         }
+        if self.phase == Phase::Lobby {
+            self.seats.remove(&conn.player);
+        } else {
+            new_generation(&mut self.seats, conn.player);
+        }
+    }
+
+    /// A new connection to the seat of `player`, or `None` if the room has
+    /// no such seat or is over. The host checks the token of the player
+    /// first. The old connection of the seat gets [`Next::Gone`], and the
+    /// new one gets every asset and the newest frame again.
+    pub fn reconnect(&mut self, player: NonZeroU32) -> Option<Conn> {
+        if self.phase == Phase::Over {
+            return None;
+        }
+        let seat = new_generation(&mut self.seats, player)?;
+        seat.assets_sent = 0;
+        seat.frame_sent = false;
+        Some(Conn {
+            player,
+            generation: seat.generation,
+        })
     }
 
     /// Returns `true` if the room goes from the lobby to the game, `false`
@@ -271,7 +306,7 @@ impl ServerCore {
     /// of the last resize, for the start. The input of a player who left is
     /// dropped.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
-        let Some(seat) = self.seats.get_mut(&conn.0).filter(|s| s.connected) else {
+        let Some(seat) = seat_of(&mut self.seats, conn) else {
             return;
         };
         if matches!(event, InputEvent::Vsync) {
@@ -284,7 +319,8 @@ impl ServerCore {
                 }
             }
             Phase::Playing => {
-                to_engine::write_input(&mut self.to_engine, conn.0, event).expect(UNDER_THE_CAP);
+                to_engine::write_input(&mut self.to_engine, conn.player, event)
+                    .expect(UNDER_THE_CAP);
             }
             Phase::Closing | Phase::Over => {}
         }
@@ -321,6 +357,7 @@ impl ServerCore {
                 Ok(Some(Arm::Frame { player: None })) => {
                     for seat in self.seats.values_mut() {
                         seat.frame = Some(payload.clone());
+                        seat.frame_sent = false;
                     }
                     self.frame_for_all = Some(payload);
                 }
@@ -329,6 +366,7 @@ impl ServerCore {
                 })) => {
                     if let Some(seat) = self.seats.get_mut(&player) {
                         seat.frame = Some(payload);
+                        seat.frame_sent = false;
                     }
                 }
                 Ok(None) => {}
@@ -358,15 +396,16 @@ impl ServerCore {
     /// [`Next::Gone`] after its last frame, as does the view of a player
     /// who left.
     pub fn next_for(&mut self, conn: Conn) -> Next {
-        let Some(seat) = self.seats.get_mut(&conn.0).filter(|s| s.connected) else {
+        let Some(seat) = seat_of(&mut self.seats, conn) else {
             return Next::Gone;
         };
         if let Some(asset) = self.assets.get(seat.assets_sent) {
             seat.assets_sent += 1;
             return Next::Send(asset.clone());
         }
-        if let Some(frame) = seat.frame.take() {
-            return Next::Send(frame);
+        if let Some(frame) = seat.frame.as_ref().filter(|_| !seat.frame_sent) {
+            seat.frame_sent = true;
+            return Next::Send(frame.clone());
         }
         match self.phase {
             Phase::Lobby | Phase::Playing | Phase::Closing => Next::Idle,
@@ -399,12 +438,15 @@ impl Default for ServerCore {
 #[derive(Debug)]
 struct Seat {
     nickname: String,
-    /// Whether the view of the seat is still there.
-    connected: bool,
+    /// The generation of the connection that the seat takes. A leave and a
+    /// reconnect move it on, so no older connection matches.
+    generation: u32,
     /// The size of the last resize in the lobby, for the start.
     lobby_size: Option<(f32, f32)>,
-    /// The newest frame for the view that the view has not got yet.
+    /// The newest frame for the player, kept for a reconnect.
     frame: Option<Arc<[u8]>>,
+    /// Whether the view got `frame`.
+    frame_sent: bool,
     /// How many of the assets of the room the view got.
     assets_sent: usize,
 }
@@ -417,6 +459,24 @@ enum Phase {
     Playing,
     Closing,
     Over,
+}
+
+/// The seat of `conn`, if `conn` is the connection that the seat takes.
+fn seat_of(seats: &mut BTreeMap<NonZeroU32, Seat>, conn: Conn) -> Option<&mut Seat> {
+    seats
+        .get_mut(&conn.player)
+        .filter(|seat| seat.generation == conn.generation)
+}
+
+/// Move the seat of `player` to a new generation, and return the seat, or
+/// `None` if the room has no such seat.
+fn new_generation(seats: &mut BTreeMap<NonZeroU32, Seat>, player: NonZeroU32) -> Option<&mut Seat> {
+    let seat = seats.get_mut(&player)?;
+    seat.generation = seat
+        .generation
+        .checked_add(1)
+        .expect("a seat has fewer than 2^32 connections");
+    Some(seat)
 }
 
 /// `nickname` without its control characters, cut at a character to
@@ -749,6 +809,61 @@ mod tests {
         core.leave(ana);
         assert!(core.from_engine(&frame(1, 1.0)).is_empty());
         assert_eq!(sent(&mut core, ana), ["gone"]);
+    }
+
+    #[test]
+    fn a_view_that_reconnects_gets_every_asset_and_the_newest_frame_again() {
+        let mut core = ServerCore::new();
+        let ana = core.join("Ana").unwrap();
+        core.start();
+        let mut stream = asset(1);
+        stream.extend_from_slice(&frame(1, 2.0));
+        core.from_engine(&stream);
+        assert_eq!(sent(&mut core, ana), ["asset 1", "frame 1 2", "idle"]);
+        core.leave(ana);
+        let again = core.reconnect(ana.player()).unwrap();
+        assert_eq!(sent(&mut core, again), ["asset 1", "frame 1 2", "idle"]);
+        core.from_engine(&frame(0, 3.0));
+        assert_eq!(sent(&mut core, again), ["frame all 3", "idle"]);
+    }
+
+    #[test]
+    fn the_old_connection_of_a_seat_gets_nothing_and_changes_nothing() {
+        for start in [false, true] {
+            let mut room = Room::new();
+            let ana = room.core.join("Ana").unwrap();
+            if start {
+                room.core.start();
+                room.events();
+            }
+            let again = room.core.reconnect(ana.player()).unwrap();
+            room.core.input(ana, &key("a"));
+            room.core.leave(ana);
+            assert_eq!(sent(&mut room.core, ana), ["gone"]);
+            assert_eq!(sent(&mut room.core, again), ["idle"]);
+            room.core.input(again, &key("b"));
+            room.core.start();
+            // In the lobby the start shows that the seat stayed, and in the
+            // game the key of the new connection goes through.
+            let expected: &[&str] = if start {
+                &["1 key b"]
+            } else {
+                &["start 1 Ana"]
+            };
+            assert_eq!(room.events(), expected);
+        }
+    }
+
+    #[test]
+    fn a_reconnect_to_no_seat_or_to_a_room_that_is_over_is_refused() {
+        let mut core = ServerCore::new();
+        let ana = core.join("Ana").unwrap();
+        core.leave(ana);
+        assert!(core.reconnect(ana.player()).is_none());
+        let beto = core.join("Beto").unwrap();
+        core.start();
+        assert!(core.engine_ended().is_none());
+        assert!(core.reconnect(beto.player()).is_none());
     }
 
     #[test]
