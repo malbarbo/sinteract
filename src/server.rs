@@ -447,7 +447,6 @@ mod tests {
     use crate::event::{KeyEvent, KeyKind, Modifiers};
     use crate::scene::Scene;
     use crate::session::{Session, SessionEvent};
-    use crate::wire::framing::HEADER_BYTES;
 
     /// A core with a session that reads what the core writes, which also
     /// checks that the core writes nothing that a session rejects.
@@ -511,13 +510,6 @@ mod tests {
 
     fn resize(width: f32, height: f32) -> InputEvent {
         InputEvent::Resize { width, height }
-    }
-
-    /// `event` as a view sends it over a WebSocket.
-    fn from_view(event: &InputEvent) -> Vec<u8> {
-        let mut out = Vec::new();
-        to_server::write_input(&mut out, event).unwrap();
-        out.split_off(HEADER_BYTES)
     }
 
     /// A frame of width `width` for `player`, or for every player, with
@@ -652,7 +644,9 @@ mod tests {
         let ana = room.core.join("Ana");
         let beto = room.core.join("Beto");
         room.core.start();
-        room.core.from_view(beto, &from_view(&key("b"))).unwrap();
+        room.core
+            .from_view(beto, &to_server::encode_input(&key("b")))
+            .unwrap();
         room.core.input(ana, &key("a"));
         room.core.input(ana, &InputEvent::Vsync);
         assert_eq!(room.events(), ["start 1 Ana, 2 Beto", "2 key b", "1 key a"]);
@@ -707,7 +701,8 @@ mod tests {
         let mut room = Room::new();
         let ana = room.core.join("Ana");
         room.core.start();
-        let unknown = wire::with_unknown_view_value(&from_view(&key("a")), |m| wire::tag_of(m));
+        let unknown =
+            wire::with_unknown_view_value(&to_server::encode_input(&key("a")), |m| wire::tag_of(m));
         room.core.from_view(ana, &unknown).unwrap();
         assert_eq!(room.events(), ["start 1 Ana"]);
     }

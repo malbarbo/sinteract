@@ -3,8 +3,8 @@
 //! Cap'n Proto frames its own payload, and this envelope puts a header of
 //! 8 bytes in front of it. The header holds a magic of four bytes and the
 //! length of the payload as a little-endian `u32`. The magic is `SI`, then
-//! `E` from the engine, `V` from the view or `S` from the server, then the
-//! version of the payload, `1`.
+//! `E` from the engine or `S` from the server, then the version of the
+//! payload, `1`.
 //!
 //! The magic rejects text from another writer on the same pipe, such as a
 //! stray `print` from the program of a student, before the bytes reach the
@@ -15,7 +15,8 @@
 //! cannot.
 //!
 //! A WebSocket, which frames its own messages, carries the payload alone
-//! and the version in its subprotocol, `sinteract.v1`.
+//! and the version in its subprotocol, `sinteract.v1`. A view only talks
+//! over a WebSocket, so it has no magic.
 //!
 //! A message goes from the builder to the writer, and from the reader into
 //! the words that the decoder reads in place, with no copy in between.
@@ -31,9 +32,6 @@ use capnp::serialize;
 pub enum Side {
     /// Runs the program and sends the frames.
     Engine,
-    /// Draws the frames and sends the input, to the server or to an engine
-    /// with no server between them.
-    View,
     /// Owns the session. It passes the input of the views to the engine and
     /// tells the engine who plays.
     Server,
@@ -44,14 +42,13 @@ impl Side {
     pub const fn magic(self) -> [u8; 4] {
         match self {
             Side::Engine => *b"SIE1",
-            Side::View => *b"SIV1",
             Side::Server => *b"SIS1",
         }
     }
 
     /// The side whose magic is `magic`, if any.
     fn from_magic(magic: [u8; 4]) -> Option<Side> {
-        [Side::Engine, Side::View, Side::Server]
+        [Side::Engine, Side::Server]
             .into_iter()
             .find(|side| side.magic() == magic)
     }
@@ -189,13 +186,13 @@ mod tests {
     use super::*;
 
     fn header_with(magic: [u8; 4], len: u32) -> Vec<u8> {
-        let mut out = header(Side::View, len);
+        let mut out = header(Side::Server, len);
         out[..4].copy_from_slice(&magic);
         out.to_vec()
     }
 
     fn read(bytes: &[u8]) -> io::Result<Option<Vec<Word>>> {
-        read_framed(&mut &bytes[..], Side::View)
+        read_framed(&mut &bytes[..], Side::Server)
     }
 
     fn read_error(bytes: &[u8]) -> io::Error {
@@ -207,8 +204,8 @@ mod tests {
         let mut message = capnp::message::Builder::new_default();
         message.set_root("hi").unwrap();
         let mut bytes = Vec::new();
-        write_framed(&mut bytes, Side::View, &message).unwrap();
-        assert_eq!(&bytes[..4], b"SIV1");
+        write_framed(&mut bytes, Side::Server, &message).unwrap();
+        assert_eq!(&bytes[..4], b"SIS1");
         let words = read(&bytes).unwrap().expect("a message");
         assert_eq!(
             Word::words_to_bytes(&words),
@@ -223,35 +220,35 @@ mod tests {
 
     #[test]
     fn a_stream_that_ends_inside_the_header_is_an_error() {
-        let err = read_error(&Side::View.magic());
+        let err = read_error(&Side::Server.magic());
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
     #[test]
     fn a_stream_that_ends_inside_the_payload_is_an_error() {
-        let mut bytes = header_with(Side::View.magic(), 16);
+        let mut bytes = header_with(Side::Server.magic(), 16);
         bytes.extend_from_slice(&[0; 8]);
         assert_eq!(read_error(&bytes).kind(), io::ErrorKind::UnexpectedEof);
     }
 
     #[test]
     fn a_message_of_another_side_is_an_error() {
-        let err = read_framed(&mut &header_with(Side::View.magic(), 0)[..], Side::Server)
+        let err = read_framed(&mut &header_with(Side::Engine.magic(), 0)[..], Side::Server)
             .expect_err("an error");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("View side"), "{err}");
+        assert!(err.to_string().contains("Engine side"), "{err}");
     }
 
     #[test]
     fn each_side_has_its_own_magic() {
-        for side in [Side::Engine, Side::View, Side::Server] {
+        for side in [Side::Engine, Side::Server] {
             assert_eq!(Side::from_magic(side.magic()), Some(side));
         }
     }
 
     #[test]
     fn an_unknown_version_is_an_error() {
-        let err = read_error(&header_with(*b"SIV2", 0));
+        let err = read_error(&header_with(*b"SIS2", 0));
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("version"), "{err}");
     }
@@ -265,7 +262,7 @@ mod tests {
 
     #[test]
     fn a_length_that_is_not_whole_words_is_an_error() {
-        let mut bytes = header_with(Side::View.magic(), 4);
+        let mut bytes = header_with(Side::Server.magic(), 4);
         bytes.extend_from_slice(&[0; 4]);
         assert_eq!(read_error(&bytes).kind(), io::ErrorKind::InvalidData);
     }
@@ -274,7 +271,7 @@ mod tests {
     fn a_header_parses_to_its_length() {
         let header = header(Side::Engine, 16);
         assert_eq!(parse_header(header, Side::Engine).unwrap(), 16);
-        let err = parse_header(header, Side::View).expect_err("an error");
+        let err = parse_header(header, Side::Server).expect_err("an error");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
@@ -302,7 +299,7 @@ mod tests {
     #[test]
     fn a_length_above_the_cap_is_an_error() {
         let len = (MAX_FRAME_BYTES + size_of::<Word>()) as u32;
-        let err = read_error(&header_with(Side::View.magic(), len));
+        let err = read_error(&header_with(Side::Server.magic(), len));
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }

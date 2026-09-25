@@ -35,12 +35,13 @@ os braços abaixo.
 | quem escreve | raiz            | mágica | braços                                             |
 |--------------|-----------------|--------|----------------------------------------------------|
 | engine       | `EngineMessage` | `SIE1` | `asset`, `frame`, `close`                          |
-| view         | `ViewMessage`   | `SIV1` | `event`, `close`                                   |
+| view         | `ViewMessage`   |        | `event`, `close`                                   |
 | servidor     | `ServerMessage` | `SIS1` | `event`, `close`, `start`, `join`, `leave`, `tick` |
 
 Num pipe, cada mensagem vai atrás de um cabeçalho de 8 bytes: a mágica e o
 tamanho em `u32` LE. Num WebSocket vai só o payload, e a versão vai no
-subprotocolo `sinteract.v1`. O player é o número do jogador na partida, a
+subprotocolo `sinteract.v1`. A view só fala por WebSocket, então não tem
+mágica. O player é o número do jogador na partida, a
 partir de 1, e vai no primeiro campo do payload das mensagens que falam de
 um jogador: o `event`, o `join` e o `leave` do servidor e o `frame` da
 engine, em que o 0 quer dizer todos. O `start`, o `close`, o `tick` e o

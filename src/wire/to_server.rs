@@ -2,8 +2,8 @@
 //!
 //! The view sends its input as events, and ends the session with a close.
 //! The server passes the input on to the engine with [`super::to_engine`].
-
-use std::io::{self, Read, Write};
+//! A view talks to the server over a WebSocket, which frames each message
+//! itself, so a message of a view has no envelope.
 
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
@@ -12,8 +12,7 @@ use crate::protocol_capnp::view_message;
 
 use super::Error;
 use super::event::{read_input_event, write_input_event};
-use super::framing::{Side, write_framed};
-use super::protocol::{ReadError, decode_root, read_next};
+use super::protocol::decode_root;
 
 /// One message of the view, one variant per arm of `ViewMessage`. The arm
 /// `event` is `Input` here, so it does not clash with [`crate::event::Event`].
@@ -23,25 +22,17 @@ pub enum Message {
     Close,
 }
 
-/// Read the next message of a view. Returns `None` at the end of the
-/// stream. A message or an event of an arm from a newer schema is skipped,
-/// and the next one comes out.
-pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
-    read_next(r, Side::View, decode)
+/// Encode the input `ev`.
+pub fn encode_input(ev: &InputEvent) -> Vec<u8> {
+    super::finish(input_message(ev))
 }
 
-/// Write the input `ev`.
-pub fn write_input(w: &mut impl Write, ev: &InputEvent) -> io::Result<()> {
-    write_framed(w, Side::View, &input_message(ev))
+/// Encode the close of the session.
+pub fn encode_close() -> Vec<u8> {
+    super::finish(close_message())
 }
 
-/// Write the close of the session.
-pub fn write_close(w: &mut impl Write) -> io::Result<()> {
-    write_framed(w, Side::View, &close_message())
-}
-
-/// Decode `payload`, a message with no envelope, such as one that came
-/// over a WebSocket. `None` for a message or an event of an arm from a
+/// Decode `payload`. `None` for a message or an event of an arm from a
 /// newer schema.
 pub fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<view_message::Owned, _>(payload, decode_message)
@@ -70,10 +61,4 @@ fn close_message() -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     builder.init_root::<view_message::Builder>().init_close();
     builder
-}
-
-/// Encode a close, with no envelope.
-#[cfg(test)]
-pub(crate) fn encode_close() -> Vec<u8> {
-    super::finish(close_message())
 }

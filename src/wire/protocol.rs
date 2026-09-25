@@ -4,9 +4,9 @@
 //! The engine sends an `EngineMessage`, a view sends a `ViewMessage` and
 //! the server sends a `ServerMessage`. [`super::to_view`],
 //! [`super::to_server`] and [`super::to_engine`] wrap the payloads of
-//! [`super::scene`] and [`super::event`] in them and unwrap them again, and
-//! write them with the envelope of [`super::framing`]. [`super::to_view`]
-//! and [`super::to_server`] also read them.
+//! [`super::scene`] and [`super::event`] in them and unwrap them again.
+//! [`super::to_view`] and [`super::to_engine`] write them with the envelope
+//! of [`super::framing`], and [`super::to_view`] also reads them.
 
 use std::io::{self, Read};
 

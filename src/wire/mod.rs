@@ -9,7 +9,7 @@
 //! [`Renderer::render_stream`](crate::renderer::Renderer::render_stream).
 //!
 //! The engine runs the program and writes with [`to_view`]. A view draws
-//! the frames, sends the input and writes with [`to_server`]. The server
+//! the frames, sends the input and encodes with [`to_server`]. The server
 //! owns the session, passes the input of the views on and writes with
 //! [`to_engine`]. A view and the server read with the module of the side
 //! that writes to them, and the engine reads with
@@ -527,24 +527,6 @@ mod tests {
     }
 
     #[test]
-    fn the_messages_of_a_view_round_trip_with_their_header() {
-        let mut stream = Vec::new();
-        to_server::write_input(&mut stream, &InputEvent::Vsync).unwrap();
-        to_server::write_close(&mut stream).unwrap();
-        assert_eq!(&stream[..4], b"SIV1");
-        let mut r = &stream[..];
-        assert!(matches!(
-            to_server::read(&mut r),
-            Ok(Some(to_server::Message::Input(InputEvent::Vsync)))
-        ));
-        assert!(matches!(
-            to_server::read(&mut r),
-            Ok(Some(to_server::Message::Close))
-        ));
-        assert!(matches!(to_server::read(&mut r), Ok(None)));
-    }
-
-    #[test]
     fn the_arm_of_a_message_of_the_engine_comes_without_a_decode() {
         let frame = to_view::encode_frame(&Scene::new(4.0, 3.0));
         assert_eq!(
@@ -568,12 +550,14 @@ mod tests {
     }
 
     #[test]
-    fn a_message_of_a_view_decodes_without_its_header() {
-        let mut stream = Vec::new();
-        to_server::write_input(&mut stream, &InputEvent::Vsync).unwrap();
+    fn the_messages_of_a_view_round_trip() {
         assert!(matches!(
-            to_server::decode(&stream[framing::HEADER_BYTES..]),
+            to_server::decode(&to_server::encode_input(&InputEvent::Vsync)),
             Ok(Some(to_server::Message::Input(InputEvent::Vsync)))
+        ));
+        assert!(matches!(
+            to_server::decode(&to_server::encode_close()),
+            Ok(Some(to_server::Message::Close))
         ));
     }
 
