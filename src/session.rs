@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 
 use crate::event::InputEvent;
 use crate::wire;
-use crate::wire::framing::{self, HEADER_BYTES, Side};
+use crate::wire::framing::{self, Side};
 use crate::wire::to_engine::{self, Message, Roster};
 
 /// The engine side of a session, from the bytes of the server to the
@@ -166,20 +166,14 @@ impl Session {
     fn take_messages(&mut self) {
         let mut at = 0;
         while self.state != State::Ended {
-            let Some(header) = self.bytes.get(at..at + HEADER_BYTES) else {
-                break;
-            };
-            let header = header.try_into().expect("a slice of HEADER_BYTES");
-            let len = match framing::parse_header(header, Side::Server) {
-                Ok(len) => len,
+            let bytes = self.bytes.get(at..).expect("at is inside the bytes");
+            let (payload, rest) = match framing::split_frame(bytes, Side::Server) {
+                Ok(Some(frame)) => frame,
+                Ok(None) => break,
                 Err(e) => return self.finish(Some(e)),
             };
-            let start = at + HEADER_BYTES;
-            let Some(payload) = self.bytes.get(start..start + len) else {
-                break;
-            };
             let decoded = to_engine::decode(payload);
-            at = start + len;
+            at = self.bytes.len() - rest.len();
             match decoded {
                 Ok(Some(message)) => self.receive(message),
                 Ok(None) => {}
@@ -291,6 +285,7 @@ enum State {
 mod tests {
     use super::*;
     use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
+    use crate::wire::framing::HEADER_BYTES;
     use crate::wire::to_engine::Member;
 
     fn player(n: u32) -> NonZeroU32 {

@@ -123,6 +123,19 @@ pub fn parse_header(header: [u8; HEADER_BYTES], side: Side) -> io::Result<usize>
     Ok(len)
 }
 
+/// Split the first message that `side` wrote off the front of `bytes`, for
+/// a reader that keeps the stream in a buffer. Returns the payload and the
+/// bytes after it, or `None` while `bytes` holds no whole message. The
+/// checks on the header are the ones of [`parse_header`], and a header
+/// that fails them is an error before its payload arrives.
+pub fn split_frame(bytes: &[u8], side: Side) -> io::Result<Option<(&[u8], &[u8])>> {
+    let Some((header, rest)) = bytes.split_first_chunk::<HEADER_BYTES>() else {
+        return Ok(None);
+    };
+    let len = parse_header(*header, side)?;
+    Ok(rest.split_at_checked(len))
+}
+
 /// The header in front of a payload of `len` bytes.
 pub(crate) fn header(side: Side, len: u32) -> [u8; HEADER_BYTES] {
     let mut header = [0u8; HEADER_BYTES];
@@ -262,6 +275,27 @@ mod tests {
         let header = header(Side::Engine, 16);
         assert_eq!(parse_header(header, Side::Engine).unwrap(), 16);
         let err = parse_header(header, Side::View).expect_err("an error");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn split_frame_waits_for_a_whole_message() {
+        let mut bytes = header(Side::Engine, 8).to_vec();
+        bytes.extend_from_slice(&[1; 8]);
+        bytes.extend_from_slice(&[2; 3]);
+        for end in 0..HEADER_BYTES + 8 {
+            assert_eq!(split_frame(&bytes[..end], Side::Engine).unwrap(), None);
+        }
+        let (payload, rest) = split_frame(&bytes, Side::Engine)
+            .unwrap()
+            .expect("a message");
+        assert_eq!(payload, [1; 8]);
+        assert_eq!(rest, [2; 3]);
+    }
+
+    #[test]
+    fn split_frame_rejects_a_header_of_another_side() {
+        let err = split_frame(&header(Side::Engine, 0), Side::Server).expect_err("an error");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
