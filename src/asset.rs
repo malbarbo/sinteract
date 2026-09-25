@@ -17,6 +17,11 @@ use crate::scene::{Bitmap, Element, RotatedRect, Scene};
 /// The most pixels of one image, 2048 by 2048.
 pub const MAX_IMAGE_PIXELS: u64 = 2048 * 2048;
 
+/// The most pixels of an image that [`Assets::image`] shrinks to
+/// [`MAX_IMAGE_PIXELS`], sixteen times as many, such as a photo of 8000 by
+/// 6000. A larger one would take the engine more than 256 MiB to decode.
+pub const MAX_SHRINK_PIXELS: u64 = 16 * MAX_IMAGE_PIXELS;
+
 /// The most pixels of the live assets of a room, eight of the largest
 /// images, which a view decodes to 128 MiB.
 pub const MAX_LIVE_PIXELS: u64 = 8 * MAX_IMAGE_PIXELS;
@@ -48,27 +53,37 @@ impl Assets {
         Self::default()
     }
 
-    /// The image in `png`, with its id, or an error if it is not a PNG or
-    /// has more than [`MAX_IMAGE_PIXELS`].
+    /// The image in `png`, with its id, or an error if it is not a PNG. An
+    /// image with more than [`MAX_IMAGE_PIXELS`] shrinks to fit, with the
+    /// feature `render`, up to [`MAX_SHRINK_PIXELS`], and is an error past
+    /// that or without the feature.
     pub fn image(&mut self, png: &[u8]) -> Result<Asset, AssetError> {
         if let Some(&id) = self.ids.get(png) {
             let entry = self.images.get_mut(&id).expect("an id names an image");
             entry.seen = self.frames;
             return Ok(entry.asset);
         }
+        let source = Arc::<[u8]>::from(png);
         let (width, height) = png_size(png).ok_or(AssetError::NotPng)?;
+        let (png, (width, height)) = if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+            let shrunk = shrink(png, width, height)?;
+            let size = png_size(&shrunk).expect("the shrunk image is a PNG");
+            (Arc::from(shrunk), size)
+        } else {
+            (source.clone(), (width, height))
+        };
         Footprint::new(Some((width, height)), png.len())?;
         let id = self.next_id;
         self.next_id = id
             .checked_add(1)
             .expect("an engine makes fewer than 2^32 images");
         let asset = Asset { id, width, height };
-        let png = Arc::<[u8]>::from(png);
-        self.ids.insert(png.clone(), id);
+        self.ids.insert(source.clone(), id);
         self.images.insert(
             id,
             Entry {
                 asset,
+                source,
                 png,
                 sent: false,
                 seen: self.frames,
@@ -111,7 +126,7 @@ impl Assets {
 
     fn remove(&mut self, id: u32) {
         if let Some(entry) = self.images.remove(&id) {
-            self.ids.remove(&entry.png);
+            self.ids.remove(&entry.source);
         }
     }
 }
@@ -359,11 +374,72 @@ struct Live {
 #[derive(Debug)]
 struct Entry {
     asset: Asset,
+    /// The PNG from the front end, which finds the image again.
+    source: Arc<[u8]>,
+    /// The PNG that goes out, which is `source` unless it shrank.
     png: Arc<[u8]>,
     /// Whether the image went out, and the server has not lost it since.
     sent: bool,
     /// The count of frames at the last call of [`Assets::image`] for it.
     seen: u64,
+}
+
+/// `png`, of `width` by `height`, shrunk to at most [`MAX_IMAGE_PIXELS`]
+/// with its ratio, or an error if it has more than [`MAX_SHRINK_PIXELS`]
+/// or does not decode.
+#[cfg(feature = "render")]
+fn shrink(png: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
+    if u64::from(width) * u64::from(height) > MAX_SHRINK_PIXELS {
+        return Err(AssetError::TooManyPixels { width, height });
+    }
+    shrink_to(png, shrunk_size(width, height, MAX_IMAGE_PIXELS))
+}
+
+/// Without the renderer, an image over the limit cannot shrink.
+#[cfg(not(feature = "render"))]
+fn shrink(_png: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
+    Err(AssetError::TooManyPixels { width, height })
+}
+
+/// The largest size with the ratio of `width` by `height` and at most
+/// `pixels`, at least 1 by 1.
+#[cfg(feature = "render")]
+fn shrunk_size(width: u32, height: u32, pixels: u64) -> (u32, u32) {
+    let scale = (pixels as f64 / (f64::from(width) * f64::from(height))).sqrt();
+    let to_height = ((f64::from(height) * scale) as u32).max(1);
+    let to_width = ((f64::from(width) * scale) as u32)
+        .max(1)
+        .min((pixels / u64::from(to_height)) as u32);
+    (to_width, to_height)
+}
+
+/// `png` drawn at `size`, which is smaller, as a PNG. Each halving
+/// averages four pixels, which a single scale of a large ratio would skip,
+/// and a last scale reaches the size.
+#[cfg(feature = "render")]
+fn shrink_to(png: &[u8], (width, height): (u32, u32)) -> Result<Vec<u8>, AssetError> {
+    let mut image = tiny_skia::Pixmap::decode_png(png).map_err(|_| AssetError::NotPng)?;
+    while image.width() / 2 >= width && image.height() / 2 >= height {
+        image = scaled(&image, image.width() / 2, image.height() / 2);
+    }
+    let image = scaled(&image, width, height);
+    Ok(image.encode_png().expect("a pixmap encodes"))
+}
+
+/// `image` drawn at `width` by `height`.
+#[cfg(feature = "render")]
+fn scaled(image: &tiny_skia::Pixmap, width: u32, height: u32) -> tiny_skia::Pixmap {
+    let mut out = tiny_skia::Pixmap::new(width, height).expect("a shrunk image has a size");
+    let transform = tiny_skia::Transform::from_scale(
+        width as f32 / image.width() as f32,
+        height as f32 / image.height() as f32,
+    );
+    let paint = tiny_skia::PixmapPaint {
+        quality: tiny_skia::FilterQuality::Bilinear,
+        ..tiny_skia::PixmapPaint::default()
+    };
+    out.draw_pixmap(0, 0, image.as_ref(), &paint, transform, None);
+    out
 }
 
 fn add_bitmap_ids(elements: &[Element], ids: &mut BTreeSet<u32>) {
@@ -468,10 +544,64 @@ mod tests {
     fn an_image_that_is_not_a_png_or_is_too_large_gets_no_id() {
         let mut assets = Assets::new();
         assert_eq!(assets.image(b"GIF89a"), Err(AssetError::NotPng));
+        assert_eq!(
+            assets.image(&png_head(8193, 8193)),
+            Err(AssetError::TooManyPixels {
+                width: 8193,
+                height: 8193
+            })
+        );
+    }
+
+    #[cfg(not(feature = "render"))]
+    #[test]
+    fn an_image_over_the_limit_is_an_error_without_the_renderer() {
+        let mut assets = Assets::new();
         assert!(matches!(
             assets.image(&png_head(2049, 2048)),
             Err(AssetError::TooManyPixels { .. })
         ));
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn an_image_over_the_limit_goes_to_the_renderer_to_shrink() {
+        // The header of a large image, with no pixels to decode.
+        let mut assets = Assets::new();
+        assert_eq!(assets.image(&png_head(2049, 2048)), Err(AssetError::NotPng));
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_shrunk_image_averages_its_pixels() {
+        // Stripes of red and blue, one pixel wide, average to purple.
+        let mut stripes = tiny_skia::Pixmap::new(64, 32).unwrap();
+        for (i, pixel) in stripes.pixels_mut().iter_mut().enumerate() {
+            *pixel = if i % 2 == 0 {
+                tiny_skia::ColorU8::from_rgba(255, 0, 0, 255).premultiply()
+            } else {
+                tiny_skia::ColorU8::from_rgba(0, 0, 255, 255).premultiply()
+            };
+        }
+        let png = shrink_to(&stripes.encode_png().unwrap(), (6, 3)).unwrap();
+        assert_eq!(png_size(&png), Some((6, 3)));
+        let small = tiny_skia::Pixmap::decode_png(&png).unwrap();
+        let pixel = small.pixel(3, 1).unwrap();
+        assert!((100..=155).contains(&pixel.red()), "{pixel:?}");
+        assert!((100..=155).contains(&pixel.blue()), "{pixel:?}");
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn the_shrunk_size_keeps_the_ratio_under_the_limit() {
+        let max = MAX_IMAGE_PIXELS;
+        assert_eq!(shrunk_size(4096, 4096, max), (2048, 2048));
+        assert_eq!(shrunk_size(3000, 2000, max), (2508, 1672));
+        assert_eq!(shrunk_size(40_000_000, 1, max), (4_194_304, 1));
+        for (w, h) in [(3000, 2000), (8000, 6000), (5000, 900), (40_000_000, 1)] {
+            let (to_w, to_h) = shrunk_size(w, h, max);
+            assert!(u64::from(to_w) * u64::from(to_h) <= MAX_IMAGE_PIXELS);
+        }
     }
 
     #[test]
