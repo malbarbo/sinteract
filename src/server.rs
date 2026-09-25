@@ -34,11 +34,13 @@ use crate::wire::to_view::{self, Arm};
 ///
 /// The room waits in the lobby until [`ServerCore::start`], then plays until
 /// [`ServerCore::close`], and is over when the engine ends. Only a playing
-/// room writes to the engine.
+/// room writes to the engine. The players join in the lobby, and the start
+/// tells the engine who they are. A player who leaves the game keeps the
+/// seat, so the engine sees the same players until the end.
 #[derive(Debug)]
 pub struct ServerCore {
-    /// A number never returns, so a late message for a player who left
-    /// never goes to a new one.
+    /// A number never returns, so a late message for a player who left the
+    /// lobby never goes to a new one.
     next_player: NonZeroU32,
     seats: BTreeMap<NonZeroU32, Seat>,
     phase: Phase,
@@ -48,7 +50,7 @@ pub struct ServerCore {
     from_engine: Vec<u8>,
     /// The assets of the engine, in its order. Each view gets all of them.
     assets: Vec<Arc<[u8]>>,
-    /// The newest frame for every player, for a view that joins later.
+    /// The newest frame for every player, for a view that joins after it.
     frame_for_all: Option<Arc<[u8]>>,
 }
 
@@ -158,38 +160,40 @@ impl ServerCore {
         }
     }
 
-    /// Seat a new player as `nickname`, and return the connection of its
-    /// view. The nickname loses its control characters, so it cannot move
-    /// the cursor of a terminal that prints it, and is cut to 64 bytes. In
-    /// the lobby the player waits for the start, and in the game the engine
-    /// gets a join. The view gets the assets and the newest frame for every
-    /// player.
-    pub fn join(&mut self, nickname: &str) -> Conn {
+    /// Seat a new player as `nickname` in the lobby, and return the
+    /// connection of its view, or `None` after the start. The nickname loses
+    /// its control characters, so it cannot move the cursor of a terminal
+    /// that prints it, and is cut to 64 bytes. The view gets the assets and
+    /// the newest frame for every player.
+    pub fn join(&mut self, nickname: &str) -> Option<Conn> {
+        if self.phase != Phase::Lobby {
+            return None;
+        }
         let player = self.next_player;
         self.next_player = player
             .checked_add(1)
             .expect("a room has fewer than 2^32 joins");
-        let nickname = clean_nickname(nickname);
-        if self.phase == Phase::Playing {
-            to_engine::write_join(&mut self.to_engine, player, &nickname).expect(UNDER_THE_CAP);
-        }
         self.seats.insert(
             player,
             Seat {
-                nickname,
+                nickname: clean_nickname(nickname),
+                connected: true,
                 lobby_size: None,
                 frame: self.frame_for_all.clone(),
                 assets_sent: 0,
             },
         );
-        Conn(player)
+        Some(Conn(player))
     }
 
-    /// Free the seat of `conn`, when its WebSocket closes. In the game the
-    /// engine gets a leave. A second call does nothing.
+    /// Say that the WebSocket of `conn` closed. In the lobby the player
+    /// loses the seat. After the start the seat stays, and its input and
+    /// frames stop. A second call does nothing.
     pub fn leave(&mut self, conn: Conn) {
-        if self.seats.remove(&conn.0).is_some() && self.phase == Phase::Playing {
-            to_engine::write_leave(&mut self.to_engine, conn.0).expect(UNDER_THE_CAP);
+        if self.phase == Phase::Lobby {
+            self.seats.remove(&conn.0);
+        } else if let Some(seat) = self.seats.get_mut(&conn.0) {
+            seat.connected = false;
         }
     }
 
@@ -267,7 +271,7 @@ impl ServerCore {
     /// of the last resize, for the start. The input of a player who left is
     /// dropped.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
-        let Some(seat) = self.seats.get_mut(&conn.0) else {
+        let Some(seat) = self.seats.get_mut(&conn.0).filter(|s| s.connected) else {
             return;
         };
         if matches!(event, InputEvent::Vsync) {
@@ -288,10 +292,9 @@ impl ServerCore {
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
     /// message too. An asset goes to every view, and a frame to its player,
-    /// or to every player. A frame for a player who left is dropped, since
-    /// the engine may write it before it reads the leave. A broken stream
-    /// ends the room, and the core ignores what comes after the end.
-    /// Returns what went wrong, in the order of the stream.
+    /// or to every player. A broken stream ends the room, and the core
+    /// ignores what comes after the end. Returns what went wrong, in the
+    /// order of the stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
         let mut errors = Vec::new();
         if self.phase == Phase::Over {
@@ -355,7 +358,7 @@ impl ServerCore {
     /// [`Next::Gone`] after its last frame, as does the view of a player
     /// who left.
     pub fn next_for(&mut self, conn: Conn) -> Next {
-        let Some(seat) = self.seats.get_mut(&conn.0) else {
+        let Some(seat) = self.seats.get_mut(&conn.0).filter(|s| s.connected) else {
             return Next::Gone;
         };
         if let Some(asset) = self.assets.get(seat.assets_sent) {
@@ -392,10 +395,12 @@ impl Default for ServerCore {
     }
 }
 
-/// The seat of a player who is in the room.
+/// The seat of a player of the room.
 #[derive(Debug)]
 struct Seat {
     nickname: String,
+    /// Whether the view of the seat is still there.
+    connected: bool,
     /// The size of the last resize in the lobby, for the start.
     lobby_size: Option<(f32, f32)>,
     /// The newest frame for the view that the view has not got yet.
@@ -475,8 +480,6 @@ mod tests {
                             format!("{player} {event:?}")
                         }
                     },
-                    SessionEvent::Join { player, nickname } => format!("join {player} {nickname}"),
-                    SessionEvent::Leave { player } => format!("leave {player}"),
                     SessionEvent::Error(e) => format!("error {e}"),
                     SessionEvent::End(None) => "end".into(),
                     SessionEvent::End(Some(e)) => format!("broken {e}"),
@@ -544,9 +547,9 @@ mod tests {
     #[test]
     fn the_start_has_the_players_of_the_lobby() {
         let mut room = Room::new();
-        room.core.join("Ana");
-        let beto = room.core.join("Beto");
-        room.core.join("Caio");
+        room.core.join("Ana").unwrap();
+        let beto = room.core.join("Beto").unwrap();
+        room.core.join("Caio").unwrap();
         room.core.leave(beto);
         room.core.tick();
         assert!(room.events().is_empty());
@@ -557,35 +560,38 @@ mod tests {
     }
 
     #[test]
-    fn the_engine_gets_a_join_and_a_leave_in_the_game() {
+    fn a_join_after_the_start_is_refused_and_a_leave_keeps_the_seat() {
         let mut room = Room::new();
+        let ana = room.core.join("Ana").unwrap();
         room.core.start();
-        let ana = room.core.join("Ana");
+        assert!(room.core.join("Beto").is_none());
         room.core.tick();
         room.core.leave(ana);
         room.core.leave(ana);
-        assert_eq!(room.events(), ["start ", "join 1 Ana", "tick", "leave 1"]);
+        room.core.input(ana, &key("a"));
+        assert_eq!(room.events(), ["start 1 Ana", "tick"]);
+        assert_eq!(sent(&mut room.core, ana), ["gone"]);
     }
 
     #[test]
     fn a_number_never_returns() {
         let mut core = ServerCore::new();
-        let ana = core.join("Ana");
+        let ana = core.join("Ana").unwrap();
         core.leave(ana);
-        assert_eq!(core.join("Beto").player().get(), 2);
+        assert_eq!(core.join("Beto").unwrap().player().get(), 2);
     }
 
     #[test]
     fn the_close_drops_what_the_host_has_not_taken_and_nothing_follows() {
         let mut room = Room::new();
-        let ana = room.core.join("Ana");
+        let ana = room.core.join("Ana").unwrap();
         room.core.start();
         assert_eq!(room.events(), ["start 1 Ana"]);
         room.core.tick();
         room.core.close();
         room.core.close();
         room.core.tick();
-        room.core.join("Beto");
+        assert!(room.core.join("Beto").is_none());
         room.core.leave(ana);
         assert!(!room.core.start());
         assert!(room.events().is_empty());
@@ -622,8 +628,8 @@ mod tests {
     #[test]
     fn the_input_of_a_view_goes_with_its_player() {
         let mut room = Room::new();
-        let ana = room.core.join("Ana");
-        let beto = room.core.join("Beto");
+        let ana = room.core.join("Ana").unwrap();
+        let beto = room.core.join("Beto").unwrap();
         room.core.start();
         room.core
             .from_view(beto, &to_server::encode_input(&key("b")))
@@ -636,8 +642,8 @@ mod tests {
     #[test]
     fn the_lobby_keeps_the_last_resize_for_the_start() {
         let mut room = Room::new();
-        let ana = room.core.join("Ana");
-        let beto = room.core.join("Beto");
+        let ana = room.core.join("Ana").unwrap();
+        let beto = room.core.join("Beto").unwrap();
         room.core.input(ana, &resize(10.0, 10.0));
         room.core.input(ana, &key("a"));
         room.core.input(ana, &resize(20.0, 30.0));
@@ -651,7 +657,7 @@ mod tests {
     #[test]
     fn a_message_of_a_view_that_is_too_long_or_does_not_decode_is_an_error() {
         let mut core = ServerCore::new();
-        let ana = core.join("Ana");
+        let ana = core.join("Ana").unwrap();
         let long = vec![0; MAX_VIEW_BYTES + 1];
         assert!(matches!(
             core.from_view(ana, &long),
@@ -666,7 +672,7 @@ mod tests {
     #[test]
     fn a_message_of_an_unknown_arm_is_dropped() {
         let mut room = Room::new();
-        let ana = room.core.join("Ana");
+        let ana = room.core.join("Ana").unwrap();
         room.core.start();
         let unknown = wire::with_unknown_view_value(&to_server::encode_input(&key("a")), |m| {
             wire::tag_of(m.get_event().unwrap())
@@ -678,8 +684,8 @@ mod tests {
     #[test]
     fn a_view_gets_the_assets_then_its_newest_frame() {
         let mut core = ServerCore::new();
-        let ana = core.join("Ana");
-        let beto = core.join("Beto");
+        let ana = core.join("Ana").unwrap();
+        let beto = core.join("Beto").unwrap();
         core.start();
         let mut stream = frame(0, 1.0);
         stream.extend_from_slice(&asset(7));
@@ -695,21 +701,20 @@ mod tests {
     }
 
     #[test]
-    fn a_view_that_joins_later_gets_the_assets_and_the_frame_for_all() {
+    fn a_view_that_joins_after_a_frame_gets_the_assets_and_the_frame_for_all() {
         let mut core = ServerCore::new();
-        core.start();
         let mut stream = asset(1);
         stream.extend_from_slice(&frame(0, 1.0));
         stream.extend_from_slice(&frame(1, 2.0));
         core.from_engine(&stream);
-        let ana = core.join("Ana");
+        let ana = core.join("Ana").unwrap();
         assert_eq!(sent(&mut core, ana), ["asset 1", "frame all 1", "idle"]);
     }
 
     #[test]
     fn the_messages_come_out_whole_from_bytes_fed_one_at_a_time() {
         let mut core = ServerCore::new();
-        let ana = core.join("Ana");
+        let ana = core.join("Ana").unwrap();
         core.start();
         let mut stream = asset(1);
         stream.extend_from_slice(&frame(1, 2.0));
@@ -722,7 +727,7 @@ mod tests {
     #[test]
     fn the_end_of_the_engine_ends_the_room_after_the_last_frame() {
         let mut room = Room::new();
-        let ana = room.core.join("Ana");
+        let ana = room.core.join("Ana").unwrap();
         room.core.start();
         room.core.tick();
         room.core.from_engine(&frame(0, 1.0));
@@ -737,9 +742,9 @@ mod tests {
     }
 
     #[test]
-    fn the_view_of_a_player_who_left_is_gone_and_its_frame_is_dropped() {
+    fn the_view_of_a_player_who_left_is_gone() {
         let mut core = ServerCore::new();
-        let ana = core.join("Ana");
+        let ana = core.join("Ana").unwrap();
         core.start();
         core.leave(ana);
         assert!(core.from_engine(&frame(1, 1.0)).is_empty());
@@ -749,7 +754,7 @@ mod tests {
     #[test]
     fn a_message_of_the_engine_that_does_not_decode_is_an_error_and_the_stream_goes_on() {
         let mut core = ServerCore::new();
-        let ana = core.join("Ana");
+        let ana = core.join("Ana").unwrap();
         core.start();
         let mut stream = framing::header(Side::Engine, 8).to_vec();
         stream.extend_from_slice(&[0xff; 8]);
@@ -762,7 +767,7 @@ mod tests {
     #[test]
     fn a_header_of_another_side_breaks_the_stream() {
         let mut core = ServerCore::new();
-        let ana = core.join("Ana");
+        let ana = core.join("Ana").unwrap();
         core.start();
         let mut stream = frame(0, 1.0);
         stream.extend_from_slice(b"SIS1\0\0\0\0");
@@ -787,10 +792,10 @@ mod tests {
     #[test]
     fn the_end_between_messages_ends_the_room() {
         let mut core = ServerCore::new();
+        let ana = core.join("Ana").unwrap();
         core.from_engine(&frame(0, 1.0));
         assert!(core.engine_ended().is_none());
         assert!(core.is_over());
-        let ana = core.join("Ana");
         assert_eq!(sent(&mut core, ana), ["frame all 1", "gone"]);
     }
 }

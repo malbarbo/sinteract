@@ -1,10 +1,10 @@
 //! The messages from the server to the engine, in the `ServerMessage`
 //! union.
 //!
-//! The server starts the session with the players, passes on the input of
-//! each view with its player, and says when a player joins or leaves. A
-//! tick of the server paces the engine for every player, and the server
-//! ends the session with the end of its stream.
+//! The server starts the session with the players, who stay the same until
+//! the end, and passes on the input of each view with its player. A tick
+//! of the server paces the engine for every player, and the server ends
+//! the session with the end of its stream.
 
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -35,13 +35,6 @@ pub enum Message {
     Start(Roster),
     /// Time for the engine to draw the next frames.
     Tick,
-    Join {
-        player: NonZeroU32,
-        nickname: String,
-    },
-    Leave {
-        player: NonZeroU32,
-    },
 }
 
 /// A player of the session.
@@ -112,19 +105,9 @@ pub fn write_start(w: &mut impl Write, roster: &Roster) -> io::Result<()> {
     write_framed(w, Side::Server, &start_message(roster.members()))
 }
 
-/// Write that `player` joined the session as `nickname`.
-pub fn write_join(w: &mut impl Write, player: NonZeroU32, nickname: &str) -> io::Result<()> {
-    write_framed(w, Side::Server, &join_message(player.get(), nickname))
-}
-
-/// Write that `player` left the session.
-pub fn write_leave(w: &mut impl Write, player: NonZeroU32) -> io::Result<()> {
-    write_framed(w, Side::Server, &leave_message(player.get()))
-}
-
 /// Decode `payload`. `None` for a message or an event of an arm from a
-/// newer schema. An event, a join, a leave or a member of player 0, an
-/// event that is a Vsync, and a roster that repeats a player, are errors.
+/// newer schema. An event or a member of player 0, an event that is a
+/// Vsync, and a roster that repeats a player, are errors.
 pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<server_message::Owned, _>(payload, decode_message)
 }
@@ -160,16 +143,6 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
                 .collect::<Result<_, Error>>()?;
             Ok(Some(Message::Start(Roster::new(members)?)))
         }
-        server_message::Join(j) => {
-            let j = j?;
-            Ok(Some(Message::Join {
-                player: nonzero_player(j.get_player())?,
-                nickname: j.get_nickname()?.to_str()?.to_owned(),
-            }))
-        }
-        server_message::Leave(l) => Ok(Some(Message::Leave {
-            player: nonzero_player(l?.get_player())?,
-        })),
         server_message::Tick(_) => Ok(Some(Message::Tick)),
     }
 }
@@ -206,38 +179,9 @@ fn start_message(members: &[Member]) -> MessageBuilder<HeapAllocator> {
     builder
 }
 
-fn join_message(player: u32, nickname: &str) -> MessageBuilder<HeapAllocator> {
-    let mut builder = MessageBuilder::new_default();
-    let mut join = builder.init_root::<server_message::Builder>().init_join();
-    join.set_player(player);
-    join.set_nickname(nickname);
-    builder
-}
-
-fn leave_message(player: u32) -> MessageBuilder<HeapAllocator> {
-    let mut builder = MessageBuilder::new_default();
-    builder
-        .init_root::<server_message::Builder>()
-        .init_leave()
-        .set_player(player);
-    builder
-}
-
 /// Encode the input `ev` of `player`, with no envelope. A test passes 0,
 /// which [`write_input`] cannot.
 #[cfg(test)]
 pub(crate) fn encode_input(player: u32, ev: &InputEvent) -> Vec<u8> {
     super::finish(input_message(player, ev))
-}
-
-/// Encode that `player` joined as `nickname`, with no envelope.
-#[cfg(test)]
-pub(crate) fn encode_join(player: u32, nickname: &str) -> Vec<u8> {
-    super::finish(join_message(player, nickname))
-}
-
-/// Encode that `player` left, with no envelope.
-#[cfg(test)]
-pub(crate) fn encode_leave(player: u32) -> Vec<u8> {
-    super::finish(leave_message(player))
 }

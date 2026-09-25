@@ -34,17 +34,17 @@ os braços abaixo.
 
 | quem escreve | raiz            | mágica | braços                                             |
 |--------------|-----------------|--------|----------------------------------------------------|
-| engine       | `EngineMessage` | `SIE1` | `asset`, `frame`                          |
-| view         | `ViewMessage`   |        | `event`                                   |
-| servidor     | `ServerMessage` | `SIS1` | `event`, `start`, `join`, `leave`, `tick` |
+| engine       | `EngineMessage` | `SIE1` | `asset`, `frame`        |
+| view         | `ViewMessage`   |        | `event`                 |
+| servidor     | `ServerMessage` | `SIS1` | `event`, `start`, `tick` |
 
 Num pipe, cada mensagem vai atrás de um cabeçalho de 8 bytes: a mágica e o
 tamanho em `u32` LE. Num WebSocket vai só o payload, e a versão vai no
 subprotocolo `sinteract.v1`. A view só fala por WebSocket, então não tem
 mágica. O player é o número do jogador na partida, a
 partir de 1, e vai no primeiro campo do payload das mensagens que falam de
-um jogador: o `event`, o `join` e o `leave` do servidor e o `frame` da
-engine, em que o 0 quer dizer todos. O `start`, o `tick` e o `asset` são
+um jogador: o `event` do servidor e o `frame` da engine, em que o 0 quer
+dizer todos. O `start`, o `tick` e o `asset` são
 da sessão inteira e não têm player, e a `ViewMessage` também
 não, porque o servidor sabe o player pela conexão.
 
@@ -58,22 +58,21 @@ view, então uma view não joga em nome de outra.
 
 Regras da sessão com servidor:
 
-- o `start` é a primeira mensagem, com os jogadores que já estão na sala, e
-  pode vir vazio;
+- o `start` é a primeira mensagem, com os jogadores da sala, e pode vir
+  vazio. Um jogador só entra no lobby, e os jogadores do `start` são os
+  mesmos até o fim da partida;
 - um jogador aparece uma vez no `start`, o número dele não se repete na
-  partida, e `event`, `join` e `leave` de player 0 são erro;
+  partida, e um `event` de player 0 é erro;
 - nenhuma mensagem encerra a partida. O fim do transporte encerra, o fim
   do pipe ou o close do WebSocket, que também cobre quem quebra. Para
-  encerrar a partida, o servidor fecha o fd 3 da engine. Para tirar um
-  jogador, o servidor fecha o WebSocket dele e manda `leave`;
+  encerrar a partida, o servidor fecha o fd 3 da engine. Um jogador cujo
+  WebSocket fecha continua na partida, parado, e a engine não fica sabendo;
 - os `id`s dos assets valem para a partida toda, e o servidor guarda todos
   para quem entrar depois;
-- um frame para um jogador que saiu é descartado em silêncio, porque a
-  engine pode tê-lo escrito antes de ler o `leave`;
 - enquanto o WebSocket de um jogador está ocupado, o servidor guarda só o
   frame mais novo dele;
-- não há keep-alive no schema. O servidor usa o ping do WebSocket, guarda
-  o lugar de quem caiu por uns 30 s e depois manda `leave`;
+- não há keep-alive no schema. O servidor usa o ping do WebSocket para
+  perceber a view que caiu;
 - a view manda um `resize` como primeiro evento de cada conexão;
 - um timer do servidor manda o `tick`, que é o `Vsync` de todos os
   jogadores, e o servidor não repassa o `Vsync` da view. A engine guarda

@@ -57,8 +57,8 @@ pub enum Error {
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
-    /// An event, a join, a leave or a member of a roster has player 0,
-    /// which is not a player of the session.
+    /// An event or a member of a roster has player 0, which is not a player
+    /// of the session.
     NoPlayer,
     /// An event of a player is a Vsync, which only a tick of the server
     /// carries.
@@ -77,7 +77,7 @@ impl std::fmt::Display for Error {
                     "path verbs ({verbs} bytes) and coords ({coords} floats) disagree"
                 )
             }
-            Error::NoPlayer => write!(f, "an event, a join, a leave or a member has player 0"),
+            Error::NoPlayer => write!(f, "an event or a member has player 0"),
             Error::PlayerVsync => write!(f, "an event of a player is a Vsync"),
             Error::DuplicatePlayer(e) => write!(f, "{e}"),
         }
@@ -571,26 +571,13 @@ mod tests {
     }
 
     #[test]
-    fn the_players_of_the_server_round_trip() {
+    fn the_start_round_trips() {
         let roster = to_engine::Roster::new(vec![member(1, "Ana"), member(2, "Beto")]).unwrap();
         let mut stream = Vec::new();
         to_engine::write_start(&mut stream, &roster).unwrap();
-        to_engine::write_join(&mut stream, nonzero(3), "Caio").unwrap();
-        to_engine::write_leave(&mut stream, nonzero(2)).unwrap();
         let mut r = &stream[..];
-        let mut next = || read_server(&mut r).unwrap().expect("a message");
-        match next() {
+        match read_server(&mut r).unwrap().expect("a message") {
             to_engine::Message::Start(got) => assert_eq!(got, roster),
-            other => panic!("got {other:?}"),
-        }
-        match next() {
-            to_engine::Message::Join { player, nickname } => {
-                assert_eq!((player, nickname.as_str()), (nonzero(3), "Caio"));
-            }
-            other => panic!("got {other:?}"),
-        }
-        match next() {
-            to_engine::Message::Leave { player } => assert_eq!(player, nonzero(2)),
             other => panic!("got {other:?}"),
         }
         assert!(read_server(&mut r).unwrap().is_none());
@@ -636,33 +623,20 @@ mod tests {
     }
 
     #[test]
-    fn an_event_a_join_or_a_leave_of_player_0_is_an_error_and_the_session_goes_on() {
-        let mut stream = Vec::new();
-        for payload in [
-            to_engine::encode_input(
-                0,
-                &InputEvent::Resize {
-                    width: 1.0,
-                    height: 1.0,
-                },
-            ),
-            to_engine::encode_join(0, "Caio"),
-            to_engine::encode_leave(0),
-        ] {
-            stream.extend_from_slice(&framing::header(
-                framing::Side::Server,
-                payload.len() as u32,
-            ));
-            stream.extend_from_slice(&payload);
-        }
+    fn an_event_of_player_0_is_an_error_and_the_session_goes_on() {
+        let resize = InputEvent::Resize {
+            width: 1.0,
+            height: 1.0,
+        };
+        let payload = to_engine::encode_input(0, &resize);
+        let mut stream = framing::header(framing::Side::Server, payload.len() as u32).to_vec();
+        stream.extend_from_slice(&payload);
         to_engine::write_tick(&mut stream).unwrap();
         let mut r = &stream[..];
-        for _ in 0..3 {
-            assert!(matches!(
-                read_server(&mut r),
-                Err(ReadError::Payload(Error::NoPlayer))
-            ));
-        }
+        assert!(matches!(
+            read_server(&mut r),
+            Err(ReadError::Payload(Error::NoPlayer))
+        ));
         assert!(matches!(
             read_server(&mut r),
             Ok(Some(to_engine::Message::Tick))

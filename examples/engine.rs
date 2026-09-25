@@ -83,8 +83,6 @@ fn main() -> ExitCode {
                 break;
             }
             SessionEvent::Start(_)
-            | SessionEvent::Join { .. }
-            | SessionEvent::Leave { .. }
             | SessionEvent::Input {
                 event:
                     InputEvent::Mouse(_)

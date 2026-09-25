@@ -37,8 +37,8 @@ pub struct Session {
 /// What [`Session::next_event`] and [`Session::wait`] deliver.
 #[derive(Debug)]
 pub enum SessionEvent {
-    /// The players when the session starts. It comes before every other
-    /// event of the server, and once.
+    /// The players of the session, who are the same until its end. It comes
+    /// before every other event of the server, and once.
     Start(Roster),
     /// Time to draw the next frames, for every player.
     Vsync,
@@ -47,14 +47,6 @@ pub enum SessionEvent {
         player: NonZeroU32,
         event: InputEvent,
     },
-    /// `player` joined the session.
-    Join {
-        player: NonZeroU32,
-        nickname: String,
-    },
-    /// `player` left the session. A frame for `player` goes nowhere from
-    /// now on.
-    Leave { player: NonZeroU32 },
     /// The session dropped a message that broke a rule, and goes on.
     Error(SessionError),
     /// The stream ended, which is how the server ends the session. It is
@@ -193,22 +185,14 @@ impl Session {
                 self.state = State::Started;
                 SessionEvent::Start(roster)
             }
-            (
-                State::BeforeStart,
-                Message::Input { .. }
-                | Message::Join { .. }
-                | Message::Leave { .. }
-                | Message::Tick,
-            ) => SessionEvent::Error(SessionError::BeforeStart),
+            (State::BeforeStart, Message::Input { .. } | Message::Tick) => {
+                SessionEvent::Error(SessionError::BeforeStart)
+            }
             (State::Started, Message::Start(_)) => SessionEvent::Error(SessionError::SecondStart),
             (State::Started, Message::Tick) => SessionEvent::Vsync,
             (State::Started, Message::Input { player, event }) => {
                 SessionEvent::Input { player, event }
             }
-            (State::Started, Message::Join { player, nickname }) => {
-                SessionEvent::Join { player, nickname }
-            }
-            (State::Started, Message::Leave { player }) => SessionEvent::Leave { player },
             (State::Ended, message) => {
                 unreachable!("take_messages stops at the end, not at {message:?}")
             }
@@ -231,19 +215,14 @@ impl Session {
                     return;
                 }
             }
-            SessionEvent::Start(_)
-            | SessionEvent::Join { .. }
-            | SessionEvent::Leave { .. }
-            | SessionEvent::Error(_)
-            | SessionEvent::End(_) => {}
+            SessionEvent::Start(_) | SessionEvent::Error(_) | SessionEvent::End(_) => {}
         }
         self.events.push_back(event);
     }
 
     /// The waiting input of `player` that `new` replaces, looking from the
     /// back past the input of the other players. The events of one player
-    /// keep their order, and nothing moves across a Vsync, a join or a
-    /// leave.
+    /// keep their order, and nothing moves across a Vsync.
     fn superseded(&mut self, player: NonZeroU32, new: &InputEvent) -> Option<&mut SessionEvent> {
         for old in self.events.iter_mut().rev() {
             match old {
@@ -253,8 +232,6 @@ impl Session {
                 SessionEvent::Input { .. } => {}
                 SessionEvent::Start(_)
                 | SessionEvent::Vsync
-                | SessionEvent::Join { .. }
-                | SessionEvent::Leave { .. }
                 | SessionEvent::Error(_)
                 | SessionEvent::End(_) => return None,
             }
@@ -370,8 +347,6 @@ mod tests {
                     InputEvent::Resize { width, .. } => format!("{player} resize {width}"),
                     InputEvent::Vsync | InputEvent::Pad(_) => format!("{player} {event:?}"),
                 },
-                SessionEvent::Join { player, nickname } => format!("join {player} {nickname}"),
-                SessionEvent::Leave { player } => format!("leave {player}"),
                 SessionEvent::Error(e) => format!("error {e}"),
                 SessionEvent::End(None) => "end".into(),
                 SessionEvent::End(Some(e)) => format!("end {:?}", e.kind()),
@@ -384,8 +359,6 @@ mod tests {
         let mut stream = start();
         stream.extend_from_slice(&tick());
         input(&mut stream, 2, &key("a"));
-        to_engine::write_join(&mut stream, player(3), "Caio").unwrap();
-        to_engine::write_leave(&mut stream, player(1)).unwrap();
         let mut session = Session::new();
         let mut events = Vec::new();
         for byte in &stream {
@@ -394,17 +367,7 @@ mod tests {
         }
         session.end();
         events.extend(names(&mut session));
-        assert_eq!(
-            events,
-            [
-                "start 2",
-                "vsync",
-                "2 key a",
-                "join 3 Caio",
-                "leave 1",
-                "end"
-            ]
-        );
+        assert_eq!(events, ["start 2", "vsync", "2 key a", "end"]);
     }
 
     #[test]
@@ -444,31 +407,17 @@ mod tests {
     }
 
     #[test]
-    fn a_move_stops_at_a_vsync_a_join_a_leave_and_a_key_of_its_player() {
+    fn a_move_stops_at_a_vsync_and_a_key_of_its_player() {
         let mut stream = Vec::new();
         input(&mut stream, 1, &at(1.0));
         stream.extend_from_slice(&tick());
         input(&mut stream, 1, &at(2.0));
-        to_engine::write_join(&mut stream, player(3), "Caio").unwrap();
-        input(&mut stream, 1, &at(3.0));
-        to_engine::write_leave(&mut stream, player(3)).unwrap();
-        input(&mut stream, 1, &at(4.0));
         input(&mut stream, 1, &key("a"));
-        input(&mut stream, 1, &at(5.0));
+        input(&mut stream, 1, &at(3.0));
         let mut session = started(&stream);
         assert_eq!(
             names(&mut session),
-            [
-                "1 move 1",
-                "vsync",
-                "1 move 2",
-                "join 3 Caio",
-                "1 move 3",
-                "leave 3",
-                "1 move 4",
-                "1 key a",
-                "1 move 5"
-            ]
+            ["1 move 1", "vsync", "1 move 2", "1 key a", "1 move 3"]
         );
     }
 

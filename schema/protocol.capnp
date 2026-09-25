@@ -3,8 +3,7 @@
 # The session between the engine, which runs the program, the views,
 # which draw the frames and send the input, and the server, which owns the
 # session. It carries the payloads of scene.capnp and event.capnp, and adds
-# the player to a frame, and to the event, the join and the leave of the
-# server.
+# the player to a frame and to the event of the server.
 #
 # Each writer has its own root, EngineMessage from the engine,
 # ViewMessage from a view and ServerMessage from the server, so no side can
@@ -67,7 +66,7 @@ struct Member {
     nickname @1 :Text;
 }
 
-# The players when the session starts.
+# The players of the session, who are the same until its end.
 struct Start {
     members @0 :List(Member);
 }
@@ -79,19 +78,6 @@ struct PlayerEvent {
     event  @1 :Input.InputEvent;
 }
 
-# A player joined the session.
-struct Join {
-    # The player, from 1.
-    player   @0 :UInt32;
-    nickname @1 :Text;
-}
-
-# A player left the session.
-struct Leave {
-    # The player, from 1.
-    player @0 :UInt32;
-}
-
 # Server to engine. A start and a tick are about the whole session.
 struct ServerMessage {
     union {
@@ -100,9 +86,7 @@ struct ServerMessage {
         event @0 :PlayerEvent;
         # The first message of the session.
         start @1 :Start;
-        join  @2 :Join;
-        leave @3 :Leave;
         # Time for the engine to draw the next frames.
-        tick  @4 :Input.Tick;
+        tick  @2 :Input.Tick;
     }
 }
