@@ -58,25 +58,28 @@ view, então uma view não joga em nome de outra.
 
 Regras da sessão com servidor:
 
-- o `start` é a primeira mensagem, com os jogadores da sala, e pode vir
-  vazio. Um jogador só entra no lobby, e os jogadores do `start` são os
-  mesmos até o fim da partida;
+- o servidor lança a engine, e a primeira mensagem dela é o `hello`, com
+  o mínimo e o máximo de jogadores do jogo. Se a primeira mensagem não é
+  um `hello`, a sala acaba. O lobby é do servidor, fora do protocolo, e
+  usa esses limites. No começo da partida, o servidor manda o `start` com
+  os jogadores, que são os mesmos até o fim. Só então as views conectam e
+  mandam eventos;
 - um jogador aparece uma vez no `start`, o número dele não se repete na
   partida, e um `event` de player 0 é erro;
 - nenhuma mensagem encerra a partida. O fim do transporte encerra, o fim
   do pipe ou o close do WebSocket, que também cobre quem quebra. Para
   encerrar a partida, o servidor fecha o fd 3 da engine. Um jogador cujo
   WebSocket fecha continua na partida, parado, e a engine não fica sabendo;
-- quem cai volta ao mesmo lugar. No `join`, o servidor dá ao jogador um
-  token, que a página guarda no `sessionStorage`, e uma conexão que traz o
-  token de volta recebe o mesmo player, todos os assets e o frame mais
-  novo. A conexão antiga, se ainda parece viva, não recebe nem muda mais
+- o servidor dá a cada jogador um token, no link dele, que a página
+  guarda no `sessionStorage`. Uma conexão que traz o token ocupa o lugar
+  do jogador, na primeira vez e depois de uma queda, e recebe todos os
+  assets e o frame mais novo. A conexão antiga, se ainda parece viva, não recebe nem muda mais
   nada;
 - quando uma view cai ou é trocada por outra, o servidor manda à engine
   um `Up` para cada tecla e botão que ela segurava, como a janela faz ao
   perder o foco;
 - os `id`s dos assets valem para a partida toda, e o servidor guarda todos
-  para quem entrar depois;
+  para quem conectar depois;
 - enquanto o WebSocket de um jogador está ocupado, o servidor guarda só o
   frame mais novo dele;
 - não há keep-alive no schema. O servidor usa o ping do WebSocket para
