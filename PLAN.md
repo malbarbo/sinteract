@@ -34,9 +34,9 @@ os braços abaixo.
 
 | quem escreve | raiz            | mágica | braços                                             |
 |--------------|-----------------|--------|----------------------------------------------------|
-| engine       | `EngineMessage` | `SIE1` | `asset`, `frame`, `hello` |
+| engine       | `EngineMessage` | `SIE1` | `asset`, `frame`, `hello`, `forget` |
 | view         | `ViewMessage`   |        | `event`                 |
-| servidor     | `ServerMessage` | `SIS1` | `event`, `start`, `tick` |
+| servidor     | `ServerMessage` | `SIS1` | `event`, `start`, `tick`, `lost` |
 
 Num pipe, cada mensagem vai atrás de um cabeçalho de 8 bytes: a mágica e o
 tamanho em `u32` LE. Num WebSocket vai só o payload, e a versão vai no
@@ -78,10 +78,27 @@ Regras da sessão com servidor:
 - quando uma view cai ou é trocada por outra, o servidor manda à engine
   um `Up` para cada tecla e botão que ela segurava, como a janela faz ao
   perder o foco;
-- os `id`s dos assets valem para a partida toda, e o servidor guarda todos
-  para quem conectar depois;
-- enquanto o WebSocket de um jogador está ocupado, o servidor guarda só o
-  frame mais novo dele;
+- a engine manda um asset logo antes do primeiro frame que o desenha. A
+  tabela `Assets` do módulo `asset` dá o `id` pelo conteúdo do PNG, então
+  um programa que monta a mesma imagem a cada frame a manda uma vez só, e
+  reduz uma imagem maior que 2048 por 2048 pixels, mantendo a proporção;
+- o servidor guarda os assets num `Cache` do módulo `asset`, com no
+  máximo oito imagens de 2048 por 2048 e 48 MiB. Para caber um asset
+  novo, ele tira o que os frames usaram há mais tempo, fora os que o
+  último frame de algum jogador desenha, e manda à engine um `lost` para
+  cada um. Um asset que não cabe nem assim se perde na hora. A engine
+  manda de novo, com outro `id`, uma imagem perdida que um frame volta a
+  desenhar. O servidor não confia na engine para isso, e o jogo local usa
+  o mesmo `Cache` com o `Display`;
+- o servidor lê os `id`s dos bitmaps de cada frame e guarda o frame com
+  os assets que ele desenha. Uma view recebe os que lhe faltam, o frame,
+  e o `forget` de um asset que nem o frame na tela nem o próximo
+  desenham. Só o servidor manda `forget`. Enquanto o WebSocket de um
+  jogador está ocupado, o servidor segura o próximo frame dele até
+  entregá-lo, e depois passa ao mais novo, então uma view lenta pula
+  frames mas avança;
+- uma conexão nova começa sem assets, e a view aplica um `forget` depois
+  de mostrar o frame que chegou antes dele;
 - não há keep-alive no schema. O servidor usa o ping do WebSocket para
   perceber a view que caiu;
 - a view manda um `resize` como primeiro evento de cada conexão;
@@ -176,6 +193,8 @@ Feito no sinteract:
 - a entrada com teclado, mouse, resize e pad de 12 botões;
 - a `Session`, com o `Vsync` do `tick` do servidor e a fila que junta
   movimentos por jogador;
+- os assets com `lost` e `forget`, a tabela `Assets` da engine e o
+  `Cache` de uma sala;
 - as funções do servidor: `framing::parse_header`, `to_server::decode` e
   `to_view::arm`;
 - a feature `render`, que um servidor desliga.
@@ -193,5 +212,8 @@ Falta:
 
 - O caminho do SVG no servidor precisa de `to_view::decode` público.
 - Os bytes que sobram depois de uma mensagem são aceitos.
-- O que sobrou do item A da revisão: `seq`, `Error` e `Hello`.
-- O cache de assets do servidor não tem como apagar um asset.
+- O que sobrou do item A da revisão: `seq` e `Error`.
+- Um asset vai para todos os jogadores, então um jogador vê no DevTools a
+  imagem que só outro jogador desenha. O asset pode ganhar um `player` no
+  fim, como o frame.
+- O campo `mime` do asset sobrou, já que uma view só decodifica PNG.
