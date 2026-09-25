@@ -38,13 +38,22 @@ struct Frame {
     scene  @1 :Draw.Scene;
 }
 
-# Engine to view. An asset goes to every player.
+# The players that a game takes, with 1 <= minPlayers <= maxPlayers.
+struct Hello {
+    minPlayers @0 :UInt32;
+    maxPlayers @1 :UInt32;
+}
+
+# Engine to view, through the server. An asset goes to every player.
 struct EngineMessage {
     union {
         # One per bitmap, before the frames that draw it.
         asset @0 :AssetMsg;
         # One per repaint.
         frame @1 :Frame;
+        # The first message of the engine, and only once. It goes to the
+        # server, which starts the session if the game takes its players.
+        hello @2 :Hello;
     }
 }
 

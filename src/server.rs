@@ -379,7 +379,8 @@ impl ServerCore {
                         seat.frame_sent = false;
                     }
                 }
-                Ok(None) => {}
+                // The core does not start the session at the hello yet.
+                Ok(Some(Arm::Hello(_)) | None) => {}
                 Err(e) => errors.push(EngineError::Payload(e)),
             }
         }
@@ -712,6 +713,7 @@ mod tests {
                             Some(p) => format!("frame {p} {}", scene.width()),
                             None => format!("frame all {}", scene.width()),
                         },
+                        to_view::Message::Hello(_) => "hello".into(),
                     });
                 }
                 Next::Idle => {

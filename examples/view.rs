@@ -209,6 +209,8 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
                     stats.skipped += 1;
                 }
             }
+            // The engine writes no hello yet.
+            Message::Hello(_) => {}
         }
     }
     if let Some(scene) = last {

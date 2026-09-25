@@ -1,15 +1,17 @@
 //! The messages from the engine to the view, in the `EngineMessage` union.
 //!
-//! The engine uploads each bitmap once as an asset, before the frames that
-//! draw it, and sends a frame per repaint, for one player or for all of
-//! them. The engine ends the session with the end of its stream.
+//! The engine says first how many players the game takes, in a hello for
+//! the server. Then it uploads each bitmap once as an asset, before the
+//! frames that draw it, and sends a frame per repaint, for one player or
+//! for all of them. The engine ends the session with the end of its
+//! stream.
 
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
-use crate::protocol_capnp::engine_message;
+use crate::protocol_capnp::{engine_message, hello};
 use crate::scene::Scene;
 
 use super::Error;
@@ -31,6 +33,7 @@ pub enum Message {
         player: Option<NonZeroU32>,
         scene: Scene,
     },
+    Hello(PlayerRange),
 }
 
 /// The arm of a message of the engine, with the player of a frame. A
@@ -43,6 +46,38 @@ pub enum Arm {
     Frame {
         player: Option<NonZeroU32>,
     },
+    Hello(PlayerRange),
+}
+
+/// The fewest and the most players that a game takes, from 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayerRange {
+    min: NonZeroU32,
+    max: NonZeroU32,
+}
+
+impl PlayerRange {
+    /// The range from `min` to `max`, or `None` if `min` is 0 or above
+    /// `max`.
+    pub fn new(min: u32, max: u32) -> Option<PlayerRange> {
+        let min = NonZeroU32::new(min)?;
+        let max = NonZeroU32::new(max).filter(|&max| max >= min)?;
+        Some(PlayerRange { min, max })
+    }
+
+    pub fn min(self) -> NonZeroU32 {
+        self.min
+    }
+
+    pub fn max(self) -> NonZeroU32 {
+        self.max
+    }
+
+    /// Returns `true` if the game takes `players` players, `false`
+    /// otherwise.
+    pub fn contains(self, players: usize) -> bool {
+        (self.min.get() as usize..=self.max.get() as usize).contains(&players)
+    }
 }
 
 /// Read the next message of the engine. Returns `None` at the end of the
@@ -62,13 +97,19 @@ pub fn write_frame(
     write_framed(w, Side::Engine, &frame_message(player, scene))
 }
 
+/// Write the hello, the first message of the engine.
+pub fn write_hello(w: &mut impl Write, players: PlayerRange) -> io::Result<()> {
+    write_framed(w, Side::Engine, &hello_message(players))
+}
+
 /// Write a bitmap upload as an asset.
 pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8], mime: Option<&str>) -> io::Result<()> {
     write_framed(w, Side::Engine, &asset_message(id, blob, mime))
 }
 
 /// The arm of `payload`, a message with no envelope, without a decode of
-/// the scene of a frame. `None` for an arm from a newer schema.
+/// the scene of a frame. `None` for an arm from a newer schema. A hello
+/// whose players are not a [`PlayerRange`] is an error.
 pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
     decode_root::<engine_message::Owned, _>(payload, |msg| {
         let Ok(which) = msg.which() else {
@@ -79,6 +120,7 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
             engine_message::Frame(f) => Arm::Frame {
                 player: NonZeroU32::new(f?.get_player()),
             },
+            engine_message::Hello(h) => Arm::Hello(read_hello(h?)?),
         }))
     })
 }
@@ -116,7 +158,13 @@ fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Er
                 scene: read_scene(f.get_scene()?)?,
             }))
         }
+        engine_message::Hello(h) => Ok(Some(Message::Hello(read_hello(h?)?))),
     }
+}
+
+fn read_hello(h: hello::Reader<'_>) -> Result<PlayerRange, Error> {
+    let (min, max) = (h.get_min_players(), h.get_max_players());
+    PlayerRange::new(min, max).ok_or(Error::PlayerRange { min, max })
 }
 
 fn frame_message(player: Option<NonZeroU32>, scene: &Scene) -> MessageBuilder<HeapAllocator> {
@@ -124,6 +172,14 @@ fn frame_message(player: Option<NonZeroU32>, scene: &Scene) -> MessageBuilder<He
     let mut frame = builder.init_root::<engine_message::Builder>().init_frame();
     frame.set_player(player.map_or(0, NonZeroU32::get));
     write_scene(frame.init_scene(), scene);
+    builder
+}
+
+fn hello_message(players: PlayerRange) -> MessageBuilder<HeapAllocator> {
+    let mut builder = MessageBuilder::new_default();
+    let mut hello = builder.init_root::<engine_message::Builder>().init_hello();
+    hello.set_min_players(players.min.get());
+    hello.set_max_players(players.max.get());
     builder
 }
 
