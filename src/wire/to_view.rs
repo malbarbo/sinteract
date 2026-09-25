@@ -172,7 +172,6 @@ pub(crate) fn encode_asset(id: u32, blob: &[u8], mime: Option<&str>) -> Vec<u8> 
 }
 
 /// Encode the close of the session, with no envelope.
-#[cfg(test)]
 pub(crate) fn encode_close() -> Vec<u8> {
     super::finish(close_message())
 }
