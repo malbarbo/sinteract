@@ -65,14 +65,14 @@ impl Assets {
         }
         let source = Arc::<[u8]>::from(png);
         let (width, height) = png_size(png).ok_or(AssetError::NotPng)?;
-        let (png, (width, height)) = if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        let (png, size) = if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
             let shrunk = shrink(png, width, height)?;
             let size = png_size(&shrunk).expect("the shrunk image is a PNG");
             (Arc::from(shrunk), size)
         } else {
             (source.clone(), (width, height))
         };
-        Footprint::new(Some((width, height)), png.len())?;
+        Footprint::new(Some(size), png.len())?;
         let id = self.next_id;
         self.next_id = id
             .checked_add(1)
@@ -131,8 +131,9 @@ impl Assets {
     }
 }
 
-/// An image of [`Assets`], with its id and the size of the PNG that goes
-/// out.
+/// An image of [`Assets`], with its id and the size of the image from the
+/// program. A shrunk image keeps its size, since a [`Bitmap`] places the
+/// image with no regard to its pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Asset {
     pub id: u32,
