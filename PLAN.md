@@ -89,7 +89,10 @@ Regras da sessão com servidor:
   cada um. Um asset que não cabe nem assim se perde na hora. A engine
   manda de novo, com outro `id`, uma imagem perdida que um frame volta a
   desenhar. O servidor não confia na engine para isso, e o jogo local usa
-  o mesmo `Cache` com o `Display`;
+  o mesmo `Cache` com o `Display`. Um bitmap sem imagem aparece na view
+  como uma caixa cinza com um X vermelho, no lugar da imagem, porque o
+  `transform` do bitmap leva o quadrado unitário ao canvas, qualquer que
+  seja o tamanho da imagem;
 - o servidor lê os `id`s dos bitmaps de cada frame e guarda o frame com
   os assets que ele desenha. Uma view recebe os que lhe faltam, o frame,
   e o `forget` de um asset que nem o frame na tela nem o próximo

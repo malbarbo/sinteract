@@ -94,7 +94,7 @@ impl Assets {
 
     /// The id and the PNG of each image that `scene` draws and that has not
     /// gone out, which go out before the frame. A bitmap whose id did not
-    /// come from [`Assets::image`] draws nothing, so it sends nothing.
+    /// come from [`Assets::image`] sends nothing.
     pub fn frame(&mut self, scene: &Scene) -> Vec<(u32, Arc<[u8]>)> {
         let mut send = Vec::new();
         for id in bitmap_ids(scene) {

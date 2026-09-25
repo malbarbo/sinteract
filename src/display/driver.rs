@@ -90,7 +90,8 @@ pub enum PresentError {
     Io(io::Error),
     /// The surface of the window refused the frame.
     Platform(String),
-    /// The asset does not decode, so a bitmap of its id draws nothing.
+    /// The asset does not decode, so a bitmap of its id draws the marker of
+    /// a missing image.
     Asset(AssetError),
 }
 

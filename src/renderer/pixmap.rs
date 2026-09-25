@@ -231,24 +231,32 @@ impl Canvas for PixmapRenderer {
         render_text(node, &mut self.pixmap, mask, self.base, &mut self.builder);
     }
 
-    /// Draw the image of `bitmap.id`. An id with no image draws nothing.
+    /// Draw the image of `bitmap.id`. An id with no image draws a gray box
+    /// with a red cross in its place, so a missing image shows.
     fn draw_bitmap(&mut self, bitmap: &Bitmap) {
-        let Some(image) = self.assets.images.get(&bitmap.id) else {
-            return;
-        };
         let mask = match in_effect(&self.clip_stack) {
             InEffect::Nothing => return,
             InEffect::Everything => None,
             InEffect::Through(mask) => Some(mask),
         };
-        let (w, h) = (image.width() as f32, image.height() as f32);
         let [a, b, c, d, e, f] = bitmap.transform;
-        // The transform takes the unit square centred on the origin, and the
-        // pixmap starts at its top left corner.
+        let square = Transform::from_row(a, b, c, d, e, f).post_concat(self.base);
+        let Some(image) = self.assets.images.get(&bitmap.id) else {
+            draw_missing(
+                &mut self.pixmap,
+                &mut self.builder,
+                square,
+                self.base.sx,
+                mask,
+            );
+            return;
+        };
+        let (w, h) = (image.width() as f32, image.height() as f32);
+        // The pixmap starts at its top left corner, and `square` takes the
+        // unit square centred on the origin.
         let transform = Transform::from_translate(-w / 2.0, -h / 2.0)
             .post_scale(1.0 / w, 1.0 / h)
-            .post_concat(Transform::from_row(a, b, c, d, e, f))
-            .post_concat(self.base);
+            .post_concat(square);
         let reach = SkRect::from_xywh(0.0, 0.0, w, h)
             .is_some_and(|rect| rect_within_reach(rect, transform));
         if reach {
@@ -551,6 +559,60 @@ fn paint_text_path(
     *builder = path.clear();
 }
 
+/// Draw the marker of a bitmap with no image over the unit square that
+/// `transform` places. The outline and the cross are `width` pixels wide
+/// whatever the transform, so they are drawn in output pixels.
+fn draw_missing(
+    pixmap: &mut Pixmap,
+    builder: &mut PathBuilder,
+    transform: Transform,
+    width: f32,
+    mask: Option<&Mask>,
+) {
+    let unit = SkRect::from_xywh(-0.5, -0.5, 1.0, 1.0).expect("the unit square is a rect");
+    if !rect_within_reach(unit, transform) {
+        return;
+    }
+    let mut corners = [
+        SkPoint::from_xy(-0.5, -0.5),
+        SkPoint::from_xy(0.5, -0.5),
+        SkPoint::from_xy(0.5, 0.5),
+        SkPoint::from_xy(-0.5, 0.5),
+    ];
+    transform.map_points(&mut corners);
+    let [p0, p1, p2, p3] = corners;
+    let mut b = std::mem::take(builder);
+    b.move_to(p0.x, p0.y);
+    b.line_to(p1.x, p1.y);
+    b.line_to(p2.x, p2.y);
+    b.line_to(p3.x, p3.y);
+    b.close();
+    let Some(outline) = b.finish() else {
+        return;
+    };
+    let gray = sk_paint(SkShader::SolidColor(SkColor::from_rgba8(
+        200, 200, 200, 255,
+    )));
+    let red = sk_paint(SkShader::SolidColor(SkColor::from_rgba8(200, 0, 0, 255)));
+    let stroke = Stroke {
+        width,
+        ..Stroke::default()
+    };
+    let identity = Transform::identity();
+    pixmap.fill_path(&outline, &gray, SkFillRule::Winding, identity, mask);
+    pixmap.stroke_path(&outline, &red, &stroke, identity, mask);
+    let mut b = outline.clear();
+    b.move_to(p0.x, p0.y);
+    b.line_to(p2.x, p2.y);
+    b.move_to(p1.x, p1.y);
+    b.line_to(p3.x, p3.y);
+    let Some(cross) = b.finish() else {
+        return;
+    };
+    pixmap.stroke_path(&cross, &red, &stroke, identity, mask);
+    *builder = cross.clear();
+}
+
 /// The farthest a path may reach from the origin, in output pixels.
 /// tiny-skia overflows an `i32` on a path that reaches 2^29 pixels above the
 /// canvas and aborts (linebender/tiny-skia#180), so a path that reaches
@@ -724,9 +786,12 @@ mod tests {
     }
 
     #[test]
-    fn a_bitmap_with_no_image_draws_nothing() {
+    fn a_bitmap_with_no_image_draws_a_gray_box_with_a_red_cross() {
         let pm = draw_red_blue_png(2);
-        assert!(pm.pixels().iter().all(|p| p.alpha() == 0));
+        assert_eq!(pixel_rgba(&pm, 3, 5), (200, 200, 200, 255));
+        // The cross goes through the center, antialiased.
+        let (r, g, _, a) = pixel_rgba(&pm, 10, 5);
+        assert!(r == 200 && g < 100 && a == 255, "{r} {g} {a}");
     }
 
     #[test]
