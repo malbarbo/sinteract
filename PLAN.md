@@ -79,9 +79,21 @@ Regras da sessão com servidor:
   um `Up` para cada tecla e botão que ela segurava, como a janela faz ao
   perder o foco;
 - a engine manda um asset logo antes do primeiro frame que o desenha. A
-  tabela `Assets` do módulo `asset` dá o `id` pelo conteúdo do PNG, então
-  um programa que monta a mesma imagem a cada frame a manda uma vez só, e
-  reduz uma imagem maior que 2048 por 2048 pixels, mantendo a proporção;
+  tabela `Assets` do módulo `asset` dá o `id` pelo conteúdo da imagem,
+  então um programa que monta a mesma imagem a cada frame a manda uma vez
+  só, e reduz uma imagem maior que 2048 por 2048 pixels para um PNG,
+  mantendo a proporção;
+- uma imagem é um PNG, um JPEG, um GIF ou um WebP, e o formato vem dos
+  primeiros bytes. O servidor não decodifica nada. Ele lê o tamanho no
+  cabeçalho, que é o tamanho que o decodificador aloca, e o limite de
+  pixels barra uma imagem bomba, pequena em bytes e enorme em pixels. No
+  GIF, o tamanho cobre também a primeira imagem, se ela passa da tela. A
+  view nativa não deixa o decodificador passar do tamanho do cabeçalho. A
+  view do navegador depende do servidor, porque `createImageBitmap` não
+  tem limite. Um JPEG gira pela orientação do EXIF, na view, no tamanho
+  que o programa vê e no shrink, e a view do navegador passa
+  `imageOrientation: "from-image"`. Um PNG ou um WebP com EXIF não gira.
+  De um GIF ou de um WebP animado, só o primeiro quadro aparece;
 - o servidor guarda os assets num `Cache` do módulo `asset`, com no
   máximo oito imagens de 2048 por 2048 e 48 MiB. Para caber um asset
   novo, ele tira o que os frames usaram há mais tempo, fora os que o
@@ -155,12 +167,12 @@ de um jogador só ao jogador 1.
 
 O servidor usa só `wire`, `scene` e `event`, e o renderer `svg` se ele
 converte o frame em SVG. A feature `render`, default, traz o que ele não
-usa: `tiny-skia` e `png`, do renderer `pixmap`, `pdf-writer`, do `pdf`, e
-`icy_sixel`, do encoder Sixel, que vem do git e traz `quantette`,
+usa: `tiny-skia`, `png` e `image`, do renderer `pixmap`, `pdf-writer`, do
+`pdf`, e `icy_sixel`, do encoder Sixel, que vem do git e traz `quantette`,
 `palette` e `rand`. As features `terminal` e `window` ligam a `render`.
 Com `default-features = false`, o sinteract puxa `capnp`, `kurbo`,
-`ttf-parser` e as dependências pequenas deles, cerca de 5 crates em vez de
-52, e nada do git.
+`ttf-parser` e as dependências pequenas deles, cerca de 6 crates em vez de
+66, e nada do git.
 
 Um crate separado para o `wire` não vale a pena. O `wire` converte a
 `Scene` e o `InputEvent`, a `Scene` usa o `text` para medir, e o `text` traz

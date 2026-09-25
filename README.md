@@ -36,8 +36,8 @@ scope, so a renderer only sees moves, lines, quadratics and cubics.
 
 A `Printer` prints images where the cursor sits. It fails to open when the
 terminal shows no graphics, so a REPL falls back to the text of the value.
-Its `Assets` hold the PNG images that the bitmaps of the scenes name, and
-it keeps them from one print to the next.
+Its `Assets` hold the images that the bitmaps of the scenes name, in PNG,
+JPEG, GIF or WebP, and it keeps them from one print to the next.
 
 For an animation, a `Display` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `Event`s. A frame that
