@@ -102,5 +102,9 @@ struct ServerMessage {
         start @1 :Start;
         # Time for the engine to draw the next frames.
         tick  @2 :Input.Tick;
+        # The server dropped the asset of this id, to keep the room under
+        # its limits. The engine sends the image again, under a new id,
+        # before a frame that draws it.
+        lost  @3 :UInt32;
     }
 }

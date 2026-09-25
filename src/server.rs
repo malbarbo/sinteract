@@ -658,6 +658,7 @@ mod tests {
                         format!("start {}", members.join(", "))
                     }
                     SessionEvent::Vsync => "tick".into(),
+                    SessionEvent::Lost(id) => format!("lost {id}"),
                     SessionEvent::Input { player, event } => match event {
                         InputEvent::Key(k) if k.kind == KeyKind::Up => {
                             format!("{player} up {}", k.key)

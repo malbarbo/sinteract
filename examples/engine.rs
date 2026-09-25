@@ -87,7 +87,9 @@ fn main() -> ExitCode {
                 }
                 break;
             }
+            // The engine sends no asset yet.
             SessionEvent::Start(_)
+            | SessionEvent::Lost(_)
             | SessionEvent::Input {
                 event:
                     InputEvent::Mouse(_)

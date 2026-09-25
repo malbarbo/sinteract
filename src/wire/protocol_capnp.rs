@@ -2784,7 +2784,7 @@ pub mod player_event {
 }
 
 pub mod server_message {
-    pub use self::Which::{Event, Start, Tick};
+    pub use self::Which::{Event, Lost, Start, Tick};
 
     #[derive(Copy, Clone)]
     pub struct Owned(());
@@ -2926,6 +2926,7 @@ pub mod server_message {
                         ::core::option::Option::None,
                     ),
                 )),
+                3 => ::core::result::Result::Ok(Lost(self.reader.get_data_field::<u32>(1))),
                 x => ::core::result::Result::Err(::capnp::NotInSchema(x)),
             }
         }
@@ -3090,6 +3091,11 @@ pub mod server_message {
             !self.builder.is_pointer_field_null(0)
         }
         #[inline]
+        pub fn set_lost(&mut self, value: u32) {
+            self.builder.set_data_field::<u16>(0, 3);
+            self.builder.set_data_field::<u32>(1, value);
+        }
+        #[inline]
         pub fn which(self) -> ::core::result::Result<WhichBuilder<'a>, ::capnp::NotInSchema> {
             match self.builder.get_data_field::<u16>(0) {
                 0 => ::core::result::Result::Ok(Event(
@@ -3110,6 +3116,7 @@ pub mod server_message {
                         ::core::option::Option::None,
                     ),
                 )),
+                3 => ::core::result::Result::Ok(Lost(self.builder.get_data_field::<u32>(1))),
                 x => ::core::result::Result::Err(::capnp::NotInSchema(x)),
             }
         }
@@ -3127,18 +3134,18 @@ pub mod server_message {
     }
     impl Pipeline {}
     mod _private {
-        pub(crate) static ENCODED_NODE: [::capnp::Word; 64] = [
+        pub(crate) static ENCODED_NODE: [::capnp::Word; 79] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
             ::capnp::word(130, 140, 51, 84, 228, 49, 4, 252),
             ::capnp::word(15, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
-            ::capnp::word(1, 0, 7, 0, 0, 0, 3, 0),
+            ::capnp::word(1, 0, 7, 0, 0, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(82, 12, 0, 0, 162, 13, 0, 0),
+            ::capnp::word(82, 12, 0, 0, 118, 14, 0, 0),
             ::capnp::word(21, 0, 0, 0, 234, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(29, 0, 0, 0, 175, 0, 0, 0),
+            ::capnp::word(29, 0, 0, 0, 231, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(112, 114, 111, 116, 111, 99, 111, 108),
@@ -3146,28 +3153,35 @@ pub mod server_message {
             ::capnp::word(101, 114, 118, 101, 114, 77, 101, 115),
             ::capnp::word(115, 97, 103, 101, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
-            ::capnp::word(12, 0, 0, 0, 3, 0, 4, 0),
+            ::capnp::word(16, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 255, 255, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(69, 0, 0, 0, 50, 0, 0, 0),
+            ::capnp::word(97, 0, 0, 0, 50, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(64, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(76, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(92, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(104, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(1, 0, 254, 255, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 1, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(73, 0, 0, 0, 50, 0, 0, 0),
+            ::capnp::word(101, 0, 0, 0, 50, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(68, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(80, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(96, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(108, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(2, 0, 253, 255, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 2, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(77, 0, 0, 0, 42, 0, 0, 0),
+            ::capnp::word(105, 0, 0, 0, 42, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(72, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(84, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(100, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(112, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(3, 0, 252, 255, 1, 0, 0, 0),
+            ::capnp::word(0, 0, 1, 0, 3, 0, 0, 0),
+            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(109, 0, 0, 0, 42, 0, 0, 0),
+            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(104, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(116, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(101, 118, 101, 110, 116, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(187, 191, 80, 242, 173, 196, 169, 150),
@@ -3192,12 +3206,21 @@ pub mod server_message {
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(108, 111, 115, 116, 0, 0, 0, 0),
+            ::capnp::word(8, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(8, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
         ];
         pub(crate) fn get_field_types(index: u16) -> ::capnp::introspect::Type {
             match index {
                 0 => <crate::protocol_capnp::player_event::Owned as ::capnp::introspect::Introspect>::introspect(),
                 1 => <crate::protocol_capnp::start::Owned as ::capnp::introspect::Introspect>::introspect(),
                 2 => <crate::event_capnp::tick::Owned as ::capnp::introspect::Introspect>::introspect(),
+                3 => <u32 as ::capnp::introspect::Introspect>::introspect(),
                 _ => ::capnp::introspect::panic_invalid_field_index(index),
             }
         }
@@ -3217,14 +3240,15 @@ pub mod server_message {
                 MEMBERS_BY_NAME,
             );
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[];
-        pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[0, 1, 2];
-        pub(crate) static MEMBERS_BY_NAME: &[u16] = &[0, 1, 2];
+        pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[0, 1, 2, 3];
+        pub(crate) static MEMBERS_BY_NAME: &[u16] = &[0, 3, 1, 2];
         pub(crate) const TYPE_ID: u64 = 0xfc04_31e4_5433_8c82;
     }
     pub enum Which<A0, A1, A2> {
         Event(A0),
         Start(A1),
         Tick(A2),
+        Lost(u32),
     }
     pub type WhichReader<'a> = Which<
         ::capnp::Result<crate::protocol_capnp::player_event::Reader<'a>>,

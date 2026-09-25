@@ -47,6 +47,9 @@ pub enum SessionEvent {
         player: NonZeroU32,
         event: InputEvent,
     },
+    /// The server dropped the asset of this id, so the engine sends the
+    /// image again before a frame that draws it.
+    Lost(u32),
     /// The session dropped a message that broke a rule, and goes on.
     Error(SessionError),
     /// The stream ended, which is how the server ends the session. It is
@@ -185,11 +188,12 @@ impl Session {
                 self.state = State::Started;
                 SessionEvent::Start(roster)
             }
-            (State::BeforeStart, Message::Input { .. } | Message::Tick) => {
+            (State::BeforeStart, Message::Input { .. } | Message::Tick | Message::Lost(_)) => {
                 SessionEvent::Error(SessionError::BeforeStart)
             }
             (State::Started, Message::Start(_)) => SessionEvent::Error(SessionError::SecondStart),
             (State::Started, Message::Tick) => SessionEvent::Vsync,
+            (State::Started, Message::Lost(id)) => SessionEvent::Lost(id),
             (State::Started, Message::Input { player, event }) => {
                 SessionEvent::Input { player, event }
             }
@@ -215,7 +219,10 @@ impl Session {
                     return;
                 }
             }
-            SessionEvent::Start(_) | SessionEvent::Error(_) | SessionEvent::End(_) => {}
+            SessionEvent::Start(_)
+            | SessionEvent::Lost(_)
+            | SessionEvent::Error(_)
+            | SessionEvent::End(_) => {}
         }
         self.events.push_back(event);
     }
@@ -230,6 +237,7 @@ impl Session {
                     return new.supersedes(event).then_some(old);
                 }
                 SessionEvent::Input { .. } => {}
+                SessionEvent::Lost(_) => {}
                 SessionEvent::Start(_)
                 | SessionEvent::Vsync
                 | SessionEvent::Error(_)
@@ -341,6 +349,7 @@ mod tests {
             .map(|e| match e {
                 SessionEvent::Start(r) => format!("start {}", r.members().len()),
                 SessionEvent::Vsync => "vsync".into(),
+                SessionEvent::Lost(id) => format!("lost {id}"),
                 SessionEvent::Input { player, event } => match event {
                     InputEvent::Key(k) => format!("{player} key {}", k.key),
                     InputEvent::Mouse(m) => format!("{player} move {}", m.x),
@@ -439,6 +448,27 @@ mod tests {
             Some(SessionEvent::Error(SessionError::SecondStart))
         ));
         assert!(matches!(session.next_event(), Some(SessionEvent::Vsync)));
+    }
+
+    #[test]
+    fn a_lost_comes_out_after_the_start_and_is_an_error_before_it() {
+        let mut lost = Vec::new();
+        to_engine::write_lost(&mut lost, 7).unwrap();
+        let mut stream = lost.clone();
+        stream.extend_from_slice(&start());
+        stream.extend_from_slice(&tick());
+        stream.extend_from_slice(&lost);
+        stream.extend_from_slice(&tick());
+        let mut session = Session::new();
+        session.feed(&stream);
+        assert!(matches!(
+            session.next_event(),
+            Some(SessionEvent::Error(SessionError::BeforeStart))
+        ));
+        assert!(matches!(session.next_event(), Some(SessionEvent::Start(_))));
+        assert!(matches!(session.next_event(), Some(SessionEvent::Vsync)));
+        assert!(matches!(session.next_event(), Some(SessionEvent::Lost(7))));
+        assert!(session.next_event().is_none());
     }
 
     #[test]

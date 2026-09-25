@@ -3,8 +3,9 @@
 //!
 //! The server starts the session with the players, who stay the same until
 //! the end, and passes on the input of each view with its player. A tick
-//! of the server paces the engine for every player, and the server ends
-//! the session with the end of its stream.
+//! of the server paces the engine for every player, a lost says that the
+//! server dropped an asset, and the server ends the session with the end
+//! of its stream.
 
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -35,6 +36,8 @@ pub enum Message {
     Start(Roster),
     /// Time for the engine to draw the next frames.
     Tick,
+    /// The server dropped the asset of this id.
+    Lost(u32),
 }
 
 /// A player of the session.
@@ -100,6 +103,11 @@ pub fn write_tick(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::Server, &tick_message())
 }
 
+/// Write that the server dropped the asset `id`.
+pub fn write_lost(w: &mut impl Write, id: u32) -> io::Result<()> {
+    write_framed(w, Side::Server, &lost_message(id))
+}
+
 /// Write the start of the session with `roster`.
 pub fn write_start(w: &mut impl Write, roster: &Roster) -> io::Result<()> {
     write_framed(w, Side::Server, &start_message(roster.members()))
@@ -144,6 +152,7 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
             Ok(Some(Message::Start(Roster::new(members)?)))
         }
         server_message::Tick(_) => Ok(Some(Message::Tick)),
+        server_message::Lost(id) => Ok(Some(Message::Lost(id))),
     }
 }
 
@@ -163,6 +172,12 @@ fn input_message(player: u32, ev: &InputEvent) -> MessageBuilder<HeapAllocator> 
 fn tick_message() -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     builder.init_root::<server_message::Builder>().init_tick();
+    builder
+}
+
+fn lost_message(id: u32) -> MessageBuilder<HeapAllocator> {
+    let mut builder = MessageBuilder::new_default();
+    builder.init_root::<server_message::Builder>().set_lost(id);
     builder
 }
 
