@@ -29,7 +29,6 @@ use crate::event::{Event, InputEvent, Interrupt, MouseEvent};
 use crate::renderer::pixmap::{Assets, PixmapRenderer};
 use crate::renderer::{AllocError, Renderer};
 use crate::scene::{Rgba, Scene};
-use crate::wire::ReadError;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
 
@@ -991,7 +990,7 @@ fn read_bytes(
     let mut tty = match super::term_query::TtyInput::open() {
         Ok(tty) => tty,
         Err(e) => {
-            let _ = tx.send_read_error(ReadError::Broken(e));
+            let _ = tx.send_read_error(e);
             return;
         }
     };
@@ -1004,7 +1003,7 @@ fn read_bytes(
             return;
         }
         if let Err(e) = tty.read(READ_POLL, &mut bytes) {
-            let _ = tx.send_read_error(ReadError::Broken(e));
+            let _ = tx.send_read_error(e);
             return;
         }
         if bytes.is_empty() {

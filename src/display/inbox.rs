@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::io;
 use std::mem;
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -48,9 +49,9 @@ impl Sender {
     }
 
     /// Queue [`Interrupt::Read`], in order with the events. A reader that
-    /// sends a `ReadError::Broken` sends a close right after.
+    /// sends a read error sends a close right after.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
-    pub(crate) fn send_read_error(&self, e: crate::wire::ReadError) -> Result<(), Closed> {
+    pub(crate) fn send_read_error(&self, e: io::Error) -> Result<(), Closed> {
         self.send(Entry::Read(e))
     }
 
@@ -129,7 +130,7 @@ enum Entry {
     Input(InputEvent),
     Wake,
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
-    Read(crate::wire::ReadError),
+    Read(io::Error),
     Close,
 }
 
@@ -417,17 +418,12 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_message_keeps_its_place_and_the_queue_goes_on() {
+    fn a_read_error_keeps_its_place() {
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.send_input(key("a")).unwrap();
-        tx.send_read_error(crate::wire::ReadError::Payload(
-            crate::wire::Error::PathLengthMismatch {
-                verbs: 2,
-                coords: 1,
-            },
-        ))
-        .unwrap();
+        tx.send_read_error(io::Error::other("the tty went away"))
+            .unwrap();
         tx.send_input(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(matches!(inbox.wait(None), Err(Interrupt::Read(_))));
