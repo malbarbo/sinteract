@@ -1,7 +1,9 @@
 //! An engine that runs a game and talks the protocol on fd 3 and fd 4, for
 //! `examples/view.rs`. Balls bounce, and the arrows of any player move a
-//! paddle, for 1 to 8 players. `q` ends the session from this side. The
-//! argument is the number of balls:
+//! paddle, for 1 to 8 players. The paddle is an image that changes its
+//! color at each move, so a new image goes out at each move.
+//! `q` ends the session from this side. The argument is the number of
+//! balls:
 //!
 //! ```text
 //! cargo build --examples
@@ -14,13 +16,14 @@
 #![cfg(unix)]
 
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{self, BufWriter, Write};
 use std::os::fd::FromRawFd;
 use std::process::ExitCode;
 use std::time::Instant;
 
+use sinteract::asset::{Asset, Assets};
 use sinteract::event::{InputEvent, KeyKind, key};
-use sinteract::scene::{Paint, PathStyle, Scene};
+use sinteract::scene::{Paint, PathStyle, RotatedRect, Scene};
 use sinteract::session::{Session, SessionEvent};
 use sinteract::wire::to_view::{self, PlayerRange};
 
@@ -47,6 +50,7 @@ fn main() -> ExitCode {
     }
     let mut session = Session::new();
     let mut game = Game::new(balls);
+    let mut assets = Assets::new();
     let mut last = None;
     // The end of fd 4, when the engine exits, ends the session for the
     // server.
@@ -65,11 +69,12 @@ fn main() -> ExitCode {
                 last = Some(now);
                 // A long pause would throw the balls through the walls.
                 game.step(dt.min(0.1));
-                if let Err(e) = to_view::write_frame(&mut to_view, None, &game.scene()) {
+                if let Err(e) = draw(&game, &mut assets, &mut to_view) {
                     eprintln!("engine: {e}");
                     break;
                 }
             }
+            SessionEvent::Lost(id) => assets.lost(id),
             SessionEvent::Input {
                 event: InputEvent::Key(k),
                 ..
@@ -87,9 +92,7 @@ fn main() -> ExitCode {
                 }
                 break;
             }
-            // The engine sends no asset yet.
             SessionEvent::Start(_)
-            | SessionEvent::Lost(_)
             | SessionEvent::Input {
                 event:
                     InputEvent::Mouse(_)
@@ -103,9 +106,22 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Write a frame of `game` for every player, after the images that it
+/// draws and that have not gone out.
+fn draw(game: &Game, assets: &mut Assets, to_view: &mut impl Write) -> io::Result<()> {
+    let paddle = assets.image(&game.paddle_png()).map_err(io::Error::other)?;
+    let scene = game.scene(paddle);
+    for (id, png) in assets.frame(&scene) {
+        to_view::write_asset(to_view, id, &png, None)?;
+    }
+    to_view::write_frame(to_view, None, &scene)
+}
+
 struct Game {
     balls: Vec<Ball>,
     paddle: f32,
+    /// How many times the paddle moved, which picks its color.
+    moves: u8,
 }
 
 struct Ball {
@@ -117,6 +133,7 @@ struct Ball {
 
 const RADIUS: f32 = 6.0;
 const PADDLE_WIDTH: f32 = 60.0;
+const PADDLE_HEIGHT: f32 = 6.0;
 const PADDLE_STEP: f32 = 20.0;
 
 impl Game {
@@ -136,6 +153,7 @@ impl Game {
         Self {
             balls,
             paddle: (WIDTH - PADDLE_WIDTH) / 2.0,
+            moves: 0,
         }
     }
 
@@ -163,9 +181,25 @@ impl Game {
             return;
         };
         self.paddle = (self.paddle + step).clamp(0.0, WIDTH - PADDLE_WIDTH);
+        self.moves = self.moves.wrapping_add(1);
     }
 
-    fn scene(&self) -> Scene {
+    /// The paddle as a PNG, in a green that the moves shift.
+    fn paddle_png(&self) -> Vec<u8> {
+        let mut pixmap = tiny_skia::Pixmap::new(PADDLE_WIDTH as u32, PADDLE_HEIGHT as u32)
+            .expect("the paddle has a size");
+        let shade = self.moves % 8 * 16;
+        pixmap.fill(tiny_skia::Color::from_rgba8(
+            80,
+            200 - shade,
+            120 + shade,
+            255,
+        ));
+        pixmap.encode_png().expect("a pixmap encodes")
+    }
+
+    /// The field, with the image `paddle` for the paddle.
+    fn scene(&self, paddle: Asset) -> Scene {
         let mut scene = Scene::new(WIDTH, HEIGHT);
         let fill = |r, g, b| PathStyle {
             fill: Paint::rgba(r, g, b, 1.0),
@@ -183,12 +217,14 @@ impl Game {
                 .arc_to(RADIUS, RADIUS, 0.0, false, true, b.x + RADIUS, b.y)
                 .arc_to(RADIUS, RADIUS, 0.0, false, true, b.x - RADIUS, b.y);
         }
-        let top = HEIGHT - 12.0;
-        scene
-            .path(fill(80, 200, 120), self.paddle, top)
-            .line_to(self.paddle + PADDLE_WIDTH, top)
-            .line_to(self.paddle + PADDLE_WIDTH, top + 6.0)
-            .line_to(self.paddle, top + 6.0);
+        let rect = RotatedRect {
+            cx: self.paddle + PADDLE_WIDTH / 2.0,
+            cy: HEIGHT - 12.0 + PADDLE_HEIGHT / 2.0,
+            w: PADDLE_WIDTH,
+            h: PADDLE_HEIGHT,
+            angle_deg: 0.0,
+        };
+        scene.bitmap(paddle.fit(rect));
         scene
     }
 }

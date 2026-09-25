@@ -96,6 +96,11 @@ path = "src/lib.rs"
 name = "view"
 required-features = ["terminal", "window"]
 
+# It draws its paddle with tiny-skia.
+[[example]]
+name = "engine"
+required-features = ["render"]
+
 [[example]]
 name = "gallery"
 required-features = ["terminal", "window"]

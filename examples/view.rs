@@ -3,8 +3,9 @@
 //! part of the server for one player. At the hello of the engine it starts
 //! the session with player 1, shows the frames in the terminal or in a
 //! window, and sends a tick for each Vsync of the display and the input of
-//! the user as player 1. At the
-//! end it prints to stderr what the frames cost:
+//! the user as player 1. Like a server, it keeps the assets under the
+//! limits of a room, and tells the engine which ones it drops. At the end
+//! it prints to stderr what the frames cost:
 //!
 //! ```text
 //! cargo build --examples
@@ -16,7 +17,7 @@
 #![cfg_attr(not(unix), no_main)]
 #![cfg(unix)]
 
-use std::io::{self, BufReader, BufWriter, PipeReader, PipeWriter, Read};
+use std::io::{self, BufReader, BufWriter, PipeReader, PipeWriter, Read, Write};
 use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::process::{Child, Command, ExitCode, Stdio};
@@ -25,6 +26,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use command_fds::{CommandFdExt, FdMapping};
+use sinteract::asset::{self, Cache, Footprint};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, InputEvent, Interrupt};
 use sinteract::scene::Scene;
@@ -98,6 +100,7 @@ fn main() -> ExitCode {
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
     let mut stats = Stats::default();
+    let mut cache = Cache::new();
     loop {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
@@ -114,7 +117,13 @@ fn main() -> ExitCode {
             }
             // The messages of the engine come through the channel, and the
             // reader thread wakes the loop after each one.
-            Err(Interrupt::Wake) => match drain(fr.as_mut(), &from_reader, &mut stats) {
+            Err(Interrupt::Wake) => match drain(
+                fr.as_mut(),
+                &from_reader,
+                &mut cache,
+                &mut to_engine,
+                &mut stats,
+            ) {
                 Drained::Open => {}
                 Drained::EngineEnded | Drained::DisplayFailed => break,
             },
@@ -199,9 +208,18 @@ enum Drained {
 
 /// Act on the messages of the engine that arrived. The assets go to the
 /// display in order, and only the last frame is shown, since the ones
-/// before it are already stale.
-fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stats) -> Drained {
+/// before it are already stale. An asset that `cache` drops, or that does
+/// not fit, is lost for the engine, and the display forgets it after it
+/// shows the frame, since the one on the screen may still draw it.
+fn drain(
+    fr: &mut dyn Display,
+    from_reader: &Receiver<Message>,
+    cache: &mut Cache,
+    to_engine: &mut impl Write,
+    stats: &mut Stats,
+) -> Drained {
     let mut last: Option<Scene> = None;
+    let mut forgets = Vec::new();
     let mut session = Drained::Open;
     loop {
         let message = match from_reader.try_recv() {
@@ -213,22 +231,48 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
             }
         };
         match message {
-            Message::Asset { id, blob, mime } => match fr.push_asset(id, &blob, mime.as_deref()) {
-                Ok(()) => {}
-                // The rest of the frame still draws.
-                Err(e @ PresentError::Asset(_)) => eprintln!("view: {e}"),
-                Err(e) => {
-                    eprintln!("view: {e}");
-                    return Drained::DisplayFailed;
+            Message::Asset { id, blob, mime } => {
+                if cache.contains(id) {
+                    eprintln!("view: skipping asset {id}, which is live");
+                    continue;
                 }
-            },
+                let kept = Footprint::of(&blob).and_then(|footprint| cache.asset(id, footprint));
+                let dropped = match kept {
+                    Ok(dropped) => dropped,
+                    Err(e) => {
+                        eprintln!("view: asset {id}: {e}");
+                        vec![id]
+                    }
+                };
+                for gone in dropped {
+                    if gone != id {
+                        forgets.push(gone);
+                    }
+                    if to_engine::write_lost(to_engine, gone).is_err() {
+                        return Drained::EngineEnded;
+                    }
+                }
+                if !cache.contains(id) {
+                    continue;
+                }
+                match fr.push_asset(id, &blob, mime.as_deref()) {
+                    Ok(()) => {}
+                    // The rest of the frame still draws.
+                    Err(e @ PresentError::Asset(_)) => eprintln!("view: {e}"),
+                    Err(e) => {
+                        eprintln!("view: {e}");
+                        return Drained::DisplayFailed;
+                    }
+                }
+            }
             Message::Frame { scene, .. } => {
+                cache.frame(None, asset::bitmap_ids(&scene));
                 if last.replace(scene).is_some() {
                     stats.skipped += 1;
                 }
             }
             Message::Hello(_) => eprintln!("view: skipping a hello after the first one"),
-            Message::Forget(_) => {}
+            Message::Forget(_) => eprintln!("view: skipping a forget from the engine"),
         }
     }
     if let Some(scene) = last {
@@ -238,6 +282,9 @@ fn drain(fr: &mut dyn Display, from_reader: &Receiver<Message>, stats: &mut Stat
             return Drained::DisplayFailed;
         }
         stats.shown(start.elapsed());
+    }
+    for id in forgets {
+        fr.forget_asset(id);
     }
     session
 }
