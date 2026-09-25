@@ -1,14 +1,18 @@
-//! The limits on the assets of a room. The server keeps the live assets of
-//! a room under them, and a local host keeps its display under them the
-//! same way.
+//! The images of a room. [`Assets`] is the table of the engine, which gives
+//! an image its id and sends it before the first frame that draws it.
+//! [`Cache`] keeps the live assets of a room under the limits, in the
+//! server, and in a local host for its display.
 //!
 //! A limit counts the pixels, since each view decodes an asset to four
 //! bytes a pixel, and a small PNG can hold a large image. It also counts
 //! the bytes, which the server keeps and sends to each view.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::num::NonZeroU32;
+use std::sync::Arc;
+
+use crate::scene::{Bitmap, Element, RotatedRect, Scene};
 
 /// The most pixels of one image, 2048 by 2048.
 pub const MAX_IMAGE_PIXELS: u64 = 2048 * 2048;
@@ -20,6 +24,120 @@ pub const MAX_LIVE_PIXELS: u64 = 8 * MAX_IMAGE_PIXELS;
 /// The most bytes of the live assets of a room. It is under the cap of the
 /// framing, so any asset under it fits in a message.
 pub const MAX_LIVE_BYTES: u64 = 48 << 20;
+
+/// The images of an engine. [`Assets::image`] gives an image its id, as a
+/// front end turns its image into a [`Bitmap`], and [`Assets::frame`] says
+/// which images go out before a frame. The same image keeps its id until
+/// the server loses it, so a program can make the same image each frame
+/// and send it once.
+///
+/// The front end calls `image` for the bitmaps of one frame, then `frame`
+/// for that frame, and [`Assets::lost`] for each lost of the server. An
+/// image that did not go out is gone after the next two calls of `frame`.
+#[derive(Debug, Default)]
+pub struct Assets {
+    ids: HashMap<Arc<[u8]>, u32>,
+    images: BTreeMap<u32, Entry>,
+    /// How many times `frame` ran.
+    frames: u64,
+    next_id: u32,
+}
+
+impl Assets {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The image in `png`, with its id, or an error if it is not a PNG or
+    /// has more than [`MAX_IMAGE_PIXELS`].
+    pub fn image(&mut self, png: &[u8]) -> Result<Asset, AssetError> {
+        if let Some(&id) = self.ids.get(png) {
+            let entry = self.images.get_mut(&id).expect("an id names an image");
+            entry.seen = self.frames;
+            return Ok(entry.asset);
+        }
+        let (width, height) = png_size(png).ok_or(AssetError::NotPng)?;
+        Footprint::new(Some((width, height)), png.len())?;
+        let id = self.next_id;
+        self.next_id = id
+            .checked_add(1)
+            .expect("an engine makes fewer than 2^32 images");
+        let asset = Asset { id, width, height };
+        let png = Arc::<[u8]>::from(png);
+        self.ids.insert(png.clone(), id);
+        self.images.insert(
+            id,
+            Entry {
+                asset,
+                png,
+                sent: false,
+                seen: self.frames,
+            },
+        );
+        Ok(asset)
+    }
+
+    /// The id and the PNG of each image that `scene` draws and that has not
+    /// gone out, which go out before the frame. A bitmap whose id did not
+    /// come from [`Assets::image`] draws nothing, so it sends nothing.
+    pub fn frame(&mut self, scene: &Scene) -> Vec<(u32, Arc<[u8]>)> {
+        let mut send = Vec::new();
+        for id in bitmap_ids(scene) {
+            if let Some(entry) = self.images.get_mut(&id).filter(|e| !e.sent) {
+                entry.sent = true;
+                send.push((id, entry.png.clone()));
+            }
+        }
+        let frames = self.frames;
+        // An image that did not go out, from before the last frame.
+        let stale: Vec<u32> = self
+            .images
+            .iter()
+            .filter(|(_, entry)| !entry.sent && entry.seen < frames)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in stale {
+            self.remove(id);
+        }
+        self.frames += 1;
+        send
+    }
+
+    /// Say that the server lost the image `id`. The image gets a new id the
+    /// next time, and goes out again. An unknown id does nothing.
+    pub fn lost(&mut self, id: u32) {
+        self.remove(id);
+    }
+
+    fn remove(&mut self, id: u32) {
+        if let Some(entry) = self.images.remove(&id) {
+            self.ids.remove(&entry.png);
+        }
+    }
+}
+
+/// An image of [`Assets`], with its id and the size of the PNG that goes
+/// out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Asset {
+    pub id: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Asset {
+    /// The bitmap of the image, drawn into `rect`.
+    pub fn fit(self, rect: RotatedRect) -> Bitmap {
+        Bitmap::fit(self.id, self.width, self.height, rect)
+    }
+}
+
+/// The ids of the bitmaps that `scene` draws, in its clips too.
+pub fn bitmap_ids(scene: &Scene) -> BTreeSet<u32> {
+    let mut ids = BTreeSet::new();
+    add_bitmap_ids(scene.elements(), &mut ids);
+    ids
+}
 
 /// The live assets of a room, under the limits. [`Cache::asset`] keeps a
 /// new asset, and drops the ones that the frames used longest ago when it
@@ -237,6 +355,29 @@ struct Live {
     used: u64,
 }
 
+/// An image of [`Assets`].
+#[derive(Debug)]
+struct Entry {
+    asset: Asset,
+    png: Arc<[u8]>,
+    /// Whether the image went out, and the server has not lost it since.
+    sent: bool,
+    /// The count of frames at the last call of [`Assets::image`] for it.
+    seen: u64,
+}
+
+fn add_bitmap_ids(elements: &[Element], ids: &mut BTreeSet<u32>) {
+    for element in elements {
+        match element {
+            Element::Bitmap(b) => {
+                ids.insert(b.id);
+            }
+            Element::Clipped { elements, .. } => add_bitmap_ids(elements, ids),
+            Element::Path(_) | Element::Text(_) => {}
+        }
+    }
+}
+
 /// The first 24 bytes of a PNG of `width` by `height`, all that
 /// [`png_size`] reads.
 #[cfg(test)]
@@ -250,6 +391,94 @@ pub(crate) fn png_head(width: u32, height: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::{ClipPath, FillRule};
+
+    /// A scene that draws the bitmaps of `ids`, the last one inside a clip.
+    fn drawing(ids: &[u32]) -> Scene {
+        let mut scene = Scene::new(10.0, 10.0);
+        let Some((last, rest)) = ids.split_last() else {
+            return scene;
+        };
+        for &id in rest {
+            scene.bitmap(Bitmap {
+                id,
+                ..Bitmap::default()
+            });
+        }
+        let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
+            .line_to(5.0, 0.0)
+            .line_to(5.0, 5.0)
+            .build();
+        scene.clip(clip).bitmap(Bitmap {
+            id: *last,
+            ..Bitmap::default()
+        });
+        scene
+    }
+
+    fn sent(send: &[(u32, Arc<[u8]>)]) -> Vec<u32> {
+        send.iter().map(|(id, _)| *id).collect()
+    }
+
+    fn id(assets: &mut Assets, png: &[u8]) -> u32 {
+        assets.image(png).unwrap().id
+    }
+
+    #[test]
+    fn the_same_image_gets_the_same_id_and_goes_out_once() {
+        let mut assets = Assets::new();
+        let a = id(&mut assets, &png_head(4, 4));
+        assert_eq!(id(&mut assets, &png_head(4, 4)), a);
+        let b = id(&mut assets, &png_head(5, 5));
+        assert_ne!(a, b);
+        let send = assets.frame(&drawing(&[a, b]));
+        assert_eq!(sent(&send), [a, b]);
+        assert_eq!(&*send[0].1, &png_head(4, 4)[..]);
+        // An image that no frame draws for a while keeps its id.
+        assert!(assets.frame(&drawing(&[])).is_empty());
+        assert!(assets.frame(&drawing(&[])).is_empty());
+        assert_eq!(id(&mut assets, &png_head(4, 4)), a);
+        assert!(assets.frame(&drawing(&[a, b])).is_empty());
+    }
+
+    #[test]
+    fn a_lost_image_gets_a_new_id_and_goes_out_again() {
+        let mut assets = Assets::new();
+        let a = id(&mut assets, &png_head(4, 4));
+        assets.frame(&drawing(&[a]));
+        assets.lost(a);
+        assets.lost(99);
+        let again = id(&mut assets, &png_head(4, 4));
+        assert_ne!(again, a);
+        assert_eq!(sent(&assets.frame(&drawing(&[a, again]))), [again]);
+    }
+
+    #[test]
+    fn an_image_that_did_not_go_out_is_gone_after_two_frames() {
+        let mut assets = Assets::new();
+        let a = id(&mut assets, &png_head(4, 4));
+        assets.frame(&drawing(&[]));
+        assert_eq!(id(&mut assets, &png_head(4, 4)), a);
+        assets.frame(&drawing(&[]));
+        assets.frame(&drawing(&[]));
+        assert_ne!(id(&mut assets, &png_head(4, 4)), a);
+    }
+
+    #[test]
+    fn an_image_that_is_not_a_png_or_is_too_large_gets_no_id() {
+        let mut assets = Assets::new();
+        assert_eq!(assets.image(b"GIF89a"), Err(AssetError::NotPng));
+        assert!(matches!(
+            assets.image(&png_head(2049, 2048)),
+            Err(AssetError::TooManyPixels { .. })
+        ));
+    }
+
+    #[test]
+    fn a_bitmap_of_an_unknown_id_sends_nothing() {
+        let mut assets = Assets::new();
+        assert!(assets.frame(&drawing(&[42])).is_empty());
+    }
 
     /// The footprint of the largest image, eight of which fill a room.
     fn largest() -> Footprint {
