@@ -18,6 +18,8 @@
 #![cfg_attr(not(unix), no_main)]
 #![cfg(unix)]
 
+use std::collections::VecDeque;
+use std::fmt;
 use std::io::{self, BufReader, BufWriter, PipeReader, PipeWriter, Read, Write};
 use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
@@ -106,7 +108,10 @@ fn main() -> ExitCode {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
                 let sent = match ev {
-                    InputEvent::Vsync => to_engine::write_tick(&mut to_engine),
+                    InputEvent::Vsync => {
+                        stats.vsync();
+                        to_engine::write_tick(&mut to_engine)
+                    }
                     InputEvent::Key(_)
                     | InputEvent::Mouse(_)
                     | InputEvent::Resize { .. }
@@ -269,6 +274,7 @@ fn drain(
                 }
             }
             Message::Frame { scene, .. } => {
+                stats.frame_arrived();
                 cache.frame(None, asset::bitmap_ids(&scene));
                 if last.replace(scene).is_some() {
                     stats.skipped += 1;
@@ -292,11 +298,20 @@ fn drain(
     session
 }
 
+/// What the frames cost, from the first Vsync to the end.
 #[derive(Default)]
 struct Stats {
     frames: u32,
     skipped: u32,
-    presenting: Duration,
+    /// The time between two Vsyncs.
+    vsync_gap: Span,
+    /// The time from a tick to the frame of the engine for it, which the
+    /// view sees when it drains the channel.
+    engine: Span,
+    present: Span,
+    /// When each tick without its frame went out, oldest first.
+    ticks: VecDeque<Instant>,
+    last_vsync: Option<Instant>,
     /// The assets that the view kept.
     assets: u32,
     /// The assets that the view told the engine it lost.
@@ -306,12 +321,27 @@ struct Stats {
 }
 
 impl Stats {
+    fn vsync(&mut self) {
+        let now = Instant::now();
+        if let Some(last) = self.last_vsync.replace(now) {
+            self.vsync_gap.add(now - last);
+        }
+        self.ticks.push_back(now);
+    }
+
+    /// The engine answers each tick with one frame, in order.
+    fn frame_arrived(&mut self) {
+        if let Some(tick) = self.ticks.pop_front() {
+            self.engine.add(tick.elapsed());
+        }
+    }
+
     fn shown(&mut self, presenting: Duration) {
         let now = Instant::now();
         self.first.get_or_insert(now);
         self.last = Some(now);
         self.frames += 1;
-        self.presenting += presenting;
+        self.present.add(presenting);
     }
 
     fn report(&self) {
@@ -325,14 +355,39 @@ impl Stats {
             0.0
         };
         eprintln!(
-            "view: {} frames, {} skipped, {:.1} fps, present {:?} per frame, \
-             {} assets, {} lost",
+            "view: {} frames, {} skipped, {:.1} fps, {} assets, {} lost\n\
+             view: vsync every {}, engine {}, present {}",
             self.frames,
             self.skipped,
             fps,
-            self.presenting / self.frames.max(1),
             self.assets,
             self.lost,
+            self.vsync_gap,
+            self.engine,
+            self.present,
         );
+    }
+}
+
+/// The mean and the longest of a few durations.
+#[derive(Default)]
+struct Span {
+    total: Duration,
+    max: Duration,
+    count: u32,
+}
+
+impl Span {
+    fn add(&mut self, d: Duration) {
+        self.total += d;
+        self.max = self.max.max(d);
+        self.count += 1;
+    }
+}
+
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mean = self.total / self.count.max(1);
+        write!(f, "{mean:.2?} (max {:.2?})", self.max)
     }
 }
