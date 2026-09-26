@@ -27,12 +27,24 @@ impl TickClock {
         self.period = period(rate);
     }
 
-    /// Make the next tick fall due a period after `vblank`, the time of a
-    /// frame of the screen, so the ticks keep the phase of the screen and
-    /// not only its rate.
+    /// Move the next tick to the nearest time that is a whole number of
+    /// periods from `vblank`, the time of a frame of the screen, so the
+    /// ticks keep the phase of the screen and not only its rate. The next
+    /// tick moves by half a period at most, so no tick is lost or doubled.
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn align(&mut self, vblank: Instant) {
-        self.due = vblank + self.period;
+        let period = self.period.as_secs_f64();
+        let (ahead, sign) = match self.due.checked_duration_since(vblank) {
+            Some(d) => (d.as_secs_f64(), 1.0),
+            None => ((vblank - self.due).as_secs_f64(), -1.0),
+        };
+        let periods = sign * (ahead / period).round();
+        let offset = self.period.mul_f64(periods.abs());
+        self.due = if periods < 0.0 {
+            vblank - offset
+        } else {
+            vblank + offset
+        };
     }
 
     pub(crate) fn due(&self) -> Instant {
@@ -75,15 +87,25 @@ mod tests {
     }
 
     #[test]
-    fn a_tick_falls_due_a_period_after_the_frame_that_it_aligns_to() {
+    fn aligns_the_next_tick_to_the_nearest_frame_of_the_screen() {
         let mut clock = at_60_hz();
         let t0 = clock.due();
         let period = clock.period;
         assert!(clock.take_due(t0));
-        let vblank = t0 + period / 3;
+        // The screen shows a frame a little after the next tick was due, so
+        // the tick moves to that frame.
+        let vblank = t0 + period + period / 5;
         clock.align(vblank);
-        assert!(!clock.take_due(vblank + period - period / 8));
-        assert!(clock.take_due(vblank + period));
+        assert_eq!(clock.due(), vblank);
+        // A frame a little after the tick that just went out moves the next
+        // one a period after the frame, not to the frame again.
+        assert!(clock.take_due(vblank));
+        let late = vblank + period / 5;
+        clock.align(late);
+        assert_eq!(clock.due(), late + period);
+        // A frame of the screen after the due time pulls the tick back.
+        clock.align(late + period * 2 - period / 5);
+        assert_eq!(clock.due(), late + period - period / 5);
     }
 
     #[test]
