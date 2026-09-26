@@ -233,3 +233,11 @@ Falta:
 - Um asset vai para todos os jogadores, então um jogador vê no DevTools a
   imagem que só outro jogador desenha. O asset pode ganhar um `player` no
   fim, como o frame.
+- O `ServerCore` copia cada mensagem da engine duas vezes, do buffer do
+  host para o seu e do seu para um `Arc` próprio. Com o crate `bytes`, o
+  host leria direto no buffer do core, cada mensagem seria uma fatia
+  `Bytes` desse buffer e o `Next::Send` levaria o `Bytes` ao tungstenite
+  sem cópia. Uma fatia guardada prende o bloco inteiro de onde saiu, e a
+  conta do `Cache` deixaria de ser a memória real. Um frame de dezenas de
+  KB a 60 Hz custa poucos MB/s de cópia, então isso espera um host em
+  Tokio e uma medida que mostre a cópia.
