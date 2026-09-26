@@ -484,53 +484,53 @@ impl App {
     }
 
     /// Send a Resize when the logical size changed since the last one.
-    fn send_resize(&mut self) {
+    fn report_size(&mut self) {
         let (width, height) = self.logical_size();
         if (width, height) != self.reported_size {
             self.reported_size = (width, height);
-            let _ = self.tx.send_input(InputEvent::Resize { width, height });
+            let _ = self.tx.send_resize(width, height);
         }
     }
 
     /// Send the events of a winit key event. A press gives `Down` and
     /// `Press`, the first one and each repeat alike, as a browser does, and
     /// the release of a held key gives `Up`, with the name from its `Down`.
-    fn send_key_events(&mut self, ev: &KeyEvent) {
+    fn report_key_events(&mut self, ev: &KeyEvent) {
         match ev.state {
             ElementState::Pressed => {
                 let Some(key) = winit_key_to_string(&ev.logical_key) else {
                     return;
                 };
                 self.held.press(ev.physical_key, key.clone());
-                self.send_key(KeyKind::Down, key.clone(), ev.repeat);
-                self.send_key(KeyKind::Press, key, ev.repeat);
+                self.report_key(KeyKind::Down, key.clone(), ev.repeat);
+                self.report_key(KeyKind::Press, key, ev.repeat);
             }
             ElementState::Released => {
                 if let Some(key) = self.held.release(ev.physical_key) {
-                    self.send_key(KeyKind::Up, key, false);
+                    self.report_key(KeyKind::Up, key, false);
                 }
             }
         }
     }
 
-    fn send_key(&self, kind: KeyKind, key: String, repeat: bool) {
-        let _ = self.tx.send_input(InputEvent::Key(crate::event::KeyEvent {
+    fn report_key(&self, kind: KeyKind, key: String, repeat: bool) {
+        let _ = self.tx.send_key(crate::event::KeyEvent {
             kind,
             key,
             modifiers: modifiers(self.modifiers),
             repeat,
-        }));
+        });
     }
 
-    fn send_mouse(&self, action: MouseAction) {
+    fn report_mouse(&self, action: MouseAction) {
         let (x, y) = self.placement.to_scene(self.cursor);
-        let _ = self.tx.send_input(InputEvent::Mouse(MouseEvent {
+        let _ = self.tx.send_mouse(MouseEvent {
             action,
             x,
             y,
             modifiers: modifiers(self.modifiers),
             buttons: self.buttons,
-        }));
+        });
     }
 }
 
@@ -556,12 +556,12 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = scale_factor;
-                self.send_resize();
+                self.report_size();
                 let _ = self.tx.request_redraw();
             }
             WindowEvent::Resized(size) => {
                 self.size = size;
-                self.send_resize();
+                self.report_size();
                 let _ = self.tx.request_redraw();
             }
             WindowEvent::RedrawRequested => {
@@ -572,9 +572,9 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = position;
-                self.send_mouse(MouseAction::Move);
+                self.report_mouse(MouseAction::Move);
             }
-            WindowEvent::CursorLeft { .. } => self.send_mouse(MouseAction::Leave),
+            WindowEvent::CursorLeft { .. } => self.report_mouse(MouseAction::Leave),
             WindowEvent::MouseInput { state, button, .. } => {
                 let Some(button) = mouse_button(button) else {
                     return;
@@ -589,11 +589,11 @@ impl ApplicationHandler for App {
                         MouseAction::Up(button)
                     }
                 };
-                self.send_mouse(action);
+                self.report_mouse(action);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let (dx, dy) = wheel_notches(delta, self.scale_factor);
-                self.send_mouse(MouseAction::Wheel { dx, dy });
+                self.report_mouse(MouseAction::Wheel { dx, dy });
             }
             // On X11 and Windows, winit makes up a press for each key held
             // when the window gains focus. The user did not press it here.
@@ -602,13 +602,13 @@ impl ApplicationHandler for App {
                 is_synthetic,
                 ..
             } if !(is_synthetic && event.state == ElementState::Pressed) => {
-                self.send_key_events(&event);
+                self.report_key_events(&event);
             }
             // Wayland sends no release for the keys held when the window
             // loses focus, and takes them as released.
             WindowEvent::Focused(false) => {
                 for key in self.held.release_all() {
-                    self.send_key(KeyKind::Up, key, false);
+                    self.report_key(KeyKind::Up, key, false);
                 }
             }
             _ => {}

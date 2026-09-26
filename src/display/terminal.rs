@@ -1013,17 +1013,17 @@ fn read_bytes(
         }
         for input in inputs.drain(..) {
             let sent = match input {
-                Input::Key(k) => tx.send_input(InputEvent::Key(k)),
+                Input::Key(k) => tx.send_key(k),
                 Input::Mouse(m) => {
                     let cells = *cells.lock().unwrap_or_else(PoisonError::into_inner);
                     let (x, y) = cells.to_scene(m.column, m.row);
-                    tx.send_input(InputEvent::Mouse(MouseEvent {
+                    tx.send_mouse(MouseEvent {
                         action: m.action,
                         x,
                         y,
                         modifiers: m.modifiers,
                         buttons: m.buttons,
-                    }))
+                    })
                 }
                 Input::Interrupt => {
                     let _ = tx.send_close();
@@ -1078,7 +1078,7 @@ impl SizeWatch {
 /// the last frame again.
 fn resized(tx: &Sender, size: (u16, u16)) -> Result<(), super::Closed> {
     if let Some((width, height)) = scene_size(size, cell_pixels()) {
-        let _ = tx.send_input(InputEvent::Resize { width, height });
+        let _ = tx.send_resize(width, height);
     }
     tx.request_redraw()
 }

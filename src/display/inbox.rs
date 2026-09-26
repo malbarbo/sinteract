@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, InputEvent, Interrupt};
+use crate::event::{Event, InputEvent, Interrupt, KeyEvent, MouseEvent};
 
 /// Pushes into the queue of a display from any thread, and wakes a
 /// `wait_event` that blocks on it. Get one from
@@ -62,17 +62,17 @@ impl Sender {
         self.put(Msg::Redraw)
     }
 
-    /// Queue `ev`. The clock of the queue makes every Vsync.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `ev` is a Vsync.
-    pub(crate) fn send_input(&self, ev: InputEvent) -> Result<(), Closed> {
-        assert!(
-            !matches!(ev, InputEvent::Vsync),
-            "the clock of the queue makes every Vsync"
-        );
-        self.send(Entry::Input(ev))
+    pub(crate) fn send_key(&self, key: KeyEvent) -> Result<(), Closed> {
+        self.send(Entry::Input(InputEvent::Key(key)))
+    }
+
+    pub(crate) fn send_mouse(&self, mouse: MouseEvent) -> Result<(), Closed> {
+        self.send(Entry::Input(InputEvent::Mouse(mouse)))
+    }
+
+    /// Queue a Resize to the scene size `width` by `height`.
+    pub(crate) fn send_resize(&self, width: f32, height: f32) -> Result<(), Closed> {
+        self.send(Entry::Input(InputEvent::Resize { width, height }))
     }
 
     fn send(&self, entry: Entry) -> Result<(), Closed> {
@@ -345,16 +345,16 @@ impl Clock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
+    use crate::event::{KeyKind, Modifiers, MouseAction, MouseButtons};
     use std::thread;
 
-    fn key(name: &str) -> InputEvent {
-        InputEvent::Key(KeyEvent {
+    fn key(name: &str) -> KeyEvent {
+        KeyEvent {
             kind: KeyKind::Press,
             key: name.into(),
             modifiers: Modifiers::default(),
             repeat: false,
-        })
+        }
     }
 
     fn key_name(ready: &Result<Event, Interrupt>) -> Option<&str> {
@@ -364,14 +364,14 @@ mod tests {
         }
     }
 
-    fn move_to(x: f32) -> InputEvent {
-        InputEvent::Mouse(MouseEvent {
+    fn move_to(x: f32) -> MouseEvent {
+        MouseEvent {
             action: MouseAction::Move,
             x,
             y: 0.0,
             modifiers: Modifiers::default(),
             buttons: MouseButtons::default(),
-        })
+        }
     }
 
     fn mouse_x(ready: &Result<Event, Interrupt>) -> f32 {
@@ -409,9 +409,9 @@ mod tests {
     fn delivers_in_the_order_of_arrival() {
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
-        tx.send_input(key("a")).unwrap();
+        tx.send_key(key("a")).unwrap();
         tx.wake().unwrap();
-        tx.send_input(key("b")).unwrap();
+        tx.send_key(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
         assert_eq!(key_name(&inbox.wait(None)), Some("b"));
@@ -421,10 +421,10 @@ mod tests {
     fn a_read_error_keeps_its_place() {
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
-        tx.send_input(key("a")).unwrap();
+        tx.send_key(key("a")).unwrap();
         tx.send_read_error(io::Error::other("the tty went away"))
             .unwrap();
-        tx.send_input(key("b")).unwrap();
+        tx.send_key(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(matches!(inbox.wait(None), Err(Interrupt::Read(_))));
         assert_eq!(key_name(&inbox.wait(None)), Some("b"));
@@ -439,8 +439,8 @@ mod tests {
     #[test]
     fn an_event_sent_first_goes_out_before_the_first_vsync() {
         let mut inbox = Inbox::new(Duration::from_secs(60));
-        inbox.sender().send_input(key("a")).unwrap();
-        inbox.send_first(key("first"));
+        inbox.sender().send_key(key("a")).unwrap();
+        inbox.send_first(InputEvent::Key(key("first")));
         assert_eq!(key_name(&inbox.wait(None)), Some("first"));
         assert!(is_vsync(&inbox.wait(None)));
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
@@ -448,19 +448,14 @@ mod tests {
 
     #[test]
     fn a_move_or_a_resize_replaces_one_of_its_kind_at_the_back() {
-        let resize = |width| InputEvent::Resize { width, height: 1.0 };
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
-        for ev in [
-            move_to(1.0),
-            move_to(2.0),
-            key("a"),
-            move_to(3.0),
-            resize(1.0),
-            resize(2.0),
-        ] {
-            tx.send_input(ev).unwrap();
-        }
+        tx.send_mouse(move_to(1.0)).unwrap();
+        tx.send_mouse(move_to(2.0)).unwrap();
+        tx.send_key(key("a")).unwrap();
+        tx.send_mouse(move_to(3.0)).unwrap();
+        tx.send_resize(1.0, 1.0).unwrap();
+        tx.send_resize(2.0, 1.0).unwrap();
         assert_eq!(mouse_x(&inbox.wait(None)), 2.0);
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert_eq!(mouse_x(&inbox.wait(None)), 3.0);
@@ -475,9 +470,9 @@ mod tests {
     fn a_move_before_a_wake_stays() {
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
-        tx.send_input(move_to(1.0)).unwrap();
+        tx.send_mouse(move_to(1.0)).unwrap();
         tx.wake().unwrap();
-        tx.send_input(move_to(2.0)).unwrap();
+        tx.send_mouse(move_to(2.0)).unwrap();
         assert_eq!(mouse_x(&inbox.wait(None)), 1.0);
         assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
         assert_eq!(mouse_x(&inbox.wait(None)), 2.0);
@@ -487,7 +482,7 @@ mod tests {
     fn close_goes_out_in_order_and_stays() {
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
-        tx.send_input(key("a")).unwrap();
+        tx.send_key(key("a")).unwrap();
         tx.send_close().unwrap();
         tx.wake().unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
@@ -500,7 +495,7 @@ mod tests {
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.wake().unwrap();
-        tx.send_input(key("a")).unwrap();
+        tx.send_key(key("a")).unwrap();
         tx.wake().unwrap();
         assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
@@ -532,7 +527,7 @@ mod tests {
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
         tx.request_redraw().unwrap();
-        tx.send_input(key("a")).unwrap();
+        tx.send_key(key("a")).unwrap();
         tx.request_redraw().unwrap();
         let mut next = || inbox.wait_with(soon(), Inbox::receive);
         assert!(matches!(next(), Next::Ready(r) if key_name(&r) == Some("a")));
@@ -590,7 +585,7 @@ mod tests {
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
         // A key arrives, and the engine comes back ten periods later.
-        inbox.push(item(t0 + period / 2, key("a")));
+        inbox.push(item(t0 + period / 2, InputEvent::Key(key("a"))));
         let late = t0 + period * 10;
         assert_eq!(key_name(&inbox.pop(late).unwrap()), Some("a"));
         assert!(is_vsync(&inbox.pop(late).unwrap()));
@@ -619,20 +614,12 @@ mod tests {
         // A key arrives while the frame takes two periods. The next Vsync
         // fell due when the frame began, so it goes out first, and the key
         // goes out ahead of the Vsync after it.
-        inbox.push(item(late + period / 2, key("a")));
+        inbox.push(item(late + period / 2, InputEvent::Key(key("a"))));
         let next = late + period * 2;
         assert!(is_vsync(&inbox.pop(next).unwrap()));
         let after = next + period * 2;
         assert_eq!(key_name(&inbox.pop(after).unwrap()), Some("a"));
         assert!(is_vsync(&inbox.pop(after).unwrap()));
-    }
-
-    #[test]
-    #[should_panic(expected = "the clock of the queue makes every Vsync")]
-    fn a_sender_refuses_a_vsync() {
-        let _ = Inbox::new(Duration::from_secs(1))
-            .sender()
-            .send_input(InputEvent::Vsync);
     }
 
     #[test]
@@ -647,7 +634,7 @@ mod tests {
         let mut inbox = Inbox::new(period);
         let t0 = Instant::now();
         assert!(is_vsync(&inbox.pop(t0).unwrap()));
-        inbox.push(item(t0 + period * 2, key("a")));
+        inbox.push(item(t0 + period * 2, InputEvent::Key(key("a"))));
         let now = t0 + period * 3;
         assert!(is_vsync(&inbox.pop(now).unwrap()));
         assert_eq!(key_name(&inbox.pop(now).unwrap()), Some("a"));
