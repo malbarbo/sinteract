@@ -113,6 +113,7 @@ impl super::Display for Window {
         let Some(session) = self.session.as_mut() else {
             return Err(PresentError::Closed);
         };
+        self.inbox.take_redraw();
         let drawn = session.draw(&scene);
         session.last = Some(scene);
         drawn

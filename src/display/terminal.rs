@@ -205,7 +205,9 @@ impl super::Display for Terminal {
         if self.live.is_none() {
             return Err(PresentError::Closed);
         }
-        let drawn = self.draw(&scene, false);
+        // A resize that waits for its redraw still clears the screen.
+        let after_resize = self.inbox.take_redraw();
+        let drawn = self.draw(&scene, after_resize);
         self.last = Some(scene);
         drawn
     }

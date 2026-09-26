@@ -203,6 +203,14 @@ impl Inbox {
         Next::Block(wake_at.saturating_duration_since(now))
     }
 
+    /// Returns `true` if a redraw waits, `false` otherwise, and drops it. A
+    /// display calls it as it presents, since the new scene makes the
+    /// redraw stale.
+    pub(crate) fn take_redraw(&mut self) -> bool {
+        self.drain();
+        mem::take(&mut self.redraw)
+    }
+
     /// Take the next message of the channel, or wait until `timeout`
     /// passes. A [`Sender`] ends the wait.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
@@ -223,9 +231,7 @@ impl Inbox {
         if self.closed {
             return Some(Err(Interrupt::Close));
         }
-        while let Ok(msg) = self.rx.try_recv() {
-            self.take(msg);
-        }
+        self.drain();
         if !self.pending.iter().any(|e| matches!(e, Entry::Vsync)) && clock.take_due(now) {
             self.pending.push_back(Entry::Vsync);
         }
@@ -239,6 +245,12 @@ impl Inbox {
                 Err(Interrupt::Close)
             }
         })
+    }
+
+    fn drain(&mut self) {
+        while let Ok(msg) = self.rx.try_recv() {
+            self.take(msg);
+        }
     }
 
     fn take(&mut self, msg: Msg) {
@@ -497,6 +509,18 @@ mod tests {
         let mut inbox = past_the_first_vsync();
         inbox.sender().request_redraw().unwrap();
         assert!(is_timeout(&inbox.wait(soon())));
+    }
+
+    #[test]
+    fn a_taken_redraw_does_not_go_out() {
+        let mut inbox = past_the_first_vsync();
+        inbox.sender().request_redraw().unwrap();
+        assert!(inbox.inbox.take_redraw());
+        assert!(!inbox.inbox.take_redraw());
+        assert!(matches!(
+            inbox.next(soon()),
+            Next::Ready(Err(Interrupt::Timeout))
+        ));
     }
 
     #[test]
