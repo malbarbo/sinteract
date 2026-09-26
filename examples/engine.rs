@@ -111,7 +111,7 @@ fn main() -> ExitCode {
 /// Write a frame of `game` for every player, after the images that it
 /// draws and that have not gone out.
 fn draw(game: &Game, assets: &mut Assets, to_view: &mut impl Write) -> io::Result<()> {
-    let paddle = assets.image(&game.paddle_png()).map_err(io::Error::other)?;
+    let paddle = assets.image(&game.paddle_png).map_err(io::Error::other)?;
     let scene = game.scene(paddle);
     for (id, png) in assets.frame(&scene) {
         to_view::write_asset(to_view, id, &png)?;
@@ -126,6 +126,9 @@ struct Game {
     moves: u32,
     /// The size of the image of the paddle in pixels.
     image_size: (u32, u32),
+    /// The image of the paddle as a PNG, for the color of `moves`. A move
+    /// encodes it again, and a frame without a move reuses it.
+    paddle_png: Vec<u8>,
 }
 
 struct Ball {
@@ -158,15 +161,17 @@ impl Game {
                 }
             })
             .collect();
+        let image_size = if big {
+            (1024, 1024)
+        } else {
+            (PADDLE_WIDTH as u32, PADDLE_HEIGHT as u32)
+        };
         Self {
             balls,
             paddle: (WIDTH - PADDLE_WIDTH) / 2.0,
             moves: 0,
-            image_size: if big {
-                (1024, 1024)
-            } else {
-                (PADDLE_WIDTH as u32, PADDLE_HEIGHT as u32)
-            },
+            image_size,
+            paddle_png: paddle_png(0, image_size),
         }
     }
 
@@ -195,34 +200,7 @@ impl Game {
         };
         self.paddle = (self.paddle + step).clamp(0.0, WIDTH - PADDLE_WIDTH);
         self.moves = (self.moves + 1) % COLORS;
-    }
-
-    /// The paddle as a PNG, in a green that the moves shift. It encodes
-    /// with [`png::Compression::Fast`], since the default level of
-    /// `Pixmap::encode_png` takes about 17 ms for 1024 by 1024 pixels, a
-    /// whole frame, and this one about 1.5 ms.
-    fn paddle_png(&self) -> Vec<u8> {
-        let (w, h) = self.image_size;
-        let mut pixmap = tiny_skia::Pixmap::new(w, h).expect("the paddle has a size");
-        let shade = (self.moves * 3) as u8;
-        pixmap.fill(tiny_skia::Color::from_rgba8(
-            80,
-            200 - shade,
-            120 + shade,
-            255,
-        ));
-        let mut png = Vec::new();
-        let mut encoder = png::Encoder::new(&mut png, w, h);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Fast);
-        // The paddle is opaque, so its premultiplied pixels are the straight
-        // ones that a PNG holds.
-        encoder
-            .write_header()
-            .and_then(|mut writer| writer.write_image_data(pixmap.data()))
-            .expect("a pixmap encodes");
-        png
+        self.paddle_png = paddle_png(self.moves, self.image_size);
     }
 
     /// The field, with the image `paddle` for the paddle.
@@ -254,4 +232,32 @@ impl Game {
         scene.bitmap(paddle.fit(rect));
         scene
     }
+}
+
+/// The paddle of `size` pixels as a PNG, in a green that `moves` shifts.
+/// It encodes with [`png::Compression::Fast`], since the default level of
+/// `Pixmap::encode_png` takes about 17 ms for 1024 by 1024 pixels, a
+/// whole frame, and this one about 1.5 ms.
+fn paddle_png(moves: u32, size: (u32, u32)) -> Vec<u8> {
+    let (w, h) = size;
+    let mut pixmap = tiny_skia::Pixmap::new(w, h).expect("the paddle has a size");
+    let shade = (moves * 3) as u8;
+    pixmap.fill(tiny_skia::Color::from_rgba8(
+        80,
+        200 - shade,
+        120 + shade,
+        255,
+    ));
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    // The paddle is opaque, so its premultiplied pixels are the straight
+    // ones that a PNG holds.
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(pixmap.data()))
+        .expect("a pixmap encodes");
+    png
 }
