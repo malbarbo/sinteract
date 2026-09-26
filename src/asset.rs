@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use crate::scene::{Bitmap, Element, RotatedRect, Scene};
@@ -167,14 +166,14 @@ pub fn bitmap_ids(scene: &Scene) -> BTreeSet<u32> {
 /// The live assets of a room, under the limits. [`Cache::asset`] keeps a
 /// new asset, and drops the ones that the frames used longest ago when it
 /// does not fit. [`Cache::frame`] says which assets a frame draws. An asset
-/// that the last frame of some player draws stays, as does one that came
-/// after the last frame, since the next frame draws it.
+/// that the last frame draws stays, as does one that came after the last
+/// frame, since the next frame draws it. The cache does not tell the
+/// players apart, since the views of a room mostly draw the same images.
 #[derive(Debug, Default)]
 pub struct Cache {
     live: BTreeMap<u32, Live>,
-    /// The ids that the last frame of each player draws, with 0 for the
-    /// last frame for every player.
-    shown: BTreeMap<u32, BTreeSet<u32>>,
+    /// The ids that the last frame draws.
+    shown: BTreeSet<u32>,
     load: Load,
     /// How many frames came.
     frames: u64,
@@ -199,11 +198,10 @@ impl Cache {
             !self.contains(id),
             "Cache::asset takes an id that is not live"
         );
-        let shown: BTreeSet<u32> = self.shown.values().flatten().copied().collect();
         let mut may_go: Vec<(u64, u32)> = self
             .live
             .iter()
-            .filter(|(id, live)| !shown.contains(id) && live.used < self.frames)
+            .filter(|(id, live)| !self.shown.contains(id) && live.used < self.frames)
             .map(|(&id, live)| (live.used, id))
             .collect();
         may_go.sort_unstable();
@@ -241,24 +239,15 @@ impl Cache {
         Ok(dropped)
     }
 
-    /// Say that a frame for `player`, or for every player when `player` is
-    /// `None`, draws the assets of `ids`. An id that is not live changes
-    /// nothing.
-    pub fn frame(&mut self, player: Option<NonZeroU32>, ids: BTreeSet<u32>) {
+    /// Say that a frame draws the assets of `ids`. An id that is not live
+    /// changes nothing.
+    pub fn frame(&mut self, ids: BTreeSet<u32>) {
         for id in &ids {
             if let Some(live) = self.live.get_mut(id) {
                 live.used = self.frames;
             }
         }
-        match player {
-            None => {
-                self.shown.clear();
-                self.shown.insert(0, ids);
-            }
-            Some(player) => {
-                self.shown.insert(player.get(), ids);
-            }
-        }
+        self.shown = ids;
         self.frames += 1;
     }
 }
@@ -947,19 +936,19 @@ mod tests {
         for id in 0..8 {
             assert_eq!(cache.asset(id, largest()), Ok(vec![]));
         }
-        cache.frame(None, ids(&[]));
+        cache.frame(ids(&[]));
         cache
     }
 
     #[test]
     fn a_full_cache_drops_the_asset_that_the_frames_used_longest_ago() {
         let mut cache = full();
-        cache.frame(None, ids(&[0, 3]));
-        cache.frame(None, ids(&[5]));
-        cache.frame(None, ids(&[]));
+        cache.frame(ids(&[0, 3]));
+        cache.frame(ids(&[5]));
+        cache.frame(ids(&[]));
         assert_eq!(cache.asset(8, largest()), Ok(vec![1]));
         assert_eq!(cache.asset(9, largest()), Ok(vec![2]));
-        cache.frame(None, ids(&[8, 9]));
+        cache.frame(ids(&[8, 9]));
         assert_eq!(cache.asset(10, largest()), Ok(vec![4]));
         assert_eq!(cache.asset(11, largest()), Ok(vec![6]));
         assert_eq!(cache.asset(12, largest()), Ok(vec![7]));
@@ -969,23 +958,21 @@ mod tests {
     }
 
     #[test]
-    fn an_asset_on_a_screen_or_for_the_next_frame_stays() {
+    fn an_asset_of_the_last_frame_or_for_the_next_frame_stays() {
         let mut cache = full();
-        cache.frame(None, ids(&[0, 1]));
-        cache.frame(NonZeroU32::new(2), ids(&[2, 3]));
-        cache.frame(NonZeroU32::new(1), ids(&[4, 5]));
-        // The frame for every player may still be on the screen of a player
-        // with no frame of its own.
-        assert_eq!(cache.asset(8, largest()), Ok(vec![6]));
-        assert_eq!(cache.asset(9, largest()), Ok(vec![7]));
-        // Every other asset is on a screen or came after the last frame.
+        cache.frame(ids(&[0, 1]));
+        cache.frame(ids(&[2, 3, 4, 5, 6]));
+        assert_eq!(cache.asset(8, largest()), Ok(vec![7]));
+        assert_eq!(cache.asset(9, largest()), Ok(vec![0]));
+        assert_eq!(cache.asset(10, largest()), Ok(vec![1]));
+        // Every other asset is in the last frame or came after it.
         assert!(matches!(
-            cache.asset(10, largest()),
+            cache.asset(11, largest()),
             Err(AssetError::Full { .. })
         ));
-        assert!(!cache.contains(10));
-        cache.frame(None, ids(&[8]));
-        assert_eq!(cache.asset(10, largest()), Ok(vec![0]));
+        assert!(!cache.contains(11));
+        cache.frame(ids(&[8]));
+        assert_eq!(cache.asset(11, largest()), Ok(vec![2]));
     }
 
     #[test]
@@ -993,10 +980,10 @@ mod tests {
         let mut cache = Cache::new();
         let small = Footprint::new(Some((10, 10)), 100).unwrap();
         assert_eq!(cache.asset(1, small), Ok(vec![]));
-        cache.frame(None, ids(&[]));
+        cache.frame(ids(&[]));
         let heavy = Footprint::new(Some((1, 1)), MAX_LIVE_BYTES as usize).unwrap();
         assert!(cache.asset(2, heavy).is_ok_and(|gone| gone == [1]));
-        cache.frame(None, ids(&[2]));
+        cache.frame(ids(&[2]));
         assert!(cache.asset(3, small).is_err());
         assert!(cache.contains(2) && !cache.contains(3));
     }
@@ -1015,7 +1002,7 @@ mod tests {
                 lost.push(gone);
             }
         }
-        cache.frame(None, bitmap_ids(scene));
+        cache.frame(bitmap_ids(scene));
         (sent, lost)
     }
 

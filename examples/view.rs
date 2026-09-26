@@ -285,7 +285,7 @@ fn drain(
             }
             Message::Frame { scene, .. } => {
                 stats.frame_arrived();
-                cache.frame(None, asset::bitmap_ids(&scene));
+                cache.frame(asset::bitmap_ids(&scene));
                 if last.replace(scene).is_some() {
                     stats.skipped += 1;
                 }

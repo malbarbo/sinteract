@@ -505,7 +505,7 @@ impl ServerCore {
 
     /// Keep the asset `id`, and drop the ones that it takes the place of,
     /// or refuse it if the id is live or the image is too large. An asset
-    /// that does not fit beside the ones on the screens is lost at once.
+    /// that does not fit beside the ones of the last frame is lost at once.
     fn keep_asset(
         &mut self,
         id: u32,
@@ -551,7 +551,7 @@ impl ServerCore {
             .iter()
             .filter_map(|id| Some((*id, self.assets.get(id)?.clone())))
             .collect();
-        self.cache.frame(player, ids);
+        self.cache.frame(ids);
         let shot = Shot {
             frame: payload,
             assets: Arc::new(assets),
