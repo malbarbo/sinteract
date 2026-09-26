@@ -197,7 +197,10 @@ impl Game {
         self.moves = (self.moves + 1) % COLORS;
     }
 
-    /// The paddle as a PNG, in a green that the moves shift.
+    /// The paddle as a PNG, in a green that the moves shift. It encodes
+    /// with [`png::Compression::Fast`], since the default level of
+    /// `Pixmap::encode_png` takes about 17 ms for 1024 by 1024 pixels, a
+    /// whole frame, and this one about 1.5 ms.
     fn paddle_png(&self) -> Vec<u8> {
         let (w, h) = self.image_size;
         let mut pixmap = tiny_skia::Pixmap::new(w, h).expect("the paddle has a size");
@@ -208,7 +211,18 @@ impl Game {
             120 + shade,
             255,
         ));
-        pixmap.encode_png().expect("a pixmap encodes")
+        let mut png = Vec::new();
+        let mut encoder = png::Encoder::new(&mut png, w, h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        // The paddle is opaque, so its premultiplied pixels are the straight
+        // ones that a PNG holds.
+        encoder
+            .write_header()
+            .and_then(|mut writer| writer.write_image_data(pixmap.data()))
+            .expect("a pixmap encodes");
+        png
     }
 
     /// The field, with the image `paddle` for the paddle.
