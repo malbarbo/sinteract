@@ -649,6 +649,8 @@ impl ApplicationHandler for App {
             // and Window::pump aligns the tick clock to it and draws a
             // scene that waits for it. A redraw
             // there would draw again and ask for the next callback forever.
+            // winit gives no time of the callback, so the stamp is the time
+            // of the call, late after a frame that drew past the vblank.
             WindowEvent::RedrawRequested => {
                 if mem::take(&mut self.frame_pending) {
                     self.frame_shown = Some(Instant::now());
