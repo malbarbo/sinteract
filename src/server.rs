@@ -361,15 +361,13 @@ impl ServerCore {
     }
 
     /// Pass `event` of the view of `conn` to the engine, in the game. The
-    /// tick of the server paces the engine, so the core drops a tick of the
-    /// view. It drops the input of an old connection too, and a `Down` of a
-    /// new key when the view holds 32 keys, since it could not release the
+    /// core drops the input of an old connection, and a `Down` of a new key when the view holds 32 keys, since it could not release the
     /// key.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
         let Some(seat) = seat_of(&mut self.seats, conn) else {
             return;
         };
-        if self.phase != Phase::Playing || matches!(event, InputEvent::Tick) {
+        if self.phase != Phase::Playing {
             return;
         }
         if !seat.held.track(event) {
@@ -685,7 +683,7 @@ impl Held {
             InputEvent::Mouse(m) => self.mouse = (m.x, m.y, m.buttons),
             InputEvent::Pad(PadEvent::Down(b)) if !self.pad.contains(b) => self.pad.push(*b),
             InputEvent::Pad(PadEvent::Up(b)) => self.pad.retain(|p| p != b),
-            InputEvent::Pad(_) | InputEvent::Resize { .. } | InputEvent::Tick => {}
+            InputEvent::Pad(_) | InputEvent::Resize { .. } => {}
         }
         true
     }
@@ -835,7 +833,7 @@ mod tests {
                         InputEvent::Resize { width, height } => {
                             format!("{player} resize {width}x{height}")
                         }
-                        InputEvent::Mouse(_) | InputEvent::Tick | InputEvent::Pad(_) => {
+                        InputEvent::Mouse(_) | InputEvent::Pad(_) => {
                             format!("{player} {event:?}")
                         }
                     },
@@ -1079,7 +1077,6 @@ mod tests {
             .from_view(conns[1], &to_server::encode_input(&key("b")))
             .unwrap();
         room.core.input(conns[0], &key("a"));
-        room.core.input(conns[0], &InputEvent::Tick);
         assert_eq!(room.events(), ["2 key b", "1 key a"]);
     }
 

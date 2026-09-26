@@ -49,7 +49,7 @@ pub enum SessionEvent {
     Start(Roster),
     /// Time to draw the next frames, for every player.
     Tick,
-    /// The input of `player`, never [`InputEvent::Tick`].
+    /// The input of `player`.
     Input {
         player: NonZeroU32,
         event: InputEvent,
@@ -375,7 +375,7 @@ mod tests {
                     InputEvent::Key(k) => format!("{player} key {}", k.key),
                     InputEvent::Mouse(m) => format!("{player} move {}", m.x),
                     InputEvent::Resize { width, .. } => format!("{player} resize {width}"),
-                    InputEvent::Tick | InputEvent::Pad(_) => format!("{player} {event:?}"),
+                    InputEvent::Pad(_) => format!("{player} {event:?}"),
                 },
                 SessionEvent::Error(e) => format!("error {e}"),
                 SessionEvent::End(None) => "end".into(),

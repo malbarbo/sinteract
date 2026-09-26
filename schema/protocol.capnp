@@ -97,8 +97,7 @@ struct PlayerEvent {
 # Server to engine. A start and a tick are about the whole session.
 struct ServerMessage {
     union {
-        # The input of a player, never a tick, since the server paces the
-        # engine for every player.
+        # The input of a player.
         event @0 :PlayerEvent;
         # The first message of the session.
         start @1 :Start;

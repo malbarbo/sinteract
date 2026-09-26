@@ -1,12 +1,13 @@
 //! The events that a [`display`](crate::display) delivers.
 //!
-//! Every display turns its input into the same [`InputEvent`] stream, and
-//! the engine loop blocks on `wait_event` and dispatches:
+//! Every display turns its input into the same [`InputEvent`] stream, adds
+//! a [`Event::Tick`] at each frame, and the engine loop blocks on
+//! `wait_event` and dispatches:
 //!
 //! ```text
 //! loop {
 //!     match display.wait_event(deadline) {
-//!         Ok(Event::Input(InputEvent::Tick)) => on_frame(),
+//!         Ok(Event::Tick) => on_frame(),
 //!         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 //!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
@@ -29,6 +30,8 @@
 pub enum Event {
     /// From the user or the platform.
     Input(InputEvent),
+    /// Time for the next frame.
+    Tick,
 }
 
 /// What interrupted a `wait_event` that delivered no event. A failure comes
@@ -58,8 +61,6 @@ pub enum InputEvent {
         width: f32,
         height: f32,
     },
-    /// Time for the next frame.
-    Tick,
     /// A button of a pad, or a pad that the view found or lost.
     Pad(PadEvent),
 }

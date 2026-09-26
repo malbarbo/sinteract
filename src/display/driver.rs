@@ -25,7 +25,7 @@ use crate::scene::Scene;
 /// # fn run(fr: &mut dyn Display) -> Result<(), Box<dyn std::error::Error>> {
 /// loop {
 ///     match fr.wait_event(None) {
-///         Ok(Event::Input(InputEvent::Tick)) => fr.present(next_scene())?,
+///         Ok(Event::Tick) => fr.present(next_scene())?,
 ///         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 ///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 ///         Ok(Event::Input(InputEvent::Resize { .. } | InputEvent::Pad(_))) => {}

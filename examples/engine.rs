@@ -98,11 +98,7 @@ fn run_session(mut game: Game) -> ExitCode {
             }
             SessionEvent::Start(_)
             | SessionEvent::Input {
-                event:
-                    InputEvent::Mouse(_)
-                    | InputEvent::Resize { .. }
-                    | InputEvent::Tick
-                    | InputEvent::Pad(_),
+                event: InputEvent::Mouse(_) | InputEvent::Resize { .. } | InputEvent::Pad(_),
                 ..
             } => {}
         }
@@ -124,7 +120,7 @@ fn run_local(mut game: Game) -> ExitCode {
     let mut assets = Assets::new();
     loop {
         match fr.wait_event(None) {
-            Ok(Event::Input(InputEvent::Tick)) => {
+            Ok(Event::Tick) => {
                 game.tick();
                 let (scene, send) = match game.frame(&mut assets) {
                     Ok(frame) => frame,

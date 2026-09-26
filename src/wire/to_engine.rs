@@ -27,8 +27,7 @@ use super::protocol::decode_root;
 /// session.
 #[derive(Clone, Debug)]
 pub enum Message {
-    /// The input of `player`. The server sends every tick as
-    /// [`Message::Tick`], so `event` is never [`InputEvent::Tick`].
+    /// The input of `player`.
     Input {
         player: NonZeroU32,
         event: InputEvent,
@@ -85,16 +84,8 @@ impl From<DuplicatePlayer> for Error {
     }
 }
 
-/// Write the input `ev` of `player`. A tick is not written, and the error
-/// is [`io::ErrorKind::InvalidInput`], since the server sends every tick
-/// with [`write_tick`].
+/// Write the input `ev` of `player`.
 pub fn write_input(w: &mut impl Write, player: NonZeroU32, ev: &InputEvent) -> io::Result<()> {
-    if matches!(ev, InputEvent::Tick) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a tick goes in a message of its own, not in the input of a player",
-        ));
-    }
     write_framed(w, Side::Server, &input_message(player.get(), ev))
 }
 
@@ -130,9 +121,6 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
             let Some(event) = read_input_event(e.get_event()?)? else {
                 return Ok(None);
             };
-            if matches!(event, InputEvent::Tick) {
-                return Err(Error::PlayerTick);
-            }
             Ok(Some(Message::Input {
                 player: nonzero_player(e.get_player())?,
                 event,

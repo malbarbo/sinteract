@@ -117,8 +117,8 @@ Regras da sessão com servidor:
 - não há keep-alive no schema. O servidor usa o ping do WebSocket para
   perceber a view que caiu;
 - a view manda um `resize` como primeiro evento de cada conexão;
-- um timer do servidor manda o `tick` de todos os jogadores, e o
-  servidor não repassa o `tick` da view. A `Session` da engine responde
+- um timer do servidor manda o `tick` de todos os jogadores. Uma view
+  não manda `tick`, porque o `InputEvent` não tem esse braço. A `Session` da engine responde
   cada `tick` com um `tickTaken` quando o entrega, e o servidor só manda
   o próximo depois disso, então uma engine mais lenta que o timer não
   acumula `tick` no pipe.
@@ -132,8 +132,8 @@ sobre esse protocolo, com um exemplo em Tokio.
 (`Wake`, `Timeout`, `Read` ou `Close`). O ritmo vem de um evento `Tick` na
 fila. O terminal e a janela fazem o próprio `Tick`, e a `Session` recebe o
 `tick` do servidor, que marca o ritmo de todos os jogadores, porque cada
-view tem o seu ritmo. Um `event` do servidor que é um `Tick` é um erro de
-leitura. O loop do aluno é o mesmo em todos os modos:
+view tem o seu ritmo. O `Tick` é um `Event` e não um `InputEvent`, então a
+entrada de um jogador não carrega um. O loop do aluno é o mesmo em todos os modos:
 
 ```python
 while ev := wait_event():

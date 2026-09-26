@@ -110,10 +110,9 @@ struct PadEvent {
 struct InputEvent {
     union {
         key    @0 :KeyEvent;
-        tick   @1 :Tick;
-        mouse  @2 :MouseEvent;
-        resize @3 :ResizeEvent;
-        pad    @4 :PadEvent;
+        mouse  @1 :MouseEvent;
+        resize @2 :ResizeEvent;
+        pad    @3 :PadEvent;
     }
 }
 

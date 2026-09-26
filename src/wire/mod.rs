@@ -60,9 +60,6 @@ pub enum Error {
     /// An event or a member of a roster has player 0, which is not a player
     /// of the session.
     NoPlayer,
-    /// An event of a player is a tick, which the server sends as a
-    /// message of its own.
-    PlayerTick,
     /// A roster has a player twice.
     DuplicatePlayer(to_engine::DuplicatePlayer),
     /// A hello has a minimum of 0 players or a maximum below its minimum.
@@ -80,7 +77,6 @@ impl std::fmt::Display for Error {
                 )
             }
             Error::NoPlayer => write!(f, "an event or a member has player 0"),
-            Error::PlayerTick => write!(f, "an event of a player is a tick"),
             Error::DuplicatePlayer(e) => write!(f, "{e}"),
             Error::PlayerRange { min, max } => {
                 write!(f, "a hello takes from {min} to {max} players")
@@ -675,8 +671,14 @@ mod tests {
     #[test]
     fn a_message_of_a_view_round_trips() {
         assert!(matches!(
-            to_server::decode(&to_server::encode_input(&InputEvent::Tick)),
-            Ok(Some(InputEvent::Tick))
+            to_server::decode(&to_server::encode_input(&InputEvent::Resize {
+                width: 1.0,
+                height: 2.0
+            })),
+            Ok(Some(InputEvent::Resize {
+                width: 1.0,
+                height: 2.0
+            }))
         ));
     }
 
@@ -689,9 +691,13 @@ mod tests {
 
     #[test]
     fn a_message_of_a_view_with_an_event_of_an_unknown_arm_is_skipped() {
-        let bytes = with_unknown_view_value(&to_server::encode_input(&InputEvent::Tick), |m| {
-            tag_of(m.get_event().unwrap())
-        });
+        let bytes = with_unknown_view_value(
+            &to_server::encode_input(&InputEvent::Resize {
+                width: 1.0,
+                height: 2.0,
+            }),
+            |m| tag_of(m.get_event().unwrap()),
+        );
         assert!(matches!(to_server::decode(&bytes), Ok(None)));
     }
 
@@ -709,33 +715,15 @@ mod tests {
     }
 
     #[test]
-    fn a_tick_round_trips_and_an_event_that_is_a_tick_is_an_error() {
+    fn a_tick_round_trips() {
         let mut stream = Vec::new();
-        to_engine::write_tick(&mut stream).unwrap();
-        let tick = to_engine::encode_input(1, &InputEvent::Tick);
-        stream.extend_from_slice(&framing::header(framing::Side::Server, tick.len() as u32));
-        stream.extend_from_slice(&tick);
         to_engine::write_tick(&mut stream).unwrap();
         let mut r = &stream[..];
         assert!(matches!(
             read_server(&mut r),
             Ok(Some(to_engine::Message::Tick))
         ));
-        assert!(matches!(
-            read_server(&mut r),
-            Err(ReadError::Payload(Error::PlayerTick))
-        ));
-        assert!(matches!(
-            read_server(&mut r),
-            Ok(Some(to_engine::Message::Tick))
-        ));
-    }
-
-    #[test]
-    fn write_input_refuses_a_tick() {
-        let err = to_engine::write_input(&mut Vec::new(), nonzero(1), &InputEvent::Tick)
-            .expect_err("an error");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(read_server(&mut r).unwrap().is_none());
     }
 
     #[test]
@@ -1000,7 +988,13 @@ mod tests {
         // The reader checks the player only for an event that it keeps, so
         // player 0 is no error here.
         for player in [1, 0] {
-            let event = to_engine::encode_input(player, &InputEvent::Tick);
+            let event = to_engine::encode_input(
+                player,
+                &InputEvent::Resize {
+                    width: 1.0,
+                    height: 2.0,
+                },
+            );
             let bytes = with_unknown_server_value(&event, |m| {
                 let Ok(server_message::Event(e)) = m.which() else {
                     panic!("not an event");

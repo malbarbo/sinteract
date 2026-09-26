@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use command_fds::{CommandFdExt, FdMapping};
 use sinteract::asset::{self, Cache, Footprint};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
-use sinteract::event::{Event, InputEvent, Interrupt};
+use sinteract::event::{Event, Interrupt};
 use sinteract::scene::Scene;
 use sinteract::wire::ReadError;
 use sinteract::wire::to_engine::{self, Member, Roster};
@@ -110,22 +110,18 @@ fn main() -> ExitCode {
     let mut tick_pending = false;
     loop {
         match fr.wait_event(None) {
+            Ok(Event::Tick) => {
+                stats.tick(tick_pending);
+                if tick_pending {
+                    continue;
+                }
+                tick_pending = true;
+                if to_engine::write_tick(&mut to_engine).is_err() {
+                    break;
+                }
+            }
             Ok(Event::Input(ev)) => {
-                let sent = match ev {
-                    InputEvent::Tick => {
-                        stats.tick(tick_pending);
-                        if tick_pending {
-                            continue;
-                        }
-                        tick_pending = true;
-                        to_engine::write_tick(&mut to_engine)
-                    }
-                    InputEvent::Key(_)
-                    | InputEvent::Mouse(_)
-                    | InputEvent::Resize { .. }
-                    | InputEvent::Pad(_) => to_engine::write_input(&mut to_engine, PLAYER, &ev),
-                };
-                if sent.is_err() {
+                if to_engine::write_input(&mut to_engine, PLAYER, &ev).is_err() {
                     break;
                 }
             }

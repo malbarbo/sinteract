@@ -2649,7 +2649,7 @@ pub mod pad_event {
 }
 
 pub mod input_event {
-    pub use self::Which::{Key, Mouse, Pad, Resize, Tick};
+    pub use self::Which::{Key, Mouse, Pad, Resize};
 
     #[derive(Copy, Clone)]
     pub struct Owned(());
@@ -2757,29 +2757,22 @@ pub mod input_event {
             !self.reader.get_pointer_field(0).is_null()
         }
         #[inline]
-        pub fn has_tick(&self) -> bool {
+        pub fn has_mouse(&self) -> bool {
             if self.reader.get_data_field::<u16>(0) != 1 {
                 return false;
             }
             !self.reader.get_pointer_field(0).is_null()
         }
         #[inline]
-        pub fn has_mouse(&self) -> bool {
+        pub fn has_resize(&self) -> bool {
             if self.reader.get_data_field::<u16>(0) != 2 {
                 return false;
             }
             !self.reader.get_pointer_field(0).is_null()
         }
         #[inline]
-        pub fn has_resize(&self) -> bool {
-            if self.reader.get_data_field::<u16>(0) != 3 {
-                return false;
-            }
-            !self.reader.get_pointer_field(0).is_null()
-        }
-        #[inline]
         pub fn has_pad(&self) -> bool {
-            if self.reader.get_data_field::<u16>(0) != 4 {
+            if self.reader.get_data_field::<u16>(0) != 3 {
                 return false;
             }
             !self.reader.get_pointer_field(0).is_null()
@@ -2793,25 +2786,19 @@ pub mod input_event {
                         ::core::option::Option::None,
                     ),
                 )),
-                1 => ::core::result::Result::Ok(Tick(
+                1 => ::core::result::Result::Ok(Mouse(
                     ::capnp::traits::FromPointerReader::get_from_pointer(
                         &self.reader.get_pointer_field(0),
                         ::core::option::Option::None,
                     ),
                 )),
-                2 => ::core::result::Result::Ok(Mouse(
+                2 => ::core::result::Result::Ok(Resize(
                     ::capnp::traits::FromPointerReader::get_from_pointer(
                         &self.reader.get_pointer_field(0),
                         ::core::option::Option::None,
                     ),
                 )),
-                3 => ::core::result::Result::Ok(Resize(
-                    ::capnp::traits::FromPointerReader::get_from_pointer(
-                        &self.reader.get_pointer_field(0),
-                        ::core::option::Option::None,
-                    ),
-                )),
-                4 => ::core::result::Result::Ok(Pad(
+                3 => ::core::result::Result::Ok(Pad(
                     ::capnp::traits::FromPointerReader::get_from_pointer(
                         &self.reader.get_pointer_field(0),
                         ::core::option::Option::None,
@@ -2933,35 +2920,11 @@ pub mod input_event {
             !self.builder.is_pointer_field_null(0)
         }
         #[inline]
-        pub fn set_tick(
-            &mut self,
-            value: crate::event_capnp::tick::Reader<'_>,
-        ) -> ::capnp::Result<()> {
-            self.builder.set_data_field::<u16>(0, 1);
-            ::capnp::traits::SetterInput::set_pointer_builder(
-                self.builder.reborrow().get_pointer_field(0),
-                value,
-                false,
-            )
-        }
-        #[inline]
-        pub fn init_tick(self) -> crate::event_capnp::tick::Builder<'a> {
-            self.builder.set_data_field::<u16>(0, 1);
-            ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
-        }
-        #[inline]
-        pub fn has_tick(&self) -> bool {
-            if self.builder.get_data_field::<u16>(0) != 1 {
-                return false;
-            }
-            !self.builder.is_pointer_field_null(0)
-        }
-        #[inline]
         pub fn set_mouse(
             &mut self,
             value: crate::event_capnp::mouse_event::Reader<'_>,
         ) -> ::capnp::Result<()> {
-            self.builder.set_data_field::<u16>(0, 2);
+            self.builder.set_data_field::<u16>(0, 1);
             ::capnp::traits::SetterInput::set_pointer_builder(
                 self.builder.reborrow().get_pointer_field(0),
                 value,
@@ -2970,12 +2933,12 @@ pub mod input_event {
         }
         #[inline]
         pub fn init_mouse(self) -> crate::event_capnp::mouse_event::Builder<'a> {
-            self.builder.set_data_field::<u16>(0, 2);
+            self.builder.set_data_field::<u16>(0, 1);
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
         }
         #[inline]
         pub fn has_mouse(&self) -> bool {
-            if self.builder.get_data_field::<u16>(0) != 2 {
+            if self.builder.get_data_field::<u16>(0) != 1 {
                 return false;
             }
             !self.builder.is_pointer_field_null(0)
@@ -2985,7 +2948,7 @@ pub mod input_event {
             &mut self,
             value: crate::event_capnp::resize_event::Reader<'_>,
         ) -> ::capnp::Result<()> {
-            self.builder.set_data_field::<u16>(0, 3);
+            self.builder.set_data_field::<u16>(0, 2);
             ::capnp::traits::SetterInput::set_pointer_builder(
                 self.builder.reborrow().get_pointer_field(0),
                 value,
@@ -2994,12 +2957,12 @@ pub mod input_event {
         }
         #[inline]
         pub fn init_resize(self) -> crate::event_capnp::resize_event::Builder<'a> {
-            self.builder.set_data_field::<u16>(0, 3);
+            self.builder.set_data_field::<u16>(0, 2);
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
         }
         #[inline]
         pub fn has_resize(&self) -> bool {
-            if self.builder.get_data_field::<u16>(0) != 3 {
+            if self.builder.get_data_field::<u16>(0) != 2 {
                 return false;
             }
             !self.builder.is_pointer_field_null(0)
@@ -3009,7 +2972,7 @@ pub mod input_event {
             &mut self,
             value: crate::event_capnp::pad_event::Reader<'_>,
         ) -> ::capnp::Result<()> {
-            self.builder.set_data_field::<u16>(0, 4);
+            self.builder.set_data_field::<u16>(0, 3);
             ::capnp::traits::SetterInput::set_pointer_builder(
                 self.builder.reborrow().get_pointer_field(0),
                 value,
@@ -3018,12 +2981,12 @@ pub mod input_event {
         }
         #[inline]
         pub fn init_pad(self) -> crate::event_capnp::pad_event::Builder<'a> {
-            self.builder.set_data_field::<u16>(0, 4);
+            self.builder.set_data_field::<u16>(0, 3);
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
         }
         #[inline]
         pub fn has_pad(&self) -> bool {
-            if self.builder.get_data_field::<u16>(0) != 4 {
+            if self.builder.get_data_field::<u16>(0) != 3 {
                 return false;
             }
             !self.builder.is_pointer_field_null(0)
@@ -3037,25 +3000,19 @@ pub mod input_event {
                         ::core::option::Option::None,
                     ),
                 )),
-                1 => ::core::result::Result::Ok(Tick(
+                1 => ::core::result::Result::Ok(Mouse(
                     ::capnp::traits::FromPointerBuilder::get_from_pointer(
                         self.builder.get_pointer_field(0),
                         ::core::option::Option::None,
                     ),
                 )),
-                2 => ::core::result::Result::Ok(Mouse(
+                2 => ::core::result::Result::Ok(Resize(
                     ::capnp::traits::FromPointerBuilder::get_from_pointer(
                         self.builder.get_pointer_field(0),
                         ::core::option::Option::None,
                     ),
                 )),
-                3 => ::core::result::Result::Ok(Resize(
-                    ::capnp::traits::FromPointerBuilder::get_from_pointer(
-                        self.builder.get_pointer_field(0),
-                        ::core::option::Option::None,
-                    ),
-                )),
-                4 => ::core::result::Result::Ok(Pad(
+                3 => ::core::result::Result::Ok(Pad(
                     ::capnp::traits::FromPointerBuilder::get_from_pointer(
                         self.builder.get_pointer_field(0),
                         ::core::option::Option::None,
@@ -3078,71 +3035,56 @@ pub mod input_event {
     }
     impl Pipeline {}
     mod _private {
-        pub(crate) static ENCODED_NODE: [::capnp::Word; 93] = [
+        pub(crate) static ENCODED_NODE: [::capnp::Word; 78] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
             ::capnp::word(179, 89, 65, 228, 71, 25, 46, 186),
             ::capnp::word(12, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(249, 152, 94, 63, 36, 82, 11, 145),
-            ::capnp::word(1, 0, 7, 0, 0, 0, 5, 0),
+            ::capnp::word(1, 0, 7, 0, 0, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(118, 12, 0, 0, 47, 13, 0, 0),
+            ::capnp::word(118, 12, 0, 0, 22, 13, 0, 0),
             ::capnp::word(21, 0, 0, 0, 186, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(25, 0, 0, 0, 31, 1, 0, 0),
+            ::capnp::word(25, 0, 0, 0, 231, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(101, 118, 101, 110, 116, 46, 99, 97),
             ::capnp::word(112, 110, 112, 58, 73, 110, 112, 117),
             ::capnp::word(116, 69, 118, 101, 110, 116, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
-            ::capnp::word(20, 0, 0, 0, 3, 0, 4, 0),
+            ::capnp::word(16, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 255, 255, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(125, 0, 0, 0, 34, 0, 0, 0),
+            ::capnp::word(97, 0, 0, 0, 34, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(120, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(132, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(92, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(104, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(1, 0, 254, 255, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 1, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(129, 0, 0, 0, 42, 0, 0, 0),
+            ::capnp::word(101, 0, 0, 0, 50, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(124, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(136, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(96, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(108, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(2, 0, 253, 255, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 2, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(133, 0, 0, 0, 50, 0, 0, 0),
+            ::capnp::word(105, 0, 0, 0, 58, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(128, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(140, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(100, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(112, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(3, 0, 252, 255, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 3, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(137, 0, 0, 0, 58, 0, 0, 0),
+            ::capnp::word(109, 0, 0, 0, 34, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(132, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(144, 0, 0, 0, 2, 0, 1, 0),
-            ::capnp::word(4, 0, 251, 255, 0, 0, 0, 0),
-            ::capnp::word(0, 0, 1, 0, 4, 0, 0, 0),
-            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(141, 0, 0, 0, 34, 0, 0, 0),
-            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(136, 0, 0, 0, 3, 0, 1, 0),
-            ::capnp::word(148, 0, 0, 0, 2, 0, 1, 0),
+            ::capnp::word(104, 0, 0, 0, 3, 0, 1, 0),
+            ::capnp::word(116, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(107, 101, 121, 0, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(92, 43, 144, 55, 65, 241, 49, 193),
-            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(116, 105, 99, 107, 0, 0, 0, 0),
-            ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(95, 232, 168, 122, 201, 94, 235, 166),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
@@ -3176,10 +3118,9 @@ pub mod input_event {
         pub(crate) fn get_field_types(index: u16) -> ::capnp::introspect::Type {
             match index {
                 0 => <crate::event_capnp::key_event::Owned as ::capnp::introspect::Introspect>::introspect(),
-                1 => <crate::event_capnp::tick::Owned as ::capnp::introspect::Introspect>::introspect(),
-                2 => <crate::event_capnp::mouse_event::Owned as ::capnp::introspect::Introspect>::introspect(),
-                3 => <crate::event_capnp::resize_event::Owned as ::capnp::introspect::Introspect>::introspect(),
-                4 => <crate::event_capnp::pad_event::Owned as ::capnp::introspect::Introspect>::introspect(),
+                1 => <crate::event_capnp::mouse_event::Owned as ::capnp::introspect::Introspect>::introspect(),
+                2 => <crate::event_capnp::resize_event::Owned as ::capnp::introspect::Introspect>::introspect(),
+                3 => <crate::event_capnp::pad_event::Owned as ::capnp::introspect::Introspect>::introspect(),
                 _ => ::capnp::introspect::panic_invalid_field_index(index),
             }
         }
@@ -3199,27 +3140,24 @@ pub mod input_event {
                 MEMBERS_BY_NAME,
             );
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[];
-        pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[0, 1, 2, 3, 4];
-        pub(crate) static MEMBERS_BY_NAME: &[u16] = &[0, 2, 4, 3, 1];
+        pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[0, 1, 2, 3];
+        pub(crate) static MEMBERS_BY_NAME: &[u16] = &[0, 1, 3, 2];
         pub(crate) const TYPE_ID: u64 = 0xba2e_1947_e441_59b3;
     }
-    pub enum Which<A0, A1, A2, A3, A4> {
+    pub enum Which<A0, A1, A2, A3> {
         Key(A0),
-        Tick(A1),
-        Mouse(A2),
-        Resize(A3),
-        Pad(A4),
+        Mouse(A1),
+        Resize(A2),
+        Pad(A3),
     }
     pub type WhichReader<'a> = Which<
         ::capnp::Result<crate::event_capnp::key_event::Reader<'a>>,
-        ::capnp::Result<crate::event_capnp::tick::Reader<'a>>,
         ::capnp::Result<crate::event_capnp::mouse_event::Reader<'a>>,
         ::capnp::Result<crate::event_capnp::resize_event::Reader<'a>>,
         ::capnp::Result<crate::event_capnp::pad_event::Reader<'a>>,
     >;
     pub type WhichBuilder<'a> = Which<
         ::capnp::Result<crate::event_capnp::key_event::Builder<'a>>,
-        ::capnp::Result<crate::event_capnp::tick::Builder<'a>>,
         ::capnp::Result<crate::event_capnp::mouse_event::Builder<'a>>,
         ::capnp::Result<crate::event_capnp::resize_event::Builder<'a>>,
         ::capnp::Result<crate::event_capnp::pad_event::Builder<'a>>,
@@ -3434,7 +3372,7 @@ pub mod tick {
             ::capnp::word(249, 152, 94, 63, 36, 82, 11, 145),
             ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(153, 13, 0, 0, 167, 13, 0, 0),
+            ::capnp::word(128, 13, 0, 0, 142, 13, 0, 0),
             ::capnp::word(21, 0, 0, 0, 138, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),

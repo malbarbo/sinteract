@@ -237,7 +237,7 @@ impl Inbox {
         }
         Some(match self.pending.pop_front()? {
             Entry::Input(ev) => Ok(Event::Input(ev)),
-            Entry::Tick => Ok(Event::Input(InputEvent::Tick)),
+            Entry::Tick => Ok(Event::Tick),
             Entry::Wake => Err(Interrupt::Wake),
             Entry::Read(e) => Err(Interrupt::Read(e)),
             Entry::Close => {
@@ -315,7 +315,7 @@ mod tests {
     }
 
     fn is_tick(ready: &Result<Event, Interrupt>) -> bool {
-        matches!(ready, Ok(Event::Input(InputEvent::Tick)))
+        matches!(ready, Ok(Event::Tick))
     }
 
     fn is_close(ready: &Result<Event, Interrupt>) -> bool {
