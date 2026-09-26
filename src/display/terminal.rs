@@ -26,7 +26,7 @@ use tiny_skia::Pixmap;
 use super::driver::{NoGraphics, OpenError, PresentError, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
-use super::vsync_clock::VsyncClock;
+use super::tick_clock::TickClock;
 use crate::event::{Event, Interrupt, MouseEvent};
 use crate::renderer::pixmap::{Assets, PixmapRenderer};
 use crate::renderer::{AllocError, Renderer};
@@ -65,7 +65,7 @@ pub struct TerminalOptions {
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
 /// Ctrl-C arrives as [`Interrupt::Close`]. The size of the terminal
 /// arrives as an [`InputEvent::Resize`](crate::event::InputEvent::Resize)
-/// ahead of the first Vsync, and again after each change. A mouse event
+/// ahead of the first tick, and again after each change. A mouse event
 /// gives the center of its cell.
 ///
 /// A thread of the session writes each frame while the next one renders.
@@ -75,7 +75,7 @@ pub struct TerminalOptions {
 /// a caller that holds the lock across a `present` waits forever.
 pub struct Terminal {
     inbox: Inbox,
-    clock: VsyncClock,
+    clock: TickClock,
     /// The pixmap of the next frame, the clip masks and the images of the
     /// bitmaps.
     renderer: PixmapRenderer,
@@ -100,7 +100,7 @@ struct Live {
 impl Terminal {
     /// There is no hardware refresh in a terminal. 60 Hz is smooth for
     /// half-block animation and does not flood the pty with escape codes.
-    const VSYNC_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
     /// Enter the alt screen and raw mode, with [`TerminalOptions::default`].
     pub fn open() -> Result<Self, OpenError> {
@@ -158,7 +158,7 @@ impl Terminal {
         };
         Ok(Self {
             inbox,
-            clock: VsyncClock::from_millihertz(Self::VSYNC_RATE),
+            clock: TickClock::from_millihertz(Self::TICK_RATE),
             renderer,
             backend,
             live: Some(Live {

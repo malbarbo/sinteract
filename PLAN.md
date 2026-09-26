@@ -117,9 +117,9 @@ Regras da sessão com servidor:
 - não há keep-alive no schema. O servidor usa o ping do WebSocket para
   perceber a view que caiu;
 - a view manda um `resize` como primeiro evento de cada conexão;
-- um timer do servidor manda o `tick`, que é o `Vsync` de todos os
-  jogadores, e o servidor não repassa o `Vsync` da view. A engine guarda
-  no máximo um `Vsync` na fila, então não acumula `tick`.
+- um timer do servidor manda o `tick` de todos os jogadores, e o
+  servidor não repassa o `tick` da view. A engine guarda no máximo um
+  `tick` na fila.
 
 O documento `sgleam/RUNTIME_PROTOCOL.md` descreve o servidor do Sarcade
 sobre esse protocolo, com um exemplo em Tokio.
@@ -127,10 +127,10 @@ sobre esse protocolo, com um exemplo em Tokio.
 ## Loop e ritmo
 
 `Display::wait_event(deadline)` devolve um `Event` ou um `Interrupt`
-(`Wake`, `Timeout`, `Read` ou `Close`). O ritmo vem de um evento `Vsync` na
-fila. O terminal e a janela fazem o próprio `Vsync`, e a `Session` recebe o
+(`Wake`, `Timeout`, `Read` ou `Close`). O ritmo vem de um evento `Tick` na
+fila. O terminal e a janela fazem o próprio `Tick`, e a `Session` recebe o
 `tick` do servidor, que marca o ritmo de todos os jogadores, porque cada
-view tem o seu ritmo. Um `event` do servidor que é um `Vsync` é um erro de
+view tem o seu ritmo. Um `event` do servidor que é um `Tick` é um erro de
 leitura. O loop do aluno é o mesmo em todos os modos:
 
 ```python
@@ -141,7 +141,7 @@ while ev := wait_event():
 
 `time.sleep` continua existindo, mas sai da API de animação. No navegador,
 o Worker espera com `Atomics.wait` e o `requestAnimationFrame` da thread
-principal empurra o `Vsync` a uma taxa fixa.
+principal empurra o `Tick` a uma taxa fixa.
 
 ## Texto e fontes
 
@@ -157,7 +157,7 @@ mesma face.
 `open_native` escolhe a janela ou o terminal. A `Session` é o lado da
 engine numa sessão com servidor. Ela não faz E/S. O host lhe dá os bytes
 que leu, com `feed`, ou chama `wait` sobre um `Read`, como o descritor 3,
-e ela devolve os eventos com o jogador, sempre com no máximo um `Vsync` na
+e ela devolve os eventos com o jogador, sempre com no máximo um `Tick` na
 fila. A engine
 escreve os frames no descritor 4 com `to_view`. Um host roda o jogo local
 num `Display` e o modo servidor numa `Session`, e um adaptador liga o jogo
@@ -191,7 +191,7 @@ o mesmo. No modo servidor, o protocolo passa pelos descritores 3 e 4,
 então o `print` do aluno no stdout não atrapalha a partida.
 
 No simplecode, o `env.ts` ganha `wait_event` com `Atomics.wait`, o canal de
-teclas vira canal de entrada com o `Vsync`, e o Worker escreve o frame num
+teclas vira canal de entrada com o `Tick`, e o Worker escreve o frame num
 buffer de saída que a thread principal desenha no `requestAnimationFrame`.
 As fontes WOFF2 são servidas estaticamente.
 
@@ -206,7 +206,7 @@ Feito no sinteract:
 - o trait `Display`, com `Terminal` e `Window`, as features `terminal` e
   `window`, e o `wait_event` com `Interrupt`;
 - a entrada com teclado, mouse, resize e pad de 12 botões;
-- a `Session`, com o `Vsync` do `tick` do servidor e a fila que junta
+- a `Session`, com o `tick` do servidor e a fila que junta
   movimentos por jogador;
 - os assets com `lost` e `forget`, a tabela `Assets` da engine e o
   `Cache` de uma sala;

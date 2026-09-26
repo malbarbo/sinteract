@@ -49,7 +49,7 @@ pub mod terminal;
     any(feature = "terminal", feature = "window"),
     not(target_arch = "wasm32")
 ))]
-mod vsync_clock;
+mod tick_clock;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 mod vt_input;
 #[cfg(all(feature = "window", not(target_arch = "wasm32")))]

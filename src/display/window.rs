@@ -30,7 +30,7 @@ use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
 use super::driver::{OpenError, PresentError, sealed};
 use super::inbox::{Inbox, Next, Sender};
-use super::vsync_clock::VsyncClock;
+use super::tick_clock::TickClock;
 use crate::event::{
     Event, Interrupt, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
 };
@@ -42,10 +42,10 @@ use crate::scene::Scene;
 /// as [`Interrupt::Close`], and the window stays until
 /// [`super::Display::close`]. The size of the window arrives as an
 /// [`InputEvent::Resize`](crate::event::InputEvent::Resize) ahead of the
-/// first Vsync, and again after each change.
+/// first tick, and again after each change.
 pub struct Window {
     inbox: Inbox,
-    clock: VsyncClock,
+    clock: TickClock,
     /// `None` after [`super::Display::close`].
     session: Option<Session>,
 }
@@ -64,8 +64,8 @@ struct Session {
 }
 
 impl Window {
-    /// The rate of the Vsync on a monitor that gives no refresh rate.
-    const VSYNC_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    /// The rate of the ticks on a monitor that gives no refresh rate.
+    const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
     /// How long [`Window::open`] waits for the platform to create the window.
     const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -96,7 +96,7 @@ impl Window {
         };
         Ok(Self {
             inbox,
-            clock: VsyncClock::from_millihertz(Self::VSYNC_RATE),
+            clock: TickClock::from_millihertz(Self::TICK_RATE),
             session: Some(Session {
                 lent,
                 app,
@@ -109,7 +109,7 @@ impl Window {
         })
     }
 
-    /// Run the loop of the window for at most `timeout`, pace the Vsync
+    /// Run the loop of the window for at most `timeout`, pace the ticks
     /// at the refresh rate of the monitor that shows the window, and draw
     /// a scene that waited for the frame callback of Wayland.
     fn pump(&mut self, timeout: Duration) {
@@ -126,7 +126,7 @@ impl Window {
         {
             s.app.read_refresh_rate = false;
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
-            self.clock.set_millihertz(rate.unwrap_or(Self::VSYNC_RATE));
+            self.clock.set_millihertz(rate.unwrap_or(Self::TICK_RATE));
         }
         if s.unshown && !s.app.frame_pending {
             // A failure here fails the next present the same way.
@@ -147,7 +147,7 @@ impl super::Display for Window {
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
-        // A frame that draws for longer than the period finds the next Vsync
+        // A frame that draws for longer than the period finds the next tick
         // due, so the wait returns it without a pump, and the platform takes
         // a window that never answers for hung. So every call pumps once.
         self.pump(Duration::ZERO);
@@ -217,7 +217,7 @@ impl Drop for Window {
 impl Session {
     /// Draw `last` now, or when the frame callback of Wayland for the
     /// frame before arrives. A hidden window gets no callback, so it draws
-    /// nothing, and the Vsync keeps its rate.
+    /// nothing, and the ticks keep their rate.
     fn show(&mut self) -> Result<(), PresentError> {
         // A second frame would block in `buffer_mut` until the compositor
         // releases a buffer.

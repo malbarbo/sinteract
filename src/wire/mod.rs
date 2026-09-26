@@ -60,9 +60,9 @@ pub enum Error {
     /// An event or a member of a roster has player 0, which is not a player
     /// of the session.
     NoPlayer,
-    /// An event of a player is a Vsync, which only a tick of the server
-    /// carries.
-    PlayerVsync,
+    /// An event of a player is a tick, which the server sends as a
+    /// message of its own.
+    PlayerTick,
     /// A roster has a player twice.
     DuplicatePlayer(to_engine::DuplicatePlayer),
     /// A hello has a minimum of 0 players or a maximum below its minimum.
@@ -80,7 +80,7 @@ impl std::fmt::Display for Error {
                 )
             }
             Error::NoPlayer => write!(f, "an event or a member has player 0"),
-            Error::PlayerVsync => write!(f, "an event of a player is a Vsync"),
+            Error::PlayerTick => write!(f, "an event of a player is a tick"),
             Error::DuplicatePlayer(e) => write!(f, "{e}"),
             Error::PlayerRange { min, max } => {
                 write!(f, "a hello takes from {min} to {max} players")
@@ -660,8 +660,8 @@ mod tests {
     #[test]
     fn a_message_of_a_view_round_trips() {
         assert!(matches!(
-            to_server::decode(&to_server::encode_input(&InputEvent::Vsync)),
-            Ok(Some(InputEvent::Vsync))
+            to_server::decode(&to_server::encode_input(&InputEvent::Tick)),
+            Ok(Some(InputEvent::Tick))
         ));
     }
 
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn a_message_of_a_view_with_an_event_of_an_unknown_arm_is_skipped() {
-        let bytes = with_unknown_view_value(&to_server::encode_input(&InputEvent::Vsync), |m| {
+        let bytes = with_unknown_view_value(&to_server::encode_input(&InputEvent::Tick), |m| {
             tag_of(m.get_event().unwrap())
         });
         assert!(matches!(to_server::decode(&bytes), Ok(None)));
@@ -694,12 +694,12 @@ mod tests {
     }
 
     #[test]
-    fn a_tick_round_trips_and_an_event_that_is_a_vsync_is_an_error() {
+    fn a_tick_round_trips_and_an_event_that_is_a_tick_is_an_error() {
         let mut stream = Vec::new();
         to_engine::write_tick(&mut stream).unwrap();
-        let vsync = to_engine::encode_input(1, &InputEvent::Vsync);
-        stream.extend_from_slice(&framing::header(framing::Side::Server, vsync.len() as u32));
-        stream.extend_from_slice(&vsync);
+        let tick = to_engine::encode_input(1, &InputEvent::Tick);
+        stream.extend_from_slice(&framing::header(framing::Side::Server, tick.len() as u32));
+        stream.extend_from_slice(&tick);
         to_engine::write_tick(&mut stream).unwrap();
         let mut r = &stream[..];
         assert!(matches!(
@@ -708,7 +708,7 @@ mod tests {
         ));
         assert!(matches!(
             read_server(&mut r),
-            Err(ReadError::Payload(Error::PlayerVsync))
+            Err(ReadError::Payload(Error::PlayerTick))
         ));
         assert!(matches!(
             read_server(&mut r),
@@ -717,8 +717,8 @@ mod tests {
     }
 
     #[test]
-    fn write_input_refuses_a_vsync() {
-        let err = to_engine::write_input(&mut Vec::new(), nonzero(1), &InputEvent::Vsync)
+    fn write_input_refuses_a_tick() {
+        let err = to_engine::write_input(&mut Vec::new(), nonzero(1), &InputEvent::Tick)
             .expect_err("an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -985,7 +985,7 @@ mod tests {
         // The reader checks the player only for an event that it keeps, so
         // player 0 is no error here.
         for player in [1, 0] {
-            let event = to_engine::encode_input(player, &InputEvent::Vsync);
+            let event = to_engine::encode_input(player, &InputEvent::Tick);
             let bytes = with_unknown_server_value(&event, |m| {
                 let Ok(server_message::Event(e)) = m.which() else {
                     panic!("not an event");

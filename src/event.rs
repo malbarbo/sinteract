@@ -6,7 +6,7 @@
 //! ```text
 //! loop {
 //!     match display.wait_event(deadline) {
-//!         Ok(Event::Input(InputEvent::Vsync)) => on_frame(),
+//!         Ok(Event::Input(InputEvent::Tick)) => on_frame(),
 //!         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 //!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
@@ -19,9 +19,9 @@
 //! }
 //! ```
 //!
-//! The display decides when a `Vsync` arrives, with a timer in the
+//! The display decides when a `Tick` arrives, with a timer in the
 //! terminal and in the window and rAF in the browser. In a session, the
-//! tick of the server arrives as a `SessionEvent::Vsync`. The engine
+//! tick of the server arrives as a `SessionEvent::Tick`. The engine
 //! derives a simulation tick from the time between two.
 
 /// What happened, as `wait_event` delivers it.
@@ -58,8 +58,8 @@ pub enum InputEvent {
         width: f32,
         height: f32,
     },
-    /// The surface can be repainted now.
-    Vsync,
+    /// Time for the next frame.
+    Tick,
     /// A button of a pad, or a pad that the view found or lost.
     Pad(PadEvent),
 }

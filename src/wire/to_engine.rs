@@ -27,8 +27,8 @@ use super::protocol::decode_root;
 /// session.
 #[derive(Clone, Debug)]
 pub enum Message {
-    /// The input of `player`. The server sends every Vsync as a `Tick`, so
-    /// `event` is never [`InputEvent::Vsync`].
+    /// The input of `player`. The server sends every tick as
+    /// [`Message::Tick`], so `event` is never [`InputEvent::Tick`].
     Input {
         player: NonZeroU32,
         event: InputEvent,
@@ -85,20 +85,20 @@ impl From<DuplicatePlayer> for Error {
     }
 }
 
-/// Write the input `ev` of `player`. A Vsync is not written, and the error
-/// is [`io::ErrorKind::InvalidInput`], since the server sends every Vsync
+/// Write the input `ev` of `player`. A tick is not written, and the error
+/// is [`io::ErrorKind::InvalidInput`], since the server sends every tick
 /// with [`write_tick`].
 pub fn write_input(w: &mut impl Write, player: NonZeroU32, ev: &InputEvent) -> io::Result<()> {
-    if matches!(ev, InputEvent::Vsync) {
+    if matches!(ev, InputEvent::Tick) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "a Vsync goes in a tick, not in the input of a player",
+            "a tick goes in a message of its own, not in the input of a player",
         ));
     }
     write_framed(w, Side::Server, &input_message(player.get(), ev))
 }
 
-/// Write a tick, the Vsync of every player.
+/// Write a tick, for every player.
 pub fn write_tick(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::Server, &tick_message())
 }
@@ -115,7 +115,7 @@ pub fn write_start(w: &mut impl Write, roster: &Roster) -> io::Result<()> {
 
 /// Decode `payload`. `None` for a message or an event of an arm from a
 /// newer schema. An event or a member of player 0, an event that is a
-/// Vsync, and a roster that repeats a player, are errors.
+/// tick, and a roster that repeats a player, are errors.
 pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<server_message::Owned, _>(payload, decode_message)
 }
@@ -130,8 +130,8 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
             let Some(event) = read_input_event(e.get_event()?)? else {
                 return Ok(None);
             };
-            if matches!(event, InputEvent::Vsync) {
-                return Err(Error::PlayerVsync);
+            if matches!(event, InputEvent::Tick) {
+                return Err(Error::PlayerTick);
             }
             Ok(Some(Message::Input {
                 player: nonzero_player(e.get_player())?,

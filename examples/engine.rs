@@ -65,7 +65,7 @@ fn main() -> ExitCode {
             }
         };
         match event {
-            SessionEvent::Vsync => {
+            SessionEvent::Tick => {
                 let now = Instant::now();
                 let dt = last.map_or(0.0, |t: Instant| (now - t).as_secs_f32());
                 last = Some(now);
@@ -99,7 +99,7 @@ fn main() -> ExitCode {
                 event:
                     InputEvent::Mouse(_)
                     | InputEvent::Resize { .. }
-                    | InputEvent::Vsync
+                    | InputEvent::Tick
                     | InputEvent::Pad(_),
                 ..
             } => {}

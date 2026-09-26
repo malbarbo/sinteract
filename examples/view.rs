@@ -2,7 +2,7 @@
 //! `examples/engine.rs`. It runs the engine as a subprocess and plays the
 //! part of the server for one player. At the hello of the engine it starts
 //! the session with player 1, shows the frames in the terminal or in a
-//! window, and sends a tick for each Vsync of the display and the input of
+//! window, and sends the engine a tick for each tick of the display and the input of
 //! the user as player 1. Like a server, it keeps the assets under the
 //! limits of a room, and tells the engine which ones it drops. At the end
 //! it prints to stderr what the frames cost, and how many assets came and
@@ -88,7 +88,7 @@ fn main() -> ExitCode {
     }
 
     // The size of the scene is only known at the first frame, and the
-    // engine sends no frame before a Vsync, which needs the display open.
+    // engine sends no frame before a tick, which needs the display open.
     // So the window opens at a guess and letterboxes.
     let mut fr = match open_native("sinteract view", 400.0, 300.0, TerminalOptions::default()) {
         Ok(fr) => fr,
@@ -108,8 +108,8 @@ fn main() -> ExitCode {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
                 let sent = match ev {
-                    InputEvent::Vsync => {
-                        stats.vsync();
+                    InputEvent::Tick => {
+                        stats.tick();
                         to_engine::write_tick(&mut to_engine)
                     }
                     InputEvent::Key(_)
@@ -298,20 +298,20 @@ fn drain(
     session
 }
 
-/// What the frames cost, from the first Vsync to the end.
+/// What the frames cost, from the first tick to the end.
 #[derive(Default)]
 struct Stats {
     frames: u32,
     skipped: u32,
-    /// The time between two Vsyncs.
-    vsync_gap: Span,
+    /// The time between two ticks.
+    tick_gap: Span,
     /// The time from a tick to the frame of the engine for it, which the
     /// view sees when it drains the channel.
     engine: Span,
     present: Span,
     /// When each tick without its frame went out, oldest first.
     ticks: VecDeque<Instant>,
-    last_vsync: Option<Instant>,
+    last_tick: Option<Instant>,
     /// The assets that the view kept.
     assets: u32,
     /// The assets that the view told the engine it lost.
@@ -321,10 +321,10 @@ struct Stats {
 }
 
 impl Stats {
-    fn vsync(&mut self) {
+    fn tick(&mut self) {
         let now = Instant::now();
-        if let Some(last) = self.last_vsync.replace(now) {
-            self.vsync_gap.add(now - last);
+        if let Some(last) = self.last_tick.replace(now) {
+            self.tick_gap.add(now - last);
         }
         self.ticks.push_back(now);
     }
@@ -356,13 +356,13 @@ impl Stats {
         };
         eprintln!(
             "view: {} frames, {} skipped, {:.1} fps, {} assets, {} lost\n\
-             view: vsync every {}, engine {}, present {}",
+             view: tick every {}, engine {}, present {}",
             self.frames,
             self.skipped,
             fps,
             self.assets,
             self.lost,
-            self.vsync_gap,
+            self.tick_gap,
             self.engine,
             self.present,
         );

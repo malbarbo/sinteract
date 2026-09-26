@@ -21,8 +21,8 @@ use crate::wire::to_engine::{self, Message, Roster};
 /// The engine side of a session, from the bytes of the server to the
 /// events of the engine.
 ///
-/// The queue keeps one Vsync, so an engine that falls behind the server
-/// gets one Vsync and not a burst. A move of the mouse or a resize replaces
+/// The queue keeps one tick, so an engine that falls behind the server
+/// gets one tick and not a burst. A move of the mouse or a resize replaces
 /// one of the same player that still waits, since only the latest one
 /// counts. It passes the input of the other players, and stops at anything
 /// else.
@@ -41,8 +41,8 @@ pub enum SessionEvent {
     /// before every other event of the server, and once.
     Start(Roster),
     /// Time to draw the next frames, for every player.
-    Vsync,
-    /// The input of `player`, never [`InputEvent::Vsync`].
+    Tick,
+    /// The input of `player`, never [`InputEvent::Tick`].
     Input {
         player: NonZeroU32,
         event: InputEvent,
@@ -192,7 +192,7 @@ impl Session {
                 SessionEvent::Error(SessionError::BeforeStart)
             }
             (State::Started, Message::Start(_)) => SessionEvent::Error(SessionError::SecondStart),
-            (State::Started, Message::Tick) => SessionEvent::Vsync,
+            (State::Started, Message::Tick) => SessionEvent::Tick,
             (State::Started, Message::Lost(id)) => SessionEvent::Lost(id),
             (State::Started, Message::Input { player, event }) => {
                 SessionEvent::Input { player, event }
@@ -204,12 +204,12 @@ impl Session {
         self.push(event);
     }
 
-    /// Queue `event`, dropping a second Vsync and a move or a resize that
+    /// Queue `event`, dropping a second tick and a move or a resize that
     /// `event` replaces.
     fn push(&mut self, event: SessionEvent) {
         match &event {
-            SessionEvent::Vsync => {
-                if self.events.iter().any(|e| matches!(e, SessionEvent::Vsync)) {
+            SessionEvent::Tick => {
+                if self.events.iter().any(|e| matches!(e, SessionEvent::Tick)) {
                     return;
                 }
             }
@@ -229,7 +229,7 @@ impl Session {
 
     /// The waiting input of `player` that `new` replaces, looking from the
     /// back past the input of the other players. The events of one player
-    /// keep their order, and nothing moves across a Vsync.
+    /// keep their order, and nothing moves across a tick.
     fn superseded(&mut self, player: NonZeroU32, new: &InputEvent) -> Option<&mut SessionEvent> {
         for old in self.events.iter_mut().rev() {
             match old {
@@ -239,7 +239,7 @@ impl Session {
                 SessionEvent::Input { .. } => {}
                 SessionEvent::Lost(_) => {}
                 SessionEvent::Start(_)
-                | SessionEvent::Vsync
+                | SessionEvent::Tick
                 | SessionEvent::Error(_)
                 | SessionEvent::End(_) => return None,
             }
@@ -348,13 +348,13 @@ mod tests {
         std::iter::from_fn(|| session.next_event())
             .map(|e| match e {
                 SessionEvent::Start(r) => format!("start {}", r.members().len()),
-                SessionEvent::Vsync => "vsync".into(),
+                SessionEvent::Tick => "tick".into(),
                 SessionEvent::Lost(id) => format!("lost {id}"),
                 SessionEvent::Input { player, event } => match event {
                     InputEvent::Key(k) => format!("{player} key {}", k.key),
                     InputEvent::Mouse(m) => format!("{player} move {}", m.x),
                     InputEvent::Resize { width, .. } => format!("{player} resize {width}"),
-                    InputEvent::Vsync | InputEvent::Pad(_) => format!("{player} {event:?}"),
+                    InputEvent::Tick | InputEvent::Pad(_) => format!("{player} {event:?}"),
                 },
                 SessionEvent::Error(e) => format!("error {e}"),
                 SessionEvent::End(None) => "end".into(),
@@ -376,18 +376,18 @@ mod tests {
         }
         session.end();
         events.extend(names(&mut session));
-        assert_eq!(events, ["start 2", "vsync", "2 key a", "end"]);
+        assert_eq!(events, ["start 2", "tick", "2 key a", "end"]);
     }
 
     #[test]
-    fn one_vsync_waits_at_most() {
+    fn one_tick_waits_at_most() {
         let mut stream = tick();
         input(&mut stream, 1, &key("a"));
         stream.extend_from_slice(&tick());
         let mut session = started(&stream);
-        assert_eq!(names(&mut session), ["vsync", "1 key a"]);
+        assert_eq!(names(&mut session), ["tick", "1 key a"]);
         session.feed(&tick());
-        assert_eq!(names(&mut session), ["vsync"]);
+        assert_eq!(names(&mut session), ["tick"]);
     }
 
     #[test]
@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn a_move_stops_at_a_vsync_and_a_key_of_its_player() {
+    fn a_move_stops_at_a_tick_and_a_key_of_its_player() {
         let mut stream = Vec::new();
         input(&mut stream, 1, &at(1.0));
         stream.extend_from_slice(&tick());
@@ -426,7 +426,7 @@ mod tests {
         let mut session = started(&stream);
         assert_eq!(
             names(&mut session),
-            ["1 move 1", "vsync", "1 move 2", "1 key a", "1 move 3"]
+            ["1 move 1", "tick", "1 move 2", "1 key a", "1 move 3"]
         );
     }
 
@@ -447,7 +447,7 @@ mod tests {
             session.next_event(),
             Some(SessionEvent::Error(SessionError::SecondStart))
         ));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Vsync)));
+        assert!(matches!(session.next_event(), Some(SessionEvent::Tick)));
     }
 
     #[test]
@@ -466,7 +466,7 @@ mod tests {
             Some(SessionEvent::Error(SessionError::BeforeStart))
         ));
         assert!(matches!(session.next_event(), Some(SessionEvent::Start(_))));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Vsync)));
+        assert!(matches!(session.next_event(), Some(SessionEvent::Tick)));
         assert!(matches!(session.next_event(), Some(SessionEvent::Lost(7))));
         assert!(session.next_event().is_none());
     }
@@ -489,7 +489,7 @@ mod tests {
                 wire::Error::NoPlayer
             )))
         ));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Vsync)));
+        assert!(matches!(session.next_event(), Some(SessionEvent::Tick)));
     }
 
     #[test]
@@ -498,7 +498,7 @@ mod tests {
         let mut stream = framed(&unknown);
         stream.extend_from_slice(&tick());
         let mut session = started(&stream);
-        assert_eq!(names(&mut session), ["vsync"]);
+        assert_eq!(names(&mut session), ["tick"]);
     }
 
     #[test]
@@ -523,7 +523,7 @@ mod tests {
     fn the_end_between_messages_is_the_end() {
         let mut session = started(&tick());
         session.end();
-        assert_eq!(names(&mut session), ["vsync", "end"]);
+        assert_eq!(names(&mut session), ["tick", "end"]);
     }
 
     #[test]
@@ -579,7 +579,7 @@ mod tests {
         assert!(matches!(session.wait(&mut r), Ok(SessionEvent::Start(_))));
         let e = session.wait(&mut r).expect_err("the error of the reader");
         assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
-        assert!(matches!(session.wait(&mut r), Ok(SessionEvent::Vsync)));
+        assert!(matches!(session.wait(&mut r), Ok(SessionEvent::Tick)));
         assert!(matches!(session.wait(&mut r), Ok(SessionEvent::End(None))));
         assert!(matches!(session.wait(&mut r), Ok(SessionEvent::End(None))));
     }

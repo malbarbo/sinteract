@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use super::vsync_clock::VsyncClock;
+use super::tick_clock::TickClock;
 use crate::event::{Event, InputEvent, Interrupt, KeyEvent, MouseEvent};
 
 /// Pushes into the queue of a display from any thread, and wakes a
@@ -121,7 +121,7 @@ enum Msg {
 enum Entry {
     Input(InputEvent),
     /// Only the clock of the display queues it.
-    Vsync,
+    Tick,
     Wake,
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     Read(io::Error),
@@ -186,9 +186,9 @@ impl Inbox {
     /// `deadline` of `None` waits for as long as it takes. So an engine
     /// that presents anyway skips the redraw.
     ///
-    /// A Vsync that fell due on `clock` goes in behind what arrived so
+    /// A tick that fell due on `clock` goes in behind what arrived so
     /// far, so the input that waited on a busy engine goes out first.
-    pub(crate) fn next(&mut self, clock: &mut VsyncClock, deadline: Option<Instant>) -> Next {
+    pub(crate) fn next(&mut self, clock: &mut TickClock, deadline: Option<Instant>) -> Next {
         let now = Instant::now();
         if let Some(ready) = self.pop(clock, now) {
             return Next::Ready(ready);
@@ -223,21 +223,21 @@ impl Inbox {
         }
     }
 
-    /// The oldest entry, after the channel drains and a Vsync goes in at
+    /// The oldest entry, after the channel drains and a tick goes in at
     /// the back if `clock` has one due by `now`, or `None` when nothing
-    /// waits. At most one Vsync waits, so a flood of input delays the
-    /// Vsync but never drops it.
-    fn pop(&mut self, clock: &mut VsyncClock, now: Instant) -> Option<Result<Event, Interrupt>> {
+    /// waits. At most one tick waits, so a flood of input delays the
+    /// tick but never drops it.
+    fn pop(&mut self, clock: &mut TickClock, now: Instant) -> Option<Result<Event, Interrupt>> {
         if self.closed {
             return Some(Err(Interrupt::Close));
         }
         self.drain();
-        if !self.pending.iter().any(|e| matches!(e, Entry::Vsync)) && clock.take_due(now) {
-            self.pending.push_back(Entry::Vsync);
+        if !self.pending.iter().any(|e| matches!(e, Entry::Tick)) && clock.take_due(now) {
+            self.pending.push_back(Entry::Tick);
         }
         Some(match self.pending.pop_front()? {
             Entry::Input(ev) => Ok(Event::Input(ev)),
-            Entry::Vsync => Ok(Event::Input(InputEvent::Vsync)),
+            Entry::Tick => Ok(Event::Input(InputEvent::Tick)),
             Entry::Wake => Err(Interrupt::Wake),
             Entry::Read(e) => Err(Interrupt::Read(e)),
             Entry::Close => {
@@ -314,8 +314,8 @@ mod tests {
         }
     }
 
-    fn is_vsync(ready: &Result<Event, Interrupt>) -> bool {
-        matches!(ready, Ok(Event::Input(InputEvent::Vsync)))
+    fn is_tick(ready: &Result<Event, Interrupt>) -> bool {
+        matches!(ready, Ok(Event::Input(InputEvent::Tick)))
     }
 
     fn is_close(ready: &Result<Event, Interrupt>) -> bool {
@@ -334,14 +334,14 @@ mod tests {
     /// as the terminal does.
     struct TestDisplay {
         inbox: Inbox,
-        clock: VsyncClock,
+        clock: TickClock,
     }
 
     impl TestDisplay {
         fn new(rate: u32) -> Self {
             Self {
                 inbox: Inbox::new(None),
-                clock: VsyncClock::from_millihertz(NonZeroU32::new(rate).unwrap()),
+                clock: TickClock::from_millihertz(NonZeroU32::new(rate).unwrap()),
             }
         }
 
@@ -373,17 +373,17 @@ mod tests {
         }
     }
 
-    /// A display whose next Vsync is 1000 s away, for the tests of the
+    /// A display whose next tick is 1000 s away, for the tests of the
     /// other events.
-    fn past_the_first_vsync() -> TestDisplay {
+    fn past_the_first_tick() -> TestDisplay {
         let mut inbox = TestDisplay::new(1);
-        assert!(is_vsync(&inbox.wait(None)));
+        assert!(is_tick(&inbox.wait(None)));
         inbox
     }
 
     #[test]
     fn delivers_in_the_order_of_arrival() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.send_key(key("a")).unwrap();
         tx.wake().unwrap();
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn a_read_error_keeps_its_place() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.send_key(key("a")).unwrap();
         tx.send_read_error(io::Error::other("the tty went away"))
@@ -408,13 +408,13 @@ mod tests {
 
     #[test]
     fn times_out_when_nothing_arrives() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
     fn a_move_or_a_resize_replaces_one_of_its_kind_at_the_back() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.send_mouse(move_to(1.0)).unwrap();
         tx.send_mouse(move_to(2.0)).unwrap();
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn a_move_before_a_wake_stays() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.send_mouse(move_to(1.0)).unwrap();
         tx.wake().unwrap();
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn close_goes_out_in_order_and_stays() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.send_key(key("a")).unwrap();
         tx.send_close().unwrap();
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn each_wake_goes_out_in_order() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.wake().unwrap();
         tx.send_key(key("a")).unwrap();
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn a_sender_fails_once_close_goes_out() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.send_close().unwrap();
         assert!(is_close(&inbox.wait(None)));
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn a_sender_fails_once_the_inbox_closes() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         inbox.close();
         assert_eq!(tx.send_close(), Err(Closed));
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn a_redraw_goes_out_once_after_the_events() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.request_redraw().unwrap();
         tx.send_key(key("a")).unwrap();
@@ -506,14 +506,14 @@ mod tests {
 
     #[test]
     fn wait_skips_a_redraw() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         inbox.sender().request_redraw().unwrap();
         assert!(is_timeout(&inbox.wait(soon())));
     }
 
     #[test]
     fn a_taken_redraw_does_not_go_out() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         inbox.sender().request_redraw().unwrap();
         assert!(inbox.inbox.take_redraw());
         assert!(!inbox.inbox.take_redraw());
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn a_sender_on_another_thread_wakes_the_wait() {
-        let mut inbox = past_the_first_vsync();
+        let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(20));
@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn a_sender_fails_once_the_inbox_is_gone() {
-        let tx = past_the_first_vsync().sender();
+        let tx = past_the_first_tick().sender();
         assert_eq!(tx.send_close(), Err(Closed));
     }
 
@@ -545,9 +545,9 @@ mod tests {
     fn the_clock_fires_at_once_and_then_after_a_period() {
         let mut inbox = TestDisplay::new(33_000);
         let start = Instant::now();
-        assert!(is_vsync(&inbox.wait(None)));
+        assert!(is_tick(&inbox.wait(None)));
         assert!(is_timeout(&inbox.wait(Some(Instant::now()))));
-        assert!(is_vsync(&inbox.wait(None)));
+        assert!(is_tick(&inbox.wait(None)));
         assert!(start.elapsed() >= Duration::from_millis(30));
     }
 
@@ -560,25 +560,25 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_engine_gets_the_input_before_the_vsync() {
+    fn a_slow_engine_gets_the_input_before_the_tick() {
         let mut inbox = TestDisplay::new(60_000);
         let t0 = Instant::now();
-        assert!(is_vsync(&pop(&mut inbox, t0).unwrap()));
+        assert!(is_tick(&pop(&mut inbox, t0).unwrap()));
         // A key arrives, and the engine comes back ten periods later.
         push_key(&mut inbox, "a");
         let late = t0 + Duration::from_millis(170);
         assert_eq!(key_name(&pop(&mut inbox, late).unwrap()), Some("a"));
-        assert!(is_vsync(&pop(&mut inbox, late).unwrap()));
+        assert!(is_tick(&pop(&mut inbox, late).unwrap()));
     }
 
     #[test]
-    fn input_that_arrives_behind_a_vsync_waits_for_it() {
+    fn input_that_arrives_behind_a_tick_waits_for_it() {
         let mut inbox = TestDisplay::new(1);
         let t0 = Instant::now();
         push_key(&mut inbox, "a");
         assert_eq!(key_name(&pop(&mut inbox, t0).unwrap()), Some("a"));
         push_key(&mut inbox, "b");
-        assert!(is_vsync(&pop(&mut inbox, t0).unwrap()));
+        assert!(is_tick(&pop(&mut inbox, t0).unwrap()));
         assert_eq!(key_name(&pop(&mut inbox, t0).unwrap()), Some("b"));
         assert!(pop(&mut inbox, t0).is_none());
     }

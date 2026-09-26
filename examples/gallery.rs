@@ -148,7 +148,7 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
     let mut presenting = std::time::Duration::ZERO;
     loop {
         match display.wait_event(None) {
-            Ok(Event::Input(InputEvent::Vsync)) => {
+            Ok(Event::Input(InputEvent::Tick)) => {
                 let scene = gallery(start.elapsed().as_secs_f32());
                 let before = Instant::now();
                 display.present(scene).map_err(|e| e.to_string())?;

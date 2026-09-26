@@ -25,7 +25,7 @@ a local display.
 
 `display/` shows a scene and reads the input back. `driver.rs` holds the
 sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind
-`wait_event`, `vsync_clock.rs` the clock that paces the Vsync,
+`wait_event`, `tick_clock.rs` the clock that paces the tick,
 `terminal.rs` and `window.rs` are the two displays, and
 `sixel.rs` and `term_query.rs` support them.
 Only `sixel.rs` builds on wasm32, so the `cfg` sits on each submodule in

@@ -37,7 +37,7 @@ pub(super) fn write_input_event(b: input_event::Builder<'_>, ev: &InputEvent) {
         InputEvent::Resize { width, height } => {
             write_resize_event(b.init_resize(), *width, *height)
         }
-        InputEvent::Vsync => {
+        InputEvent::Tick => {
             b.init_tick();
         }
         InputEvent::Pad(p) => write_pad_event(b.init_pad(), *p),
@@ -139,7 +139,7 @@ fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEv
                 repeat: k.get_repeat(),
             })
         }
-        Which::Tick(_) => InputEvent::Vsync,
+        Which::Tick(_) => InputEvent::Tick,
         Which::Mouse(m) => InputEvent::Mouse(read_mouse_event(m?)?),
         Which::Resize(r) => {
             let r = r?;
