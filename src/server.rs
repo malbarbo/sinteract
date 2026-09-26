@@ -813,7 +813,7 @@ mod tests {
             self.core.take_engine_output(&mut buf);
             self.engine.feed(&buf);
             let mut back = Vec::new();
-            let events = std::iter::from_fn(|| self.engine.next_event(&mut back).unwrap())
+            let events = std::iter::from_fn(|| self.engine.next_event(&mut back))
                 .map(|e| match e {
                     SessionEvent::Start(roster) => {
                         let members: Vec<_> = roster

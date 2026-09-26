@@ -5,11 +5,12 @@
 //! [`crate::wire::to_view`], and the session writes a tickTaken there as
 //! it hands out each tick, so the server holds the next tick until then.
 //!
-//! The session does no I/O of its own. A host that reads the bytes itself,
-//! such as JavaScript through wasm, calls [`Session::feed`] and
-//! [`Session::next_event`]. A host that reads a [`Read`], such as an
-//! engine on fd 3, calls [`Session::wait`]. Both write to the [`Write`]
-//! that goes to the server, such as fd 4.
+//! The session does no I/O of its own. A host that moves the bytes itself,
+//! such as JavaScript through wasm or a loop over a socket that does not
+//! block, calls [`Session::feed`] and [`Session::next_event`], which
+//! appends the tickTaken to the buffer of the host for the server. A host
+//! with a [`Read`] and a [`Write`] that block, such as an engine on fd 3
+//! and fd 4, calls [`Session::wait`].
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -121,27 +122,33 @@ impl Session {
     }
 
     /// The next event, or `None` while the next one waits for more bytes
-    /// and after the end. A tick writes a tickTaken to `w` first, and an
-    /// error of `w` comes back in place of the tick.
-    pub fn next_event(&mut self, w: &mut impl Write) -> io::Result<Option<SessionEvent>> {
-        let Some(event) = self.events.pop_front() else {
-            return Ok(None);
-        };
+    /// and after the end. A tick appends a tickTaken to `out`, the bytes
+    /// that the host sends to the server, in order with its frames.
+    pub fn next_event(&mut self, out: &mut Vec<u8>) -> Option<SessionEvent> {
+        let event = self.events.pop_front()?;
         if matches!(event, SessionEvent::Tick) {
-            to_view::write_tick_taken(w)?;
+            to_view::write_tick_taken(out).expect("a tickTaken is under the cap of the framing");
         }
-        Ok(Some(event))
+        Some(event)
     }
 
     /// The next event, with bytes from `r` when none waits. It blocks for
     /// as long as `r` blocks. After the end, it returns `End(None)` without
     /// a read. An error of `r` other than [`io::ErrorKind::Interrupted`]
     /// comes back as is, and the session keeps the bytes that it read
-    /// before. A tick writes a tickTaken to `w` first, as in
-    /// [`Session::next_event`].
+    /// before. A tick writes a tickTaken to `w` first. An error of `w`
+    /// comes back in place of the tick and ends the session, since `w` may
+    /// hold part of the tickTaken.
     pub fn wait(&mut self, r: &mut impl Read, w: &mut impl Write) -> io::Result<SessionEvent> {
         loop {
-            if let Some(event) = self.next_event(w)? {
+            let mut out = Vec::new();
+            if let Some(event) = self.next_event(&mut out) {
+                if let Err(e) = w.write_all(&out) {
+                    self.state = State::Ended;
+                    self.bytes = Vec::new();
+                    self.events.clear();
+                    return Err(e);
+                }
                 return Ok(event);
             }
             if self.state == State::Ended {
@@ -347,7 +354,7 @@ mod tests {
 
     /// The next event, with the tickTaken dropped.
     fn next(session: &mut Session) -> Option<SessionEvent> {
-        session.next_event(&mut io::sink()).unwrap()
+        session.next_event(&mut Vec::new())
     }
 
     /// A session after its start, fed with `bytes`.
@@ -623,16 +630,50 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             session.next_event(&mut out),
-            Ok(Some(SessionEvent::Start(_)))
+            Some(SessionEvent::Start(_))
         ));
         assert!(out.is_empty());
         assert!(matches!(
             session.next_event(&mut out),
-            Ok(Some(SessionEvent::Tick))
+            Some(SessionEvent::Tick)
         ));
         assert!(matches!(
             to_view::read(&mut &out[..]),
             Ok(Some(to_view::Message::TickTaken))
+        ));
+    }
+
+    /// A writer that fails every write.
+    struct Broken;
+
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_error_of_the_writer_at_a_tick_ends_the_session() {
+        let mut stream = start();
+        stream.extend_from_slice(&tick());
+        stream.extend_from_slice(&tick());
+        let mut r = &stream[..];
+        let mut session = Session::new();
+        assert!(matches!(
+            session.wait(&mut r, &mut Broken),
+            Ok(SessionEvent::Start(_))
+        ));
+        let e = session
+            .wait(&mut r, &mut Broken)
+            .expect_err("the error of the writer");
+        assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
+        assert!(matches!(
+            session.wait(&mut r, &mut io::sink()),
+            Ok(SessionEvent::End(None))
         ));
     }
 }
