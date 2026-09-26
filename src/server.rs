@@ -64,6 +64,8 @@ pub struct ServerCore {
     /// The ids of the assets that the cache dropped before the start, for
     /// the lost that follows the start.
     lost_before_start: Vec<u32>,
+    /// The engine did not take the last tick yet.
+    tick_pending: bool,
 }
 
 type Assets = BTreeMap<u32, Arc<[u8]>>;
@@ -227,6 +229,7 @@ impl ServerCore {
             assets: Assets::new(),
             cache: Cache::new(),
             lost_before_start: Vec::new(),
+            tick_pending: false,
         }
     }
 
@@ -311,10 +314,13 @@ impl ServerCore {
         })
     }
 
-    /// Tell the engine to draw the next frames, in the game.
+    /// Tell the engine to draw the next frames, in the game. The tick is
+    /// dropped while the engine has not taken the last one, so the ticks
+    /// of an engine slower than the timer do not pile up.
     pub fn tick(&mut self) {
-        if self.phase == Phase::Playing {
+        if self.phase == Phase::Playing && !self.tick_pending {
             to_engine::write_tick(&mut self.to_engine).expect(UNDER_THE_CAP);
+            self.tick_pending = true;
         }
     }
 
@@ -413,7 +419,7 @@ impl ServerCore {
                     }
                 }
                 Ok(Some(Arm::Forget(id))) => errors.push(EngineError::Forget(id)),
-                Ok(Some(Arm::TickTaken)) => {}
+                Ok(Some(Arm::TickTaken)) => self.tick_pending = false,
                 Ok(Some(Arm::Frame { player })) => {
                     if let Err(e) = self.keep_frame(player, payload) {
                         errors.push(EngineError::Payload(e));
@@ -786,12 +792,13 @@ mod tests {
         }
 
         /// The events that the engine got since the last call, in a short
-        /// form.
+        /// form. The tickTaken of the engine goes back to the core.
         fn events(&mut self) -> Vec<String> {
             let mut buf = Vec::new();
             self.core.take_engine_output(&mut buf);
             self.engine.feed(&buf);
-            std::iter::from_fn(|| self.engine.next_event(&mut io::sink()).unwrap())
+            let mut back = Vec::new();
+            let events = std::iter::from_fn(|| self.engine.next_event(&mut back).unwrap())
                 .map(|e| match e {
                     SessionEvent::Start(roster) => {
                         let members: Vec<_> = roster
@@ -827,7 +834,9 @@ mod tests {
                     SessionEvent::End(None) => "end".into(),
                     SessionEvent::End(Some(e)) => format!("broken {e}"),
                 })
-                .collect()
+                .collect();
+            assert!(self.core.from_engine(&back).is_empty());
+            events
         }
     }
 
@@ -1000,6 +1009,16 @@ mod tests {
         ));
         assert_eq!(sent(&mut room.core, conns[0]), ["frame all 1", "idle"]);
         assert!(room.events().is_empty());
+    }
+
+    #[test]
+    fn a_tick_waits_until_the_engine_takes_the_last_one() {
+        let (mut room, _) = Room::playing(&["Ana"]);
+        room.core.tick();
+        room.core.tick();
+        assert_eq!(room.events(), ["tick"]);
+        room.core.tick();
+        assert_eq!(room.events(), ["tick"]);
     }
 
     #[test]
