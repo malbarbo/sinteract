@@ -2,9 +2,10 @@
 //! `examples/engine.rs`. It runs the engine as a subprocess and plays the
 //! part of the server for one player. At the hello of the engine it starts
 //! the session with player 1, shows the frames in the terminal or in a
-//! window, and sends the engine a tick for each tick of the display and the input of
-//! the user as player 1. Like a server, it keeps the assets under the
-//! limits of a room, and tells the engine which ones it drops. At the end
+//! window, and sends the input of the user as player 1. Like a server, it
+//! sends the engine a tick for each tick of the display once the engine
+//! took the last one, keeps the assets under the limits of a room, and
+//! tells the engine which ones it drops. At the end
 //! it prints to stderr what the frames cost, and how many assets came and
 //! were lost:
 //!
@@ -104,12 +105,19 @@ fn main() -> ExitCode {
 
     let mut stats = Stats::default();
     let mut cache = Cache::new();
+    // The engine did not take the last tick yet, and the ticks of the
+    // display wait for it, as a server holds them.
+    let mut tick_pending = false;
     loop {
         match fr.wait_event(None) {
             Ok(Event::Input(ev)) => {
                 let sent = match ev {
                     InputEvent::Tick => {
-                        stats.tick();
+                        stats.tick(tick_pending);
+                        if tick_pending {
+                            continue;
+                        }
+                        tick_pending = true;
                         to_engine::write_tick(&mut to_engine)
                     }
                     InputEvent::Key(_)
@@ -128,6 +136,7 @@ fn main() -> ExitCode {
                 &from_reader,
                 &mut cache,
                 &mut to_engine,
+                &mut tick_pending,
                 &mut stats,
             ) {
                 Drained::Open => {}
@@ -222,6 +231,7 @@ fn drain(
     from_reader: &Receiver<Message>,
     cache: &mut Cache,
     to_engine: &mut impl Write,
+    tick_pending: &mut bool,
     stats: &mut Stats,
 ) -> Drained {
     let mut last: Option<Scene> = None;
@@ -282,7 +292,7 @@ fn drain(
             }
             Message::Hello(_) => eprintln!("view: skipping a hello after the first one"),
             Message::Forget(_) => eprintln!("view: skipping a forget from the engine"),
-            Message::TickTaken => {}
+            Message::TickTaken => *tick_pending = false,
         }
     }
     if let Some(scene) = last {
@@ -304,7 +314,9 @@ fn drain(
 struct Stats {
     frames: u32,
     skipped: u32,
-    /// The time between two ticks.
+    /// The ticks of the display that waited on the engine and did not go.
+    held: u32,
+    /// The time between two ticks of the display.
     tick_gap: Span,
     /// The time from a tick to the frame of the engine for it, which the
     /// view sees when it drains the channel.
@@ -322,12 +334,16 @@ struct Stats {
 }
 
 impl Stats {
-    fn tick(&mut self) {
+    fn tick(&mut self, held: bool) {
         let now = Instant::now();
         if let Some(last) = self.last_tick.replace(now) {
             self.tick_gap.add(now - last);
         }
-        self.ticks.push_back(now);
+        if held {
+            self.held += 1;
+        } else {
+            self.ticks.push_back(now);
+        }
     }
 
     /// The engine answers each tick with one frame, in order.
@@ -357,13 +373,14 @@ impl Stats {
         };
         eprintln!(
             "view: {} frames, {} skipped, {:.1} fps, {} assets, {} lost\n\
-             view: tick every {}, engine {}, present {}",
+             view: tick every {}, {} held, engine {}, present {}",
             self.frames,
             self.skipped,
             fps,
             self.assets,
             self.lost,
             self.tick_gap,
+            self.held,
             self.engine,
             self.present,
         );
