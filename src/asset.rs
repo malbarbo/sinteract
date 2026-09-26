@@ -295,7 +295,7 @@ impl Footprint {
 
 /// The live assets of a room, as the limits count them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Load {
+struct Load {
     pixels: u64,
     bytes: u64,
 }
@@ -303,7 +303,7 @@ pub struct Load {
 impl Load {
     /// The load with `asset` on top, or an error if that goes over
     /// [`MAX_LIVE_PIXELS`] or [`MAX_LIVE_BYTES`].
-    pub fn with(self, asset: Footprint) -> Result<Load, AssetError> {
+    fn with(self, asset: Footprint) -> Result<Load, AssetError> {
         let load = Load {
             pixels: self.pixels + asset.pixels,
             bytes: self.bytes + asset.bytes,
@@ -318,7 +318,7 @@ impl Load {
     }
 
     /// The load without `asset`, which [`Load::with`] added before.
-    pub fn without(self, asset: Footprint) -> Load {
+    fn without(self, asset: Footprint) -> Load {
         Load {
             pixels: self.pixels - asset.pixels,
             bytes: self.bytes - asset.bytes,
@@ -371,7 +371,7 @@ pub fn image_size(blob: &[u8]) -> Option<(u32, u32)> {
 
 /// The format of an image, from its first bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Format {
+enum Format {
     Png,
     Jpeg,
     Gif,
@@ -380,26 +380,26 @@ pub(crate) enum Format {
 
 /// What the header of an image says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Head {
-    pub(crate) format: Format,
+struct Head {
+    format: Format,
     /// The width and the height, both above 0.
-    pub(crate) size: (u32, u32),
+    size: (u32, u32),
     /// The EXIF orientation of a JPEG, from 1 to 8, and 1 for any other
     /// format.
-    pub(crate) orientation: u8,
+    orientation: u8,
 }
 
 impl Head {
     /// Returns `true` if the orientation swaps the width and the height,
     /// `false` otherwise.
-    pub(crate) fn turned(self) -> bool {
+    fn turned(self) -> bool {
         self.orientation >= 5
     }
 }
 
 /// The header of the image in `blob`, or `None` if `blob` is not a PNG, a
 /// JPEG, a GIF or a WebP, or gives a width or a height of 0.
-pub(crate) fn head(blob: &[u8]) -> Option<Head> {
+fn head(blob: &[u8]) -> Option<Head> {
     let (format, size, orientation) = if blob.starts_with(PNG_SIGNATURE) {
         (Format::Png, png_size(blob)?, 1)
     } else if blob.starts_with(b"\xff\xd8") {
