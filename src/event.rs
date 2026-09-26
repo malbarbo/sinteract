@@ -218,6 +218,17 @@ pub enum MouseButton {
     Forward = 4,
 }
 
+impl MouseButton {
+    /// Every button, in the order of the discriminants.
+    pub const ALL: [MouseButton; 5] = [
+        MouseButton::Left,
+        MouseButton::Middle,
+        MouseButton::Right,
+        MouseButton::Back,
+        MouseButton::Forward,
+    ];
+}
+
 /// A set of mouse buttons.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct MouseButtons(u8);
@@ -244,7 +255,7 @@ impl MouseButtons {
     /// The set of the known buttons among `bits`. A bit of a button from a
     /// newer schema drops out.
     pub fn from_bits(bits: u8) -> Self {
-        MouseButtons(bits & ((1 << (MouseButton::Forward as u8 + 1)) - 1))
+        MouseButtons(bits & ((1 << MouseButton::ALL.len()) - 1))
     }
 
     fn bit(button: MouseButton) -> u8 {

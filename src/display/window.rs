@@ -705,13 +705,7 @@ impl ApplicationHandler for App {
                 for key in self.held.release_all() {
                     self.report_key(KeyKind::Up, key, false);
                 }
-                for button in [
-                    MouseButton::Left,
-                    MouseButton::Middle,
-                    MouseButton::Right,
-                    MouseButton::Back,
-                    MouseButton::Forward,
-                ] {
+                for button in MouseButton::ALL {
                     if self.buttons.contains(button) {
                         self.buttons = self.buttons.without(button);
                         self.report_mouse(MouseAction::Up(button));

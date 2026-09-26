@@ -705,13 +705,7 @@ impl Held {
             })
             .collect();
         let (x, y, mut buttons) = self.mouse;
-        for button in [
-            MouseButton::Left,
-            MouseButton::Middle,
-            MouseButton::Right,
-            MouseButton::Back,
-            MouseButton::Forward,
-        ] {
+        for button in MouseButton::ALL {
             if buttons.contains(button) {
                 buttons = buttons.without(button);
                 ups.push(InputEvent::Mouse(MouseEvent {
