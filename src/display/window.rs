@@ -62,8 +62,7 @@ struct Session {
 }
 
 impl Window {
-    /// The window paints through softbuffer without a swap chain, so its
-    /// cadence is software-timed too.
+    /// The rate of the Vsync on a monitor that gives no refresh rate.
     const VSYNC_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
     /// How long [`Window::open`] waits for the platform to create the window.
@@ -106,6 +105,26 @@ impl Window {
             }),
         })
     }
+
+    /// Run the loop of the window for at most `timeout`, and pace the
+    /// Vsync at the refresh rate of the monitor that shows the window.
+    fn pump(&mut self, timeout: Duration) {
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        if !s.lent.pump(&mut s.app, timeout) {
+            let _ = s.app.tx.send_close();
+        }
+        // Wayland puts the window on a monitor only after its first frame,
+        // so the rate stays to read until a monitor shows the window.
+        if s.app.read_refresh_rate
+            && let Some(monitor) = s.window.current_monitor()
+        {
+            s.app.read_refresh_rate = false;
+            let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
+            self.clock.set_millihertz(rate.unwrap_or(Self::VSYNC_RATE));
+        }
+    }
 }
 
 impl super::Display for Window {
@@ -124,11 +143,7 @@ impl super::Display for Window {
         // A frame that draws for longer than the period finds the next Vsync
         // due, so the wait returns it without a pump, and the platform takes
         // a window that never answers for hung. So every call pumps once.
-        if let Some(s) = self.session.as_mut()
-            && !s.lent.pump(&mut s.app, Duration::ZERO)
-        {
-            let _ = s.app.tx.send_close();
-        }
+        self.pump(Duration::ZERO);
         loop {
             // A closed session has a closed inbox, which returns Close
             // before it redraws or blocks.
@@ -139,13 +154,7 @@ impl super::Display for Window {
                         s.redraw();
                     }
                 }
-                Next::Block(timeout) => {
-                    if let Some(s) = self.session.as_mut()
-                        && !s.lent.pump(&mut s.app, timeout)
-                    {
-                        let _ = s.app.tx.send_close();
-                    }
-                }
+                Next::Block(timeout) => self.pump(timeout),
             }
         }
     }
@@ -431,6 +440,9 @@ struct App {
     /// The size in the last Resize, in logical pixels.
     reported_size: (f32, f32),
     held: HeldKeys,
+    /// The window may be on another monitor, whose refresh rate is still
+    /// to read.
+    read_refresh_rate: bool,
 }
 
 impl App {
@@ -448,6 +460,7 @@ impl App {
             size: PhysicalSize::default(),
             reported_size: (0.0, 0.0),
             held: HeldKeys::default(),
+            read_refresh_rate: true,
         }
     }
 
@@ -553,8 +566,10 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                 let _ = self.tx.send_close();
             }
+            WindowEvent::Moved(_) => self.read_refresh_rate = true,
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = scale_factor;
+                self.read_refresh_rate = true;
                 self.report_size();
                 let _ = self.tx.request_redraw();
             }

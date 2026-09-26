@@ -15,9 +15,16 @@ impl VsyncClock {
     /// in winit.
     pub(crate) fn from_millihertz(rate: NonZeroU32) -> Self {
         Self {
-            period: Duration::from_nanos(1_000_000_000_000 / u64::from(rate.get())),
+            period: period(rate),
             due: Instant::now(),
         }
+    }
+
+    /// Change the rate to `rate` thousandths of a hertz. The next Vsync
+    /// keeps its time.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn set_millihertz(&mut self, rate: NonZeroU32) {
+        self.period = period(rate);
     }
 
     pub(crate) fn due(&self) -> Instant {
@@ -40,6 +47,10 @@ impl VsyncClock {
         }
         true
     }
+}
+
+fn period(rate: NonZeroU32) -> Duration {
+    Duration::from_nanos(1_000_000_000_000 / u64::from(rate.get()))
 }
 
 #[cfg(test)]
