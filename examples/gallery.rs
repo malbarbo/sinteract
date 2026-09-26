@@ -37,7 +37,7 @@ use sinteract::scene::{
 type DrawCell = fn(s: &mut Scene, x: f32, y: f32, t: f32);
 
 /// The cells in reading order, each with its label.
-const CELLS: [(&str, DrawCell); 16] = [
+const CELLS: [(&str, DrawCell); 20] = [
     ("fill and stroke", fill_and_stroke),
     ("line quad cubic arc", segments),
     ("caps", caps),
@@ -54,6 +54,10 @@ const CELLS: [(&str, DrawCell); 16] = [
     ("text transforms", text_transforms),
     ("bitmaps", bitmaps),
     ("families", families),
+    ("PNG with alpha", png_image),
+    ("JPEG turned by EXIF", jpeg_image),
+    ("GIF, first frame", gif_image),
+    ("WebP", webp_image),
 ];
 const COLS: usize = 4;
 const CELL_W: f32 = 200.0;
@@ -64,6 +68,29 @@ const HEIGHT: f32 = (CELLS.len() / COLS) as f32 * CELL_H;
 const BADGE: u32 = 1;
 /// The size of the badge image in pixels.
 const BADGE_SIZE: (u32, u32) = (32, 24);
+/// An image of each format that an asset takes, from `examples/images`.
+const PNG: Photo = Photo {
+    id: 2,
+    blob: include_bytes!("images/dice.png"),
+    size: (250, 187),
+};
+/// The pixels are stored on their side, 160 by 240, and the EXIF
+/// orientation turns them.
+const JPEG: Photo = Photo {
+    id: 3,
+    blob: include_bytes!("images/landscape.jpg"),
+    size: (240, 160),
+};
+const GIF: Photo = Photo {
+    id: 4,
+    blob: include_bytes!("images/horse.gif"),
+    size: (307, 230),
+};
+const WEBP: Photo = Photo {
+    id: 5,
+    blob: include_bytes!("images/cat.webp"),
+    size: (576, 531),
+};
 /// The time of the still images, which gives every rotation an angle.
 const STILL: f32 = 0.7;
 
@@ -105,10 +132,17 @@ fn main() -> ExitCode {
     }
 }
 
+/// An image in a file, and its size upright.
+struct Photo {
+    id: u32,
+    blob: &'static [u8],
+    size: (u32, u32),
+}
+
 fn run(mut display: Box<dyn Display>) -> Result<(), String> {
-    display
-        .push_asset(BADGE, &badge_png())
-        .map_err(|e| e.to_string())?;
+    for (id, blob) in images() {
+        display.push_asset(id, &blob).map_err(|e| e.to_string())?;
+    }
     let start = Instant::now();
     let mut frames = 0u32;
     let mut presenting = std::time::Duration::ZERO;
@@ -144,25 +178,40 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
 
 fn print() -> Result<(), String> {
     let mut printer = Printer::new().map_err(|e| e.to_string())?;
-    printer
-        .assets_mut()
-        .insert(BADGE, &badge_png())
-        .map_err(|e| e.to_string())?;
+    for (id, blob) in images() {
+        printer
+            .assets_mut()
+            .insert(id, &blob)
+            .map_err(|e| e.to_string())?;
+    }
     printer.print(&gallery(STILL)).map_err(|e| e.to_string())
 }
 
 fn png() -> Result<(), String> {
     let mut renderer =
         PixmapRenderer::new(2.0, WIDTH, HEIGHT).ok_or("the pixmap does not allocate")?;
-    renderer
-        .assets_mut()
-        .insert(BADGE, &badge_png())
-        .map_err(|e| e.to_string())?;
+    for (id, blob) in images() {
+        renderer
+            .assets_mut()
+            .insert(id, &blob)
+            .map_err(|e| e.to_string())?;
+    }
     let pixmap = renderer
         .render(&gallery(STILL))
         .map_err(|e| e.to_string())?;
     let png = pixmap.encode_png().map_err(|e| e.to_string())?;
     std::io::stdout().write_all(&png).map_err(|e| e.to_string())
+}
+
+/// The id and the bytes of every image that the gallery draws.
+fn images() -> [(u32, Vec<u8>); 5] {
+    [
+        (BADGE, badge_png()),
+        (PNG.id, PNG.blob.to_vec()),
+        (JPEG.id, JPEG.blob.to_vec()),
+        (GIF.id, GIF.blob.to_vec()),
+        (WEBP.id, WEBP.blob.to_vec()),
+    ]
 }
 
 /// A PNG of four colored quarters and a white dot, drawn by sinteract.
@@ -710,6 +759,37 @@ fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
         angle_deg: 0.0,
     };
     s.bitmap(Bitmap::fit(BADGE, flipped));
+}
+
+fn png_image(s: &mut Scene, x: f32, y: f32, _: f32) {
+    photo(s, &PNG, x, y);
+}
+
+fn jpeg_image(s: &mut Scene, x: f32, y: f32, _: f32) {
+    photo(s, &JPEG, x, y);
+}
+
+fn gif_image(s: &mut Scene, x: f32, y: f32, _: f32) {
+    photo(s, &GIF, x, y);
+}
+
+fn webp_image(s: &mut Scene, x: f32, y: f32, _: f32) {
+    photo(s, &WEBP, x, y);
+}
+
+/// `photo` as large as it fits in the box at `(x, y)`, under the label,
+/// with its own aspect.
+fn photo(s: &mut Scene, photo: &Photo, x: f32, y: f32) {
+    let (w, h) = (photo.size.0 as f32, photo.size.1 as f32);
+    let scale = f32::min((CELL_W - 20.0) / w, (CELL_H - 30.0) / h);
+    let rect = RotatedRect {
+        cx: x + CELL_W / 2.0,
+        cy: y + (CELL_H - 20.0) / 2.0,
+        w: w * scale,
+        h: h * scale,
+        angle_deg: 0.0,
+    };
+    s.bitmap(Bitmap::fit(photo.id, rect));
 }
 
 fn families(s: &mut Scene, x: f32, y: f32, _: f32) {
