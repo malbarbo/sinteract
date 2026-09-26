@@ -254,7 +254,9 @@ impl Session {
 
     /// Rasterize `scene` at the size of the surface and present it.
     fn draw(&mut self, scene: &Scene) -> Result<(), PresentError> {
-        let inner = self.window.inner_size();
+        // The size from the last Resized. X11 answers inner_size with a
+        // round trip to the server. A newer size comes with a redraw.
+        let inner = self.app.size;
         // A window of no pixels is minimized, and the platform asks for a
         // redraw when it comes back.
         let (Some(w), Some(h)) = (NonZeroU32::new(inner.width), NonZeroU32::new(inner.height))
