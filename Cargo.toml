@@ -29,7 +29,7 @@ terminal = [
     "dep:libc",
     "dep:windows-sys",
 ]
-window = ["render", "dep:winit", "dep:softbuffer", "dep:libc"]
+window = ["render", "dep:winit", "dep:softbuffer", "dep:libc", "dep:objc2"]
 
 [dependencies]
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"], optional = true }
@@ -73,6 +73,11 @@ softbuffer = { version = "0.4", optional = true, default-features = false, featu
     "wayland",
     "wayland-dlopen",
 ] }
+
+# The display link of the view of a window, which paces the ticks of the
+# window on macOS. softbuffer already builds it.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }

@@ -61,6 +61,8 @@ struct Session {
     last: Option<Scene>,
     /// `last` waits for the frame callback of Wayland.
     unshown: bool,
+    #[cfg(target_os = "macos")]
+    display_link: super::display_link::DisplayLink,
 }
 
 impl Window {
@@ -94,6 +96,9 @@ impl Window {
                 return Err(e);
             }
         };
+        #[cfg(target_os = "macos")]
+        let display_link =
+            super::display_link::DisplayLink::start(&window, lent.event_loop().create_proxy());
         Ok(Self {
             inbox,
             clock: TickClock::from_millihertz(Self::TICK_RATE),
@@ -105,14 +110,16 @@ impl Window {
                 renderer: PixmapRenderer::default(),
                 last: None,
                 unshown: false,
+                #[cfg(target_os = "macos")]
+                display_link,
             }),
         })
     }
 
     /// Run the loop of the window for at most `timeout`, pace the ticks
-    /// at the refresh rate of the monitor that shows the window, and, at a
-    /// frame callback of Wayland, align the ticks to it and draw a scene
-    /// that waited for it.
+    /// at the refresh rate of the monitor that shows the window, align the
+    /// ticks to a frame callback of Wayland or a frame of the display link
+    /// of macOS, and draw a scene that waited for the callback.
     fn pump(&mut self, timeout: Duration) {
         let Some(s) = self.session.as_mut() else {
             return;
@@ -129,7 +136,10 @@ impl Window {
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
             self.clock.set_millihertz(rate.unwrap_or(Self::TICK_RATE));
         }
-        if let Some(at) = s.app.frame_shown.take() {
+        let shown = s.app.frame_shown.take();
+        #[cfg(target_os = "macos")]
+        let shown = shown.or_else(|| s.display_link.take());
+        if let Some(at) = shown {
             self.clock.align(at);
         }
         if s.unshown && !s.app.frame_pending {
@@ -197,12 +207,16 @@ impl super::Display for Window {
             mut app,
             window,
             surface,
+            #[cfg(target_os = "macos")]
+            display_link,
             ..
         }) = self.session.take()
         else {
             return;
         };
         self.inbox.close();
+        #[cfg(target_os = "macos")]
+        drop(display_link);
         drop(surface);
         drop(window);
         // Wayland, X11 and Windows destroy a window as the loop runs.

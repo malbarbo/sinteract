@@ -29,6 +29,8 @@
 #[cfg(feature = "render")]
 pub mod sixel;
 
+#[cfg(all(feature = "window", target_os = "macos"))]
+mod display_link;
 #[cfg(all(
     any(feature = "terminal", feature = "window"),
     not(target_arch = "wasm32")
