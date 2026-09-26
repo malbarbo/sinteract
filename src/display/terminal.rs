@@ -1115,14 +1115,19 @@ fn cell_pixels() -> (u32, u32) {
 /// Pixel box available for the image, from the terminal size. `None` when
 /// crossterm cannot read the size, as when stdout is a file.
 fn target_pixels_for_backend(backend: Backend, cell: (u32, u32)) -> Option<(u32, u32)> {
-    let (cols, rows_avail) = image_cells(terminal::size().ok()?)?;
-    let (cw, ch) = cell;
-    Some(match backend {
-        Backend::Kitty | Backend::Sixel => (cols as u32 * cw, rows_avail as u32 * ch),
-        // Half-blocks pack two image-pixel rows into one cell row, and one
-        // image-pixel column into one cell column.
-        Backend::TextBlocks => (cols as u32, rows_avail as u32 * 2),
-    })
+    let (cols, rows) = image_cells(terminal::size().ok()?)?;
+    let (pw, ph) = pixmap_per_cell(backend, cell);
+    Some((u32::from(cols) * pw, u32::from(rows) * ph))
+}
+
+/// The pixmap pixels in a cell, across and down. In Kitty and Sixel a
+/// pixmap pixel is a screen pixel, and in half-blocks a cell holds one
+/// pixmap pixel across and two down.
+fn pixmap_per_cell(backend: Backend, cell: (u32, u32)) -> (u32, u32) {
+    match backend {
+        Backend::Kitty | Backend::Sixel => cell,
+        Backend::TextBlocks => (1, 2),
+    }
 }
 
 /// The columns and the rows that the image may take in a terminal of
@@ -1152,16 +1157,11 @@ struct CellMap {
 }
 
 impl CellMap {
-    /// A frame at `scale`. In Kitty and Sixel a pixmap pixel is a screen
-    /// pixel, and in half-blocks a cell holds one pixmap pixel across and
-    /// two down.
-    fn new(backend: Backend, (cw, ch): (u32, u32), scale: f32) -> Self {
-        let pixels = match backend {
-            Backend::Kitty | Backend::Sixel => (cw as f32, ch as f32),
-            Backend::TextBlocks => (1.0, 2.0),
-        };
+    /// A frame at `scale`.
+    fn new(backend: Backend, cell: (u32, u32), scale: f32) -> Self {
+        let (pw, ph) = pixmap_per_cell(backend, cell);
         Self {
-            per_cell: (pixels.0 / scale, pixels.1 / scale),
+            per_cell: (pw as f32 / scale, ph as f32 / scale),
         }
     }
 
@@ -1179,16 +1179,12 @@ impl CellMap {
 }
 
 /// Upper bound on the scale of the rasterizer for `backend`, so that a
-/// logical pixel never grows past [`pixel_density`] screen pixels. In Kitty
-/// and Sixel a pixmap pixel is a screen pixel. In half-blocks a pixmap pixel
-/// covers a cell width by half a cell height, so the cap divides by the
-/// larger of the two.
+/// logical pixel never grows past [`pixel_density`] screen pixels. A
+/// pixmap pixel covers `cw / pw` by `ch / ph` screen pixels, so the cap
+/// divides by the larger of the two.
 fn max_scale_for_backend(backend: Backend, (cw, ch): (u32, u32)) -> f32 {
-    let density = pixel_density(ch);
-    match backend {
-        Backend::Kitty | Backend::Sixel => density,
-        Backend::TextBlocks => density / (cw as f32).max(ch as f32 / 2.0),
-    }
+    let (pw, ph) = pixmap_per_cell(backend, (cw, ch));
+    pixel_density(ch) / (cw as f32 / pw as f32).max(ch as f32 / ph as f32)
 }
 
 /// The height in pixels of a cell of Monospace 11 at a desktop scale of 1,
