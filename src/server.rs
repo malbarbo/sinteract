@@ -348,8 +348,8 @@ impl ServerCore {
     }
 
     /// Take a message that the view of `conn` sent over its WebSocket, and
-    /// pass its event to [`Self::input`]. A message from a newer schema is
-    /// dropped.
+    /// pass its event to [`Self::input`]. The core drops a message from a
+    /// newer schema.
     pub fn from_view(&mut self, conn: Conn, payload: &[u8]) -> Result<(), ViewError> {
         if payload.len() > MAX_VIEW_BYTES {
             return Err(ViewError::TooLong(payload.len()));
@@ -361,10 +361,10 @@ impl ServerCore {
     }
 
     /// Pass `event` of the view of `conn` to the engine, in the game. The
-    /// tick of the server paces the engine, so a tick of the view is
-    /// dropped. The input
-    /// of an old connection is dropped. The core drops a `Down` of a new
-    /// key when the view holds 32 keys, since it could not release it.
+    /// tick of the server paces the engine, so the core drops a tick of the
+    /// view. It drops the input of an old connection too, and a `Down` of a
+    /// new key when the view holds 32 keys, since it could not release the
+    /// key.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
         let Some(seat) = seat_of(&mut self.seats, conn) else {
             return;
@@ -383,8 +383,8 @@ impl ServerCore {
     /// asset under the limits of the room, and drops the assets that the
     /// frames used longest ago to fit it, with a lost to the engine for
     /// each. A frame goes to its player, or to every player, with the
-    /// assets that it draws. Before the start a frame has no player, and is
-    /// dropped. A broken stream ends the room, and the core ignores what
+    /// assets that it draws. Before the start a frame has no player, and the
+    /// core drops it. A broken stream ends the room, and the core ignores what
     /// comes after the end. Returns what went wrong, in the order of the
     /// stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
@@ -594,8 +594,8 @@ impl ServerCore {
         }
     }
 
-    /// End the room. The engine no longer reads, so the messages for it
-    /// are dropped.
+    /// End the room. The engine no longer reads, so the core drops the
+    /// messages for it.
     fn end(&mut self) {
         self.phase = Phase::Over;
         self.to_engine = Vec::new();
