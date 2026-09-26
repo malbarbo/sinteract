@@ -25,7 +25,7 @@ use tiny_skia::Pixmap;
 use super::driver::{NoGraphics, OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
-use crate::event::{Event, InputEvent, Interrupt, MouseEvent};
+use crate::event::{Event, Interrupt, MouseEvent};
 use crate::renderer::pixmap::{Assets, PixmapRenderer};
 use crate::renderer::{AllocError, Renderer};
 use crate::scene::{Rgba, Scene};
@@ -62,8 +62,9 @@ pub struct TerminalOptions {
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
 /// Ctrl-C arrives as [`Interrupt::Close`]. The size of the terminal
-/// arrives as an [`InputEvent::Resize`] ahead of the first Vsync, and again
-/// after each change. A mouse event gives the center of its cell.
+/// arrives as an [`InputEvent::Resize`](crate::event::InputEvent::Resize)
+/// ahead of the first Vsync, and again after each change. A mouse event
+/// gives the center of its cell.
 ///
 /// A thread of the session writes each frame while the next one renders.
 /// So a write that fails reports at the next
@@ -117,10 +118,10 @@ impl Terminal {
         install_panic_hook();
         let keys = execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
             .and_then(|()| KeyInput::start(stdin_tty));
-        let mut inbox = Inbox::new(Self::VSYNC_PERIOD);
+        let inbox = Inbox::new(Self::VSYNC_PERIOD);
         let cell = cell_pixels();
         if let Some((width, height)) = terminal::size().ok().and_then(|s| scene_size(s, cell)) {
-            inbox.send_first(InputEvent::Resize { width, height });
+            let _ = inbox.sender().send_resize(width, height);
         }
         let cells = Arc::new(Mutex::new(CellMap::before_frames(backend, cell)));
         let reader = keys.and_then(|keys| {

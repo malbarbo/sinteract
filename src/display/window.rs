@@ -31,8 +31,7 @@ use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 use super::driver::{OpenError, PresentError, period_from_hz, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use crate::event::{
-    Event, InputEvent, Interrupt, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons,
-    MouseEvent, key,
+    Event, Interrupt, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
 };
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
@@ -41,8 +40,8 @@ use crate::scene::Scene;
 /// A [`super::Display`] over a winit window. Closing the window arrives
 /// as [`Interrupt::Close`], and the window stays until
 /// [`super::Display::close`]. The size of the window arrives as an
-/// [`InputEvent::Resize`] ahead of the first Vsync, and again after each
-/// change.
+/// [`InputEvent::Resize`](crate::event::InputEvent::Resize) ahead of the
+/// first Vsync, and again after each change.
 pub struct Window {
     inbox: Inbox,
     /// `None` after [`super::Display::close`].
@@ -75,7 +74,7 @@ impl Window {
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
         let mut lent = Lent::take()?;
         let proxy = lent.event_loop().create_proxy();
-        let mut inbox = Inbox::with_waker(
+        let inbox = Inbox::with_waker(
             Self::VSYNC_PERIOD,
             Some(Arc::new(move || {
                 let _ = proxy.send_event(());
@@ -87,8 +86,6 @@ impl Window {
             .with_inner_size(LogicalSize::new(w as f64, h as f64));
         let mut app = App::new(inbox.sender_in_loop(), attrs);
         let window = lent.create_window(&mut app, Self::OPEN_TIMEOUT)?;
-        let (width, height) = app.reported_size;
-        inbox.send_first(InputEvent::Resize { width, height });
         let surface = match new_surface(&window) {
             Ok(surface) => surface,
             Err(e) => {
@@ -464,8 +461,11 @@ impl App {
                 self.id = Some(window.id());
                 self.scale_factor = window.scale_factor();
                 self.size = window.inner_size();
-                // Window::open sends this size ahead of the first Vsync.
+                // The first event of the window, ahead of any from the
+                // pumps that create it.
                 self.reported_size = self.logical_size();
+                let (width, height) = self.reported_size;
+                let _ = self.tx.send_resize(width, height);
                 // Until the first frame, the pointer maps to logical pixels.
                 self.placement = Placement {
                     scale: self.scale_factor as f32,

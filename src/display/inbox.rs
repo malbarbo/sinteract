@@ -177,20 +177,6 @@ impl Inbox {
         }
     }
 
-    /// Queue `ev` ahead of every event, the first Vsync included, for what
-    /// a display tells the engine as it opens.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `ev` is a Vsync.
-    pub(crate) fn send_first(&mut self, ev: InputEvent) {
-        assert!(
-            !matches!(ev, InputEvent::Vsync),
-            "the clock of the queue makes every Vsync"
-        );
-        self.pending.push_front(Entry::Input(ev));
-    }
-
     /// Deliver Close from now on and drop what is queued. A new receiver
     /// replaces the channel, so every [`Sender`] fails from now on.
     pub(crate) fn close(&mut self) {
@@ -422,16 +408,6 @@ mod tests {
     }
 
     #[test]
-    fn an_event_sent_first_goes_out_first() {
-        let mut inbox = Inbox::new(Duration::from_secs(60));
-        inbox.sender().send_key(key("a")).unwrap();
-        inbox.send_first(InputEvent::Key(key("first")));
-        assert_eq!(key_name(&inbox.wait(None)), Some("first"));
-        assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(is_vsync(&inbox.wait(None)));
-    }
-
-    #[test]
     fn a_move_or_a_resize_replaces_one_of_its_kind_at_the_back() {
         let mut inbox = past_the_first_vsync();
         let tx = inbox.sender();
@@ -554,12 +530,6 @@ mod tests {
         assert!(is_timeout(&inbox.wait(Some(Instant::now()))));
         assert!(is_vsync(&inbox.wait(None)));
         assert!(start.elapsed() >= period);
-    }
-
-    #[test]
-    #[should_panic(expected = "the clock of the queue makes every Vsync")]
-    fn send_first_refuses_a_vsync() {
-        Inbox::new(Duration::from_secs(1)).send_first(InputEvent::Vsync);
     }
 
     #[test]
