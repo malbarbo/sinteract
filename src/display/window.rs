@@ -59,6 +59,8 @@ struct Session {
     renderer: PixmapRenderer,
     /// The scene of the last present, drawn again when the platform asks.
     last: Option<Scene>,
+    /// `last` waits for the frame callback of Wayland.
+    unshown: bool,
 }
 
 impl Window {
@@ -102,12 +104,14 @@ impl Window {
                 surface,
                 renderer: PixmapRenderer::default(),
                 last: None,
+                unshown: false,
             }),
         })
     }
 
-    /// Run the loop of the window for at most `timeout`, and pace the
-    /// Vsync at the refresh rate of the monitor that shows the window.
+    /// Run the loop of the window for at most `timeout`, pace the Vsync
+    /// at the refresh rate of the monitor that shows the window, and draw
+    /// a scene that waited for the frame callback of Wayland.
     fn pump(&mut self, timeout: Duration) {
         let Some(s) = self.session.as_mut() else {
             return;
@@ -124,6 +128,10 @@ impl Window {
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
             self.clock.set_millihertz(rate.unwrap_or(Self::VSYNC_RATE));
         }
+        if s.unshown && !s.app.frame_pending {
+            // A failure here fails the next present the same way.
+            let _ = s.show();
+        }
     }
 }
 
@@ -133,9 +141,8 @@ impl super::Display for Window {
             return Err(PresentError::Closed);
         };
         self.inbox.take_redraw();
-        let drawn = session.draw(&scene);
         session.last = Some(scene);
-        drawn
+        session.show()
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
@@ -150,8 +157,9 @@ impl super::Display for Window {
             match self.inbox.next(&mut self.clock, deadline) {
                 Next::Ready(ready) => return ready,
                 Next::Redraw => {
+                    // A failure here fails the next present the same way.
                     if let Some(s) = self.session.as_mut() {
-                        s.redraw();
+                        let _ = s.show();
                     }
                 }
                 Next::Block(timeout) => self.pump(timeout),
@@ -207,6 +215,25 @@ impl Drop for Window {
 }
 
 impl Session {
+    /// Draw `last` now, or when the frame callback of Wayland for the
+    /// frame before arrives. A hidden window gets no callback, so it draws
+    /// nothing, and the Vsync keeps its rate.
+    fn show(&mut self) -> Result<(), PresentError> {
+        // A second frame would block in `buffer_mut` until the compositor
+        // releases a buffer.
+        if self.app.frame_pending {
+            self.unshown = true;
+            return Ok(());
+        }
+        self.unshown = false;
+        let Some(scene) = self.last.take() else {
+            return Ok(());
+        };
+        let drawn = self.draw(&scene);
+        self.last = Some(scene);
+        drawn
+    }
+
     /// Rasterize `scene` at the size of the surface and present it.
     fn draw(&mut self, scene: &Scene) -> Result<(), PresentError> {
         let inner = self.window.inner_size();
@@ -226,17 +253,14 @@ impl Session {
         let placement = Placement::centered(scale, pixmap, target_px);
         blit_pixmap(pixmap, &mut buffer, (w, h), placement.offset);
         self.app.placement = placement;
-        buffer.present().map_err(surface_error)
-    }
-
-    /// Draw the last scene again, at the current size of the window. A
-    /// failure here reaches the caller at its next `present`, which fails
-    /// the same way.
-    fn redraw(&mut self) {
-        if let Some(scene) = self.last.take() {
-            let _ = self.draw(&scene);
-            self.last = Some(scene);
+        self.window.pre_present_notify();
+        buffer.present().map_err(surface_error)?;
+        if self.app.frame_callbacks {
+            // The RedrawRequested of the callback clears it.
+            self.window.request_redraw();
+            self.app.frame_pending = true;
         }
+        Ok(())
     }
 }
 
@@ -384,6 +408,20 @@ impl Drop for Lent {
     }
 }
 
+/// Returns `true` if `event_loop` runs on Wayland, `false` otherwise.
+fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
+    #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        event_loop.is_wayland()
+    }
+    #[cfg(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))))]
+    {
+        let _ = event_loop;
+        false
+    }
+}
+
 /// Build the loop of the process on this thread. winit panics on a thread
 /// other than the main one unless told otherwise, so Linux and Windows allow
 /// any thread, and macOS, which cannot, gets an error.
@@ -443,6 +481,10 @@ struct App {
     /// The window may be on another monitor, whose refresh rate is still
     /// to read.
     read_refresh_rate: bool,
+    /// Wayland paces the frames by its frame callback.
+    frame_callbacks: bool,
+    /// The frame callback of the last frame did not arrive yet.
+    frame_pending: bool,
 }
 
 impl App {
@@ -461,6 +503,8 @@ impl App {
             reported_size: (0.0, 0.0),
             held: HeldKeys::default(),
             read_refresh_rate: true,
+            frame_callbacks: false,
+            frame_pending: false,
         }
     }
 
@@ -471,6 +515,7 @@ impl App {
         let created = match event_loop.create_window(attrs) {
             Ok(window) => {
                 self.id = Some(window.id());
+                self.frame_callbacks = is_wayland(event_loop);
                 self.scale_factor = window.scale_factor();
                 self.size = window.inner_size();
                 // The first event of the window, ahead of any from the
@@ -578,8 +623,13 @@ impl ApplicationHandler for App {
                 self.report_size();
                 let _ = self.tx.request_redraw();
             }
+            // The frame callback of Wayland arrives as a RedrawRequested,
+            // and Window::pump draws a scene that waits for it. A redraw
+            // there would draw again and ask for the next callback forever.
             WindowEvent::RedrawRequested => {
-                let _ = self.tx.request_redraw();
+                if !mem::take(&mut self.frame_pending) {
+                    let _ = self.tx.request_redraw();
+                }
             }
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
