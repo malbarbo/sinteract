@@ -673,6 +673,8 @@ impl ApplicationHandler for App {
                         self.buttons = self.buttons.with(button);
                         MouseAction::Down(button)
                     }
+                    // The loss of focus released the button already.
+                    ElementState::Released if !self.buttons.contains(button) => return,
                     ElementState::Released => {
                         self.buttons = self.buttons.without(button);
                         MouseAction::Up(button)
@@ -694,10 +696,24 @@ impl ApplicationHandler for App {
                 self.report_key_events(&event);
             }
             // Wayland sends no release for the keys held when the window
-            // loses focus, and takes them as released.
+            // loses focus, and takes them as released. A grab of the
+            // pointer, as by the window switcher, can take the release of a
+            // button too.
             WindowEvent::Focused(false) => {
                 for key in self.held.release_all() {
                     self.report_key(KeyKind::Up, key, false);
+                }
+                for button in [
+                    MouseButton::Left,
+                    MouseButton::Middle,
+                    MouseButton::Right,
+                    MouseButton::Back,
+                    MouseButton::Forward,
+                ] {
+                    if self.buttons.contains(button) {
+                        self.buttons = self.buttons.without(button);
+                        self.report_mouse(MouseAction::Up(button));
+                    }
                 }
             }
             _ => {}
