@@ -170,8 +170,10 @@ pub fn bitmap_ids(payload: &[u8]) -> Result<BTreeSet<u32>, Error> {
     .map(|ids| ids.unwrap_or_default())
 }
 
-/// Decode `payload`. `None` for a message of an arm from a newer schema.
-pub(super) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
+/// Decode `payload`, a message with no envelope, as
+/// [`crate::server::Next::Send`] carries it. `None` for a message of an
+/// arm from a newer schema.
+pub fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<engine_message::Owned, _>(payload, decode_message)
 }
 

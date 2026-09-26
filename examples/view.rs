@@ -1,13 +1,10 @@
 //! A view for an engine that talks the protocol on fd 3 and fd 4, such as
 //! `examples/engine.rs`. It runs the engine as a subprocess and plays the
-//! part of the server for one player. At the hello of the engine it starts
-//! the session with player 1, shows the frames in the terminal or in a
-//! window, and sends the input of the user as player 1. Like a server, it
-//! sends the engine a tick for each tick of the display once the engine
-//! took the last one, keeps the assets under the limits of a room, and
-//! tells the engine which ones it drops. At the end
-//! it prints to stderr what the frames cost, and how many assets came and
-//! were lost:
+//! part of the server for one player, with a [`ServerCore`]. At the hello
+//! of the engine it starts the room with player 1, shows the frames in the
+//! terminal or in a window, and sends the input of the user and a tick for
+//! each tick of the display. At the end it prints to stderr what the
+//! frames cost:
 //!
 //! ```text
 //! cargo build --examples
@@ -19,9 +16,8 @@
 #![cfg_attr(not(unix), no_main)]
 #![cfg(unix)]
 
-use std::collections::VecDeque;
 use std::fmt;
-use std::io::{self, BufReader, BufWriter, PipeReader, PipeWriter, Read, Write};
+use std::io::{self, PipeReader, PipeWriter, Read, Write};
 use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::process::{Child, Command, ExitCode, Stdio};
@@ -30,19 +26,20 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use command_fds::{CommandFdExt, FdMapping};
-use sinteract::asset::{self, Cache, Footprint};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
-use sinteract::scene::Scene;
-use sinteract::wire::ReadError;
-use sinteract::wire::to_engine::{self, Member, Roster};
+use sinteract::server::{Conn, Next, ServerCore};
 use sinteract::wire::to_view::{self, Message};
 
-/// How many messages the reader thread holds before it waits for the loop,
-/// so an engine that draws faster than the view does not fill the memory.
+/// How many reads of the engine the reader thread holds before it waits
+/// for the loop, so an engine that draws faster than the view does not
+/// fill the memory.
 const BACKLOG: usize = 4;
 
-/// The one player of the session.
+/// How much the view asks of the pipe of the engine at a time.
+const READ_BYTES: usize = 64 * 1024;
+
+/// The one player of the room.
 const PLAYER: NonZeroU32 = NonZeroU32::MIN;
 
 fn main() -> ExitCode {
@@ -51,42 +48,22 @@ fn main() -> ExitCode {
         eprintln!("usage: view ENGINE [ARGS...]");
         return ExitCode::FAILURE;
     };
-    let (mut child, to_engine, from_engine) = match spawn(engine, engine_args) {
+    let (mut child, mut to_engine, mut from_engine) = match spawn(engine, engine_args) {
         Ok(spawned) => spawned,
         Err(e) => {
             eprintln!("view: cannot run {engine}: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let mut to_engine = BufWriter::new(to_engine);
-    let mut from_engine = BufReader::new(from_engine);
-    match to_view::read(&mut from_engine) {
-        Ok(Some(Message::Hello(takes))) if takes.contains(1) => {}
-        Ok(Some(Message::Hello(takes))) => {
-            eprintln!(
-                "view: the game takes from {} to {} players, not 1",
-                takes.min(),
-                takes.max()
-            );
+    let mut core = ServerCore::new();
+    let conn = match start(&mut core, &mut from_engine, &mut to_engine) {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("view: {e}");
             let _ = child.kill();
             return ExitCode::FAILURE;
         }
-        other => {
-            eprintln!("view: the first message of the engine is not a hello: {other:?}");
-            let _ = child.kill();
-            return ExitCode::FAILURE;
-        }
-    }
-    let roster = Roster::new(vec![Member {
-        player: PLAYER,
-        nickname: "view".into(),
-    }])
-    .expect("one player");
-    if let Err(e) = to_engine::write_start(&mut to_engine, &roster) {
-        eprintln!("view: {e}");
-        let _ = child.kill();
-        return ExitCode::FAILURE;
-    }
+    };
 
     // The size of the scene is only known at the first frame, and the
     // engine sends no frame before a tick, which needs the display open.
@@ -104,43 +81,31 @@ fn main() -> ExitCode {
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
     let mut stats = Stats::default();
-    let mut cache = Cache::new();
-    // The engine did not take the last tick yet, and the ticks of the
-    // display wait for it, as a server holds them.
-    let mut tick_pending = false;
     loop {
         match fr.wait_event(None) {
             Ok(Event::Tick) => {
-                stats.tick(tick_pending);
-                if tick_pending {
-                    continue;
-                }
-                tick_pending = true;
-                if to_engine::write_tick(&mut to_engine).is_err() {
+                stats.tick();
+                core.tick();
+            }
+            Ok(Event::Input(ev)) => core.input(conn, &ev),
+            // The bytes of the engine come through the channel, and the
+            // reader thread wakes the loop after each read.
+            Err(Interrupt::Wake) => {
+                take_engine(&mut core, &from_reader);
+                if let Err(e) = show(fr.as_mut(), &mut core, conn, &mut stats) {
+                    if let Some(e) = e {
+                        eprintln!("view: {e}");
+                    }
                     break;
                 }
             }
-            Ok(Event::Input(ev)) => {
-                if to_engine::write_input(&mut to_engine, PLAYER, &ev).is_err() {
-                    break;
-                }
-            }
-            // The messages of the engine come through the channel, and the
-            // reader thread wakes the loop after each one.
-            Err(Interrupt::Wake) => match drain(
-                fr.as_mut(),
-                &from_reader,
-                &mut cache,
-                &mut to_engine,
-                &mut tick_pending,
-                &mut stats,
-            ) {
-                Drained::Open => {}
-                Drained::EngineEnded | Drained::DisplayFailed => break,
-            },
             Err(Interrupt::Close) => break,
             Err(Interrupt::Read(e)) => eprintln!("view: {e}"),
             Err(Interrupt::Timeout) => {}
+        }
+        if let Err(e) = send_engine(&mut core, &mut to_engine) {
+            eprintln!("view: {e}");
+            break;
         }
     }
     // The end of fd 3 tells the engine to end.
@@ -154,6 +119,50 @@ fn main() -> ExitCode {
     let _ = child.wait();
     stats.report();
     ExitCode::SUCCESS
+}
+
+/// Read the engine up to its hello, start the room with the one player,
+/// and send the engine the start.
+fn start(
+    core: &mut ServerCore,
+    from_engine: &mut impl Read,
+    to_engine: &mut impl Write,
+) -> Result<Conn, String> {
+    let mut buf = vec![0; READ_BYTES];
+    while core.players().is_none() {
+        if core.is_over() {
+            return Err("the engine ended before its hello".into());
+        }
+        match from_engine.read(&mut buf) {
+            Ok(0) => {
+                if let Some(e) = core.engine_ended() {
+                    return Err(e.to_string());
+                }
+            }
+            Ok(n) => {
+                for e in core.from_engine(buf.get(..n).expect("a read fits its buffer")) {
+                    eprintln!("view: {e}");
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    core.start(&["view"]).map_err(|e| e.to_string())?;
+    let conn = core.connect(PLAYER).expect("the room has player 1");
+    send_engine(core, to_engine).map_err(|e| e.to_string())?;
+    Ok(conn)
+}
+
+/// Write what the core has for the engine.
+fn send_engine(core: &mut ServerCore, to_engine: &mut impl Write) -> io::Result<()> {
+    let mut out = Vec::new();
+    core.take_engine_output(&mut out);
+    if out.is_empty() {
+        return Ok(());
+    }
+    to_engine.write_all(&out)?;
+    to_engine.flush()
 }
 
 /// Run `engine` with the session on fd 3 and fd 4, and return the ends of
@@ -184,23 +193,25 @@ fn spawn(engine: &str, args: &[String]) -> io::Result<(Child, PipeWriter, PipeRe
     Ok((child, to_engine, from_engine))
 }
 
-/// Pass each message of the engine to the loop and wake it. At the end of
-/// the stream the channel closes, and a last wake tells the loop.
-fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Message>, wake: Sender) {
+/// Pass each read of the engine to the loop and wake it. At the end of the
+/// stream the channel closes, and a last wake tells the loop.
+fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Vec<u8>>, wake: Sender) {
+    let mut buf = vec![0; READ_BYTES];
     loop {
-        let message = match to_view::read(&mut from_engine) {
-            Ok(Some(message)) => message,
-            Ok(None) => break,
-            Err(ReadError::Payload(e)) => {
-                eprintln!("view: skipping a message that does not decode: {e}");
-                continue;
-            }
-            Err(ReadError::Broken(e)) => {
+        let n = match from_engine.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => {
                 eprintln!("view: read error: {e}");
                 break;
             }
         };
-        if to_loop.send(message).is_err() || wake.wake().is_err() {
+        if to_loop
+            .send(buf.get(..n).expect("a read fits its buffer").to_vec())
+            .is_err()
+            || wake.wake().is_err()
+        {
             return;
         }
     }
@@ -208,152 +219,80 @@ fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Message>, wake: S
     let _ = wake.wake();
 }
 
-enum Drained {
-    Open,
-    /// The stream of the engine ended.
-    EngineEnded,
-    /// The display of the view failed, and the engine hears nothing of it
-    /// until the view closes fd 3.
-    DisplayFailed,
+/// Pass the reads of the engine that arrived to the core.
+fn take_engine(core: &mut ServerCore, from_reader: &Receiver<Vec<u8>>) {
+    loop {
+        let errors = match from_reader.try_recv() {
+            Ok(bytes) => core.from_engine(&bytes),
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => core.engine_ended().into_iter().collect(),
+        };
+        for e in errors {
+            eprintln!("view: {e}");
+        }
+        if core.is_over() {
+            return;
+        }
+    }
 }
 
-/// Act on the messages of the engine that arrived. The assets go to the
-/// display in order, and only the last frame is shown, since the ones
-/// before it are already stale. An asset that `cache` drops, or that does
-/// not fit, is lost for the engine, and the display forgets it after it
-/// shows the frame, since the one on the screen may still draw it.
-fn drain(
+/// Show what the core has for the view: the forgets, the assets and the
+/// newest frame. Returns `Err` when the view is done, with the error of
+/// the display if it failed, or with `None` when the engine ended.
+fn show(
     fr: &mut dyn Display,
-    from_reader: &Receiver<Message>,
-    cache: &mut Cache,
-    to_engine: &mut impl Write,
-    tick_pending: &mut bool,
+    core: &mut ServerCore,
+    conn: Conn,
     stats: &mut Stats,
-) -> Drained {
-    let mut last: Option<Scene> = None;
-    let mut forgets = Vec::new();
-    let mut session = Drained::Open;
+) -> Result<(), Option<PresentError>> {
     loop {
-        let message = match from_reader.try_recv() {
-            Ok(message) => message,
-            Err(TryRecvError::Empty) => break,
-            Err(TryRecvError::Disconnected) => {
-                session = Drained::EngineEnded;
-                break;
-            }
+        let payload = match core.next_for(conn) {
+            Next::Send(payload) => payload,
+            Next::Idle => return Ok(()),
+            Next::Gone => return Err(None),
         };
-        match message {
-            Message::Asset { id, blob } => {
-                if cache.contains(id) {
-                    eprintln!("view: skipping asset {id}, which is live");
-                    continue;
-                }
-                // An image that is not valid fails again if sent again, so
-                // the engine gets no lost for it.
-                let footprint = match Footprint::of(&blob) {
-                    Ok(footprint) => footprint,
-                    Err(e) => {
-                        eprintln!("view: asset {id}: {e}");
-                        continue;
-                    }
-                };
-                let dropped = match cache.asset(id, footprint) {
-                    Ok(dropped) => dropped,
-                    Err(e) => {
-                        eprintln!("view: asset {id}: {e}");
-                        vec![id]
-                    }
-                };
-                stats.lost += dropped.len() as u32;
-                for gone in dropped {
-                    if gone != id {
-                        forgets.push(gone);
-                    }
-                    if to_engine::write_lost(to_engine, gone).is_err() {
-                        return Drained::EngineEnded;
-                    }
-                }
-                if !cache.contains(id) {
-                    continue;
-                }
+        match to_view::decode(&payload) {
+            Ok(Some(Message::Asset { id, blob })) => {
                 stats.assets += 1;
                 match fr.push_asset(id, &blob) {
                     Ok(()) => {}
                     // The rest of the frame still draws.
                     Err(e @ PresentError::Asset(_)) => eprintln!("view: {e}"),
-                    Err(e) => {
-                        eprintln!("view: {e}");
-                        return Drained::DisplayFailed;
-                    }
+                    Err(e) => return Err(Some(e)),
                 }
             }
-            Message::Frame { scene, .. } => {
-                stats.frame_arrived();
-                cache.frame(asset::bitmap_ids(&scene));
-                if last.replace(scene).is_some() {
-                    stats.skipped += 1;
-                }
+            Ok(Some(Message::Frame { scene, .. })) => {
+                let start = Instant::now();
+                fr.present(scene)?;
+                stats.shown(start.elapsed());
             }
-            Message::Hello(_) => eprintln!("view: skipping a hello after the first one"),
-            Message::Forget(_) => eprintln!("view: skipping a forget from the engine"),
-            Message::TickTaken => *tick_pending = false,
+            Ok(Some(Message::Forget(id))) => fr.forget_asset(id),
+            // The core passes no other message on.
+            Ok(Some(Message::Hello(_) | Message::TickTaken) | None) => {}
+            Err(e) => eprintln!("view: {e}"),
         }
     }
-    if let Some(scene) = last {
-        let start = Instant::now();
-        if let Err(e) = fr.present(scene) {
-            eprintln!("view: {e}");
-            return Drained::DisplayFailed;
-        }
-        stats.shown(start.elapsed());
-    }
-    for id in forgets {
-        fr.forget_asset(id);
-    }
-    session
 }
 
 /// What the frames cost, from the first tick to the end.
 #[derive(Default)]
 struct Stats {
     frames: u32,
-    skipped: u32,
-    /// The ticks of the display that waited on the engine and did not go.
-    held: u32,
     /// The time between two ticks of the display.
     tick_gap: Span,
-    /// The time from a tick to the frame of the engine for it, which the
-    /// view sees when it drains the channel.
-    engine: Span,
     present: Span,
-    /// When each tick without its frame went out, oldest first.
-    ticks: VecDeque<Instant>,
     last_tick: Option<Instant>,
-    /// The assets that the view kept.
+    /// The assets that went to the display.
     assets: u32,
-    /// The assets that the view told the engine it lost.
-    lost: u32,
     first: Option<Instant>,
     last: Option<Instant>,
 }
 
 impl Stats {
-    fn tick(&mut self, held: bool) {
+    fn tick(&mut self) {
         let now = Instant::now();
         if let Some(last) = self.last_tick.replace(now) {
             self.tick_gap.add(now - last);
-        }
-        if held {
-            self.held += 1;
-        } else {
-            self.ticks.push_back(now);
-        }
-    }
-
-    /// The engine answers each tick with one frame, in order.
-    fn frame_arrived(&mut self) {
-        if let Some(tick) = self.ticks.pop_front() {
-            self.engine.add(tick.elapsed());
         }
     }
 
@@ -376,17 +315,8 @@ impl Stats {
             0.0
         };
         eprintln!(
-            "view: {} frames, {} skipped, {:.1} fps, {} assets, {} lost\n\
-             view: tick every {}, {} held, engine {}, present {}",
-            self.frames,
-            self.skipped,
-            fps,
-            self.assets,
-            self.lost,
-            self.tick_gap,
-            self.held,
-            self.engine,
-            self.present,
+            "view: {} frames, {:.1} fps, {} assets, tick every {}, present {}",
+            self.frames, fps, self.assets, self.tick_gap, self.present,
         );
     }
 }
