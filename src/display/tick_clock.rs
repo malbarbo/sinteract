@@ -27,6 +27,14 @@ impl TickClock {
         self.period = period(rate);
     }
 
+    /// Make the next tick fall due a period after `vblank`, the time of a
+    /// frame of the screen, so the ticks keep the phase of the screen and
+    /// not only its rate.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn align(&mut self, vblank: Instant) {
+        self.due = vblank + self.period;
+    }
+
     pub(crate) fn due(&self) -> Instant {
         self.due
     }
@@ -64,6 +72,18 @@ mod tests {
     #[test]
     fn the_period_comes_from_the_rate() {
         assert_eq!(at_60_hz().period, Duration::from_nanos(16_666_666));
+    }
+
+    #[test]
+    fn a_tick_falls_due_a_period_after_the_frame_that_it_aligns_to() {
+        let mut clock = at_60_hz();
+        let t0 = clock.due();
+        let period = clock.period;
+        assert!(clock.take_due(t0));
+        let vblank = t0 + period / 3;
+        clock.align(vblank);
+        assert!(!clock.take_due(vblank + period - period / 8));
+        assert!(clock.take_due(vblank + period));
     }
 
     #[test]

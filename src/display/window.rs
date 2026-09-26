@@ -110,8 +110,9 @@ impl Window {
     }
 
     /// Run the loop of the window for at most `timeout`, pace the ticks
-    /// at the refresh rate of the monitor that shows the window, and draw
-    /// a scene that waited for the frame callback of Wayland.
+    /// at the refresh rate of the monitor that shows the window, and, at a
+    /// frame callback of Wayland, align the ticks to it and draw a scene
+    /// that waited for it.
     fn pump(&mut self, timeout: Duration) {
         let Some(s) = self.session.as_mut() else {
             return;
@@ -127,6 +128,9 @@ impl Window {
             s.app.read_refresh_rate = false;
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
             self.clock.set_millihertz(rate.unwrap_or(Self::TICK_RATE));
+        }
+        if let Some(at) = s.app.frame_shown.take() {
+            self.clock.align(at);
         }
         if s.unshown && !s.app.frame_pending {
             // A failure here fails the next present the same way.
@@ -485,6 +489,9 @@ struct App {
     frame_callbacks: bool,
     /// The frame callback of the last frame did not arrive yet.
     frame_pending: bool,
+    /// When the last frame callback arrived, just after the screen showed
+    /// the frame, for Window::pump to align the tick clock.
+    frame_shown: Option<Instant>,
 }
 
 impl App {
@@ -505,6 +512,7 @@ impl App {
             read_refresh_rate: true,
             frame_callbacks: false,
             frame_pending: false,
+            frame_shown: None,
         }
     }
 
@@ -624,10 +632,13 @@ impl ApplicationHandler for App {
                 let _ = self.tx.request_redraw();
             }
             // The frame callback of Wayland arrives as a RedrawRequested,
-            // and Window::pump draws a scene that waits for it. A redraw
+            // and Window::pump aligns the tick clock to it and draws a
+            // scene that waits for it. A redraw
             // there would draw again and ask for the next callback forever.
             WindowEvent::RedrawRequested => {
-                if !mem::take(&mut self.frame_pending) {
+                if mem::take(&mut self.frame_pending) {
+                    self.frame_shown = Some(Instant::now());
+                } else {
                     let _ = self.tx.request_redraw();
                 }
             }
