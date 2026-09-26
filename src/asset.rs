@@ -1001,6 +1001,56 @@ mod tests {
         assert!(cache.contains(2) && !cache.contains(3));
     }
 
+    /// Send the images of `scene` from `assets` to `cache`, as a view does,
+    /// and tell `assets` of each one that `cache` drops. Returns the ids
+    /// that went out and the ids that were lost.
+    fn round_trip(assets: &mut Assets, cache: &mut Cache, scene: &Scene) -> (Vec<u32>, Vec<u32>) {
+        let mut sent = Vec::new();
+        let mut lost = Vec::new();
+        for (id, blob) in assets.frame(scene) {
+            sent.push(id);
+            let footprint = Footprint::of(&blob).unwrap();
+            for gone in cache.asset(id, footprint).unwrap() {
+                assets.lost(gone);
+                lost.push(gone);
+            }
+        }
+        cache.frame(None, bitmap_ids(scene));
+        (sent, lost)
+    }
+
+    #[test]
+    fn an_engine_that_fills_the_room_loses_its_oldest_image_and_sends_it_again() {
+        let mut assets = Assets::new();
+        let mut cache = Cache::new();
+        // Ten images of nearly the largest size, one a frame, where eight
+        // fit.
+        let image = |k: u32| png_head(2048, 2048 - k);
+        let mut first = Vec::new();
+        for k in 0..10 {
+            let a = id(&mut assets, &image(k));
+            let (sent, lost) = round_trip(&mut assets, &mut cache, &drawing(&[a]));
+            assert_eq!(sent, [a]);
+            let expected = if k < 8 {
+                vec![]
+            } else {
+                vec![first[k as usize - 8]]
+            };
+            assert_eq!(lost, expected, "frame {k}");
+            first.push(a);
+        }
+        // The first image is lost, so it gets a new id and goes out again.
+        let again = id(&mut assets, &image(0));
+        assert_ne!(again, first[0]);
+        let (sent, lost) = round_trip(&mut assets, &mut cache, &drawing(&[again]));
+        assert_eq!((sent, lost), (vec![again], vec![first[2]]));
+        assert!(cache.contains(again) && !cache.contains(first[0]));
+        // An image that is still live keeps its id and does not go out.
+        assert_eq!(id(&mut assets, &image(9)), first[9]);
+        let (sent, _) = round_trip(&mut assets, &mut cache, &drawing(&[first[9]]));
+        assert!(sent.is_empty());
+    }
+
     #[test]
     fn the_size_comes_from_the_header_of_a_png() {
         assert_eq!(image_size(&png_head(640, 480)), Some((640, 480)));
