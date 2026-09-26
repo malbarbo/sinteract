@@ -5,7 +5,8 @@
 //! window, and sends a tick for each Vsync of the display and the input of
 //! the user as player 1. Like a server, it keeps the assets under the
 //! limits of a room, and tells the engine which ones it drops. At the end
-//! it prints to stderr what the frames cost:
+//! it prints to stderr what the frames cost, and how many assets came and
+//! were lost:
 //!
 //! ```text
 //! cargo build --examples
@@ -244,6 +245,7 @@ fn drain(
                         vec![id]
                     }
                 };
+                stats.lost += dropped.len() as u32;
                 for gone in dropped {
                     if gone != id {
                         forgets.push(gone);
@@ -255,6 +257,7 @@ fn drain(
                 if !cache.contains(id) {
                     continue;
                 }
+                stats.assets += 1;
                 match fr.push_asset(id, &blob) {
                     Ok(()) => {}
                     // The rest of the frame still draws.
@@ -294,6 +297,10 @@ struct Stats {
     frames: u32,
     skipped: u32,
     presenting: Duration,
+    /// The assets that the view kept.
+    assets: u32,
+    /// The assets that the view told the engine it lost.
+    lost: u32,
     first: Option<Instant>,
     last: Option<Instant>,
 }
@@ -318,11 +325,14 @@ impl Stats {
             0.0
         };
         eprintln!(
-            "view: {} frames, {} skipped, {:.1} fps, present {:?} per frame",
+            "view: {} frames, {} skipped, {:.1} fps, present {:?} per frame, \
+             {} assets, {} lost",
             self.frames,
             self.skipped,
             fps,
             self.presenting / self.frames.max(1),
+            self.assets,
+            self.lost,
         );
     }
 }

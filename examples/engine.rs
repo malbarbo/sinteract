@@ -2,12 +2,15 @@
 //! `examples/view.rs`. Balls bounce, and the arrows of any player move a
 //! paddle, for 1 to 8 players. The paddle is an image that changes its
 //! color at each move, so a new image goes out at each move.
-//! `q` ends the session from this side. The argument is the number of
-//! balls:
+//! `q` ends the session from this side. The first argument is the number
+//! of balls. With `big` after it, the image of the paddle has 1024 by 1024
+//! pixels, so the 32 that fit in a room fill it after 32 moves, and the
+//! view drops the oldest ones:
 //!
 //! ```text
 //! cargo build --examples
 //! target/debug/examples/view target/debug/examples/engine 200
+//! target/debug/examples/view target/debug/examples/engine 1 big
 //! ```
 
 // The view hands the engine fd 3 and fd 4, which only unix has. Without a
@@ -31,10 +34,9 @@ const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 300.0;
 
 fn main() -> ExitCode {
-    let balls = std::env::args()
-        .nth(1)
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(1);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let balls = args.first().and_then(|n| n.parse().ok()).unwrap_or(1);
+    let big = args.get(1).is_some_and(|arg| arg == "big");
     if std::env::var_os("SINTERACT_SESSION").is_none() {
         eprintln!("engine: run me from a view or a server, which open fd 3 and fd 4");
         return ExitCode::FAILURE;
@@ -49,7 +51,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut session = Session::new();
-    let mut game = Game::new(balls);
+    let mut game = Game::new(balls, big);
     let mut assets = Assets::new();
     let mut last = None;
     // The end of fd 4, when the engine exits, ends the session for the
@@ -121,7 +123,9 @@ struct Game {
     balls: Vec<Ball>,
     paddle: f32,
     /// How many times the paddle moved, which picks its color.
-    moves: u8,
+    moves: u32,
+    /// The size of the image of the paddle in pixels.
+    image_size: (u32, u32),
 }
 
 struct Ball {
@@ -135,10 +139,14 @@ const RADIUS: f32 = 6.0;
 const PADDLE_WIDTH: f32 = 60.0;
 const PADDLE_HEIGHT: f32 = 6.0;
 const PADDLE_STEP: f32 = 20.0;
+/// How many colors the paddle takes, more than the 32 images of `big`
+/// that fit in a room, so a color comes back after the view dropped it.
+const COLORS: u32 = 40;
 
 impl Game {
-    /// The balls start spread over the field, each at its own speed.
-    fn new(balls: usize) -> Self {
+    /// The balls start spread over the field, each at its own speed. A
+    /// `big` game has a large image for the paddle.
+    fn new(balls: usize, big: bool) -> Self {
         let balls = (0..balls)
             .map(|i| {
                 let i = i as f32;
@@ -154,6 +162,11 @@ impl Game {
             balls,
             paddle: (WIDTH - PADDLE_WIDTH) / 2.0,
             moves: 0,
+            image_size: if big {
+                (1024, 1024)
+            } else {
+                (PADDLE_WIDTH as u32, PADDLE_HEIGHT as u32)
+            },
         }
     }
 
@@ -181,14 +194,14 @@ impl Game {
             return;
         };
         self.paddle = (self.paddle + step).clamp(0.0, WIDTH - PADDLE_WIDTH);
-        self.moves = self.moves.wrapping_add(1);
+        self.moves = (self.moves + 1) % COLORS;
     }
 
     /// The paddle as a PNG, in a green that the moves shift.
     fn paddle_png(&self) -> Vec<u8> {
-        let mut pixmap = tiny_skia::Pixmap::new(PADDLE_WIDTH as u32, PADDLE_HEIGHT as u32)
-            .expect("the paddle has a size");
-        let shade = self.moves % 8 * 16;
+        let (w, h) = self.image_size;
+        let mut pixmap = tiny_skia::Pixmap::new(w, h).expect("the paddle has a size");
+        let shade = (self.moves * 3) as u8;
         pixmap.fill(tiny_skia::Color::from_rgba8(
             80,
             200 - shade,
