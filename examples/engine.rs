@@ -1,6 +1,7 @@
 //! An engine that runs a game and talks the protocol on fd 3 and fd 4, for
-//! `examples/view.rs`. Balls bounce, and the arrows of any player move a
-//! paddle, for 1 to 8 players. The paddle is an image that changes its
+//! `examples/view.rs`, or shows the game itself when no view runs it.
+//! Balls bounce, and the arrows of any player move a paddle, for 1 to 8
+//! players. The paddle is an image that changes its
 //! color at each move, so a new image goes out at each move.
 //! `q` ends the session from this side. The first argument is the number
 //! of balls. With `big` after it, the image of the paddle has 1024 by 1024
@@ -11,6 +12,7 @@
 //! cargo build --examples
 //! target/debug/examples/view target/debug/examples/engine 200
 //! target/debug/examples/view target/debug/examples/engine 1 big
+//! target/debug/examples/engine 200        # in a window, with no view
 //! ```
 
 // The view hands the engine fd 3 and fd 4, which only unix has. Without a
@@ -25,7 +27,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use sinteract::asset::{Asset, Assets};
-use sinteract::event::{InputEvent, KeyKind, key};
+use sinteract::display::{TerminalOptions, open_native};
+use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Paint, PathStyle, RotatedRect, Scene};
 use sinteract::session::{Session, SessionEvent};
 use sinteract::wire::to_view::{self, PlayerRange};
@@ -37,10 +40,15 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let balls = args.first().and_then(|n| n.parse().ok()).unwrap_or(1);
     let big = args.get(1).is_some_and(|arg| arg == "big");
+    let game = Game::new(balls, big);
     if std::env::var_os("SINTERACT_SESSION").is_none() {
-        eprintln!("engine: run me from a view or a server, which open fd 3 and fd 4");
-        return ExitCode::FAILURE;
+        return run_local(game);
     }
+    run_session(game)
+}
+
+/// Run `game` for a view or a server, on fd 3 and fd 4.
+fn run_session(mut game: Game) -> ExitCode {
     // SAFETY: SINTERACT_SESSION says that the parent opened fd 3 and fd 4
     // for the session, and nothing else in this process uses them.
     let (mut from_server, to_view) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
@@ -51,9 +59,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut session = Session::new();
-    let mut game = Game::new(balls, big);
     let mut assets = Assets::new();
-    let mut last = None;
     // The end of fd 4, when the engine exits, ends the session for the
     // server.
     loop {
@@ -66,11 +72,7 @@ fn main() -> ExitCode {
         };
         match event {
             SessionEvent::Tick => {
-                let now = Instant::now();
-                let dt = last.map_or(0.0, |t: Instant| (now - t).as_secs_f32());
-                last = Some(now);
-                // A long pause would throw the balls through the walls.
-                game.step(dt.min(0.1));
+                game.tick();
                 if let Err(e) = draw(&game, &mut assets, &mut to_view) {
                     eprintln!("engine: {e}");
                     break;
@@ -108,6 +110,56 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Run `game` in a window of this process, or in the terminal. The
+/// display keeps every color of the paddle, 40 images at most, since no
+/// room limits it.
+fn run_local(mut game: Game) -> ExitCode {
+    let mut fr = match open_native("engine", WIDTH, HEIGHT, TerminalOptions::default()) {
+        Ok(fr) => fr,
+        Err(e) => {
+            eprintln!("engine: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut assets = Assets::new();
+    loop {
+        match fr.wait_event(None) {
+            Ok(Event::Input(InputEvent::Tick)) => {
+                game.tick();
+                let paddle = match assets.image(&game.paddle_png) {
+                    Ok(paddle) => paddle,
+                    Err(e) => {
+                        eprintln!("engine: {e}");
+                        break;
+                    }
+                };
+                let scene = game.scene(paddle);
+                for (id, png) in assets.frame(&scene) {
+                    if let Err(e) = fr.push_asset(id, &png) {
+                        eprintln!("engine: {e}");
+                    }
+                }
+                if let Err(e) = fr.present(scene) {
+                    eprintln!("engine: {e}");
+                    break;
+                }
+            }
+            Ok(Event::Input(InputEvent::Key(k))) if k.kind == KeyKind::Press => {
+                if k.key == "q" {
+                    break;
+                }
+                game.key(&k.key);
+            }
+            Ok(Event::Input(_)) => {}
+            Err(Interrupt::Read(e)) => eprintln!("engine: {e}"),
+            Err(Interrupt::Close) => break,
+            Err(Interrupt::Wake | Interrupt::Timeout) => {}
+        }
+    }
+    fr.close();
+    ExitCode::SUCCESS
+}
+
 /// Write a frame of `game` for every player, after the images that it
 /// draws and that have not gone out.
 fn draw(game: &Game, assets: &mut Assets, to_view: &mut impl Write) -> io::Result<()> {
@@ -129,6 +181,8 @@ struct Game {
     /// The image of the paddle as a PNG, for the color of `moves`. A move
     /// encodes it again, and a frame without a move reuses it.
     paddle_png: Vec<u8>,
+    /// When the last tick arrived.
+    last_tick: Option<Instant>,
 }
 
 struct Ball {
@@ -172,7 +226,19 @@ impl Game {
             moves: 0,
             image_size,
             paddle_png: paddle_png(0, image_size),
+            last_tick: None,
         }
+    }
+
+    /// Move the balls by the time since the last tick.
+    fn tick(&mut self) {
+        let now = Instant::now();
+        let dt = self
+            .last_tick
+            .replace(now)
+            .map_or(0.0, |t| (now - t).as_secs_f32());
+        // A long pause would throw the balls through the walls.
+        self.step(dt.min(0.1));
     }
 
     fn step(&mut self, dt: f32) {
