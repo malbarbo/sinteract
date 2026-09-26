@@ -34,6 +34,9 @@ use crate::wire::to_view;
 pub struct Session {
     /// The bytes that do not make a whole message yet.
     bytes: Vec<u8>,
+    /// The buffer of [`Session::wait`] for a read, zeroed once, since a
+    /// read into `bytes` would zero its room at every read.
+    scratch: Vec<u8>,
     state: State,
     events: VecDeque<SessionEvent>,
 }
@@ -154,23 +157,18 @@ impl Session {
             if self.state == State::Ended {
                 return Ok(SessionEvent::End(None));
             }
-            let len = self.bytes.len();
-            self.bytes.resize(len + READ_BYTES, 0);
-            match r.read(self.bytes.get_mut(len..).expect("the bytes just added")) {
+            if self.scratch.is_empty() {
+                self.scratch = vec![0; READ_BYTES];
+            }
+            match r.read(&mut self.scratch) {
+                Ok(0) => self.end(),
                 Ok(n) => {
-                    self.bytes.truncate(len + n);
-                    if n == 0 {
-                        self.end();
-                    } else {
-                        self.take_messages();
-                    }
+                    let read = self.scratch.get(..n).expect("a read fits its buffer");
+                    self.bytes.extend_from_slice(read);
+                    self.take_messages();
                 }
-                Err(e) => {
-                    self.bytes.truncate(len);
-                    if e.kind() != io::ErrorKind::Interrupted {
-                        return Err(e);
-                    }
-                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
             }
         }
     }
