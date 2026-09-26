@@ -252,8 +252,16 @@ fn drain(
                     eprintln!("view: skipping asset {id}, which is live");
                     continue;
                 }
-                let kept = Footprint::of(&blob).and_then(|footprint| cache.asset(id, footprint));
-                let dropped = match kept {
+                // An image that is not valid fails again if sent again, so
+                // the engine gets no lost for it.
+                let footprint = match Footprint::of(&blob) {
+                    Ok(footprint) => footprint,
+                    Err(e) => {
+                        eprintln!("view: asset {id}: {e}");
+                        continue;
+                    }
+                };
+                let dropped = match cache.asset(id, footprint) {
                     Ok(dropped) => dropped,
                     Err(e) => {
                         eprintln!("view: asset {id}: {e}");
