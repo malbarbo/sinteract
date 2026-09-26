@@ -646,12 +646,10 @@ pub(crate) fn decode(
     let size = tiny_skia::IntSize::from_wh(image.width(), image.height())
         .ok_or("the image has no pixels")?;
     let mut pixels = image.into_rgba8().into_raw();
-    for [r, g, b, a] in pixels.as_chunks_mut::<4>().0 {
-        let alpha = u16::from(*a);
-        for c in [r, g, b] {
-            *c = u8::try_from((u16::from(*c) * alpha + 127) / 255)
-                .expect("a premultiplied channel is at most its alpha");
-        }
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        let [r, g, b, a] = *pixel;
+        let p = tiny_skia::ColorU8::from_rgba(r, g, b, a).premultiply();
+        *pixel = [p.red(), p.green(), p.blue(), a];
     }
     Ok(tiny_skia::Pixmap::from_vec(pixels, size).expect("the pixels fill the size"))
 }
