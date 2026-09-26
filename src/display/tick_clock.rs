@@ -33,17 +33,9 @@ impl TickClock {
     /// tick moves by half a period at most, so no tick is lost or doubled.
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn align(&mut self, vblank: Instant) {
-        let period = self.period.as_secs_f64();
-        let (ahead, sign) = match self.due.checked_duration_since(vblank) {
-            Some(d) => (d.as_secs_f64(), 1.0),
-            None => ((vblank - self.due).as_secs_f64(), -1.0),
-        };
-        let periods = sign * (ahead / period).round();
-        let offset = self.period.mul_f64(periods.abs());
-        self.due = if periods < 0.0 {
-            vblank - offset
-        } else {
-            vblank + offset
+        self.due = match self.due.checked_duration_since(vblank) {
+            Some(ahead) => vblank + nearest_multiple(ahead, self.period),
+            None => vblank - nearest_multiple(vblank - self.due, self.period),
         };
     }
 
@@ -67,6 +59,11 @@ impl TickClock {
         }
         true
     }
+}
+
+/// The whole number of periods nearest to `d`.
+fn nearest_multiple(d: Duration, period: Duration) -> Duration {
+    period.mul_f64((d.as_secs_f64() / period.as_secs_f64()).round())
 }
 
 fn period(rate: NonZeroU32) -> Duration {
