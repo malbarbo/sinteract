@@ -9,7 +9,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
@@ -69,9 +69,21 @@ define_class!(
     struct Target;
 
     impl Target {
+        /// The run loop turns only while the window pumps, so the call
+        /// comes late after a frame that drew past the vblank. The time
+        /// of the vblank comes from the link.
         #[unsafe(method(step:))]
-        fn step(&self, _link: &AnyObject) {
-            self.ivars().frame.set(Some(Instant::now()));
+        fn step(&self, link: &AnyObject) {
+            // SAFETY: the link is a CADisplayLink, which has a timestamp.
+            let vblank: f64 = unsafe { msg_send![link, timestamp] };
+            let now = Instant::now();
+            // SAFETY: a plain call of QuartzCore.
+            let late = unsafe { CACurrentMediaTime() } - vblank;
+            let at = Duration::try_from_secs_f64(late)
+                .ok()
+                .and_then(|late| now.checked_sub(late))
+                .unwrap_or(now);
+            self.ivars().frame.set(Some(at));
             let _ = self.ivars().proxy.send_event(());
         }
     }
@@ -80,6 +92,12 @@ define_class!(
 #[link(name = "Foundation", kind = "framework")]
 unsafe extern "C" {
     static NSRunLoopCommonModes: &'static AnyObject;
+}
+
+#[link(name = "QuartzCore", kind = "framework")]
+unsafe extern "C" {
+    /// The clock of the timestamp of a display link, in seconds.
+    fn CACurrentMediaTime() -> f64;
 }
 
 /// Add a display link of `view` to the main run loop. Returns `None` before
