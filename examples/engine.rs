@@ -57,7 +57,7 @@ fn main() -> ExitCode {
     // The end of fd 4, when the engine exits, ends the session for the
     // server.
     loop {
-        let event = match session.wait(&mut from_server) {
+        let event = match session.wait(&mut from_server, &mut to_view) {
             Ok(event) => event,
             Err(e) => {
                 eprintln!("engine: {e}");

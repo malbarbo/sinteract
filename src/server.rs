@@ -791,7 +791,7 @@ mod tests {
             let mut buf = Vec::new();
             self.core.take_engine_output(&mut buf);
             self.engine.feed(&buf);
-            std::iter::from_fn(|| self.engine.next_event())
+            std::iter::from_fn(|| self.engine.next_event(&mut io::sink()).unwrap())
                 .map(|e| match e {
                     SessionEvent::Start(roster) => {
                         let members: Vec<_> = roster

@@ -2,21 +2,24 @@
 //! that plays the part of the server, writes a `ServerMessage` stream to
 //! the engine, and the session turns the bytes into [`SessionEvent`]s with
 //! the rules of the protocol. The engine writes its frames back with
-//! [`crate::wire::to_view`].
+//! [`crate::wire::to_view`], and the session writes a tickTaken there as
+//! it hands out each tick, so the server holds the next tick until then.
 //!
 //! The session does no I/O of its own. A host that reads the bytes itself,
 //! such as JavaScript through wasm, calls [`Session::feed`] and
 //! [`Session::next_event`]. A host that reads a [`Read`], such as an
-//! engine on fd 3, calls [`Session::wait`].
+//! engine on fd 3, calls [`Session::wait`]. Both write to the [`Write`]
+//! that goes to the server, such as fd 4.
 
 use std::collections::VecDeque;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
 use crate::event::InputEvent;
 use crate::wire;
 use crate::wire::framing::{self, Side};
 use crate::wire::to_engine::{self, Message, Roster};
+use crate::wire::to_view;
 
 /// The engine side of a session, from the bytes of the server to the
 /// events of the engine.
@@ -118,19 +121,27 @@ impl Session {
     }
 
     /// The next event, or `None` while the next one waits for more bytes
-    /// and after the end.
-    pub fn next_event(&mut self) -> Option<SessionEvent> {
-        self.events.pop_front()
+    /// and after the end. A tick writes a tickTaken to `w` first, and an
+    /// error of `w` comes back in place of the tick.
+    pub fn next_event(&mut self, w: &mut impl Write) -> io::Result<Option<SessionEvent>> {
+        let Some(event) = self.events.pop_front() else {
+            return Ok(None);
+        };
+        if matches!(event, SessionEvent::Tick) {
+            to_view::write_tick_taken(w)?;
+        }
+        Ok(Some(event))
     }
 
     /// The next event, with bytes from `r` when none waits. It blocks for
     /// as long as `r` blocks. After the end, it returns `End(None)` without
     /// a read. An error of `r` other than [`io::ErrorKind::Interrupted`]
     /// comes back as is, and the session keeps the bytes that it read
-    /// before.
-    pub fn wait(&mut self, r: &mut impl Read) -> io::Result<SessionEvent> {
+    /// before. A tick writes a tickTaken to `w` first, as in
+    /// [`Session::next_event`].
+    pub fn wait(&mut self, r: &mut impl Read, w: &mut impl Write) -> io::Result<SessionEvent> {
         loop {
-            if let Some(event) = self.events.pop_front() {
+            if let Some(event) = self.next_event(w)? {
                 return Ok(event);
             }
             if self.state == State::Ended {
@@ -334,18 +345,23 @@ mod tests {
         out
     }
 
+    /// The next event, with the tickTaken dropped.
+    fn next(session: &mut Session) -> Option<SessionEvent> {
+        session.next_event(&mut io::sink()).unwrap()
+    }
+
     /// A session after its start, fed with `bytes`.
     fn started(bytes: &[u8]) -> Session {
         let mut session = Session::new();
         session.feed(&start());
-        assert!(matches!(session.next_event(), Some(SessionEvent::Start(_))));
+        assert!(matches!(next(&mut session), Some(SessionEvent::Start(_))));
         session.feed(bytes);
         session
     }
 
     /// Every event that waits, in a short form.
     fn names(session: &mut Session) -> Vec<String> {
-        std::iter::from_fn(|| session.next_event())
+        std::iter::from_fn(|| next(session))
             .map(|e| match e {
                 SessionEvent::Start(r) => format!("start {}", r.members().len()),
                 SessionEvent::Tick => "tick".into(),
@@ -439,15 +455,15 @@ mod tests {
         let mut session = Session::new();
         session.feed(&stream);
         assert!(matches!(
-            session.next_event(),
+            next(&mut session),
             Some(SessionEvent::Error(SessionError::BeforeStart))
         ));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Start(_))));
+        assert!(matches!(next(&mut session), Some(SessionEvent::Start(_))));
         assert!(matches!(
-            session.next_event(),
+            next(&mut session),
             Some(SessionEvent::Error(SessionError::SecondStart))
         ));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Tick)));
+        assert!(matches!(next(&mut session), Some(SessionEvent::Tick)));
     }
 
     #[test]
@@ -462,13 +478,13 @@ mod tests {
         let mut session = Session::new();
         session.feed(&stream);
         assert!(matches!(
-            session.next_event(),
+            next(&mut session),
             Some(SessionEvent::Error(SessionError::BeforeStart))
         ));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Start(_))));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Tick)));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Lost(7))));
-        assert!(session.next_event().is_none());
+        assert!(matches!(next(&mut session), Some(SessionEvent::Start(_))));
+        assert!(matches!(next(&mut session), Some(SessionEvent::Tick)));
+        assert!(matches!(next(&mut session), Some(SessionEvent::Lost(7))));
+        assert!(next(&mut session).is_none());
     }
 
     #[test]
@@ -484,12 +500,12 @@ mod tests {
         stream.extend_from_slice(&tick());
         let mut session = started(&stream);
         assert!(matches!(
-            session.next_event(),
+            next(&mut session),
             Some(SessionEvent::Error(SessionError::Payload(
                 wire::Error::NoPlayer
             )))
         ));
-        assert!(matches!(session.next_event(), Some(SessionEvent::Tick)));
+        assert!(matches!(next(&mut session), Some(SessionEvent::Tick)));
     }
 
     #[test]
@@ -508,7 +524,7 @@ mod tests {
         let mut session = started(&stream);
         assert_eq!(names(&mut session), ["end InvalidData"]);
         session.feed(&tick());
-        assert!(session.next_event().is_none());
+        assert!(next(&mut session).is_none());
     }
 
     #[test]
@@ -533,7 +549,7 @@ mod tests {
         session.feed(&tick());
         assert_eq!(names(&mut session), ["end"]);
         session.end();
-        assert!(session.next_event().is_none());
+        assert!(next(&mut session).is_none());
     }
 
     /// A reader that hands out one byte at a time. It fails at the byte of
@@ -576,11 +592,47 @@ mod tests {
             interrupt: false,
         };
         let mut session = Session::new();
-        assert!(matches!(session.wait(&mut r), Ok(SessionEvent::Start(_))));
-        let e = session.wait(&mut r).expect_err("the error of the reader");
+        assert!(matches!(
+            session.wait(&mut r, &mut io::sink()),
+            Ok(SessionEvent::Start(_))
+        ));
+        let e = session
+            .wait(&mut r, &mut io::sink())
+            .expect_err("the error of the reader");
         assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
-        assert!(matches!(session.wait(&mut r), Ok(SessionEvent::Tick)));
-        assert!(matches!(session.wait(&mut r), Ok(SessionEvent::End(None))));
-        assert!(matches!(session.wait(&mut r), Ok(SessionEvent::End(None))));
+        assert!(matches!(
+            session.wait(&mut r, &mut io::sink()),
+            Ok(SessionEvent::Tick)
+        ));
+        assert!(matches!(
+            session.wait(&mut r, &mut io::sink()),
+            Ok(SessionEvent::End(None))
+        ));
+        assert!(matches!(
+            session.wait(&mut r, &mut io::sink()),
+            Ok(SessionEvent::End(None))
+        ));
+    }
+
+    #[test]
+    fn a_tick_writes_a_tick_taken_and_a_start_does_not() {
+        let mut stream = start();
+        stream.extend_from_slice(&tick());
+        let mut session = Session::new();
+        session.feed(&stream);
+        let mut out = Vec::new();
+        assert!(matches!(
+            session.next_event(&mut out),
+            Ok(Some(SessionEvent::Start(_)))
+        ));
+        assert!(out.is_empty());
+        assert!(matches!(
+            session.next_event(&mut out),
+            Ok(Some(SessionEvent::Tick))
+        ));
+        assert!(matches!(
+            to_view::read(&mut &out[..]),
+            Ok(Some(to_view::Message::TickTaken))
+        ));
     }
 }
