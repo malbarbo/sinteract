@@ -26,7 +26,7 @@ use std::os::fd::FromRawFd;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use sinteract::asset::{Asset, Assets};
+use sinteract::asset::{Asset, AssetError, Assets, Upload};
 use sinteract::display::{TerminalOptions, open_native};
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Paint, PathStyle, RotatedRect, Scene};
@@ -126,16 +126,8 @@ fn run_local(mut game: Game) -> ExitCode {
         match fr.wait_event(None) {
             Ok(Event::Input(InputEvent::Tick)) => {
                 game.tick();
-                let paddle = match assets.image(&game.paddle_png) {
-                    Ok(paddle) => paddle,
-                    Err(e) => {
-                        eprintln!("engine: {e}");
-                        break;
-                    }
-                };
-                let scene = game.scene(paddle);
-                let send = match assets.frame(&scene) {
-                    Ok(send) => send,
+                let (scene, send) = match game.frame(&mut assets) {
+                    Ok(frame) => frame,
                     Err(e) => {
                         eprintln!("engine: {e}");
                         break;
@@ -170,9 +162,8 @@ fn run_local(mut game: Game) -> ExitCode {
 /// Write a frame of `game` for every player, after the images that it
 /// draws and that have not gone out.
 fn draw(game: &Game, assets: &mut Assets, to_view: &mut impl Write) -> io::Result<()> {
-    let paddle = assets.image(&game.paddle_png).map_err(io::Error::other)?;
-    let scene = game.scene(paddle);
-    for (id, png) in assets.frame(&scene).map_err(io::Error::other)? {
+    let (scene, send) = game.frame(assets).map_err(io::Error::other)?;
+    for (id, png) in send {
         to_view::write_asset(to_view, id, &png)?;
     }
     to_view::write_frame(to_view, None, &scene)
@@ -274,6 +265,14 @@ impl Game {
         self.paddle = (self.paddle + step).clamp(0.0, WIDTH - PADDLE_WIDTH);
         self.moves = (self.moves + 1) % COLORS;
         self.paddle_png = paddle_png(self.moves, self.image_size);
+    }
+
+    /// The scene of the field, and the images that it draws and that have
+    /// not gone out.
+    fn frame(&self, assets: &mut Assets) -> Result<(Scene, Vec<Upload>), AssetError> {
+        let scene = self.scene(assets.image(&self.paddle_png)?);
+        let send = assets.frame(&scene)?;
+        Ok((scene, send))
     }
 
     /// The field, with the image `paddle` for the paddle.
