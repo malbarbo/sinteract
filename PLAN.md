@@ -118,8 +118,10 @@ Regras da sessão com servidor:
   perceber a view que caiu;
 - a view manda um `resize` como primeiro evento de cada conexão;
 - um timer do servidor manda o `tick` de todos os jogadores, e o
-  servidor não repassa o `tick` da view. A engine guarda no máximo um
-  `tick` na fila.
+  servidor não repassa o `tick` da view. A `Session` da engine responde
+  cada `tick` com um `tickTaken` quando o entrega, e o servidor só manda
+  o próximo depois disso, então uma engine mais lenta que o timer não
+  acumula `tick` no pipe.
 
 O documento `sgleam/RUNTIME_PROTOCOL.md` descreve o servidor do Sarcade
 sobre esse protocolo, com um exemplo em Tokio.
