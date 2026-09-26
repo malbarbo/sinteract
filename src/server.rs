@@ -289,11 +289,15 @@ impl ServerCore {
     /// each key and button that the view held. A second call, and a call
     /// for an old connection of the seat, do nothing.
     pub fn leave(&mut self, conn: Conn) {
-        if seat_of(&mut self.seats, conn).is_none() {
+        let Some(seat) = self.seats.get_mut(&conn.player) else {
+            return;
+        };
+        if seat.generation != conn.generation {
             return;
         }
-        self.release_held(conn.player);
-        new_generation(&mut self.seats, conn.player);
+        if let Some(old) = seat.view.take() {
+            self.release(conn.player, old.held);
+        }
     }
 
     /// A connection of a view to the seat of `player`, or `None` if the
@@ -306,16 +310,19 @@ impl ServerCore {
         if self.phase == Phase::Over {
             return None;
         }
-        self.release_held(player);
-        let seat = new_generation(&mut self.seats, player)?;
-        seat.frame_sent = false;
-        seat.target = None;
-        seat.has.clear();
-        seat.shown.clear();
-        Some(Conn {
+        let seat = self.seats.get_mut(&player)?;
+        seat.generation = seat
+            .generation
+            .checked_add(1)
+            .expect("a seat has fewer than 2^32 connections");
+        let conn = Conn {
             player,
             generation: seat.generation,
-        })
+        };
+        if let Some(old) = seat.view.replace(View::default()) {
+            self.release(player, old.held);
+        }
+        Some(conn)
     }
 
     /// Tell the engine to draw the next frames, in the game. The tick is
@@ -364,13 +371,13 @@ impl ServerCore {
     /// core drops the input of an old connection, and a `Down` of a new key when the view holds 32 keys, since it could not release the
     /// key.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
-        let Some(seat) = seat_of(&mut self.seats, conn) else {
+        let Some((view, _)) = view_of(&mut self.seats, conn) else {
             return;
         };
         if self.phase != Phase::Playing {
             return;
         }
-        if !seat.held.track(event) {
+        if !view.held.track(event) {
             return;
         }
         to_engine::write_input(&mut self.to_engine, conn.player, event).expect(UNDER_THE_CAP);
@@ -460,33 +467,33 @@ impl ServerCore {
     /// When the room is over, the view gets [`Next::Gone`] after its last
     /// frame, as does an old connection.
     pub fn next_for(&mut self, conn: Conn) -> Next {
-        let Some(seat) = seat_of(&mut self.seats, conn) else {
+        let Some((view, frame)) = view_of(&mut self.seats, conn) else {
             return Next::Gone;
         };
-        if seat.target.is_none() && !seat.frame_sent {
-            seat.target = seat.frame.clone();
-            seat.frame_sent = true;
+        if view.target.is_none() && !view.frame_sent {
+            view.target = frame.cloned();
+            view.frame_sent = true;
         }
         let needs = |id: &u32| {
-            seat.shown.contains(id)
-                || seat
+            view.shown.contains(id)
+                || view
                     .target
                     .as_ref()
                     .is_some_and(|t| t.assets.contains_key(id))
         };
-        if let Some(&id) = seat.has.iter().find(|id| !needs(id)) {
-            seat.has.remove(&id);
+        if let Some(&id) = view.has.iter().find(|id| !needs(id)) {
+            view.has.remove(&id);
             return Next::Send(to_view::encode_forget(id).into());
         }
-        if let Some(target) = seat.target.take() {
-            if let Some((&id, asset)) = target.assets.iter().find(|(id, _)| !seat.has.contains(id))
+        if let Some(target) = view.target.take() {
+            if let Some((&id, asset)) = target.assets.iter().find(|(id, _)| !view.has.contains(id))
             {
-                seat.has.insert(id);
+                view.has.insert(id);
                 let payload = asset.clone();
-                seat.target = Some(target);
+                view.target = Some(target);
                 return Next::Send(payload);
             }
-            seat.shown = target.assets.keys().copied().collect();
+            view.shown = target.assets.keys().copied().collect();
             return Next::Send(target.frame);
         }
         match self.phase {
@@ -560,7 +567,9 @@ impl ServerCore {
             .filter(|(p, _)| player.is_none_or(|player| **p == player))
         {
             seat.frame = Some(shot.clone());
-            seat.frame_sent = false;
+            if let Some(view) = &mut seat.view {
+                view.frame_sent = false;
+            }
         }
         Ok(())
     }
@@ -577,13 +586,11 @@ impl ServerCore {
         }
     }
 
-    /// Send the engine an `Up` for each key and button that the view of
-    /// `player` holds, since a view that drops never sends them.
-    fn release_held(&mut self, player: NonZeroU32) {
-        let Some(seat) = self.seats.get_mut(&player) else {
-            return;
-        };
-        let released = seat.held.release();
+    /// Send the engine an `Up` for each key and button in `held`, what a
+    /// view of `player` held when it went, since a view that drops never
+    /// sends them.
+    fn release(&mut self, player: NonZeroU32, mut held: Held) {
+        let released = held.release();
         if self.phase != Phase::Playing {
             return;
         }
@@ -611,14 +618,21 @@ impl Default for ServerCore {
 #[derive(Debug)]
 struct Seat {
     nickname: String,
-    /// The generation of the connection that the seat takes. A leave and a
-    /// connect move it on, so no older connection matches.
+    /// The generation of the last connect, so no older connection matches.
     generation: u32,
-    /// What the view holds down, as the engine saw it.
-    held: Held,
     /// The newest frame for the player, kept for the next connect.
     frame: Option<Shot>,
-    /// Whether the view got `frame`, or waits for it as `target`.
+    /// The view that takes the seat, until it leaves.
+    view: Option<View>,
+}
+
+/// A view that takes a seat. A connect starts a new one.
+#[derive(Debug, Default)]
+struct View {
+    /// What the view holds down, as the engine saw it.
+    held: Held,
+    /// Whether the view got the frame of the seat, or waits for it as
+    /// `target`.
     frame_sent: bool,
     /// The next frame of the view, until the view has its assets and it.
     target: Option<Shot>,
@@ -643,12 +657,8 @@ impl Seat {
         Seat {
             nickname,
             generation: 0,
-            held: Held::default(),
             frame: None,
-            frame_sent: false,
-            target: None,
-            has: BTreeSet::new(),
-            shown: BTreeSet::new(),
+            view: None,
         }
     }
 }
@@ -733,22 +743,16 @@ enum Phase {
     Over,
 }
 
-/// The seat of `conn`, if `conn` is the connection that the seat takes.
-fn seat_of(seats: &mut BTreeMap<NonZeroU32, Seat>, conn: Conn) -> Option<&mut Seat> {
-    seats
+/// The view of `conn` and the newest frame of its seat, if `conn` is the
+/// connection that takes the seat and has not left.
+fn view_of(
+    seats: &mut BTreeMap<NonZeroU32, Seat>,
+    conn: Conn,
+) -> Option<(&mut View, Option<&Shot>)> {
+    let seat = seats
         .get_mut(&conn.player)
-        .filter(|seat| seat.generation == conn.generation)
-}
-
-/// Move the seat of `player` to a new generation, and return the seat, or
-/// `None` if the room has no such seat.
-fn new_generation(seats: &mut BTreeMap<NonZeroU32, Seat>, player: NonZeroU32) -> Option<&mut Seat> {
-    let seat = seats.get_mut(&player)?;
-    seat.generation = seat
-        .generation
-        .checked_add(1)
-        .expect("a seat has fewer than 2^32 connections");
-    Some(seat)
+        .filter(|seat| seat.generation == conn.generation)?;
+    Some((seat.view.as_mut()?, seat.frame.as_ref()))
 }
 
 /// `nickname` without its control characters, cut at a character to
