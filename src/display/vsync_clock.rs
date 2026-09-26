@@ -27,12 +27,17 @@ impl VsyncClock {
     /// Returns `true` if a Vsync fell due by `now`, `false` otherwise. A
     /// `true` moves the clock to the next Vsync. The clock keeps its beat,
     /// so a frame that took less than the period loses no time to the
-    /// wait. An engine slower than the period gets the next Vsync at once.
+    /// wait. A Vsync taken more than a period late starts a new beat at
+    /// `now`, so a slow engine gets one Vsync at once and not a second
+    /// one right behind it.
     pub(crate) fn take_due(&mut self, now: Instant) -> bool {
         if self.due > now {
             return false;
         }
-        self.due = (self.due + self.period).max(now);
+        self.due += self.period;
+        if self.due <= now {
+            self.due = now + self.period;
+        }
         true
     }
 }
@@ -63,10 +68,15 @@ mod tests {
     }
 
     #[test]
-    fn a_late_engine_gets_the_next_vsync_at_once() {
+    fn a_late_engine_gets_one_vsync_at_once_and_the_next_a_period_later() {
         let mut clock = at_60_hz();
         let t0 = clock.due();
+        let period = clock.period;
         assert!(clock.take_due(t0));
-        assert!(clock.take_due(t0 + clock.period * 3));
+        let late = t0 + period * 3;
+        assert!(clock.take_due(late));
+        assert!(!clock.take_due(late));
+        assert!(!clock.take_due(late + period - period / 8));
+        assert!(clock.take_due(late + period));
     }
 }
