@@ -28,8 +28,9 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{OpenError, PresentError, period_from_hz, sealed};
+use super::driver::{OpenError, PresentError, sealed};
 use super::inbox::{Inbox, Next, Sender};
+use super::vsync_clock::VsyncClock;
 use crate::event::{
     Event, Interrupt, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
 };
@@ -44,6 +45,7 @@ use crate::scene::Scene;
 /// first Vsync, and again after each change.
 pub struct Window {
     inbox: Inbox,
+    clock: VsyncClock,
     /// `None` after [`super::Display::close`].
     session: Option<Session>,
 }
@@ -62,7 +64,7 @@ struct Session {
 impl Window {
     /// The window paints through softbuffer without a swap chain, so its
     /// cadence is software-timed too.
-    const VSYNC_PERIOD: Duration = period_from_hz(60);
+    const VSYNC_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
     /// How long [`Window::open`] waits for the platform to create the window.
     const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -74,17 +76,14 @@ impl Window {
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
         let mut lent = Lent::take()?;
         let proxy = lent.event_loop().create_proxy();
-        let inbox = Inbox::with_waker(
-            Self::VSYNC_PERIOD,
-            Some(Arc::new(move || {
-                let _ = proxy.send_event(());
-            })),
-        );
+        let inbox = Inbox::new(Some(Arc::new(move || {
+            let _ = proxy.send_event(());
+        })));
         let (w, h) = frame_px(width, height);
         let attrs = WindowAttributes::default()
             .with_title(title)
             .with_inner_size(LogicalSize::new(w as f64, h as f64));
-        let mut app = App::new(inbox.sender_in_loop(), attrs);
+        let mut app = App::new(inbox.sender_without_waker(), attrs);
         let window = lent.create_window(&mut app, Self::OPEN_TIMEOUT)?;
         let surface = match new_surface(&window) {
             Ok(surface) => surface,
@@ -96,6 +95,7 @@ impl Window {
         };
         Ok(Self {
             inbox,
+            clock: VsyncClock::from_millihertz(Self::VSYNC_RATE),
             session: Some(Session {
                 lent,
                 app,
@@ -129,22 +129,20 @@ impl super::Display for Window {
             let _ = s.app.tx.send_close();
         }
         loop {
-            let mut session = self.session.as_mut();
-            let wait = self.inbox.wait_with(deadline, |_, timeout| {
-                // A closed session has a closed inbox, which returns Close
-                // before it blocks.
-                let Some(s) = session.as_mut() else {
-                    return;
-                };
-                if !s.lent.pump(&mut s.app, timeout) {
-                    let _ = s.app.tx.send_close();
-                }
-            });
-            match wait {
+            // A closed session has a closed inbox, which returns Close
+            // before it redraws or blocks.
+            match self.inbox.next(&mut self.clock, deadline) {
                 Next::Ready(ready) => return ready,
                 Next::Redraw => {
                     if let Some(s) = self.session.as_mut() {
                         s.redraw();
+                    }
+                }
+                Next::Block(timeout) => {
+                    if let Some(s) = self.session.as_mut()
+                        && !s.lent.pump(&mut s.app, timeout)
+                    {
+                        let _ = s.app.tx.send_close();
                     }
                 }
             }

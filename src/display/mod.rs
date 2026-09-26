@@ -45,6 +45,11 @@ mod shm;
 mod term_query;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 pub mod terminal;
+#[cfg(all(
+    any(feature = "terminal", feature = "window"),
+    not(target_arch = "wasm32")
+))]
+mod vsync_clock;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 mod vt_input;
 #[cfg(all(feature = "window", not(target_arch = "wasm32")))]

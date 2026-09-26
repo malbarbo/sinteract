@@ -237,7 +237,3 @@ impl From<NoGraphics> for OpenError {
         OpenError::NoGraphics
     }
 }
-
-pub(super) const fn period_from_hz(hz: u32) -> std::time::Duration {
-    std::time::Duration::from_nanos(1_000_000_000 / hz as u64)
-}

@@ -11,6 +11,7 @@
 
 use std::fmt;
 use std::io::{self, Write};
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
@@ -22,9 +23,10 @@ use crossterm::style::Print;
 use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::Pixmap;
 
-use super::driver::{NoGraphics, OpenError, PresentError, period_from_hz, sealed};
+use super::driver::{NoGraphics, OpenError, PresentError, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
+use super::vsync_clock::VsyncClock;
 use crate::event::{Event, Interrupt, MouseEvent};
 use crate::renderer::pixmap::{Assets, PixmapRenderer};
 use crate::renderer::{AllocError, Renderer};
@@ -73,6 +75,7 @@ pub struct TerminalOptions {
 /// a caller that holds the lock across a `present` waits forever.
 pub struct Terminal {
     inbox: Inbox,
+    clock: VsyncClock,
     /// The pixmap of the next frame, the clip masks and the images of the
     /// bitmaps.
     renderer: PixmapRenderer,
@@ -97,7 +100,7 @@ struct Live {
 impl Terminal {
     /// There is no hardware refresh in a terminal. 60 Hz is smooth for
     /// half-block animation and does not flood the pty with escape codes.
-    const VSYNC_PERIOD: Duration = period_from_hz(60);
+    const VSYNC_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
     /// Enter the alt screen and raw mode, with [`TerminalOptions::default`].
     pub fn open() -> Result<Self, OpenError> {
@@ -118,7 +121,7 @@ impl Terminal {
         install_panic_hook();
         let keys = execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
             .and_then(|()| KeyInput::start(stdin_tty));
-        let inbox = Inbox::new(Self::VSYNC_PERIOD);
+        let inbox = Inbox::new(None);
         let cell = cell_pixels();
         if let Some((width, height)) = terminal::size().ok().and_then(|s| scene_size(s, cell)) {
             let _ = inbox.sender().send_resize(width, height);
@@ -155,6 +158,7 @@ impl Terminal {
         };
         Ok(Self {
             inbox,
+            clock: VsyncClock::from_millihertz(Self::VSYNC_RATE),
             renderer,
             backend,
             live: Some(Live {
@@ -208,9 +212,10 @@ impl super::Display for Terminal {
 
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
         loop {
-            match self.inbox.wait_with(deadline, Inbox::receive) {
+            match self.inbox.next(&mut self.clock, deadline) {
                 Next::Ready(ready) => return ready,
                 Next::Redraw => self.redraw(),
+                Next::Block(timeout) => self.inbox.wait_for_message(timeout),
             }
         }
     }
