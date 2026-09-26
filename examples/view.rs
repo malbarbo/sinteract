@@ -282,6 +282,7 @@ fn drain(
             }
             Message::Hello(_) => eprintln!("view: skipping a hello after the first one"),
             Message::Forget(_) => eprintln!("view: skipping a forget from the engine"),
+            Message::TickTaken => {}
         }
     }
     if let Some(scene) = last {

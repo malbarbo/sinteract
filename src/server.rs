@@ -413,6 +413,7 @@ impl ServerCore {
                     }
                 }
                 Ok(Some(Arm::Forget(id))) => errors.push(EngineError::Forget(id)),
+                Ok(Some(Arm::TickTaken)) => {}
                 Ok(Some(Arm::Frame { player })) => {
                     if let Err(e) = self.keep_frame(player, payload) {
                         errors.push(EngineError::Payload(e));
@@ -927,6 +928,7 @@ mod tests {
             },
             to_view::Message::Hello(_) => "hello".into(),
             to_view::Message::Forget(id) => format!("forget {id}"),
+            to_view::Message::TickTaken => "tick taken".into(),
         }
     }
 

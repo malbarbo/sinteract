@@ -614,6 +614,21 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_tick_taken_round_trips() {
+        let mut stream = Vec::new();
+        to_view::write_tick_taken(&mut stream).unwrap();
+        let payload = &stream[framing::HEADER_BYTES..];
+        assert_eq!(
+            to_view::arm(payload).unwrap(),
+            Some(to_view::Arm::TickTaken)
+        );
+        assert!(matches!(
+            to_view::read(&mut &stream[..]).unwrap(),
+            Some(Message::TickTaken)
+        ));
+    }
+
     /// A hello from `min` to `max`, with no envelope, even when that is not
     /// a range.
     fn hello(min: u32, max: u32) -> Vec<u8> {

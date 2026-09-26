@@ -57,6 +57,10 @@ struct EngineMessage {
         # From the server to a view, which drops the asset of this id,
         # since no frame of the view draws it. An engine never sends it.
         forget @3 :UInt32;
+        # To the server, as the engine reads a tick. The server sends the
+        # next tick only after it, so the ticks of an engine slower than
+        # the timer do not pile up.
+        tickTaken @4 :Void;
     }
 }
 

@@ -3,8 +3,8 @@
 //! The engine says first how many players the game takes, in a hello for
 //! the server. Then it uploads each bitmap as an asset, before the first
 //! frame that draws it, and sends a frame per repaint, for one player or
-//! for all of them. The engine ends the session with the end of its
-//! stream. The server adds a forget for a view, when the view no longer
+//! for all of them. It tells the server as it takes each tick. The engine
+//! ends the session with the end of its stream. The server adds a forget for a view, when the view no longer
 //! needs an asset.
 
 use std::collections::BTreeSet;
@@ -38,6 +38,8 @@ pub enum Message {
     Hello(PlayerRange),
     /// The view drops the asset of this id. Only a server sends it.
     Forget(u32),
+    /// The engine took a tick. It goes to the server alone.
+    TickTaken,
 }
 
 /// The arm of a message of the engine, with the player of a frame. A
@@ -60,6 +62,7 @@ pub enum Arm {
     },
     Hello(PlayerRange),
     Forget(u32),
+    TickTaken,
 }
 
 /// The fewest and the most players that a game takes, from 1.
@@ -115,6 +118,11 @@ pub fn write_hello(w: &mut impl Write, players: PlayerRange) -> io::Result<()> {
     write_framed(w, Side::Engine, &hello_message(players))
 }
 
+/// Write that the engine took a tick.
+pub fn write_tick_taken(w: &mut impl Write) -> io::Result<()> {
+    write_framed(w, Side::Engine, &tick_taken_message())
+}
+
 /// Write a bitmap upload as an asset.
 pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
     write_framed(w, Side::Engine, &asset_message(id, blob))
@@ -143,6 +151,7 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
             },
             engine_message::Hello(h) => Arm::Hello(read_hello(h?)?),
             engine_message::Forget(id) => Arm::Forget(id),
+            engine_message::TickTaken(()) => Arm::TickTaken,
         }))
     })
 }
@@ -187,6 +196,7 @@ fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Er
         }
         engine_message::Hello(h) => Ok(Some(Message::Hello(read_hello(h?)?))),
         engine_message::Forget(id) => Ok(Some(Message::Forget(id))),
+        engine_message::TickTaken(()) => Ok(Some(Message::TickTaken)),
     }
 }
 
@@ -216,6 +226,14 @@ fn forget_message(id: u32) -> MessageBuilder<HeapAllocator> {
     builder
         .init_root::<engine_message::Builder>()
         .set_forget(id);
+    builder
+}
+
+fn tick_taken_message() -> MessageBuilder<HeapAllocator> {
+    let mut builder = MessageBuilder::new_default();
+    builder
+        .init_root::<engine_message::Builder>()
+        .set_tick_taken(());
     builder
 }
 
