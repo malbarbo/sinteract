@@ -74,7 +74,7 @@ impl Assets {
         } else {
             (source.clone(), (width, height))
         };
-        Footprint::new(Some(size), png.len())?;
+        let footprint = Footprint::new(Some(size), png.len())?;
         // The student sees the image the way up that its EXIF gives.
         let (width, height) = if head.turned() {
             (height, width)
@@ -93,6 +93,7 @@ impl Assets {
                 asset,
                 source,
                 png,
+                footprint,
                 sent: false,
                 seen: self.frames,
             },
@@ -102,10 +103,18 @@ impl Assets {
 
     /// The id and the PNG of each image that `scene` draws and that has not
     /// gone out, which go out before the frame. A bitmap whose id did not
-    /// come from [`Assets::image`] sends nothing.
-    pub fn frame(&mut self, scene: &Scene) -> Vec<(u32, Arc<[u8]>)> {
+    /// come from [`Assets::image`] sends nothing. Returns
+    /// [`AssetError::Full`] and changes nothing if the images of `scene`
+    /// go over the limits of a room, since the server would lose one of
+    /// them each frame.
+    pub fn frame(&mut self, scene: &Scene) -> Result<Vec<Upload>, AssetError> {
+        let ids = bitmap_ids(scene);
+        let mut load = Load::default();
+        for entry in ids.iter().filter_map(|id| self.images.get(id)) {
+            load = load.with(entry.footprint)?;
+        }
         let mut send = Vec::new();
-        for id in bitmap_ids(scene) {
+        for id in ids {
             if let Some(entry) = self.images.get_mut(&id).filter(|e| !e.sent) {
                 entry.sent = true;
                 send.push((id, entry.png.clone()));
@@ -123,7 +132,7 @@ impl Assets {
             self.remove(id);
         }
         self.frames += 1;
-        send
+        Ok(send)
     }
 
     /// Say that the server lost the image `id`. The image gets a new id the
@@ -138,6 +147,9 @@ impl Assets {
         }
     }
 }
+
+/// The id and the PNG of an image that goes out before a frame.
+pub type Upload = (u32, Arc<[u8]>);
 
 /// An image of [`Assets`], with its id and the size of the image from the
 /// program. A shrunk image keeps its size, since a [`Bitmap`] places the
@@ -666,6 +678,7 @@ struct Entry {
     source: Arc<[u8]>,
     /// The PNG that goes out, which is `source` unless it shrank.
     png: Arc<[u8]>,
+    footprint: Footprint,
     /// Whether the image went out, and the server has not lost it since.
     sent: bool,
     /// The count of frames at the last call of [`Assets::image`] for it.
@@ -783,7 +796,7 @@ mod tests {
         scene
     }
 
-    fn sent(send: &[(u32, Arc<[u8]>)]) -> Vec<u32> {
+    fn sent(send: &[Upload]) -> Vec<u32> {
         send.iter().map(|(id, _)| *id).collect()
     }
 
@@ -798,36 +811,36 @@ mod tests {
         assert_eq!(id(&mut assets, &png_head(4, 4)), a);
         let b = id(&mut assets, &png_head(5, 5));
         assert_ne!(a, b);
-        let send = assets.frame(&drawing(&[a, b]));
+        let send = assets.frame(&drawing(&[a, b])).unwrap();
         assert_eq!(sent(&send), [a, b]);
         assert_eq!(&*send[0].1, &png_head(4, 4)[..]);
         // An image that no frame draws for a while keeps its id.
-        assert!(assets.frame(&drawing(&[])).is_empty());
-        assert!(assets.frame(&drawing(&[])).is_empty());
+        assert!(assets.frame(&drawing(&[])).unwrap().is_empty());
+        assert!(assets.frame(&drawing(&[])).unwrap().is_empty());
         assert_eq!(id(&mut assets, &png_head(4, 4)), a);
-        assert!(assets.frame(&drawing(&[a, b])).is_empty());
+        assert!(assets.frame(&drawing(&[a, b])).unwrap().is_empty());
     }
 
     #[test]
     fn a_lost_image_gets_a_new_id_and_goes_out_again() {
         let mut assets = Assets::new();
         let a = id(&mut assets, &png_head(4, 4));
-        assets.frame(&drawing(&[a]));
+        assets.frame(&drawing(&[a])).unwrap();
         assets.lost(a);
         assets.lost(99);
         let again = id(&mut assets, &png_head(4, 4));
         assert_ne!(again, a);
-        assert_eq!(sent(&assets.frame(&drawing(&[a, again]))), [again]);
+        assert_eq!(sent(&assets.frame(&drawing(&[a, again])).unwrap()), [again]);
     }
 
     #[test]
     fn an_image_that_did_not_go_out_is_gone_after_two_frames() {
         let mut assets = Assets::new();
         let a = id(&mut assets, &png_head(4, 4));
-        assets.frame(&drawing(&[]));
+        assets.frame(&drawing(&[])).unwrap();
         assert_eq!(id(&mut assets, &png_head(4, 4)), a);
-        assets.frame(&drawing(&[]));
-        assets.frame(&drawing(&[]));
+        assets.frame(&drawing(&[])).unwrap();
+        assets.frame(&drawing(&[])).unwrap();
         assert_ne!(id(&mut assets, &png_head(4, 4)), a);
     }
 
@@ -915,9 +928,22 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_whose_images_go_over_the_limits_is_an_error_and_changes_nothing() {
+        let mut assets = Assets::new();
+        let ids: Vec<u32> = (0..9)
+            .map(|k| id(&mut assets, &png_head(2048, 2048 - k)))
+            .collect();
+        assert!(matches!(
+            assets.frame(&drawing(&ids)),
+            Err(AssetError::Full { .. })
+        ));
+        assert_eq!(sent(&assets.frame(&drawing(&ids[..8])).unwrap()), ids[..8]);
+    }
+
+    #[test]
     fn a_bitmap_of_an_unknown_id_sends_nothing() {
         let mut assets = Assets::new();
-        assert!(assets.frame(&drawing(&[42])).is_empty());
+        assert!(assets.frame(&drawing(&[42])).unwrap().is_empty());
     }
 
     /// The footprint of the largest image, eight of which fill a room.
@@ -994,7 +1020,7 @@ mod tests {
     fn round_trip(assets: &mut Assets, cache: &mut Cache, scene: &Scene) -> (Vec<u32>, Vec<u32>) {
         let mut sent = Vec::new();
         let mut lost = Vec::new();
-        for (id, blob) in assets.frame(scene) {
+        for (id, blob) in assets.frame(scene).unwrap() {
             sent.push(id);
             let footprint = Footprint::of(&blob).unwrap();
             for gone in cache.asset(id, footprint).unwrap() {

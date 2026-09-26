@@ -134,7 +134,14 @@ fn run_local(mut game: Game) -> ExitCode {
                     }
                 };
                 let scene = game.scene(paddle);
-                for (id, png) in assets.frame(&scene) {
+                let send = match assets.frame(&scene) {
+                    Ok(send) => send,
+                    Err(e) => {
+                        eprintln!("engine: {e}");
+                        break;
+                    }
+                };
+                for (id, png) in send {
                     if let Err(e) = fr.push_asset(id, &png) {
                         eprintln!("engine: {e}");
                     }
@@ -165,7 +172,7 @@ fn run_local(mut game: Game) -> ExitCode {
 fn draw(game: &Game, assets: &mut Assets, to_view: &mut impl Write) -> io::Result<()> {
     let paddle = assets.image(&game.paddle_png).map_err(io::Error::other)?;
     let scene = game.scene(paddle);
-    for (id, png) in assets.frame(&scene) {
+    for (id, png) in assets.frame(&scene).map_err(io::Error::other)? {
         to_view::write_asset(to_view, id, &png)?;
     }
     to_view::write_frame(to_view, None, &scene)
