@@ -215,6 +215,10 @@ pub const MAX_VIEW_BYTES: usize = 64 * 1024;
 /// The cap on a nickname, in bytes of UTF-8.
 const MAX_NICKNAME_BYTES: usize = 64;
 
+/// The cap on the keys that a view holds down at once. A keyboard holds
+/// far fewer, and the cap bounds what a view grows in the core.
+const MAX_HELD_KEYS: usize = 32;
+
 /// A message for the engine is far below the cap of the framing, since the
 /// nicknames and the messages of the views have a cap.
 const UNDER_THE_CAP: &str = "a message for the engine is under the cap of the framing";
@@ -359,7 +363,8 @@ impl ServerCore {
     /// Pass `event` of the view of `conn` to the engine, in the game. The
     /// tick of the server paces the engine, so a tick of the view is
     /// dropped. The input
-    /// of an old connection is dropped.
+    /// of an old connection is dropped. The core drops a `Down` of a new
+    /// key when the view holds 32 keys, since it could not release it.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
         let Some(seat) = seat_of(&mut self.seats, conn) else {
             return;
@@ -367,7 +372,9 @@ impl ServerCore {
         if self.phase != Phase::Playing || matches!(event, InputEvent::Tick) {
             return;
         }
-        seat.held.track(event);
+        if !seat.held.track(event) {
+            return;
+        }
         to_engine::write_input(&mut self.to_engine, conn.player, event).expect(UNDER_THE_CAP);
     }
 
@@ -661,10 +668,17 @@ struct Held {
 }
 
 impl Held {
-    fn track(&mut self, event: &InputEvent) {
+    /// Returns `true` if `event` goes to the engine, `false` otherwise. A
+    /// `Down` of a new key past [`MAX_HELD_KEYS`] does not.
+    fn track(&mut self, event: &InputEvent) -> bool {
         match event {
             InputEvent::Key(k) => match k.kind {
-                KeyKind::Down if !self.keys.contains(&k.key) => self.keys.push(k.key.clone()),
+                KeyKind::Down if !self.keys.contains(&k.key) => {
+                    if self.keys.len() == MAX_HELD_KEYS {
+                        return false;
+                    }
+                    self.keys.push(k.key.clone());
+                }
                 KeyKind::Up => self.keys.retain(|key| *key != k.key),
                 KeyKind::Down | KeyKind::Press => {}
             },
@@ -673,6 +687,7 @@ impl Held {
             InputEvent::Pad(PadEvent::Up(b)) => self.pad.retain(|p| p != b),
             InputEvent::Pad(_) | InputEvent::Resize { .. } | InputEvent::Tick => {}
         }
+        true
     }
 
     /// An `Up` for each key and button, which leaves nothing held.
@@ -1377,6 +1392,25 @@ mod tests {
                 "1 pad up A".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn a_down_of_a_key_past_the_cap_does_not_go_to_the_engine() {
+        let (mut room, conns) = Room::playing(&["Ana"]);
+        for i in 0..=MAX_HELD_KEYS {
+            room.core
+                .input(conns[0], &key_as(KeyKind::Down, &format!("k{i}")));
+        }
+        assert_eq!(room.events().len(), MAX_HELD_KEYS);
+        room.core.input(conns[0], &key_as(KeyKind::Up, "k0"));
+        let last = format!("k{MAX_HELD_KEYS}");
+        room.core.input(conns[0], &key_as(KeyKind::Down, &last));
+        assert_eq!(
+            room.events(),
+            ["1 up k0".to_string(), format!("1 key {last}")]
+        );
+        room.core.leave(conns[0]);
+        assert_eq!(room.events().len(), MAX_HELD_KEYS);
     }
 
     #[test]
