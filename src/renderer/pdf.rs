@@ -120,11 +120,7 @@ impl Canvas for PdfRenderer {
                     .set_dash_pattern(dash.array().iter().copied(), dash.offset());
             }
         }
-        path.segments()
-            .outline(&mut PdfOutline::new(&mut self.content));
-        if style.closed {
-            self.content.close_path();
-        }
+        path.outline(&mut PdfOutline::new(&mut self.content));
         paint(&mut self.content, do_fill, do_stroke, style.fill_rule);
         // restore_state also resets the pattern color space.
         self.content.restore_state();

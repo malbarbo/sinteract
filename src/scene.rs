@@ -266,6 +266,8 @@ pub struct PathStyle {
     pub line_cap: LineCap,
     pub line_join: LineJoin,
     pub fill_rule: FillRule,
+    /// Closes every sub-path, so the stroke joins at the start of each one.
+    /// A fill closes them either way.
     pub closed: bool,
     pub miter_limit: f32,
     /// `None` is a solid stroke. Boxed because a dash is rare and a `Dash`

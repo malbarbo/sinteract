@@ -125,10 +125,7 @@ impl Canvas for SvgRenderer {
         }
 
         self.body.push_str("<path d=\"");
-        path.segments().outline(&mut PathData::new(&mut self.body));
-        if style.closed {
-            self.body.push_str(" Z");
-        }
+        path.outline(&mut PathData::new(&mut self.body));
         self.body.push('"');
 
         if do_fill {

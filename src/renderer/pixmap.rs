@@ -174,10 +174,7 @@ impl Canvas for PixmapRenderer {
             InEffect::Through(mask) => Some(mask),
         };
         let mut builder = std::mem::take(&mut self.builder);
-        path.segments().outline(&mut builder);
-        if style.closed {
-            builder.close();
-        }
+        path.outline(&mut builder);
         // A path with no segments builds nothing. The pdf and the svg test
         // the segments before they write, and here the builder answers.
         let Some(sk_path) = builder.finish() else {
@@ -1057,6 +1054,33 @@ mod tests {
         }
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 10, 10).3, 0);
+    }
+
+    #[test]
+    fn a_closed_path_joins_the_first_corner_of_every_sub_path() {
+        // Two squares, each stroked 6 wide from its top left corner. Only a
+        // miter join covers the pixel outside that corner.
+        let style = PathStyle {
+            stroke: Paint::rgba(0, 0, 255, 1.0),
+            stroke_width: 6.0,
+            closed: true,
+            ..PathStyle::default()
+        };
+        let mut scene = Scene::new(80.0, 40.0);
+        scene.add_path(
+            Path::builder(style, 10.0, 10.0)
+                .line_to(30.0, 10.0)
+                .line_to(30.0, 30.0)
+                .line_to(10.0, 30.0)
+                .move_to(50.0, 10.0)
+                .line_to(70.0, 10.0)
+                .line_to(70.0, 30.0)
+                .line_to(50.0, 30.0)
+                .build(),
+        );
+        let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
+        assert_eq!(pixel_rgba(&pm, 8, 8), (0, 0, 255, 255));
+        assert_eq!(pixel_rgba(&pm, 48, 8), (0, 0, 255, 255));
     }
 
     #[test]

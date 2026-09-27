@@ -125,6 +125,7 @@ struct PathStyle {
     lineCap     @3 :LineCap;
     lineJoin    @4 :LineJoin;
     fillRule    @5 :FillRule;
+    # Closes every sub-path, so the stroke joins at the start of each one.
     closed      @6 :Bool;
     # A miter limit below 1 is 1. The limit compares a ratio that is never
     # below 1, so the two say the same thing, and SVG rejects a smaller one.
