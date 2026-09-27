@@ -68,10 +68,7 @@ impl PixmapRenderer {
         let base = base(scale);
         let (out_w, out_h) = out_size(width, height, base.sx);
         Ok(Self {
-            pixmap: Pixmap::new(out_w, out_h).ok_or(AllocError {
-                width: out_w,
-                height: out_h,
-            })?,
+            pixmap: new_pixmap(out_w, out_h)?,
             base,
             clip_stack: Vec::new(),
             mask_pool: Vec::new(),
@@ -158,10 +155,7 @@ impl Canvas for PixmapRenderer {
         if (out_w, out_h) != (self.pixmap.width(), self.pixmap.height()) {
             // Masks are canvas-sized, so a resize invalidates every pooled one.
             self.mask_pool.clear();
-            self.pixmap = Pixmap::new(out_w, out_h).ok_or(AllocError {
-                width: out_w,
-                height: out_h,
-            })?;
+            self.pixmap = new_pixmap(out_w, out_h)?;
         }
         self.pixmap.fill(self.background);
         Ok(())
@@ -400,6 +394,21 @@ pub(crate) fn frame_px(width: f32, height: f32) -> (u32, u32) {
 fn base(scale: f32) -> Transform {
     let scale = scale.max(1e-3);
     Transform::from_scale(scale, scale)
+}
+
+/// The most pixels of a frame, 8192 by 8192. The pixmap and every clip
+/// mask have the size of the frame, and a failed allocation aborts the
+/// process, so a larger frame is an [`AllocError`].
+pub const MAX_FRAME_PIXELS: u64 = 1 << 26;
+
+/// A transparent pixmap of `width` by `height`, or an error for one of more
+/// than [`MAX_FRAME_PIXELS`].
+fn new_pixmap(width: u32, height: u32) -> Result<Pixmap, AllocError> {
+    let error = AllocError { width, height };
+    if u64::from(width) * u64::from(height) > MAX_FRAME_PIXELS {
+        return Err(error);
+    }
+    Pixmap::new(width, height).ok_or(error)
 }
 
 /// The size in output pixels of a frame at `scale`.
@@ -868,6 +877,22 @@ mod tests {
 
         assert_same_pixels(pm_atomic, pm_streamed);
         assert_eq!(pixel_rgba(pm_streamed, 5, 5), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn a_frame_of_too_many_pixels_is_an_alloc_error() {
+        let huge = Scene::new(1e6, 1e6);
+        let error = AllocError {
+            width: 1_000_000,
+            height: 1_000_000,
+        };
+        assert_eq!(render_to_pixmap(&huge, 1.0).err(), Some(error));
+        let mut r = PixmapRenderer::default();
+        assert_eq!(r.render(&huge).err(), Some(error));
+        // The last pixels of the limit still allocate.
+        let side = (MAX_FRAME_PIXELS as f32).sqrt();
+        assert!(render_to_pixmap(&Scene::new(side, side), 1.0).is_ok());
+        assert!(render_to_pixmap(&Scene::new(side + 1.0, side), 1.0).is_err());
     }
 
     #[test]
