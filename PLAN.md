@@ -59,11 +59,11 @@ view, então uma view não joga em nome de outra.
 Regras da sessão com servidor:
 
 - o servidor lança a engine, e a primeira mensagem dela é o `hello`, com
-  o mínimo e o máximo de jogadores do jogo. Se a primeira mensagem não é
-  um `hello`, a sala acaba. O lobby é do servidor, fora do protocolo, e
-  usa esses limites. No começo da partida, o servidor manda o `start` com
-  os apelidos dos jogadores, que são os mesmos até o fim. Só então as
-  views conectam e mandam eventos;
+  o mínimo e o máximo de jogadores do jogo, até 1024. Se a primeira
+  mensagem não é um `hello`, a sala acaba. O lobby é do servidor, fora do
+  protocolo, e usa esses limites. No começo da partida, o servidor manda o
+  `start` com os apelidos dos jogadores, que são os mesmos até o fim. Só
+  então as views conectam e mandam eventos;
 - o número de um jogador é o lugar dele no `start`, a partir de 1, e um
   `event` de player 0 é erro;
 - nenhuma mensagem encerra a partida. O fim do transporte encerra, o fim
