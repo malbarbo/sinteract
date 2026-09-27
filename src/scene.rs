@@ -723,6 +723,12 @@ impl Iterator for Segments<'_> {
 
 impl ExactSizeIterator for Segments<'_> {}
 
+/// The tolerance of the arc to cubic conversion.
+const ARC_TOLERANCE: f64 = 0.1;
+
+/// The most cubics that one turn of an arc becomes.
+const ARC_CUBICS_PER_TURN: f64 = 64.0;
+
 /// The geometry half of [`PathBuilder`] and [`ClipPathBuilder`], so the arc
 /// expansion is written once. It begins with a move to the start point, so
 /// there is always a current point. A move that no segment follows draws
@@ -797,7 +803,7 @@ impl GeometryBuilder {
         let Some(arc) = kurbo::Arc::from_svg_arc(&svg_arc) else {
             return self.line_to(x, y);
         };
-        for el in arc.append_iter(ARC_TOLERANCE) {
+        for el in arc.append_iter(arc_tolerance(arc.radii.x.max(arc.radii.y))) {
             if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
                 self.segs.push(Segment::Cubic {
                     c1x: p1.x as f32,
@@ -818,6 +824,15 @@ impl GeometryBuilder {
         end_segments(&mut segs);
         segs
     }
+}
+
+/// The tolerance of the arc to cubic conversion for an arc of `radius`.
+/// kurbo splits a turn into `(1.1163 * radius / tolerance)^(1/6)` cubics, so
+/// a fixed tolerance turns a radius of 1e38 into millions of them. The
+/// tolerance grows so a turn takes at most [`ARC_CUBICS_PER_TURN`] cubics,
+/// which only happens for a radius above 6e9, far past what a renderer draws.
+fn arc_tolerance(radius: f64) -> f64 {
+    ARC_TOLERANCE.max(1.1163 * radius / ARC_CUBICS_PER_TURN.powi(6))
 }
 
 /// Append `seg` to `segs`. A move replaces a move that ends `segs`.
@@ -914,9 +929,6 @@ pub struct Scene {
     height: f32,
     elements: Vec<Element>,
 }
-
-/// The tolerance of the arc to cubic conversion.
-const ARC_TOLERANCE: f64 = 0.1;
 
 impl Scene {
     /// A scene of `width` by `height`. A size that describes no frame, which
@@ -1346,6 +1358,22 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn an_arc_of_a_huge_radius_takes_a_bounded_number_of_cubics() {
+        // Nearly a whole turn, since the two ends are close on the circle.
+        let arc = |r: f32| {
+            Path::builder(PathStyle::default(), 0.0, 0.0)
+                .arc_to(r, r, 0.0, true, true, r * 1e-3, 0.0)
+                .build()
+                .segments()
+                .len()
+                - 1
+        };
+        assert!(arc(1e38) <= ARC_CUBICS_PER_TURN as usize, "{}", arc(1e38));
+        // A radius a renderer draws keeps the fixed tolerance.
+        assert_eq!(arc_tolerance(2.7e8), ARC_TOLERANCE);
     }
 
     #[test]
