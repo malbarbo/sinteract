@@ -188,8 +188,7 @@ fn print() -> Result<(), String> {
 }
 
 fn png() -> Result<(), String> {
-    let mut renderer =
-        PixmapRenderer::new(2.0, WIDTH, HEIGHT).ok_or("the pixmap does not allocate")?;
+    let mut renderer = PixmapRenderer::new(2.0, WIDTH, HEIGHT).map_err(|e| e.to_string())?;
     for (id, blob) in images() {
         renderer
             .assets_mut()

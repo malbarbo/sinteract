@@ -24,10 +24,10 @@ use crate::text::TextLayout;
 
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
 /// own pixels. See [`fit_scale`].
-pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Option<Pixmap> {
+pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Result<Pixmap, AllocError> {
     let mut renderer = PixmapRenderer::new(scale, scene.width(), scene.height())?;
-    renderer.render(scene).ok()?;
-    Some(renderer.into_pixmap())
+    renderer.render(scene)?;
+    Ok(renderer.into_pixmap())
 }
 
 /// The uniform scale that fits a `width × height` frame inside `target`
@@ -63,13 +63,15 @@ pub struct PixmapRenderer {
 
 impl PixmapRenderer {
     /// A surface for frames at `scale`, where 1.0 is the frame's own pixels,
-    /// sized first for a `width × height` frame. `None` when the surface
-    /// cannot be allocated.
-    pub fn new(scale: f32, width: f32, height: f32) -> Option<Self> {
+    /// sized first for a `width × height` frame.
+    pub fn new(scale: f32, width: f32, height: f32) -> Result<Self, AllocError> {
         let base = base(scale);
         let (out_w, out_h) = out_size(width, height, base.sx);
-        Some(Self {
-            pixmap: Pixmap::new(out_w, out_h)?,
+        Ok(Self {
+            pixmap: Pixmap::new(out_w, out_h).ok_or(AllocError {
+                width: out_w,
+                height: out_h,
+            })?,
             base,
             clip_stack: Vec::new(),
             mask_pool: Vec::new(),
