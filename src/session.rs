@@ -178,7 +178,12 @@ impl Session {
     /// Turn every whole message in `bytes` into events.
     fn take_messages(&mut self) {
         let mut at = 0;
-        while self.state != State::Ended {
+        loop {
+            let started = match self.state {
+                State::BeforeStart => false,
+                State::Started => true,
+                State::Ended => break,
+            };
             let bytes = self.bytes.get(at..).expect("at is inside the bytes");
             let (payload, rest) = match framing::split_frame(bytes, Side::Server) {
                 Ok(Some(frame)) => frame,
@@ -188,7 +193,7 @@ impl Session {
             let decoded = to_engine::decode(payload);
             at = self.bytes.len() - rest.len();
             match decoded {
-                Ok(Some(message)) => self.receive(message),
+                Ok(Some(message)) => self.receive(started, message),
                 Ok(None) => {}
                 Err(e) => self.push(SessionEvent::Error(SessionError::Payload(e))),
             }
@@ -199,25 +204,20 @@ impl Session {
         }
     }
 
-    /// Turn `message` into an event, by the state of the session.
-    fn receive(&mut self, message: Message) {
-        let event = match (self.state, message) {
-            (State::BeforeStart, Message::Start(roster)) => {
+    /// Turn `message` into an event, by whether the start came before it.
+    fn receive(&mut self, started: bool, message: Message) {
+        let event = match (started, message) {
+            (false, Message::Start(roster)) => {
                 self.state = State::Started;
                 SessionEvent::Start(roster)
             }
-            (State::BeforeStart, Message::Input { .. } | Message::Tick | Message::Lost(_)) => {
+            (false, Message::Input { .. } | Message::Tick | Message::Lost(_)) => {
                 SessionEvent::Error(SessionError::BeforeStart)
             }
-            (State::Started, Message::Start(_)) => SessionEvent::Error(SessionError::SecondStart),
-            (State::Started, Message::Tick) => SessionEvent::Tick,
-            (State::Started, Message::Lost(id)) => SessionEvent::Lost(id),
-            (State::Started, Message::Input { player, event }) => {
-                SessionEvent::Input { player, event }
-            }
-            (State::Ended, message) => {
-                unreachable!("take_messages stops at the end, not at {message:?}")
-            }
+            (true, Message::Start(_)) => SessionEvent::Error(SessionError::SecondStart),
+            (true, Message::Tick) => SessionEvent::Tick,
+            (true, Message::Lost(id)) => SessionEvent::Lost(id),
+            (true, Message::Input { player, event }) => SessionEvent::Input { player, event },
         };
         self.push(event);
     }
