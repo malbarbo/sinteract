@@ -612,7 +612,7 @@ impl Bitmap {
 /// values of `schema/scene.capnp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum SegmentKind {
+pub(crate) enum SegmentKind {
     Move = 0,
     Line = 1,
     Quad = 2,
@@ -621,7 +621,7 @@ pub enum SegmentKind {
 
 impl SegmentKind {
     /// Returns `None` for an unknown verb.
-    pub fn from_u8(v: u8) -> Option<Self> {
+    pub(crate) fn from_u8(v: u8) -> Option<Self> {
         match v {
             0 => Some(Self::Move),
             1 => Some(Self::Line),
@@ -632,7 +632,7 @@ impl SegmentKind {
     }
 
     /// How many floats the verb takes from the coord stream.
-    pub fn coords(self) -> usize {
+    pub(crate) fn coords(self) -> usize {
         match self {
             Self::Move | Self::Line => 2,
             Self::Quad => 4,
@@ -671,7 +671,7 @@ pub enum Segment {
 }
 
 impl Segment {
-    pub fn kind(self) -> SegmentKind {
+    pub(crate) fn kind(self) -> SegmentKind {
         match self {
             Self::Move { .. } => SegmentKind::Move,
             Self::Line { .. } => SegmentKind::Line,
