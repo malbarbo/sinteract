@@ -57,7 +57,9 @@ impl Assets {
     /// shrinks to fit, with the feature `render`, up to
     /// [`MAX_SHRINK_PIXELS`], and is an error past that or without the
     /// feature. The size of the asset is the size on the screen, after the
-    /// EXIF orientation of a JPEG.
+    /// EXIF orientation of a JPEG. A call hashes the whole blob, so a front
+    /// end whose images do not change keeps the [`Asset`] with the image
+    /// and calls this once for each.
     pub fn image(&mut self, blob: &[u8]) -> Result<Asset, AssetError> {
         if let Some(&id) = self.ids.get(blob) {
             let entry = self.images.get_mut(&id).expect("an id names an image");
