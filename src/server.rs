@@ -220,7 +220,7 @@ impl ServerCore {
     }
 
     /// The players that the game takes, from the hello of the engine, or
-    /// `None` before the hello.
+    /// `None` before the hello and after the start.
     pub fn players(&self) -> Option<PlayerRange> {
         match self.phase {
             Phase::Ready { takes, .. } => Some(takes),
