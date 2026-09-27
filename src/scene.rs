@@ -913,12 +913,11 @@ impl Element {
 
 /// The draw list a front end builds and a
 /// [`Renderer`](crate::renderer::Renderer) replays. [`Self::path`] returns a
-/// [`PathScope`] that commits its path on drop, and [`Self::clip`] returns a
-/// [`ClipScope`] that wraps the elements drawn while it lives into an
-/// [`Element::Clipped`] on drop, so a clip cannot be left open. A move that no
-/// segment follows draws nothing, so the builders drop it. A `PathScope` with
-/// no segment past its moves commits nothing, and [`PathBuilder::build`]
-/// returns a path with no segments.
+/// [`PathScope`] that commits its path on drop, and [`Self::clip`] wraps the
+/// elements that its closure draws into an [`Element::Clipped`], so a clip
+/// cannot be left open. A move that no segment follows draws nothing, so the
+/// builders drop it. A `PathScope` with no segment past its moves commits
+/// nothing, and [`PathBuilder::build`] returns a path with no segments.
 ///
 /// An arc is stored as cubics, so a renderer sees only move, line, quad and
 /// cubic.
@@ -987,17 +986,29 @@ impl Scene {
         }
     }
 
-    /// Begin a clip to a [`ClipPath`] or to a [`RotatedRect`]. The
-    /// [`ClipScope`] draws into this scene, and on drop it wraps the elements
-    /// added since into an [`Element::Clipped`]. A nested clip is a
-    /// [`ClipScope::clip`].
-    pub fn clip(&mut self, clip: impl Into<ClipPath>) -> ClipScope<'_> {
-        let mark = self.elements.len();
-        ClipScope {
-            scene: self,
-            clip: clip.into(),
-            mark,
+    /// Clip what `inside` draws to a [`ClipPath`] or to a [`RotatedRect`].
+    /// `inside` draws into an empty scene of this size, and its elements go
+    /// into an [`Element::Clipped`] here. Returns what `inside` returns, so a
+    /// fallible walk passes its `Result` out.
+    pub fn clip<T>(
+        &mut self,
+        clip: impl Into<ClipPath>,
+        inside: impl FnOnce(&mut Scene) -> T,
+    ) -> T {
+        let clip = clip.into();
+        let mut clipped = Scene {
+            width: self.width,
+            height: self.height,
+            elements: Vec::new(),
+        };
+        let result = inside(&mut clipped);
+        if clip.is_finite() {
+            self.elements.push(Element::Clipped {
+                clip,
+                elements: clipped.elements,
+            });
         }
+        result
     }
 
     pub fn add_text(&mut self, text: Text) {
@@ -1088,66 +1099,6 @@ impl Drop for PathScope<'_> {
                 style: std::mem::take(&mut self.builder.style),
                 segs,
             });
-        }
-    }
-}
-
-/// The clip under construction by [`Scene::clip`]. It draws into the scene
-/// with the methods of [`Scene`], and `mark` is where its elements begin. On
-/// drop it moves `elements[mark..]` into an [`Element::Clipped`] at `mark`. A
-/// nested scope has a later mark and drops first, so the tree is well formed.
-///
-/// The scope only appends to the scene, so the scene cannot be replaced
-/// while the clip is open:
-///
-/// ```compile_fail,E0614
-/// use sinteract::scene::{RotatedRect, Scene};
-/// let mut scene = Scene::new(10.0, 10.0);
-/// let mut clip = scene.clip(RotatedRect::default());
-/// *clip = Scene::new(10.0, 10.0);
-/// ```
-#[must_use = "ClipScope commits the clip on drop; bind it where the clip should end"]
-pub struct ClipScope<'a> {
-    scene: &'a mut Scene,
-    clip: ClipPath,
-    mark: usize,
-}
-
-impl ClipScope<'_> {
-    /// [`Scene::add_path`] inside the clip.
-    pub fn add_path(&mut self, path: Path) {
-        self.scene.add_path(path);
-    }
-
-    /// [`Scene::path`] inside the clip.
-    pub fn path(&mut self, style: PathStyle, x: f32, y: f32) -> PathScope<'_> {
-        self.scene.path(style, x, y)
-    }
-
-    /// [`Scene::clip`] inside the clip, which nests the two.
-    pub fn clip(&mut self, clip: impl Into<ClipPath>) -> ClipScope<'_> {
-        self.scene.clip(clip)
-    }
-
-    /// [`Scene::add_text`] inside the clip.
-    pub fn add_text(&mut self, text: Text) {
-        self.scene.add_text(text);
-    }
-
-    /// [`Scene::add_bitmap`] inside the clip.
-    pub fn add_bitmap(&mut self, bitmap: Bitmap) {
-        self.scene.add_bitmap(bitmap);
-    }
-}
-
-impl<'a> Drop for ClipScope<'a> {
-    fn drop(&mut self) {
-        let clip = std::mem::take(&mut self.clip);
-        let elements = self.scene.elements.split_off(self.mark);
-        if clip.is_finite() {
-            self.scene
-                .elements
-                .push(Element::Clipped { clip, elements });
         }
     }
 }
@@ -1474,14 +1425,16 @@ mod tests {
     fn clip_wraps_only_elements_drawn_inside() {
         let mut scene = Scene::new(20.0, 20.0);
         scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
-        {
-            let mut c = scene.clip(ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build());
-            c.add_path(
-                Path::builder(PathStyle::default(), 1.0, 1.0)
-                    .line_to(2.0, 2.0)
-                    .build(),
-            );
-        }
+        scene.clip(
+            ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build(),
+            |c| {
+                c.add_path(
+                    Path::builder(PathStyle::default(), 1.0, 1.0)
+                        .line_to(2.0, 2.0)
+                        .build(),
+                );
+            },
+        );
         scene.add_path(Path::builder(PathStyle::default(), 2.0, 2.0).build());
 
         assert!(matches!(scene.elements[0], Element::Path(_)));
@@ -1504,16 +1457,35 @@ mod tests {
     }
 
     #[test]
+    fn clip_returns_what_its_closure_returns() {
+        let mut scene = Scene::new(20.0, 20.0);
+        let failed: Result<(), &str> = scene.clip(a_unit_rect(0.0), |clip| {
+            clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+            Err("stop")
+        });
+        assert_eq!(failed, Err("stop"));
+        // The elements drawn before the error stay in the clip.
+        let [Element::Clipped { elements, .. }] = &scene.elements[..] else {
+            panic!("expected one clip, got {:?}", scene.elements);
+        };
+        assert_eq!(elements.len(), 1);
+    }
+
+    #[test]
     fn nested_clips_wrap_inside_out() {
         let mut scene = Scene::new(20.0, 20.0);
-        {
-            let mut outer = scene.clip(ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build());
-            outer.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
-            {
-                let mut inner = outer.clip(ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build());
-                inner.add_path(Path::builder(PathStyle::default(), 2.0, 2.0).build());
-            }
-        }
+        scene.clip(
+            ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build(),
+            |outer| {
+                outer.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+                outer.clip(
+                    ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build(),
+                    |inner| {
+                        inner.add_path(Path::builder(PathStyle::default(), 2.0, 2.0).build());
+                    },
+                );
+            },
+        );
         // scene = [ Clipped{ outer, [ Path(1,1), Clipped{ inner, [ Path(2,2) ] } ] } ]
         assert_eq!(scene.elements.len(), 1);
         let Element::Clipped { elements, .. } = &scene.elements[0] else {
@@ -1704,9 +1676,7 @@ mod tests {
             let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
                 .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
                 .build();
-            scene
-                .clip(clip)
-                .add_path(a_line(PathStyle::default(), 5.0, 5.0));
+            scene.clip(clip, |c| c.add_path(a_line(PathStyle::default(), 5.0, 5.0)));
         }
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
     }
@@ -1714,21 +1684,19 @@ mod tests {
     #[test]
     fn a_clip_with_a_non_finite_float_drops_what_it_holds() {
         let mut scene = Scene::new(10.0, 10.0);
-        {
-            let mut clip = scene.clip(a_unit_rect(f32::NAN));
+        scene.clip(a_unit_rect(f32::NAN), |clip| {
             clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
-        }
+        });
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
     }
 
     #[test]
     fn a_non_finite_element_inside_a_clip_drops_alone() {
         let mut scene = Scene::new(10.0, 10.0);
-        {
-            let mut clip = scene.clip(a_unit_rect(0.0));
+        scene.clip(a_unit_rect(0.0), |clip| {
             clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
             clip.add_path(a_line(PathStyle::default(), f32::NAN, 5.0));
-        }
+        });
         let [Element::Clipped { elements, .. }] = &scene.elements[..] else {
             panic!("expected one clip, got {:?}", scene.elements);
         };

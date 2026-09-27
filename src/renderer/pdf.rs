@@ -845,10 +845,9 @@ mod tests {
     #[test]
     fn an_empty_clip_clips_to_an_empty_rectangle() {
         let mut scene = Scene::new(20.0, 20.0);
-        {
-            let mut empty = scene.clip(ClipPath::default());
+        scene.clip(ClipPath::default(), |empty| {
             empty.add_path(rect(red_fill(1.0), 0.0, 0.0, 20.0, 20.0));
-        }
+        });
         let s = pdf_text(&scene);
         assert!(s.contains("q\n0 0 0 0 re\nW\nn\n"), "{s}");
     }

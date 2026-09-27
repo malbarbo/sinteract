@@ -816,9 +816,11 @@ mod tests {
             .line_to(5.0, 0.0)
             .line_to(5.0, 5.0)
             .build();
-        scene.clip(clip).add_bitmap(Bitmap {
-            id: *last,
-            ..Bitmap::default()
+        scene.clip(clip, |c| {
+            c.add_bitmap(Bitmap {
+                id: *last,
+                ..Bitmap::default()
+            });
         });
         scene
     }

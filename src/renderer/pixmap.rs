@@ -922,9 +922,9 @@ mod tests {
     fn a_clip_after_two_replaced_pixmaps_of_other_sizes_covers_the_frame() {
         let clipped = |side: f32| {
             let mut scene = Scene::new(side, side);
-            let mut clip_scope = scene.clip(square_clip(0.0, 0.0, side));
-            clip_scope.add_path(rect(solid(0, 0, 255), 0.0, 0.0, side, side));
-            drop(clip_scope);
+            scene.clip(square_clip(0.0, 0.0, side), |clip| {
+                clip.add_path(rect(solid(0, 0, 255), 0.0, 0.0, side, side));
+            });
             scene
         };
         let mut r = PixmapRenderer::default();
@@ -980,10 +980,9 @@ mod tests {
     #[test]
     fn render_stream_handles_nested_clip() {
         let mut scene = Scene::new(20.0, 20.0);
-        {
-            let mut clip_scope = scene.clip(square_clip(0.0, 0.0, 10.0));
-            clip_scope.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
-        }
+        scene.clip(square_clip(0.0, 0.0, 10.0), |clip| {
+            clip.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
+        });
         let bytes = crate::wire::scene::encode(&scene);
 
         let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
@@ -1018,10 +1017,9 @@ mod tests {
         use crate::wire::{tag_of, with_unknown_scene_value};
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        {
-            let mut clip_scope = scene.clip(square_clip(0.0, 0.0, 10.0));
-            clip_scope.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        }
+        scene.clip(square_clip(0.0, 0.0, 10.0), |clip| {
+            clip.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
+        });
         scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
         let bytes = with_unknown_scene_value(&encode(&scene), |m| {
             let Ok(Which::Path(p)) = m.get_elements().unwrap().get(0).which() else {
@@ -1046,12 +1044,12 @@ mod tests {
     fn an_empty_clip_hides_what_it_holds() {
         // A clip inside it hides what it holds too.
         let mut scene = Scene::new(20.0, 20.0);
-        {
-            let mut empty = scene.clip(ClipPath::default());
+        scene.clip(ClipPath::default(), |empty| {
             empty.add_path(rect(solid(0, 255, 0), 0.0, 0.0, 20.0, 20.0));
-            let mut inner = empty.clip(square_clip(0.0, 0.0, 20.0));
-            inner.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
-        }
+            empty.clip(square_clip(0.0, 0.0, 20.0), |inner| {
+                inner.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
+            });
+        });
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 10, 10).3, 0);
     }
@@ -1110,8 +1108,9 @@ mod tests {
                 .line_to(50.0, -apex)
                 .line_to(90.0, 90.0)
                 .build();
-            let mut inner = scene.clip(clip);
-            inner.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0));
+            scene.clip(clip, |inner| {
+                inner.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0));
+            });
         } else {
             scene
                 .path(solid(0, 0, 255), 10.0, 10.0)
@@ -1184,10 +1183,9 @@ mod tests {
             ..solid(255, 0, 0)
         };
         scene.add_path(rect(red, 0.0, 0.0, 10.0, 10.0));
-        {
-            let mut clip_scope = scene.clip(square_clip(0.0, 0.0, mark));
-            clip_scope.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        }
+        scene.clip(square_clip(0.0, 0.0, mark), |clip| {
+            clip.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
+        });
         scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
         let bytes = crate::wire::with_float(&crate::wire::scene::encode(&scene), mark, f32::NAN);
 

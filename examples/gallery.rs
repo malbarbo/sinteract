@@ -536,26 +536,27 @@ fn rotated_clip(s: &mut Scene, x: f32, y: f32, t: f32) {
         h: 64.0,
         angle_deg: 20.0 + t * 30.0,
     };
-    let mut clip = s.clip(window);
-    for i in 0..12 {
-        let color = if i % 2 == 0 {
-            rgb(40, 60, 160)
-        } else {
-            rgb(240, 200, 60)
+    s.clip(window, |clip| {
+        for i in 0..12 {
+            let color = if i % 2 == 0 {
+                rgb(40, 60, 160)
+            } else {
+                rgb(240, 200, 60)
+            };
+            clip.add_path(rect(fill(color), x + i as f32 * 18.0, y, 18.0, 125.0));
+        }
+        // A text and a bitmap cross the edge of the clip.
+        let spec = TextSpec {
+            size: 34.0,
+            weight: 700,
+            text: "clipped".into(),
+            ..TextSpec::default()
         };
-        clip.add_path(rect(fill(color), x + i as f32 * 18.0, y, 18.0, 125.0));
-    }
-    // A text and a bitmap cross the edge of the clip.
-    let spec = TextSpec {
-        size: 34.0,
-        weight: 700,
-        text: "clipped".into(),
-        ..TextSpec::default()
-    };
-    if let Some(node) = text(spec, x + 100.0, y + 45.0, 0.0, opaque(230, 50, 50)) {
-        clip.add_text(node);
-    }
-    clip.add_bitmap(badge(x + 135.0, y + 85.0, 2.0, 0.0));
+        if let Some(node) = text(spec, x + 100.0, y + 45.0, 0.0, opaque(230, 50, 50)) {
+            clip.add_text(node);
+        }
+        clip.add_bitmap(badge(x + 135.0, y + 85.0, 2.0, 0.0));
+    });
 }
 
 fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -568,34 +569,36 @@ fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
         .arc_to(30.0, 30.0, 0.0, false, true, cx + 30.0, cy)
         .arc_to(30.0, 30.0, 0.0, false, true, cx - 30.0, cy)
         .build();
-    let mut outer = s.clip(ring);
-    let sweep = Paint::linear(
-        x + 40.0,
-        y,
-        x + 160.0,
-        y + 125.0,
-        stops(&[(0.0, (250, 120, 40)), (1.0, (120, 30, 160))]),
-    );
-    outer.add_path(rect(fill(sweep), x, y, CELL_W, 125.0));
-    // The right half of the ring, inside the ring.
-    let half = RotatedRect {
-        cx: cx + 40.0,
-        cy,
-        w: 80.0,
-        h: 130.0,
-        angle_deg: 0.0,
-    };
-    let mut inner = outer.clip(half);
-    for i in 0..10 {
-        let top = y + i as f32 * 13.0;
-        inner.add_path(rect(
-            fill(Paint::rgba(255, 255, 255, 0.7)),
-            cx,
-            top,
-            80.0,
-            5.0,
-        ));
-    }
+    s.clip(ring, |outer| {
+        let sweep = Paint::linear(
+            x + 40.0,
+            y,
+            x + 160.0,
+            y + 125.0,
+            stops(&[(0.0, (250, 120, 40)), (1.0, (120, 30, 160))]),
+        );
+        outer.add_path(rect(fill(sweep), x, y, CELL_W, 125.0));
+        // The right half of the ring, inside the ring.
+        let half = RotatedRect {
+            cx: cx + 40.0,
+            cy,
+            w: 80.0,
+            h: 130.0,
+            angle_deg: 0.0,
+        };
+        outer.clip(half, |inner| {
+            for i in 0..10 {
+                let top = y + i as f32 * 13.0;
+                inner.add_path(rect(
+                    fill(Paint::rgba(255, 255, 255, 0.7)),
+                    cx,
+                    top,
+                    80.0,
+                    5.0,
+                ));
+            }
+        });
+    });
 }
 
 fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {

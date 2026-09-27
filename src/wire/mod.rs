@@ -299,51 +299,54 @@ mod tests {
             p.quad_to(15.0, 5.0, 20.0, 10.0);
             p.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
         }
-        {
-            let mut clip = scene.clip(RotatedRect {
+        scene.clip(
+            RotatedRect {
                 cx: 50.0,
                 cy: 50.0,
                 w: 30.0,
                 h: 20.0,
                 angle_deg: 15.0,
-            });
-            let text = TextSpec {
-                size: 12.0,
-                family: "Liberation Sans".into(),
-                weight: 700,
-                style: FontStyle::Italic,
-                text: "Olá".into(),
-            }
-            .fit(RotatedRect {
-                cx: 60.0,
-                cy: 30.0,
-                w: 50.0,
-                h: 14.0,
-                angle_deg: 0.0,
-            })
-            .expect("text fits");
-            clip.add_text(Text {
-                fill: Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 1.0,
-                },
-                underline: true,
-                ..text
-            });
-            // An asset mirrored horizontally, rotated 90°, centred at (70, 40).
-            clip.add_bitmap(Bitmap::fit(
-                7,
-                RotatedRect {
-                    cx: 70.0,
-                    cy: 40.0,
-                    w: -32.0,
-                    h: 32.0,
-                    angle_deg: 90.0,
-                },
-            ));
-        }
+            },
+            |clip| {
+                let text = TextSpec {
+                    size: 12.0,
+                    family: "Liberation Sans".into(),
+                    weight: 700,
+                    style: FontStyle::Italic,
+                    text: "Olá".into(),
+                }
+                .fit(RotatedRect {
+                    cx: 60.0,
+                    cy: 30.0,
+                    w: 50.0,
+                    h: 14.0,
+                    angle_deg: 0.0,
+                })
+                .expect("text fits");
+                clip.add_text(Text {
+                    fill: Rgba {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 1.0,
+                    },
+                    underline: true,
+                    ..text
+                });
+                // An asset mirrored horizontally, rotated 90°, centred at
+                // (70, 40).
+                clip.add_bitmap(Bitmap::fit(
+                    7,
+                    RotatedRect {
+                        cx: 70.0,
+                        cy: 40.0,
+                        w: -32.0,
+                        h: 32.0,
+                        angle_deg: 90.0,
+                    },
+                ));
+            },
+        );
         scene
     }
 
@@ -620,9 +623,11 @@ mod tests {
             .line_to(5.0, 0.0)
             .line_to(5.0, 5.0)
             .build();
-        scene.clip(clip).add_bitmap(Bitmap {
-            id: 9,
-            ..Bitmap::default()
+        scene.clip(clip, |c| {
+            c.add_bitmap(Bitmap {
+                id: 9,
+                ..Bitmap::default()
+            });
         });
         scene.add_bitmap(Bitmap {
             id: 3,
@@ -1038,26 +1043,28 @@ mod tests {
         // and the bitmap become arms of a newer schema.
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
-        {
-            let mut clip = scene.clip(RotatedRect {
+        scene.clip(
+            RotatedRect {
                 cx: 5.0,
                 cy: 5.0,
                 w: 10.0,
                 h: 10.0,
                 angle_deg: 0.0,
-            });
-            clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
-            clip.add_bitmap(Bitmap::fit(
-                7,
-                RotatedRect {
-                    cx: 5.0,
-                    cy: 5.0,
-                    w: 4.0,
-                    h: 4.0,
-                    angle_deg: 0.0,
-                },
-            ));
-        }
+            },
+            |clip| {
+                clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+                clip.add_bitmap(Bitmap::fit(
+                    7,
+                    RotatedRect {
+                        cx: 5.0,
+                        cy: 5.0,
+                        w: 4.0,
+                        h: 4.0,
+                        angle_deg: 0.0,
+                    },
+                ));
+            },
+        );
         let bytes = with_unknown_engine_value(&encode_frame(&scene), |m| {
             tag_of(frame_of(m).get_elements().unwrap().get(0))
         });
@@ -1129,15 +1136,16 @@ mod tests {
             let mut p = scene.path(PathStyle::default(), 0.0, 0.0);
             p.line_to(1.0, 1.0);
         }
-        scene
-            .clip(RotatedRect {
-                cx: 5.0,
-                cy: 5.0,
-                w: 10.0,
-                h: 10.0,
-                angle_deg: 0.0,
-            })
-            .add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+        let rect = RotatedRect {
+            cx: 5.0,
+            cy: 5.0,
+            w: 10.0,
+            h: 10.0,
+            angle_deg: 0.0,
+        };
+        scene.clip(rect, |clip| {
+            clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+        });
         scene.add_path(
             Path::builder(PathStyle::default(), 9.0, 9.0)
                 .line_to(10.0, 10.0)
@@ -1550,17 +1558,17 @@ mod tests {
         // Built from a path, so the walk sees a quadratic and the even-odd
         // rule.
         let mut scene = Scene::new(50.0, 50.0);
-        {
-            let mut clip = scene.clip(
-                ClipPath::builder(FillRule::EvenOdd, 0.0, 0.0)
-                    .line_to(30.0, 0.0)
-                    .quad_to(40.0, 25.0, 30.0, 40.0)
-                    .line_to(0.0, 40.0)
-                    .build(),
-            );
-            let mut p = clip.path(PathStyle::default(), 0.0, 0.0);
-            p.line_to(10.0, 10.0);
-        }
+        scene.clip(
+            ClipPath::builder(FillRule::EvenOdd, 0.0, 0.0)
+                .line_to(30.0, 0.0)
+                .quad_to(40.0, 25.0, 30.0, 40.0)
+                .line_to(0.0, 40.0)
+                .build(),
+            |clip| {
+                let mut p = clip.path(PathStyle::default(), 0.0, 0.0);
+                p.line_to(10.0, 10.0);
+            },
+        );
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Message::Frame { scene: d, .. } => {
@@ -1623,27 +1631,33 @@ mod tests {
     #[test]
     fn nested_clips_round_trip() {
         let mut scene = Scene::new(100.0, 100.0);
-        {
-            let mut outer = scene.clip(RotatedRect {
+        scene.clip(
+            RotatedRect {
                 cx: 50.0,
                 cy: 50.0,
                 w: 80.0,
                 h: 80.0,
                 angle_deg: 0.0,
-            });
-            let mut p = outer.path(PathStyle::default(), 0.0, 0.0);
-            p.line_to(100.0, 100.0);
-            drop(p);
-            let mut inner = outer.clip(RotatedRect {
-                cx: 50.0,
-                cy: 50.0,
-                w: 40.0,
-                h: 40.0,
-                angle_deg: 0.0,
-            });
-            let mut p = inner.path(PathStyle::default(), 10.0, 10.0);
-            p.line_to(20.0, 20.0);
-        }
+            },
+            |outer| {
+                let mut p = outer.path(PathStyle::default(), 0.0, 0.0);
+                p.line_to(100.0, 100.0);
+                drop(p);
+                outer.clip(
+                    RotatedRect {
+                        cx: 50.0,
+                        cy: 50.0,
+                        w: 40.0,
+                        h: 40.0,
+                        angle_deg: 0.0,
+                    },
+                    |inner| {
+                        let mut p = inner.path(PathStyle::default(), 10.0, 10.0);
+                        p.line_to(20.0, 20.0);
+                    },
+                );
+            },
+        );
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Message::Frame { scene: d, .. } => {
@@ -1714,18 +1728,14 @@ mod tests {
             },
             1.0,
         ));
-        scene
-            .clip(
-                ClipPath::builder(FillRule::NonZero, mark, 0.0)
-                    .line_to(1.0, 1.0)
-                    .build(),
-            )
-            .add_path(line(PathStyle::default(), 1.0));
-        {
-            let mut clip = scene.clip(rect);
+        let clip = ClipPath::builder(FillRule::NonZero, mark, 0.0)
+            .line_to(1.0, 1.0)
+            .build();
+        scene.clip(clip, |clip| clip.add_path(line(PathStyle::default(), 1.0)));
+        scene.clip(rect, |clip| {
             clip.add_path(line(PathStyle::default(), mark));
             clip.add_path(line(PathStyle::default(), 1.0));
-        }
+        });
         scene.add_text(Text {
             stroke_width: mark,
             ..Text::default()

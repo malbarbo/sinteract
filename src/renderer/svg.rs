@@ -607,11 +607,11 @@ mod tests {
                 .build()
         };
         let mut scene = Scene::new(20.0, 20.0);
-        {
-            let mut outer = scene.clip(square(FillRule::EvenOdd));
-            let mut inner = outer.clip(square(FillRule::NonZero));
-            inner.add_path(rect(red_fill(1.0), 0.0, 0.0, 20.0, 20.0));
-        }
+        scene.clip(square(FillRule::EvenOdd), |outer| {
+            outer.clip(square(FillRule::NonZero), |inner| {
+                inner.add_path(rect(red_fill(1.0), 0.0, 0.0, 20.0, 20.0));
+            });
+        });
         let svg = render_to_svg(&scene);
         assert!(
             svg.contains(
@@ -673,9 +673,10 @@ mod tests {
                 .line_to(20.0, 0.0)
                 .line_to(20.0, 20.0)
                 .build();
-            let mut clipped = scene.clip(clip);
-            clipped.add_path(rect(red_fill(0.5), 0.0, 0.0, 40.0, 40.0));
-            clipped.add_text(text("Hi"));
+            scene.clip(clip, |clipped| {
+                clipped.add_path(rect(red_fill(0.5), 0.0, 0.0, 40.0, 40.0));
+                clipped.add_text(text("Hi"));
+            });
         }
         let bytes = crate::wire::scene::encode(&scene);
         let mut r = SvgRenderer::new();
@@ -706,13 +707,14 @@ mod tests {
                 .line_to(20.0, 0.0)
                 .line_to(20.0, 20.0)
                 .build();
-            let mut clipped = scene.clip(clip);
-            let style = PathStyle {
-                fill: Paint::radial(20.0, 20.0, 10.0, stops),
-                ..PathStyle::default()
-            };
-            clipped.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));
-            clipped.add_text(text("a"));
+            scene.clip(clip, |clipped| {
+                let style = PathStyle {
+                    fill: Paint::radial(20.0, 20.0, 10.0, stops),
+                    ..PathStyle::default()
+                };
+                clipped.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));
+                clipped.add_text(text("a"));
+            });
         }
         let mut r = SvgRenderer::with_id_prefix("fig1-").expect("a valid prefix");
         let svg = r.render(&scene).expect("render");
