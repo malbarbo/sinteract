@@ -227,7 +227,6 @@ Falta:
 
 ## Pontos abertos
 
-- O caminho do SVG no servidor precisa de `to_view::decode` público.
 - O que sobrou do item A da revisão: `seq` e `Error`.
 - Um asset vai para todos os jogadores, então um jogador vê no DevTools a
   imagem que só outro jogador desenha. O asset pode ganhar um `player` no
