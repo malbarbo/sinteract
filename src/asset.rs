@@ -214,21 +214,20 @@ impl<T> Cache<T> {
         self.live.get(&id).map(|live| &live.value)
     }
 
-    /// Keep the asset `id`, which is not live, with `value`, and return the
-    /// ids of the assets that it drops to fit, the ones that the frames
-    /// used longest ago first. Returns [`AssetError::Full`] and changes
-    /// nothing if the asset does not fit even without every asset that may
-    /// go.
+    /// Keep the asset `id` with `value`, and return the ids of the assets
+    /// that it drops to fit, the ones that the frames used longest ago
+    /// first. Returns [`AssetError::LiveId`] if `id` is live, and
+    /// [`AssetError::Full`] if the asset does not fit even without every
+    /// asset that may go. An error changes nothing.
     pub fn asset(
         &mut self,
         id: u32,
         footprint: Footprint,
         value: T,
     ) -> Result<Vec<u32>, AssetError> {
-        assert!(
-            !self.contains(id),
-            "Cache::asset takes an id that is not live"
-        );
+        if self.contains(id) {
+            return Err(AssetError::LiveId);
+        }
         let mut may_go: Vec<(u64, u32)> = self
             .live
             .iter()
@@ -352,7 +351,7 @@ impl Load {
     }
 }
 
-/// Why an asset breaks the limits.
+/// Why an image cannot be an asset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssetError {
     /// The blob does not start as a PNG, a JPEG, a GIF or a WebP does,
@@ -363,6 +362,8 @@ pub enum AssetError {
     /// The live assets of the room would hold these many pixels and bytes,
     /// over [`MAX_LIVE_PIXELS`] or [`MAX_LIVE_BYTES`].
     Full { pixels: u64, bytes: u64 },
+    /// The id already names a live asset of the room.
+    LiveId,
 }
 
 impl fmt::Display for AssetError {
@@ -380,6 +381,7 @@ impl fmt::Display for AssetError {
                 "the images of the room would take {pixels} pixels and {bytes} bytes, \
                  over {MAX_LIVE_PIXELS} pixels or {MAX_LIVE_BYTES} bytes"
             ),
+            AssetError::LiveId => f.write_str("the id already names a live asset"),
         }
     }
 }
@@ -1024,6 +1026,14 @@ mod tests {
         assert!(!cache.contains(11));
         cache.frame(ids(&[8]));
         assert_eq!(cache.asset(11, largest(), ()), Ok(vec![2]));
+    }
+
+    #[test]
+    fn an_asset_of_a_live_id_is_an_error_and_changes_nothing() {
+        let mut cache = Cache::new();
+        assert_eq!(cache.asset(1, largest(), 'a'), Ok(vec![]));
+        assert_eq!(cache.asset(1, largest(), 'b'), Err(AssetError::LiveId));
+        assert_eq!(cache.get(1), Some(&'a'));
     }
 
     #[test]

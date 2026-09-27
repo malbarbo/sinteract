@@ -104,12 +104,10 @@ pub enum EngineError {
     NoHello,
     /// A hello came after the first one. The core drops it and goes on.
     SecondHello,
-    /// The asset `id` is not a PNG or is larger than an image can be. The
+    /// The asset `id` is not an image that a view decodes, is larger than
+    /// an image can be, or came for an id that names a live asset. The
     /// core drops it and goes on.
     Asset { id: u32, error: AssetError },
-    /// An asset came for an id that names a live asset. The core drops it
-    /// and goes on.
-    LiveId(u32),
     /// A forget came from the engine, which never sends one. The core drops
     /// it and goes on.
     Forget(u32),
@@ -151,7 +149,6 @@ impl std::fmt::Display for EngineError {
             EngineError::NoHello => f.write_str("the first message is not a hello"),
             EngineError::SecondHello => f.write_str("a hello came after the first one"),
             EngineError::Asset { id, error } => write!(f, "asset {id}: {error}"),
-            EngineError::LiveId(id) => write!(f, "an asset came for the live id {id}"),
             EngineError::Forget(id) => write!(f, "a forget of {id} came from the engine"),
         }
     }
@@ -163,10 +160,7 @@ impl std::error::Error for EngineError {
             EngineError::Payload(e) => Some(e),
             EngineError::Broken(e) => Some(e),
             EngineError::Asset { error, .. } => Some(error),
-            EngineError::NoHello
-            | EngineError::SecondHello
-            | EngineError::LiveId(_)
-            | EngineError::Forget(_) => None,
+            EngineError::NoHello | EngineError::SecondHello | EngineError::Forget(_) => None,
         }
     }
 }
@@ -530,18 +524,16 @@ impl ServerCore {
         bytes: usize,
         payload: Arc<[u8]>,
     ) -> Result<(), EngineError> {
-        if self.cache.contains(id) {
-            return Err(EngineError::LiveId(id));
-        }
-        let footprint =
-            Footprint::new(size, bytes).map_err(|error| EngineError::Asset { id, error })?;
+        let refused = |error| EngineError::Asset { id, error };
+        let footprint = Footprint::new(size, bytes).map_err(refused)?;
         match self.cache.asset(id, footprint, payload) {
             Ok(dropped) => {
                 for gone in dropped {
                     self.lose(gone);
                 }
             }
-            Err(_) => self.lose(id),
+            Err(AssetError::Full { .. }) => self.lose(id),
+            Err(error) => return Err(refused(error)),
         }
         Ok(())
     }
@@ -1286,7 +1278,10 @@ mod tests {
                     id: 2,
                     error: AssetError::Unsupported
                 },
-                EngineError::LiveId(3),
+                EngineError::Asset {
+                    id: 3,
+                    error: AssetError::LiveId
+                },
                 EngineError::Forget(3),
             ]
         ));
