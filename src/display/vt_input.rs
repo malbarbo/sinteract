@@ -99,10 +99,10 @@ impl VtInput {
         {
             let (head, tail) = rest.split_at(i);
             self.parse(head, out);
-            let [_, opener, after @ ..] = tail else {
-                unreachable!("the window holds the Escape and the opener");
-            };
-            self.keys.print(char::from(*opener), ALT, out);
+            let (&[_, opener], after) = tail
+                .split_first_chunk()
+                .expect("the window holds the Escape and the opener");
+            self.keys.print(char::from(opener), ALT, out);
             rest = after;
         }
         self.parse(rest, out);
