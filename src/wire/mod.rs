@@ -62,7 +62,8 @@ pub enum Error {
     NoPlayer,
     /// A roster has a player twice.
     DuplicatePlayer(to_engine::DuplicatePlayer),
-    /// A hello has a minimum of 0 players or a maximum below its minimum.
+    /// A hello has a minimum of 0 players, a maximum below its minimum, or
+    /// a maximum above [`to_view::MAX_PLAYERS`].
     PlayerRange { min: u32, max: u32 },
 }
 
@@ -78,9 +79,11 @@ impl std::fmt::Display for Error {
             }
             Error::NoPlayer => write!(f, "an event or a member has player 0"),
             Error::DuplicatePlayer(e) => write!(f, "{e}"),
-            Error::PlayerRange { min, max } => {
-                write!(f, "a hello takes from {min} to {max} players")
-            }
+            Error::PlayerRange { min, max } => write!(
+                f,
+                "a hello takes from {min} to {max} players, not from 1 to {}",
+                to_view::MAX_PLAYERS
+            ),
         }
     }
 }
@@ -648,7 +651,7 @@ mod tests {
 
     #[test]
     fn a_hello_that_is_not_a_range_is_an_error() {
-        for (min, max) in [(0, 2), (3, 2)] {
+        for (min, max) in [(0, 2), (3, 2), (1, to_view::MAX_PLAYERS + 1)] {
             assert!(matches!(
                 to_view::arm(&hello(min, max)),
                 Err(Error::PlayerRange { .. })
@@ -660,6 +663,9 @@ mod tests {
     fn a_player_range_holds_its_ends() {
         assert!(to_view::PlayerRange::new(0, 1).is_none());
         assert!(to_view::PlayerRange::new(2, 1).is_none());
+        let most = to_view::MAX_PLAYERS;
+        assert!(to_view::PlayerRange::new(1, most).is_some());
+        assert!(to_view::PlayerRange::new(1, most + 1).is_none());
         let players = to_view::PlayerRange::new(2, 4).unwrap();
         assert_eq!((players.min().get(), players.max().get()), (2, 4));
         assert!(!players.contains(1));

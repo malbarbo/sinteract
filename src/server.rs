@@ -206,7 +206,7 @@ const MAX_NICKNAME_BYTES: usize = 64;
 const MAX_HELD_KEYS: usize = 32;
 
 /// A message for the engine is far below the cap of the framing, since the
-/// nicknames and the messages of the views have a cap.
+/// players, their nicknames and the messages of the views have a cap.
 const UNDER_THE_CAP: &str = "a message for the engine is under the cap of the framing";
 
 impl ServerCore {

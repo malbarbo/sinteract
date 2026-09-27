@@ -65,7 +65,12 @@ pub enum Arm {
     TickTaken,
 }
 
-/// The fewest and the most players that a game takes, from 1.
+/// The most players of a room. The start that names them stays far under
+/// the cap of the framing, since a nickname has 64 bytes at most.
+pub const MAX_PLAYERS: u32 = 1024;
+
+/// The fewest and the most players that a game takes, from 1 to
+/// [`MAX_PLAYERS`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlayerRange {
     min: NonZeroU32,
@@ -74,10 +79,10 @@ pub struct PlayerRange {
 
 impl PlayerRange {
     /// The range from `min` to `max`, or `None` if `min` is 0 or above
-    /// `max`.
+    /// `max`, or `max` is above [`MAX_PLAYERS`].
     pub fn new(min: u32, max: u32) -> Option<PlayerRange> {
         let min = NonZeroU32::new(min)?;
-        let max = NonZeroU32::new(max).filter(|&max| max >= min)?;
+        let max = NonZeroU32::new(max).filter(|&max| max >= min && max.get() <= MAX_PLAYERS)?;
         Some(PlayerRange { min, max })
     }
 

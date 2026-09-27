@@ -36,7 +36,7 @@ struct Frame {
     scene  @1 :Draw.Scene;
 }
 
-# The players that a game takes, with 1 <= minPlayers <= maxPlayers.
+# The players that a game takes, with 1 <= minPlayers <= maxPlayers <= 1024.
 struct Hello {
     minPlayers @0 :UInt32;
     maxPlayers @1 :UInt32;
