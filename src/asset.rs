@@ -35,9 +35,11 @@ pub const MAX_LIVE_BYTES: u64 = 48 << 20;
 /// the server loses it, so a program can make the same image each frame
 /// and send it once.
 ///
-/// The front end calls `image` for the bitmaps of one frame, then `frame`
-/// for that frame, and [`Assets::lost`] for each lost of the server. An
-/// image that did not go out is gone after the next two calls of `frame`.
+/// The front end calls `image` for the bitmaps of each frame, then
+/// `frame` for that frame, and [`Assets::lost`] for each lost of the
+/// server. An image that did not go out is gone after the next two calls
+/// of `frame`, and a lost one is gone at once, so the front end keeps no
+/// id from one frame to the next.
 #[derive(Debug, Default)]
 pub struct Assets {
     ids: HashMap<Arc<[u8]>, u32>,
@@ -57,9 +59,7 @@ impl Assets {
     /// shrinks to fit, with the feature `render`, up to
     /// [`MAX_SHRINK_PIXELS`], and is an error past that or without the
     /// feature. The size of the asset is the size on the screen, after the
-    /// EXIF orientation of a JPEG. A call hashes the whole blob, so a front
-    /// end whose images do not change keeps the [`Asset`] with the image
-    /// and calls this once for each.
+    /// EXIF orientation of a JPEG. A call hashes the whole blob.
     pub fn image(&mut self, blob: &[u8]) -> Result<Asset, AssetError> {
         if let Some(&id) = self.ids.get(blob) {
             let entry = self.images.get_mut(&id).expect("an id names an image");
