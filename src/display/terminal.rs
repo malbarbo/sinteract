@@ -371,10 +371,11 @@ impl<S: Send + 'static> FrameWriter<S> {
     /// ends before finish.
     fn resume_panic(&mut self) -> ! {
         let thread = self.thread.take().expect("the thread panics once");
-        match thread.join() {
-            Err(payload) => std::panic::resume_unwind(payload),
-            Ok(_) => panic!("the thread of the frames ended before finish"),
-        }
+        let payload = thread
+            .join()
+            .map(|_| ())
+            .expect_err("the thread of the frames ends before finish only by a panic");
+        std::panic::resume_unwind(payload)
     }
 
     /// Wait for the thread to write the frame it holds, and take back `S`.
