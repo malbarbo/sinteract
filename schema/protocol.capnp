@@ -73,13 +73,11 @@ struct ViewMessage {
     event @0 :Input.InputEvent;
 }
 
-# A player of the session.
+# A player of the session. The number of the player, which a message
+# about the player carries, is its place in the members of the start,
+# from 1.
 struct Member {
-    # The number of the player in the session, from 1, which a message
-    # about this player carries. A player is in the members of a start
-    # once.
-    player   @0 :UInt32;
-    nickname @1 :Text;
+    nickname @0 :Text;
 }
 
 # The players of the session, who are the same until its end.

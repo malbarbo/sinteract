@@ -57,11 +57,8 @@ pub enum Error {
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
-    /// An event or a member of a roster has player 0, which is not a player
-    /// of the session.
+    /// An event has player 0, which is not a player of the session.
     NoPlayer,
-    /// A roster has a player twice.
-    DuplicatePlayer(to_engine::DuplicatePlayer),
     /// A hello has a minimum of 0 players, a maximum below its minimum, or
     /// a maximum above [`to_view::MAX_PLAYERS`].
     PlayerRange { min: u32, max: u32 },
@@ -77,8 +74,7 @@ impl std::fmt::Display for Error {
                     "path verbs ({verbs} bytes) and coords ({coords} floats) disagree"
                 )
             }
-            Error::NoPlayer => write!(f, "an event or a member has player 0"),
-            Error::DuplicatePlayer(e) => write!(f, "{e}"),
+            Error::NoPlayer => write!(f, "an event has player 0"),
             Error::PlayerRange { min, max } => write!(
                 f,
                 "a hello takes from {min} to {max} players, not from 1 to {}",
@@ -375,13 +371,6 @@ mod tests {
 
     fn nonzero(n: u32) -> std::num::NonZeroU32 {
         std::num::NonZeroU32::new(n).unwrap()
-    }
-
-    fn member(player: u32, nickname: &str) -> to_engine::Member {
-        to_engine::Member {
-            player: nonzero(player),
-            nickname: nickname.into(),
-        }
     }
 
     fn assert_scene_eq(a: &Scene, b: &Scene) {
@@ -701,15 +690,23 @@ mod tests {
 
     #[test]
     fn the_start_round_trips() {
-        let roster = to_engine::Roster::new(vec![member(1, "Ana"), member(2, "Beto")]).unwrap();
         let mut stream = Vec::new();
-        to_engine::write_start(&mut stream, &roster).unwrap();
+        to_engine::write_start(&mut stream, &["Ana", "Beto"]).unwrap();
         let mut r = &stream[..];
         match read_server(&mut r).unwrap().expect("a message") {
-            to_engine::Message::Start(got) => assert_eq!(got, roster),
+            to_engine::Message::Start(got) => assert_eq!(got, ["Ana", "Beto"]),
             other => panic!("got {other:?}"),
         }
         assert!(read_server(&mut r).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_start_of_more_than_max_players_is_not_written() {
+        let nicknames = vec![""; to_view::MAX_PLAYERS as usize + 1];
+        let mut stream = Vec::new();
+        let err = to_engine::write_start(&mut stream, &nicknames).expect_err("an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(stream.is_empty());
     }
 
     #[test]
@@ -722,15 +719,6 @@ mod tests {
             Ok(Some(to_engine::Message::Tick))
         ));
         assert!(read_server(&mut r).unwrap().is_none());
-    }
-
-    #[test]
-    fn a_roster_does_not_take_a_player_twice() {
-        let members = vec![member(1, "Ana"), member(2, "Beto"), member(1, "Caio")];
-        assert_eq!(
-            to_engine::Roster::new(members),
-            Err(to_engine::DuplicatePlayer(nonzero(1)))
-        );
     }
 
     #[test]
@@ -751,27 +739,6 @@ mod tests {
         assert!(matches!(
             read_server(&mut r),
             Ok(Some(to_engine::Message::Tick))
-        ));
-    }
-
-    #[test]
-    fn a_start_with_player_0_or_a_player_twice_is_an_error() {
-        let start = |players: &[u32]| {
-            let mut builder = MessageBuilder::new_default();
-            let start = builder.init_root::<server_message::Builder>().init_start();
-            let mut list = start.init_members(players.len() as u32);
-            for (i, &p) in players.iter().enumerate() {
-                list.reborrow().get(i as u32).set_player(p);
-            }
-            finish(builder)
-        };
-        assert!(matches!(
-            to_engine::decode(&start(&[1, 0])),
-            Err(Error::NoPlayer)
-        ));
-        assert!(matches!(
-            to_engine::decode(&start(&[2, 1, 2])),
-            Err(Error::DuplicatePlayer(to_engine::DuplicatePlayer(p))) if p == nonzero(2)
         ));
     }
 

@@ -19,7 +19,7 @@ use std::num::NonZeroU32;
 use crate::event::InputEvent;
 use crate::wire;
 use crate::wire::framing::{self, Side};
-use crate::wire::to_engine::{self, Message, Roster};
+use crate::wire::to_engine::{self, Message};
 use crate::wire::to_view;
 
 /// The engine side of a session, from the bytes of the server to the
@@ -44,9 +44,10 @@ pub struct Session {
 /// What [`Session::next_event`] and [`Session::wait`] deliver.
 #[derive(Debug)]
 pub enum SessionEvent {
-    /// The players of the session, who are the same until its end. It comes
-    /// before every other event of the server, and once.
-    Start(Roster),
+    /// The nicknames of the players of the session, the first of player 1.
+    /// The players are the same until the end. It comes before every other
+    /// event of the server, and once.
+    Start(Vec<String>),
     /// Time to draw the next frames, for every player.
     Tick,
     /// The input of `player`.
@@ -207,9 +208,9 @@ impl Session {
     /// Turn `message` into an event, by whether the start came before it.
     fn receive(&mut self, started: bool, message: Message) {
         let event = match (started, message) {
-            (false, Message::Start(roster)) => {
+            (false, Message::Start(nicknames)) => {
                 self.state = State::Started;
-                SessionEvent::Start(roster)
+                SessionEvent::Start(nicknames)
             }
             (false, Message::Input { .. } | Message::Tick | Message::Lost(_)) => {
                 SessionEvent::Error(SessionError::BeforeStart)
@@ -297,7 +298,6 @@ mod tests {
     use super::*;
     use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
     use crate::wire::framing::HEADER_BYTES;
-    use crate::wire::to_engine::Member;
 
     fn player(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).unwrap()
@@ -328,19 +328,8 @@ mod tests {
 
     /// A start with Ana as player 1 and Beto as player 2.
     fn start() -> Vec<u8> {
-        let roster = Roster::new(vec![
-            Member {
-                player: player(1),
-                nickname: "Ana".into(),
-            },
-            Member {
-                player: player(2),
-                nickname: "Beto".into(),
-            },
-        ])
-        .unwrap();
         let mut out = Vec::new();
-        to_engine::write_start(&mut out, &roster).unwrap();
+        to_engine::write_start(&mut out, &["Ana", "Beto"]).unwrap();
         out
     }
 
@@ -379,7 +368,7 @@ mod tests {
     fn names(session: &mut Session) -> Vec<String> {
         std::iter::from_fn(|| next(session))
             .map(|e| match e {
-                SessionEvent::Start(r) => format!("start {}", r.members().len()),
+                SessionEvent::Start(nicknames) => format!("start {}", nicknames.len()),
                 SessionEvent::Tick => "tick".into(),
                 SessionEvent::Lost(id) => format!("lost {id}"),
                 SessionEvent::Input { player, event } => match event {

@@ -62,10 +62,10 @@ Regras da sessão com servidor:
   o mínimo e o máximo de jogadores do jogo. Se a primeira mensagem não é
   um `hello`, a sala acaba. O lobby é do servidor, fora do protocolo, e
   usa esses limites. No começo da partida, o servidor manda o `start` com
-  os jogadores, que são os mesmos até o fim. Só então as views conectam e
-  mandam eventos;
-- um jogador aparece uma vez no `start`, o número dele não se repete na
-  partida, e um `event` de player 0 é erro;
+  os apelidos dos jogadores, que são os mesmos até o fim. Só então as
+  views conectam e mandam eventos;
+- o número de um jogador é o lugar dele no `start`, a partir de 1, e um
+  `event` de player 0 é erro;
 - nenhuma mensagem encerra a partida. O fim do transporte encerra, o fim
   do pipe ou o close do WebSocket, que também cobre quem quebra. Para
   encerrar a partida, o servidor fecha o fd 3 da engine. Um jogador cujo

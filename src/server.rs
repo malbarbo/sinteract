@@ -37,7 +37,7 @@ use crate::event::{
 };
 use crate::wire;
 use crate::wire::framing::{self, Side};
-use crate::wire::to_engine::{self, Member, Roster};
+use crate::wire::to_engine;
 use crate::wire::to_server;
 use crate::wire::to_view::{self, Arm, PlayerRange};
 
@@ -251,17 +251,9 @@ impl ServerCore {
             .zip(nicknames)
             .map(|(player, nickname)| (player, Seat::new(clean_nickname(nickname.as_ref()))))
             .collect();
-        let members = self
-            .seats
-            .iter()
-            .map(|(&player, seat)| Member {
-                player,
-                nickname: seat.nickname.clone(),
-            })
-            .collect();
-        let roster = Roster::new(members).expect("a map has each player once");
+        let nicknames: Vec<&str> = self.seats.values().map(|s| s.nickname.as_str()).collect();
         let mut to_engine = Vec::new();
-        to_engine::write_start(&mut to_engine, &roster).expect(UNDER_THE_CAP);
+        to_engine::write_start(&mut to_engine, &nicknames).expect(UNDER_THE_CAP);
         for id in lost.drain(..) {
             to_engine::write_lost(&mut to_engine, id).expect(UNDER_THE_CAP);
         }
@@ -827,11 +819,10 @@ mod tests {
             let mut back = Vec::new();
             let events = std::iter::from_fn(|| self.engine.next_event(&mut back))
                 .map(|e| match e {
-                    SessionEvent::Start(roster) => {
-                        let members: Vec<_> = roster
-                            .members()
-                            .iter()
-                            .map(|m| format!("{} {}", m.player, m.nickname))
+                    SessionEvent::Start(nicknames) => {
+                        let members: Vec<_> = (1..)
+                            .zip(nicknames)
+                            .map(|(player, nickname)| format!("{player} {nickname}"))
                             .collect();
                         format!("start {}", members.join(", "))
                     }

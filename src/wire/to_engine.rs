@@ -7,7 +7,6 @@
 //! server dropped an asset, and the server ends the session with the end
 //! of its stream.
 
-use std::collections::HashSet;
 use std::io::{self, Write};
 use std::num::NonZeroU32;
 
@@ -20,6 +19,7 @@ use super::Error;
 use super::event::{read_input_event, write_input_event};
 use super::framing::{Side, write_framed};
 use super::protocol::decode_root;
+use super::to_view::MAX_PLAYERS;
 
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with
@@ -32,56 +32,12 @@ pub enum Message {
         player: NonZeroU32,
         event: InputEvent,
     },
-    Start(Roster),
+    /// The nicknames of the players, the first of player 1.
+    Start(Vec<String>),
     /// Time for the engine to draw the next frames.
     Tick,
     /// The server dropped the asset of this id.
     Lost(u32),
-}
-
-/// A player of the session.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Member {
-    /// The number of the player in the session.
-    pub player: NonZeroU32,
-    pub nickname: String,
-}
-
-/// The players at the start of the session, each player once.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Roster(Vec<Member>);
-
-/// Two members of a [`Roster`] have the same player.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DuplicatePlayer(pub NonZeroU32);
-
-impl Roster {
-    /// The roster of `members`, or the first player that repeats.
-    pub fn new(members: Vec<Member>) -> Result<Roster, DuplicatePlayer> {
-        let mut seen = HashSet::with_capacity(members.len());
-        match members.iter().find(|m| !seen.insert(m.player)) {
-            Some(m) => Err(DuplicatePlayer(m.player)),
-            None => Ok(Roster(members)),
-        }
-    }
-
-    pub fn members(&self) -> &[Member] {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for DuplicatePlayer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "player {} is in the roster twice", self.0)
-    }
-}
-
-impl std::error::Error for DuplicatePlayer {}
-
-impl From<DuplicatePlayer> for Error {
-    fn from(e: DuplicatePlayer) -> Self {
-        Error::DuplicatePlayer(e)
-    }
 }
 
 /// Write the input `ev` of `player`.
@@ -99,14 +55,24 @@ pub fn write_lost(w: &mut impl Write, id: u32) -> io::Result<()> {
     write_framed(w, Side::Server, &lost_message(id))
 }
 
-/// Write the start of the session with `roster`.
-pub fn write_start(w: &mut impl Write, roster: &Roster) -> io::Result<()> {
-    write_framed(w, Side::Server, &start_message(roster.members()))
+/// Write the start of the session, with a player for each of
+/// `nicknames`, numbered from 1 in their order. More than
+/// [`MAX_PLAYERS`] players is [`io::ErrorKind::InvalidInput`].
+pub fn write_start<S: AsRef<str>>(w: &mut impl Write, nicknames: &[S]) -> io::Result<()> {
+    if nicknames.len() > MAX_PLAYERS as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "a start of {} players has more than {MAX_PLAYERS}",
+                nicknames.len()
+            ),
+        ));
+    }
+    write_framed(w, Side::Server, &start_message(nicknames))
 }
 
 /// Decode `payload`. `None` for a message or an event of an arm from a
-/// newer schema. An event or a member of player 0, an event that is a
-/// tick, and a roster that repeats a player, are errors.
+/// newer schema. An event of player 0 is an error.
 pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<server_message::Owned, _>(payload, decode_message)
 }
@@ -127,17 +93,12 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
             }))
         }
         server_message::Start(s) => {
-            let members = s?
+            let nicknames = s?
                 .get_members()?
                 .iter()
-                .map(|m| {
-                    Ok(Member {
-                        player: nonzero_player(m.get_player())?,
-                        nickname: m.get_nickname()?.to_str()?.to_owned(),
-                    })
-                })
+                .map(|m| Ok(m.get_nickname()?.to_str()?.to_owned()))
                 .collect::<Result<_, Error>>()?;
-            Ok(Some(Message::Start(Roster::new(members)?)))
+            Ok(Some(Message::Start(nicknames)))
         }
         server_message::Tick(_) => Ok(Some(Message::Tick)),
         server_message::Lost(id) => Ok(Some(Message::Lost(id))),
@@ -169,15 +130,13 @@ fn lost_message(id: u32) -> MessageBuilder<HeapAllocator> {
     builder
 }
 
-fn start_message(members: &[Member]) -> MessageBuilder<HeapAllocator> {
+fn start_message<S: AsRef<str>>(nicknames: &[S]) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let start = builder.init_root::<server_message::Builder>().init_start();
-    let len = u32::try_from(members.len()).expect("fewer than 2^32 players");
+    let len = u32::try_from(nicknames.len()).expect("a start has at most MAX_PLAYERS players");
     let mut list = start.init_members(len);
-    for (i, member) in (0..len).zip(members) {
-        let mut m = list.reborrow().get(i);
-        m.set_player(member.player.get());
-        m.set_nickname(&*member.nickname);
+    for (i, nickname) in (0..len).zip(nicknames) {
+        list.reborrow().get(i).set_nickname(nickname.as_ref());
     }
     builder
 }
