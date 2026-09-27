@@ -780,6 +780,11 @@ impl GeometryBuilder {
         x: f32,
         y: f32,
     ) {
+        // kurbo turns a float that is not finite into no segment at all. A
+        // line to NaN keeps it, so the scene drops the element.
+        if !all_finite(&[rx, ry, rotation_deg, x, y]) {
+            return self.line_to(f32::NAN, f32::NAN);
+        }
         let (x1, y1) = self.last_point;
         let svg_arc = kurbo::SvgArc {
             from: kurbo::Point::new(x1 as f64, y1 as f64),
@@ -1644,6 +1649,35 @@ mod tests {
             ..text
         });
         scene.bitmap(Bitmap::fit(1, a_unit_rect(nan)));
+        assert!(scene.elements.is_empty(), "{:?}", scene.elements);
+    }
+
+    #[test]
+    fn an_arc_with_a_non_finite_float_drops_its_element() {
+        let (nan, inf) = (f32::NAN, f32::INFINITY);
+        let mut scene = Scene::new(10.0, 10.0);
+        for (rx, rotation_deg, x) in [
+            (nan, 0.0, 5.0),
+            (inf, 0.0, 5.0),
+            (5.0, inf, 5.0),
+            (5.0, 0.0, nan),
+        ] {
+            scene
+                .path(PathStyle::default(), 0.0, 0.0)
+                .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
+                .line_to(0.0, 9.0);
+            scene.add_path(
+                Path::builder(PathStyle::default(), 0.0, 0.0)
+                    .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
+                    .build(),
+            );
+            let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
+                .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
+                .build();
+            scene
+                .clip(clip)
+                .add_path(a_line(PathStyle::default(), 5.0, 5.0));
+        }
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
     }
 
