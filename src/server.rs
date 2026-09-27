@@ -68,7 +68,7 @@ type Assets = BTreeMap<u32, Arc<[u8]>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Conn {
     player: NonZeroU32,
-    generation: u32,
+    generation: u64,
 }
 
 impl Conn {
@@ -302,7 +302,7 @@ impl ServerCore {
         seat.generation = seat
             .generation
             .checked_add(1)
-            .expect("a seat has fewer than 2^32 connections");
+            .expect("a seat has fewer than 2^64 connections");
         let conn = Conn {
             player,
             generation: seat.generation,
@@ -620,7 +620,9 @@ impl Default for ServerCore {
 struct Seat {
     nickname: String,
     /// The generation of the last connect, so no older connection matches.
-    generation: u32,
+    /// A view that connects a million times a second takes 500,000 years
+    /// to run out of them.
+    generation: u64,
     /// The newest frame for the player, kept for the next connect.
     frame: Option<Shot>,
     /// The view that takes the seat, until it leaves.
