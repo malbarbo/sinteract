@@ -275,3 +275,14 @@ pub(crate) fn encode_frame_to(player: Option<NonZeroU32>, scene: &Scene) -> Vec<
 pub(crate) fn encode_asset(id: u32, blob: &[u8]) -> Vec<u8> {
     super::finish(asset_message(id, blob))
 }
+
+/// Encode a hello of `min` to `max` players, with no envelope. A test
+/// passes a range that [`write_hello`] cannot.
+#[cfg(test)]
+pub(crate) fn encode_hello(min: u32, max: u32) -> Vec<u8> {
+    let mut builder = MessageBuilder::new_default();
+    let mut hello = builder.init_root::<engine_message::Builder>().init_hello();
+    hello.set_min_players(min);
+    hello.set_max_players(max);
+    super::finish(builder)
+}

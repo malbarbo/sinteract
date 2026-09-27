@@ -565,7 +565,7 @@ mod tests {
         assert!(to_view::arm(&[0; 8]).is_err());
         let players = to_view::PlayerRange::new(2, 4).unwrap();
         assert_eq!(
-            to_view::arm(&hello(2, 4)).unwrap(),
+            to_view::arm(&to_view::encode_hello(2, 4)).unwrap(),
             Some(to_view::Arm::Hello(players))
         );
         assert_eq!(
@@ -630,14 +630,6 @@ mod tests {
 
     /// A hello from `min` to `max`, with no envelope, even when that is not
     /// a range.
-    fn hello(min: u32, max: u32) -> Vec<u8> {
-        let mut builder = MessageBuilder::new_default();
-        let mut hello = builder.init_root::<engine_message::Builder>().init_hello();
-        hello.set_min_players(min);
-        hello.set_max_players(max);
-        finish(builder)
-    }
-
     #[test]
     fn a_hello_round_trips() {
         let players = to_view::PlayerRange::new(1, 3).unwrap();
@@ -653,7 +645,7 @@ mod tests {
     fn a_hello_that_is_not_a_range_is_an_error() {
         for (min, max) in [(0, 2), (3, 2), (1, to_view::MAX_PLAYERS + 1)] {
             assert!(matches!(
-                to_view::arm(&hello(min, max)),
+                to_view::arm(&to_view::encode_hello(min, max)),
                 Err(Error::PlayerRange { .. })
             ));
         }

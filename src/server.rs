@@ -405,6 +405,9 @@ impl ServerCore {
             let payload = Arc::<[u8]>::from(payload);
             at = self.from_engine.len() - rest.len();
             if matches!(self.phase, Phase::Waiting) && !matches!(arm, Ok(Some(Arm::Hello(_)))) {
+                if let Err(e) = arm {
+                    errors.push(EngineError::Payload(e));
+                }
                 errors.push(EngineError::NoHello);
                 self.end();
                 return errors;
@@ -1020,6 +1023,23 @@ mod tests {
         ));
         assert!(room.core.is_over());
         assert!(room.events().is_empty());
+    }
+
+    #[test]
+    fn a_first_hello_that_does_not_decode_ends_the_room_with_its_error() {
+        let mut core = ServerCore::new();
+        let mut out = Vec::new();
+        let payload = to_view::encode_hello(0, 1);
+        out.extend_from_slice(&framing::header(Side::Engine, payload.len() as u32));
+        out.extend_from_slice(&payload);
+        assert!(matches!(
+            core.from_engine(&out)[..],
+            [
+                EngineError::Payload(wire::Error::PlayerRange { min: 0, max: 1 }),
+                EngineError::NoHello
+            ]
+        ));
+        assert!(core.is_over());
     }
 
     #[test]
