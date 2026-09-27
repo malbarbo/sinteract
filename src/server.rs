@@ -320,8 +320,9 @@ impl ServerCore {
     }
 
     /// Stop writing to the engine, and drop what the host has not taken.
-    /// The host then closes the pipe of the engine, and the end of the pipe
-    /// tells the engine to end. The engine may still send its last frames.
+    /// The next [`Self::take_engine_output`] returns `false`, the host then
+    /// closes the pipe of the engine, and the end of the pipe tells the
+    /// engine to end. The engine may still send its last frames.
     pub fn close(&mut self) {
         match self.phase {
             Phase::Waiting | Phase::Ready { .. } | Phase::Playing { .. } => {
@@ -503,9 +504,17 @@ impl ServerCore {
 
     /// Move the messages for the engine to the end of `buf`. A host that
     /// cannot write all of them keeps the rest in `buf` for the next write.
-    pub fn take_engine_output(&mut self, buf: &mut Vec<u8>) {
-        if let Phase::Playing { to_engine, .. } = &mut self.phase {
-            buf.append(to_engine);
+    /// Returns `false` once the core writes nothing more to the engine,
+    /// after [`Self::close`] or at the end of the room, so the task that
+    /// writes to the engine closes its pipe, and `true` otherwise.
+    pub fn take_engine_output(&mut self, buf: &mut Vec<u8>) -> bool {
+        match &mut self.phase {
+            Phase::Playing { to_engine, .. } => {
+                buf.append(to_engine);
+                true
+            }
+            Phase::Waiting | Phase::Ready { .. } => true,
+            Phase::Closing | Phase::Over => false,
         }
     }
 
@@ -1090,12 +1099,25 @@ mod tests {
         core.from_engine(&hello(1, 1));
         core.start(&["Ana"]).unwrap();
         let mut buf = b"rest".to_vec();
-        core.take_engine_output(&mut buf);
+        assert!(core.take_engine_output(&mut buf));
         assert_eq!(&buf[..4], b"rest");
         assert!(buf.len() > 4);
         let mut again = Vec::new();
-        core.take_engine_output(&mut again);
+        assert!(core.take_engine_output(&mut again));
         assert!(again.is_empty());
+    }
+
+    #[test]
+    fn the_output_ends_at_the_close_and_at_the_end_of_the_engine() {
+        let mut core = ServerCore::new();
+        let mut buf = Vec::new();
+        assert!(core.take_engine_output(&mut buf));
+        core.close();
+        assert!(!core.take_engine_output(&mut buf));
+        let mut core = ServerCore::new();
+        assert!(core.engine_ended().is_none());
+        assert!(!core.take_engine_output(&mut buf));
+        assert!(buf.is_empty());
     }
 
     #[test]

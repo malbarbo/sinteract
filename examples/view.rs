@@ -154,7 +154,9 @@ fn start(
     Ok(conn)
 }
 
-/// Write what the core has for the engine.
+/// Write what the core has for the engine. The view closes the pipe of
+/// the engine at its own end, so it does not look at whether the core
+/// writes more.
 fn send_engine(core: &mut ServerCore, to_engine: &mut impl Write) -> io::Result<()> {
     let mut out = Vec::new();
     core.take_engine_output(&mut out);
