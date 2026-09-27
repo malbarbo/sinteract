@@ -7,13 +7,13 @@
 //! ```text
 //! loop {
 //!     match display.wait_event(deadline) {
-//!         Ok(Event::Tick) => on_frame(),
+//!         Ok(Event::Tick) => on_tick(),
 //!         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 //!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 //!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
 //!         Ok(Event::Input(InputEvent::Pad(p))) => on_pad(p),
 //!         Err(Interrupt::Wake) => on_wake(),
-//!         Err(Interrupt::Timeout) => on_tick(),
+//!         Err(Interrupt::Timeout) => check_signals(),
 //!         Err(Interrupt::Read(e)) => report(e),
 //!         Err(Interrupt::Close) => break,
 //!     }
