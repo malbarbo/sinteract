@@ -139,14 +139,16 @@ impl Session {
     /// as long as `r` blocks. After the end, it returns `End(None)` without
     /// a read. An error of `r` other than [`io::ErrorKind::Interrupted`]
     /// comes back as is, and the session keeps the bytes that it read
-    /// before. A tick writes a tickTaken to `w` first. An error of `w`
-    /// comes back in place of the tick and ends the session, since `w` may
-    /// hold part of the tickTaken.
+    /// before. A tick writes a tickTaken to `w` and flushes `w` first, since
+    /// the server sends no other tick until it reads the tickTaken, and a
+    /// tick may draw no frame that would flush it. An error of `w` comes
+    /// back in place of the tick and ends the session, since `w` may hold
+    /// part of the tickTaken.
     pub fn wait(&mut self, r: &mut impl Read, w: &mut impl Write) -> io::Result<SessionEvent> {
         loop {
             let mut out = Vec::new();
             if let Some(event) = self.next_event(&mut out) {
-                if let Err(e) = w.write_all(&out) {
+                if let Err(e) = send(w, &out) {
                     self.state = State::Ended;
                     self.bytes = Vec::new();
                     self.events.clear();
@@ -270,6 +272,15 @@ impl Session {
         self.bytes = Vec::new();
         self.events.push_back(SessionEvent::End(broken));
     }
+}
+
+/// Write `out` to `w` and flush it, or do nothing when `out` is empty.
+fn send(w: &mut impl Write, out: &[u8]) -> io::Result<()> {
+    if out.is_empty() {
+        return Ok(());
+    }
+    w.write_all(out)?;
+    w.flush()
 }
 
 /// Whether the session waits for its start, runs, or ended.
@@ -637,6 +648,28 @@ mod tests {
         ));
         assert!(matches!(
             to_view::read(&mut &out[..]),
+            Ok(Some(to_view::Message::TickTaken))
+        ));
+    }
+
+    #[test]
+    fn wait_flushes_the_tick_taken_through_a_buffered_writer() {
+        let mut stream = start();
+        stream.extend_from_slice(&tick());
+        let mut r = &stream[..];
+        let mut w = io::BufWriter::new(Vec::new());
+        let mut session = Session::new();
+        assert!(matches!(
+            session.wait(&mut r, &mut w),
+            Ok(SessionEvent::Start(_))
+        ));
+        assert!(w.get_ref().is_empty());
+        assert!(matches!(
+            session.wait(&mut r, &mut w),
+            Ok(SessionEvent::Tick)
+        ));
+        assert!(matches!(
+            to_view::read(&mut &w.get_ref()[..]),
             Ok(Some(to_view::Message::TickTaken))
         ));
     }
