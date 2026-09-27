@@ -55,10 +55,9 @@ pub struct ServerCore {
     phase: Phase,
     /// The bytes of the engine that do not make a whole message yet.
     from_engine: Vec<u8>,
-    /// The messages of the live assets, by id, as a view gets them.
-    assets: Assets,
-    /// Which assets are live, under the limits of the room.
-    cache: Cache,
+    /// The live assets, under the limits of the room, with the message of
+    /// each, as a view gets it.
+    cache: Cache<Arc<[u8]>>,
 }
 
 type Assets = BTreeMap<u32, Arc<[u8]>>;
@@ -222,7 +221,6 @@ impl ServerCore {
             seats: BTreeMap::new(),
             phase: Phase::Waiting,
             from_engine: Vec::new(),
-            assets: Assets::new(),
             cache: Cache::new(),
         }
     }
@@ -537,11 +535,9 @@ impl ServerCore {
         }
         let footprint =
             Footprint::new(size, bytes).map_err(|error| EngineError::Asset { id, error })?;
-        match self.cache.asset(id, footprint) {
+        match self.cache.asset(id, footprint, payload) {
             Ok(dropped) => {
-                self.assets.insert(id, payload);
                 for gone in dropped {
-                    self.assets.remove(&gone);
                     self.lose(gone);
                 }
             }
@@ -568,7 +564,7 @@ impl ServerCore {
         let ids = to_view::bitmap_ids(&payload)?;
         let assets: Assets = ids
             .iter()
-            .filter_map(|id| Some((*id, self.assets.get(id)?.clone())))
+            .filter_map(|id| Some((*id, self.cache.get(*id)?.clone())))
             .collect();
         self.cache.frame(ids);
         let shot = Shot {

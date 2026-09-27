@@ -20,8 +20,7 @@ does no I/O of its own, so it builds on wasm32. `server.rs` is the server
 side. It holds the rules of a room, from the players and the timer of the
 host to the messages for the engine, also with no I/O. `asset.rs` holds
 `Assets`, which gives the images of an engine their ids, and `Cache`,
-which keeps the assets of a room under the limits, for the server and for
-a local display.
+which keeps the assets of a room under the limits, for the server.
 
 `display/` shows a scene and reads the input back. `driver.rs` holds the
 sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind

@@ -1,7 +1,7 @@
 //! The images of a room. [`Assets`] is the table of the engine, which gives
 //! an image its id and sends it before the first frame that draws it.
 //! [`Cache`] keeps the live assets of a room under the limits, in the
-//! server, and in a local host for its display.
+//! server.
 //!
 //! A limit counts the pixels, since each view decodes an asset to four
 //! bytes a pixel, and a small file can hold a large image. It also counts
@@ -181,9 +181,10 @@ pub fn bitmap_ids(scene: &Scene) -> BTreeSet<u32> {
 /// that the last frame draws stays, as does one that came after the last
 /// frame, since the next frame draws it. The cache does not tell the
 /// players apart, since the views of a room mostly draw the same images.
-#[derive(Debug, Default)]
-pub struct Cache {
-    live: BTreeMap<u32, Live>,
+/// Each asset keeps a `T`, such as its message.
+#[derive(Debug)]
+pub struct Cache<T> {
+    live: BTreeMap<u32, Live<T>>,
     /// The ids that the last frame draws.
     shown: BTreeSet<u32>,
     load: Load,
@@ -191,9 +192,14 @@ pub struct Cache {
     frames: u64,
 }
 
-impl Cache {
+impl<T> Cache<T> {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            live: BTreeMap::new(),
+            shown: BTreeSet::new(),
+            load: Load::default(),
+            frames: 0,
+        }
     }
 
     /// Returns `true` if the asset `id` is live, `false` otherwise.
@@ -201,11 +207,22 @@ impl Cache {
         self.live.contains_key(&id)
     }
 
-    /// Keep the asset `id`, which is not live, and return the ids of the
-    /// assets that it drops to fit, the ones that the frames used longest
-    /// ago first. Returns [`AssetError::Full`] and changes nothing if the
-    /// asset does not fit even without every asset that may go.
-    pub fn asset(&mut self, id: u32, footprint: Footprint) -> Result<Vec<u32>, AssetError> {
+    /// The value of the asset `id`, or `None` if it is not live.
+    pub fn get(&self, id: u32) -> Option<&T> {
+        self.live.get(&id).map(|live| &live.value)
+    }
+
+    /// Keep the asset `id`, which is not live, with `value`, and return the
+    /// ids of the assets that it drops to fit, the ones that the frames
+    /// used longest ago first. Returns [`AssetError::Full`] and changes
+    /// nothing if the asset does not fit even without every asset that may
+    /// go.
+    pub fn asset(
+        &mut self,
+        id: u32,
+        footprint: Footprint,
+        value: T,
+    ) -> Result<Vec<u32>, AssetError> {
         assert!(
             !self.contains(id),
             "Cache::asset takes an id that is not live"
@@ -246,6 +263,7 @@ impl Cache {
             Live {
                 footprint,
                 used: self.frames,
+                value,
             },
         );
         Ok(dropped)
@@ -261,6 +279,12 @@ impl Cache {
         }
         self.shown = ids;
         self.frames += 1;
+    }
+}
+
+impl<T> Default for Cache<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -661,11 +685,12 @@ fn array<const N: usize>(blob: &[u8], at: usize) -> Option<[u8; N]> {
 
 /// A live asset of a [`Cache`].
 #[derive(Debug)]
-struct Live {
+struct Live<T> {
     footprint: Footprint,
     /// The count of frames when a frame last drew the asset, or when it
     /// came. One that came after the last frame has the count of frames.
     used: u64,
+    value: T,
 }
 
 /// An image of [`Assets`].
@@ -955,10 +980,10 @@ mod tests {
 
     /// A cache with the eight largest assets 0 to 7, and a frame that
     /// draws none of them.
-    fn full() -> Cache {
+    fn full() -> Cache<()> {
         let mut cache = Cache::new();
         for id in 0..8 {
-            assert_eq!(cache.asset(id, largest()), Ok(vec![]));
+            assert_eq!(cache.asset(id, largest(), ()), Ok(vec![]));
         }
         cache.frame(ids(&[]));
         cache
@@ -970,13 +995,13 @@ mod tests {
         cache.frame(ids(&[0, 3]));
         cache.frame(ids(&[5]));
         cache.frame(ids(&[]));
-        assert_eq!(cache.asset(8, largest()), Ok(vec![1]));
-        assert_eq!(cache.asset(9, largest()), Ok(vec![2]));
+        assert_eq!(cache.asset(8, largest(), ()), Ok(vec![1]));
+        assert_eq!(cache.asset(9, largest(), ()), Ok(vec![2]));
         cache.frame(ids(&[8, 9]));
-        assert_eq!(cache.asset(10, largest()), Ok(vec![4]));
-        assert_eq!(cache.asset(11, largest()), Ok(vec![6]));
-        assert_eq!(cache.asset(12, largest()), Ok(vec![7]));
-        assert_eq!(cache.asset(13, largest()), Ok(vec![0]));
+        assert_eq!(cache.asset(10, largest(), ()), Ok(vec![4]));
+        assert_eq!(cache.asset(11, largest(), ()), Ok(vec![6]));
+        assert_eq!(cache.asset(12, largest(), ()), Ok(vec![7]));
+        assert_eq!(cache.asset(13, largest(), ()), Ok(vec![0]));
         assert!(!cache.contains(0));
         assert!(cache.contains(3));
     }
@@ -986,42 +1011,46 @@ mod tests {
         let mut cache = full();
         cache.frame(ids(&[0, 1]));
         cache.frame(ids(&[2, 3, 4, 5, 6]));
-        assert_eq!(cache.asset(8, largest()), Ok(vec![7]));
-        assert_eq!(cache.asset(9, largest()), Ok(vec![0]));
-        assert_eq!(cache.asset(10, largest()), Ok(vec![1]));
+        assert_eq!(cache.asset(8, largest(), ()), Ok(vec![7]));
+        assert_eq!(cache.asset(9, largest(), ()), Ok(vec![0]));
+        assert_eq!(cache.asset(10, largest(), ()), Ok(vec![1]));
         // Every other asset is in the last frame or came after it.
         assert!(matches!(
-            cache.asset(11, largest()),
+            cache.asset(11, largest(), ()),
             Err(AssetError::Full { .. })
         ));
         assert!(!cache.contains(11));
         cache.frame(ids(&[8]));
-        assert_eq!(cache.asset(11, largest()), Ok(vec![2]));
+        assert_eq!(cache.asset(11, largest(), ()), Ok(vec![2]));
     }
 
     #[test]
     fn an_asset_that_fits_drops_nothing_and_one_too_large_changes_nothing() {
         let mut cache = Cache::new();
         let small = Footprint::new(Some((10, 10)), 100).unwrap();
-        assert_eq!(cache.asset(1, small), Ok(vec![]));
+        assert_eq!(cache.asset(1, small, ()), Ok(vec![]));
         cache.frame(ids(&[]));
         let heavy = Footprint::new(Some((1, 1)), MAX_LIVE_BYTES as usize).unwrap();
-        assert!(cache.asset(2, heavy).is_ok_and(|gone| gone == [1]));
+        assert!(cache.asset(2, heavy, ()).is_ok_and(|gone| gone == [1]));
         cache.frame(ids(&[2]));
-        assert!(cache.asset(3, small).is_err());
+        assert!(cache.asset(3, small, ()).is_err());
         assert!(cache.contains(2) && !cache.contains(3));
     }
 
     /// Send the images of `scene` from `assets` to `cache`, as a view does,
     /// and tell `assets` of each one that `cache` drops. Returns the ids
     /// that went out and the ids that were lost.
-    fn round_trip(assets: &mut Assets, cache: &mut Cache, scene: &Scene) -> (Vec<u32>, Vec<u32>) {
+    fn round_trip(
+        assets: &mut Assets,
+        cache: &mut Cache<()>,
+        scene: &Scene,
+    ) -> (Vec<u32>, Vec<u32>) {
         let mut sent = Vec::new();
         let mut lost = Vec::new();
         for (id, blob) in assets.frame(scene).unwrap() {
             sent.push(id);
             let footprint = Footprint::of(&blob).unwrap();
-            for gone in cache.asset(id, footprint).unwrap() {
+            for gone in cache.asset(id, footprint, ()).unwrap() {
                 assets.lost(gone);
                 lost.push(gone);
             }
