@@ -85,15 +85,11 @@ impl Gradient {
     }
 }
 
-/// The geometry with a line a rasterizer can measure. A line longer than an
-/// f32 measures as infinite, and tiny-skia turns the gradient down and paints
-/// the first stop, where the svg and the pdf, which measure in wider floats,
-/// paint the ramp. Scaling the line about the origin brings the length back
-/// and moves the color under a path by the distance of the path from the
-/// origin over a length above 1e38, which is less than a step of an f32. A
-/// radius is one float and is already as long as one can be. A coordinate
-/// that is not finite leaves the length not finite, and the geometry goes
-/// through as it is, for an entry to drop the element.
+/// Scales a linear axis too long for an f32 about the origin. tiny-skia
+/// measures the axis in f32, finds it infinite and paints the first stop,
+/// where the svg and the pdf paint the ramp. The scaling moves the color
+/// under a path by less than a step of an f32. A coordinate that is not
+/// finite passes through, and the scene drops the element.
 fn measurable(geom: GradientGeom) -> GradientGeom {
     let GradientGeom::Linear { x0, y0, x1, y1 } = geom else {
         return geom;
@@ -163,11 +159,11 @@ impl Paint {
         self
     }
 
-    /// A gradient paint, or the solid color of the last stop for a gradient
-    /// with no extent, which is a radius, or a distance between the ends of
-    /// a line, of 2^-15 or less. SVG paints the last stop for those, and
-    /// tiny-skia and the pdf disagreed with it and with each other. The
-    /// wire decoder calls it, because it reads the three parts apart.
+    /// A gradient paint, or the solid color of the last stop when the
+    /// gradient has no extent, a radius or an axis of 2^-15 or less. SVG
+    /// paints the last stop in that case, and tiny-skia and the pdf each did
+    /// something else. The wire decoder calls it, because it reads the three
+    /// parts apart.
     pub(crate) fn gradient(g: Gradient) -> Self {
         // The threshold of tiny-skia, which cannot tell a gradient below it
         // from one of no extent at all, so the scene decides here and the

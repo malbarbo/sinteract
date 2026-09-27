@@ -448,12 +448,10 @@ fn sk_paint(shader: SkShader<'static>) -> SkPaint<'static> {
     }
 }
 
-/// A gradient tiny-skia turns down falls back to the primary color, the first
-/// stop, so the path still draws. Nothing arrives here that it turns down: a
-/// gradient with no stops does not draw at all, one with no extent is a solid
-/// color before it gets here, a line too long to measure is shortened by the
-/// scene, and the transform is the identity. The fallback stands for a rule a
-/// later version adds.
+/// A gradient that tiny-skia refuses falls back to the primary color, the
+/// first stop. Nothing that tiny-skia refuses arrives here today, because the
+/// scene removes each such case. The fallback keeps the path drawn if a later
+/// change lets one through.
 fn paint_to_shader(p: &Paint) -> SkShader<'static> {
     let g = match p {
         Paint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
