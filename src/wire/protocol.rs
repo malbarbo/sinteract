@@ -70,7 +70,8 @@ pub(super) fn read_next<T>(
 /// Open `payload` as a message whose root is `T`, and hand the root to
 /// `decode`. Cap'n Proto reads a payload in place when it starts on a word,
 /// and a payload that does not goes into a copy first. A payload that is
-/// not a whole number of words is an error on both paths.
+/// not a whole number of words, or that holds bytes after the message, is
+/// an error on both paths.
 pub(super) fn decode_root<T: Owned, M>(
     payload: &[u8],
     decode: impl FnOnce(T::Reader<'_>) -> Result<Option<M>, Error>,
@@ -91,6 +92,13 @@ pub(super) fn decode_root<T: Owned, M>(
     };
     let reader =
         serialize::read_message_from_flat_slice_no_alloc(&mut bytes, ReaderOptions::new())?;
+    if !bytes.is_empty() {
+        return Err(capnp::Error::failed(format!(
+            "{} bytes follow the message in its payload",
+            bytes.len()
+        ))
+        .into());
+    }
     decode(reader.get_root()?)
 }
 
@@ -123,6 +131,15 @@ mod tests {
         assert!(to_view::decode(cut).is_err());
         let (buffer, start) = unaligned(cut);
         assert!(to_view::decode(&buffer[start..start + cut.len()]).is_err());
+    }
+
+    #[test]
+    fn a_payload_with_bytes_after_the_message_is_an_error_on_both_paths() {
+        let mut long = encode_asset(7, &[1, 2, 3]);
+        long.extend_from_slice(&[0; 8]);
+        assert!(to_view::decode(&long).is_err());
+        let (buffer, start) = unaligned(&long);
+        assert!(to_view::decode(&buffer[start..start + long.len()]).is_err());
     }
 
     /// A buffer that holds `bytes` from `start`, one byte past a word.
