@@ -26,8 +26,12 @@
 //! terminal or a winit window. Only the Sixel encoder of it builds on
 //! wasm32. The rest needs threads, a tty, a window or platform FFI.
 
-// A test that fails on an unwrap reports the failure well enough.
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::indexing_slicing))]
+// A test that fails on an unwrap or a panic reports the failure well
+// enough.
+#![cfg_attr(
+    test,
+    allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)
+)]
 
 pub mod asset;
 pub mod display;
