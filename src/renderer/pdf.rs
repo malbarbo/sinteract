@@ -705,7 +705,7 @@ mod tests {
             angle_deg: 0.0,
         })
         .expect("text fits");
-        scene.text(Text {
+        scene.add_text(Text {
             fill: opaque(0, 0, 0),
             ..fitted
         });
@@ -730,7 +730,7 @@ mod tests {
     fn underline_paints_apart_from_the_glyphs() {
         let fills = |underline: bool| {
             let mut scene = Scene::new(100.0, 30.0);
-            scene.text(Text {
+            scene.add_text(Text {
                 underline,
                 ..text("Hi", 16.0)
             });
@@ -900,7 +900,7 @@ mod tests {
     #[test]
     fn a_text_with_no_outline_paints_nothing() {
         let mut scene = Scene::new(40.0, 20.0);
-        scene.text(text("   ", 12.0));
+        scene.add_text(text("   ", 12.0));
         let s = pdf_text(&scene);
         assert!(!s.lines().any(|l| l == "f"), "{s}");
     }

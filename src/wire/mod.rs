@@ -322,7 +322,7 @@ mod tests {
                 angle_deg: 0.0,
             })
             .expect("text fits");
-            clip.text(Text {
+            clip.add_text(Text {
                 fill: Rgba {
                     r: 0,
                     g: 0,
@@ -333,7 +333,7 @@ mod tests {
                 ..text
             });
             // An asset mirrored horizontally, rotated 90°, centred at (70, 40).
-            clip.bitmap(Bitmap::fit(
+            clip.add_bitmap(Bitmap::fit(
                 7,
                 RotatedRect {
                     cx: 70.0,
@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn the_bitmap_ids_of_a_frame_come_without_a_decode_of_the_scene() {
         let mut scene = Scene::new(10.0, 10.0);
-        scene.bitmap(Bitmap {
+        scene.add_bitmap(Bitmap {
             id: 3,
             ..Bitmap::default()
         });
@@ -620,11 +620,11 @@ mod tests {
             .line_to(5.0, 0.0)
             .line_to(5.0, 5.0)
             .build();
-        scene.clip(clip).bitmap(Bitmap {
+        scene.clip(clip).add_bitmap(Bitmap {
             id: 9,
             ..Bitmap::default()
         });
-        scene.bitmap(Bitmap {
+        scene.add_bitmap(Bitmap {
             id: 3,
             ..Bitmap::default()
         });
@@ -1047,7 +1047,7 @@ mod tests {
                 angle_deg: 0.0,
             });
             clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
-            clip.bitmap(Bitmap::fit(
+            clip.add_bitmap(Bitmap::fit(
                 7,
                 RotatedRect {
                     cx: 5.0,
@@ -1726,11 +1726,11 @@ mod tests {
             clip.add_path(line(PathStyle::default(), mark));
             clip.add_path(line(PathStyle::default(), 1.0));
         }
-        scene.text(Text {
+        scene.add_text(Text {
             stroke_width: mark,
             ..Text::default()
         });
-        scene.bitmap(Bitmap {
+        scene.add_bitmap(Bitmap {
             id: 1,
             transform: [1.0, 0.0, 0.0, 1.0, mark, 0.0],
         });

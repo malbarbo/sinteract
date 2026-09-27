@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn a_repeated_glyph_goes_into_defs_once() {
         let mut scene = Scene::new(60.0, 20.0);
-        scene.text(text("aaa"));
+        scene.add_text(text("aaa"));
         let svg = render_to_svg(&scene);
         assert_eq!(svg.matches("<path id=\"g").count(), 1, "{svg}");
         assert_eq!(svg.matches("<use ").count(), 3, "{svg}");
@@ -643,14 +643,14 @@ mod tests {
     #[test]
     fn a_space_places_no_glyph() {
         let mut scene = Scene::new(60.0, 20.0);
-        scene.text(text("a a"));
+        scene.add_text(text("a a"));
         assert_eq!(render_to_svg(&scene).matches("<use ").count(), 2);
     }
 
     #[test]
     fn a_stroked_text_fills_every_glyph_before_any_stroke() {
         let mut scene = Scene::new(60.0, 20.0);
-        scene.text(Text {
+        scene.add_text(Text {
             stroke: black(),
             stroke_width: 1.0,
             ..text("ab")
@@ -675,7 +675,7 @@ mod tests {
                 .build();
             let mut clipped = scene.clip(clip);
             clipped.add_path(rect(red_fill(0.5), 0.0, 0.0, 40.0, 40.0));
-            clipped.text(text("Hi"));
+            clipped.add_text(text("Hi"));
         }
         let bytes = crate::wire::scene::encode(&scene);
         let mut r = SvgRenderer::new();
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn a_second_render_starts_a_new_document() {
         let mut scene = Scene::new(20.0, 20.0);
-        scene.text(text("a"));
+        scene.add_text(text("a"));
         let mut r = SvgRenderer::new();
         let first = r.render(&scene).expect("render").to_owned();
         let second = r.render(&scene).expect("render");
@@ -712,7 +712,7 @@ mod tests {
                 ..PathStyle::default()
             };
             clipped.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));
-            clipped.text(text("a"));
+            clipped.add_text(text("a"));
         }
         let mut r = SvgRenderer::with_id_prefix("fig1-").expect("a valid prefix");
         let svg = r.render(&scene).expect("render");

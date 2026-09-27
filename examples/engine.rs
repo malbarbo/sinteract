@@ -297,7 +297,7 @@ impl Game {
             h: PADDLE_HEIGHT,
             angle_deg: 0.0,
         };
-        scene.bitmap(paddle.fit(rect));
+        scene.add_bitmap(paddle.fit(rect));
         scene
     }
 }

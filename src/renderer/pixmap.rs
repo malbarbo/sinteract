@@ -765,7 +765,7 @@ mod tests {
         let x_l = (160.0 + u.x_l).ceil() as u32 + 1;
         let x_r = (160.0 + u.x_r).floor() as u32 - 1;
         let mut scene = Scene::new(320.0, 120.0);
-        scene.text(node);
+        scene.add_text(node);
         let pixmap = render_to_pixmap(&scene, 1.0).expect("pixmap");
         for x in x_l..x_r {
             assert_eq!(pixel_rgba(&pixmap, x, y).3, 255, "a hole at x {x}");
@@ -1153,7 +1153,7 @@ mod tests {
     fn a_text_that_reaches_too_far_draws_nothing() {
         // A glyph 20 units tall at a scale of 1e9 reaches past the canvas.
         let mut scene = Scene::new(100.0, 100.0);
-        scene.text(Text {
+        scene.add_text(Text {
             fill: Rgba {
                 r: 0,
                 g: 0,
@@ -1330,7 +1330,7 @@ mod tests {
     #[test]
     fn rasterize_text_draws_some_pixels() {
         let mut scene = Scene::new(100.0, 40.0);
-        scene.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
+        scene.add_text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
         let pm = rasterize(&scene);
         assert!(count_opaque_pixels(&pm) > 50, "expected text pixels");
     }
@@ -1338,7 +1338,7 @@ mod tests {
     #[test]
     fn rasterize_text_corners_remain_transparent() {
         let mut scene = Scene::new(200.0, 60.0);
-        scene.text(text_node(100.0, 30.0, 200.0, 60.0, 24.0, "Hi"));
+        scene.add_text(text_node(100.0, 30.0, 200.0, 60.0, 24.0, "Hi"));
         let pm = rasterize(&scene);
         assert_eq!(pixel_rgba(&pm, 0, 0).3, 0);
         assert_eq!(pixel_rgba(&pm, 199, 59).3, 0);
@@ -1348,7 +1348,7 @@ mod tests {
     fn rasterize_text_handles_multibyte_utf8() {
         // A multi-byte UTF-8 string.
         let mut scene = Scene::new(100.0, 40.0);
-        scene.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Olá"));
+        scene.add_text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Olá"));
         let pm = rasterize(&scene);
         assert!(count_opaque_pixels(&pm) > 30, "expected text pixels");
     }
@@ -1357,11 +1357,11 @@ mod tests {
     fn rasterize_text_underline_adds_pixels() {
         // The same text with and without underline.
         let mut without = Scene::new(100.0, 40.0);
-        without.text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
+        without.add_text(text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi"));
         let mut with = Scene::new(100.0, 40.0);
         let mut node = text_node(50.0, 20.0, 100.0, 40.0, 24.0, "Hi");
         node.underline = true;
-        with.text(node);
+        with.add_text(node);
 
         let n = count_opaque_pixels(&rasterize(&without));
         let u = count_opaque_pixels(&rasterize(&with));
@@ -1373,7 +1373,7 @@ mod tests {
         // TextSpec::fit refuses an empty text, but the wire can still carry
         // one.
         let mut scene = Scene::new(10.0, 10.0);
-        scene.text(Text {
+        scene.add_text(Text {
             fill: Rgba {
                 r: 0,
                 g: 0,

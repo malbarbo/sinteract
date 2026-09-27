@@ -248,7 +248,7 @@ fn gallery(t: f32) -> Scene {
             ..TextSpec::default()
         };
         if let Some(node) = text(spec, x + CELL_W / 2.0, y + 12.0, 0.0, opaque(90, 90, 90)) {
-            scene.text(node);
+            scene.add_text(node);
         }
         draw(&mut scene, x, y + 20.0, t);
     }
@@ -553,9 +553,9 @@ fn rotated_clip(s: &mut Scene, x: f32, y: f32, t: f32) {
         ..TextSpec::default()
     };
     if let Some(node) = text(spec, x + 100.0, y + 45.0, 0.0, opaque(230, 50, 50)) {
-        clip.text(node);
+        clip.add_text(node);
     }
-    clip.bitmap(badge(x + 135.0, y + 85.0, 2.0, 0.0));
+    clip.add_bitmap(badge(x + 135.0, y + 85.0, 2.0, 0.0));
 }
 
 fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -621,7 +621,7 @@ fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
             0.0,
             opaque(30, 30, 30),
         ) {
-            s.text(node);
+            s.add_text(node);
         }
     }
     let spec = TextSpec {
@@ -630,7 +630,7 @@ fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
         ..TextSpec::default()
     };
     if let Some(node) = text(spec, x + 155.0, y + 20.0, 0.0, opaque(30, 30, 30)) {
-        s.text(Text {
+        s.add_text(Text {
             underline: true,
             ..node
         });
@@ -650,7 +650,7 @@ fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
             ..opaque(30, 30, 30)
         },
     ) {
-        s.text(node);
+        s.add_text(node);
     }
 }
 
@@ -667,7 +667,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         20.0 + t * 60.0,
         opaque(200, 40, 40),
     ) {
-        s.text(node);
+        s.add_text(node);
     }
     // A negative width mirrors the text, and a negative height flips it.
     let mirror = spec("mirror", 20.0).fit(RotatedRect {
@@ -678,7 +678,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         angle_deg: 0.0,
     });
     if let Some(node) = mirror {
-        s.text(Text {
+        s.add_text(Text {
             fill: opaque(40, 90, 200),
             ..node
         });
@@ -691,7 +691,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         angle_deg: 0.0,
     });
     if let Some(node) = flip {
-        s.text(Text {
+        s.add_text(Text {
             fill: opaque(40, 90, 200),
             ..node
         });
@@ -705,7 +705,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         angle_deg: 0.0,
     });
     if let Some(node) = wide {
-        s.text(Text {
+        s.add_text(Text {
             fill: opaque(40, 140, 60),
             ..node
         });
@@ -715,7 +715,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         ..spec("Outline", 30.0)
     };
     if let Some(node) = text(outline, x + 140.0, y + 75.0, 0.0, opaque(250, 220, 60)) {
-        s.text(Text {
+        s.add_text(Text {
             stroke: opaque(20, 20, 20),
             stroke_width: 1.2,
             ..node
@@ -729,7 +729,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         0.0,
         Rgba::default(),
     ) {
-        s.text(Text {
+        s.add_text(Text {
             stroke: opaque(20, 20, 20),
             stroke_width: 0.8,
             ..node
@@ -738,8 +738,8 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
 }
 
 fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
-    s.bitmap(badge(x + 40.0, y + 20.0, 1.2, 0.0));
-    s.bitmap(badge(x + 130.0, y + 60.0, 2.5, 20.0 + t * 45.0));
+    s.add_bitmap(badge(x + 40.0, y + 20.0, 1.2, 0.0));
+    s.add_bitmap(badge(x + 130.0, y + 60.0, 2.5, 20.0 + t * 45.0));
     // A negative width mirrors the image, and a negative height flips it.
     let (w, h) = (BADGE_SIZE.0 as f32 * 1.2, BADGE_SIZE.1 as f32 * 1.2);
     let mirrored = RotatedRect {
@@ -749,7 +749,7 @@ fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
         h,
         angle_deg: 0.0,
     };
-    s.bitmap(Bitmap::fit(BADGE, mirrored));
+    s.add_bitmap(Bitmap::fit(BADGE, mirrored));
     let flipped = RotatedRect {
         cx: x + 40.0,
         cy: y + 104.0,
@@ -757,7 +757,7 @@ fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
         h: -h,
         angle_deg: 0.0,
     };
-    s.bitmap(Bitmap::fit(BADGE, flipped));
+    s.add_bitmap(Bitmap::fit(BADGE, flipped));
 }
 
 fn png_image(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -788,7 +788,7 @@ fn photo(s: &mut Scene, photo: &Photo, x: f32, y: f32) {
         h: h * scale,
         angle_deg: 0.0,
     };
-    s.bitmap(Bitmap::fit(photo.id, rect));
+    s.add_bitmap(Bitmap::fit(photo.id, rect));
 }
 
 fn families(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -812,7 +812,7 @@ fn families(s: &mut Scene, x: f32, y: f32, _: f32) {
             0.0,
             opaque(30, 30, 30),
         ) {
-            s.text(node);
+            s.add_text(node);
         }
     }
 }

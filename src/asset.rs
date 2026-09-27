@@ -807,7 +807,7 @@ mod tests {
             return scene;
         };
         for &id in rest {
-            scene.bitmap(Bitmap {
+            scene.add_bitmap(Bitmap {
                 id,
                 ..Bitmap::default()
             });
@@ -816,7 +816,7 @@ mod tests {
             .line_to(5.0, 0.0)
             .line_to(5.0, 5.0)
             .build();
-        scene.clip(clip).bitmap(Bitmap {
+        scene.clip(clip).add_bitmap(Bitmap {
             id: *last,
             ..Bitmap::default()
         });

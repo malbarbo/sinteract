@@ -905,7 +905,7 @@ mod tests {
     fn drawing(player: u32, width: f32, ids: &[u32]) -> Vec<u8> {
         let mut scene = Scene::new(width, 1.0);
         for &id in ids {
-            scene.bitmap(Bitmap {
+            scene.add_bitmap(Bitmap {
                 id,
                 ..Bitmap::default()
             });

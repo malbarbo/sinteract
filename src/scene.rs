@@ -1000,15 +1000,15 @@ impl Scene {
         }
     }
 
-    pub fn text(&mut self, node: Text) {
-        if node.is_finite() {
-            self.elements.push(Element::Text(node));
+    pub fn add_text(&mut self, text: Text) {
+        if text.is_finite() {
+            self.elements.push(Element::Text(text));
         }
     }
 
-    pub fn bitmap(&mut self, node: Bitmap) {
-        if node.is_finite() {
-            self.elements.push(Element::Bitmap(node));
+    pub fn add_bitmap(&mut self, bitmap: Bitmap) {
+        if bitmap.is_finite() {
+            self.elements.push(Element::Bitmap(bitmap));
         }
     }
 }
@@ -1129,14 +1129,14 @@ impl ClipScope<'_> {
         self.scene.clip(clip)
     }
 
-    /// [`Scene::text`] inside the clip.
-    pub fn text(&mut self, node: Text) {
-        self.scene.text(node);
+    /// [`Scene::add_text`] inside the clip.
+    pub fn add_text(&mut self, text: Text) {
+        self.scene.add_text(text);
     }
 
-    /// [`Scene::bitmap`] inside the clip.
-    pub fn bitmap(&mut self, node: Bitmap) {
-        self.scene.bitmap(node);
+    /// [`Scene::add_bitmap`] inside the clip.
+    pub fn add_bitmap(&mut self, bitmap: Bitmap) {
+        self.scene.add_bitmap(bitmap);
     }
 }
 
@@ -1656,29 +1656,29 @@ mod tests {
         }
         .fit(a_unit_rect(0.0))
         .expect("text fits");
-        scene.text(Text {
+        scene.add_text(Text {
             spec: TextSpec {
                 size: inf,
                 ..text.spec.clone()
             },
             ..text.clone()
         });
-        scene.text(Text {
+        scene.add_text(Text {
             stroke_width: nan,
             ..text.clone()
         });
-        scene.text(Text {
+        scene.add_text(Text {
             fill: Rgba {
                 a: nan,
                 ..text.fill
             },
             ..text.clone()
         });
-        scene.text(Text {
+        scene.add_text(Text {
             transform: [1.0, 0.0, 0.0, 1.0, inf, 0.0],
             ..text
         });
-        scene.bitmap(Bitmap::fit(1, a_unit_rect(nan)));
+        scene.add_bitmap(Bitmap::fit(1, a_unit_rect(nan)));
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
     }
 
