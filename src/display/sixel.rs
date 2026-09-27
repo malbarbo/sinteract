@@ -36,15 +36,15 @@ impl Encoder {
     }
 
     /// Append `pixmap` to `out` as Sixel, with the DCS introducer and the
-    /// string terminator. `pixmap` has to be opaque. The encoding fails when
-    /// the width is over 1,000,000, when the height rounded up to a multiple
-    /// of 6 is over 1,000,000, or when the width times that height is over
-    /// 2^26. A failure leaves `out` as it was.
+    /// string terminator. The encoding fails when the width is over
+    /// 1,000,000, when the height rounded up to a multiple of 6 is over
+    /// 1,000,000, or when the width times that height is over 2^26. A
+    /// failure leaves `out` as it was.
+    ///
+    /// `pixmap` should be opaque. A pixel with an alpha below 128 goes out
+    /// transparent, and any other pixel that is not opaque draws its
+    /// premultiplied color, which is darker than the color.
     pub fn encode(&mut self, pixmap: &Pixmap, out: &mut Vec<u8>) -> io::Result<()> {
-        debug_assert!(
-            pixmap.pixels().iter().all(|p| p.alpha() == 255),
-            "a Sixel image is opaque"
-        );
         // An opaque premultiplied pixel holds its straight color, so the
         // bytes of the pixmap are the RGBA that the encoder reads.
         self.inner
@@ -104,10 +104,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "a Sixel image is opaque")]
-    fn encode_refuses_a_translucent_pixel_in_a_debug_build() {
-        sixel(Encoder::new(), &make_solid(2, 2, [255, 0, 0, 128]));
+    fn a_translucent_pixel_draws_its_premultiplied_color() {
+        let bytes = sixel(Encoder::new(), &make_solid(8, 6, [255, 0, 0, 128]));
+        assert!(window_contains(&bytes, b";2;50;0;0"));
     }
 
     #[test]
