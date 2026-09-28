@@ -136,13 +136,10 @@ impl Footprint {
     /// The footprint of `blob`, or an error if it is not a PNG, a JPEG, a
     /// GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
     pub fn of(blob: &[u8]) -> Result<Footprint, ImageError> {
-        let (width, height) = image_size(blob).ok_or(ImageError::Unsupported)?;
-        let pixels = u64::from(width) * u64::from(height);
-        if pixels > MAX_IMAGE_PIXELS {
-            return Err(ImageError::TooManyPixels { width, height });
-        }
+        let size = head(blob).ok_or(ImageError::Unsupported)?.size;
+        check_pixels(size, MAX_IMAGE_PIXELS)?;
         Ok(Footprint {
-            pixels,
+            pixels: pixels(size),
             bytes: blob.len() as u64,
         })
     }
@@ -255,9 +252,9 @@ impl std::error::Error for RoomFull {}
 /// without the feature. It is an error too if `file` is not a PNG, a JPEG,
 /// a GIF or a WebP.
 pub fn fit_image(file: Vec<u8>) -> Result<Vec<u8>, ImageError> {
-    let (width, height) = head(&file).ok_or(ImageError::Unsupported)?.size;
-    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-        shrink(&file, width, height)
+    let size = head(&file).ok_or(ImageError::Unsupported)?.size;
+    if pixels(size) > MAX_IMAGE_PIXELS {
+        shrink(&file, size)
     } else {
         Ok(file)
     }
@@ -268,24 +265,13 @@ pub fn fit_image(file: Vec<u8>) -> Result<Vec<u8>, ImageError> {
 /// a WebP, or has more than [`MAX_IMAGE_PIXELS`].
 pub(crate) fn screen_size(file: &[u8]) -> Result<(u32, u32), ImageError> {
     let head = head(file).ok_or(ImageError::Unsupported)?;
+    check_pixels(head.size, MAX_IMAGE_PIXELS)?;
     let (width, height) = head.size;
-    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-        return Err(ImageError::TooManyPixels { width, height });
-    }
     Ok(if head.turned() {
         (height, width)
     } else {
         (width, height)
     })
-}
-
-/// The width and the height from the header of the image in `blob`, or
-/// `None` if `blob` is not a PNG, a JPEG, a GIF or a WebP, or gives a
-/// width or a height of 0. It is the size that a decoder allocates, before
-/// the EXIF orientation of a JPEG turns it. It reads the header and decodes
-/// nothing.
-fn image_size(blob: &[u8]) -> Option<(u32, u32)> {
-    head(blob).map(|head| head.size)
 }
 
 /// How a document that holds the files of its images, such as an SVG or a
@@ -306,10 +292,7 @@ pub(crate) enum Embed {
 /// PNG, a JPEG, a GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
 pub(crate) fn embed(blob: &[u8]) -> Result<Embed, ImageError> {
     let head = head(blob).ok_or(ImageError::Unsupported)?;
-    let (width, height) = head.size;
-    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-        return Err(ImageError::TooManyPixels { width, height });
-    }
+    check_pixels(head.size, MAX_IMAGE_PIXELS)?;
     Ok(match (head.format, head.jpeg_color) {
         (Format::Png, _) => Embed::Png,
         (Format::Jpeg, Some(color)) if head.orientation == 1 => Embed::Jpeg {
@@ -358,6 +341,20 @@ impl Head {
     fn turned(self) -> bool {
         self.orientation >= 5
     }
+}
+
+/// Returns an error if an image of `size` has more than `max` pixels.
+fn check_pixels(size: (u32, u32), max: u64) -> Result<(), ImageError> {
+    if pixels(size) > max {
+        let (width, height) = size;
+        return Err(ImageError::TooManyPixels { width, height });
+    }
+    Ok(())
+}
+
+/// The pixels of an image of `size`, which do not wrap.
+fn pixels((width, height): (u32, u32)) -> u64 {
+    u64::from(width) * u64::from(height)
 }
 
 /// The header of the image in `blob`, or `None` if `blob` is not a PNG, a
@@ -587,10 +584,8 @@ pub(crate) fn decode(
     use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 
     let head = head(blob).ok_or(ImageError::Unsupported)?;
+    check_pixels(head.size, max_pixels)?;
     let (width, height) = head.size;
-    if u64::from(width) * u64::from(height) > max_pixels {
-        return Err(ImageError::TooManyPixels { width, height }.into());
-    }
     let format = match head.format {
         Format::Png => ImageFormat::Png,
         Format::Jpeg => ImageFormat::Jpeg,
@@ -647,16 +642,14 @@ struct Live<T> {
 /// [`MAX_IMAGE_PIXELS`] with its ratio, as a PNG, or an error if it has
 /// more than [`MAX_SHRINK_PIXELS`] or does not decode.
 #[cfg(feature = "render")]
-fn shrink(blob: &[u8], width: u32, height: u32) -> Result<Vec<u8>, ImageError> {
-    if u64::from(width) * u64::from(height) > MAX_SHRINK_PIXELS {
-        return Err(ImageError::TooManyPixels { width, height });
-    }
+fn shrink(blob: &[u8], size: (u32, u32)) -> Result<Vec<u8>, ImageError> {
+    check_pixels(size, MAX_SHRINK_PIXELS)?;
     shrink_to(blob, MAX_IMAGE_PIXELS)
 }
 
 /// Without the renderer, an image over the limit cannot shrink.
 #[cfg(not(feature = "render"))]
-fn shrink(_blob: &[u8], width: u32, height: u32) -> Result<Vec<u8>, ImageError> {
+fn shrink(_blob: &[u8], (width, height): (u32, u32)) -> Result<Vec<u8>, ImageError> {
     Err(ImageError::TooManyPixels { width, height })
 }
 
@@ -704,8 +697,8 @@ fn scaled(image: &tiny_skia::Pixmap, width: u32, height: u32) -> tiny_skia::Pixm
     out
 }
 
-/// The first 24 bytes of a PNG of `width` by `height`, all that
-/// [`image_size`] reads.
+/// The first 24 bytes of a PNG of `width` by `height`, all that [`head`]
+/// reads.
 #[cfg(test)]
 pub(crate) fn png_head(width: u32, height: u32) -> Vec<u8> {
     let mut head = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
@@ -1177,5 +1170,11 @@ mod tests {
                 bytes: MAX_LIVE_BYTES + 1
             })
         );
+    }
+
+    /// The width and the height from the header of the image in `blob`,
+    /// before the EXIF orientation of a JPEG turns them.
+    fn image_size(blob: &[u8]) -> Option<(u32, u32)> {
+        head(blob).map(|head| head.size)
     }
 }
