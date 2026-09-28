@@ -111,11 +111,8 @@ pub(crate) mod sealed {
 
         fn draw_text(&mut self, text: &Text);
 
-        /// Draw the asset with id `bitmap.id`. The pdf does not, so the
-        /// default skips it.
-        fn draw_bitmap(&mut self, bitmap: &Bitmap) {
-            let _ = bitmap;
-        }
+        /// Draw the asset with id `bitmap.id`.
+        fn draw_bitmap(&mut self, bitmap: &Bitmap);
 
         /// Run after the frame is painted. The pdf assembles its document
         /// here.
