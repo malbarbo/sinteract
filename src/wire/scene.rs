@@ -628,7 +628,9 @@ fn read_element_list(
 /// Add to `ids` the id of each bitmap of the scene in `r`, and in what a
 /// clip or a layer holds, with no decode of the rest. An element of an arm
 /// from a newer schema holds no bitmap, and neither does a clip or a layer
-/// past [`MAX_NESTING`], which a reader skips.
+/// past [`MAX_NESTING`], which a reader skips. The walk skips nothing else,
+/// so `ids` may hold the id of a bitmap that a reader drops, such as one in
+/// a hidden layer.
 pub(super) fn read_bitmap_ids(
     r: wire_scene::Reader<'_>,
     ids: &mut BTreeSet<u32>,

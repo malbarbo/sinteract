@@ -217,9 +217,10 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
     })
 }
 
-/// The ids of the bitmaps that the frame in `payload`, a message with no
-/// envelope, draws, with no decode of the rest of the scene. A message that
-/// is not a frame draws none.
+/// The ids of the bitmaps of the frame in `payload`, a message with no
+/// envelope, with no decode of the rest of the scene. They may include a
+/// bitmap that a view does not draw, such as one in a hidden layer. A
+/// message that is not a frame has none.
 pub fn bitmap_ids(payload: &[u8]) -> Result<BTreeSet<u32>, Error> {
     decode_root::<engine_message::Owned, _>(payload, |msg| {
         let mut ids = BTreeSet::new();
