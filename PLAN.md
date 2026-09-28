@@ -230,9 +230,6 @@ Falta:
 ## Pontos abertos
 
 - O que sobrou do item A da revisão: `seq` e `Error`.
-- Um asset vai para todos os jogadores, então um jogador vê no DevTools a
-  imagem que só outro jogador desenha. O asset pode ganhar um `player` no
-  fim, como o frame.
 - O `ServerCore` copia cada mensagem da engine duas vezes, do buffer do
   host para o seu e do seu para um `Arc` próprio. Com o crate `bytes`, o
   host leria direto no buffer do core, cada mensagem seria uma fatia
