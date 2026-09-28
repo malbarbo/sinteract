@@ -28,7 +28,11 @@ use crate::scene::{Rgba, Scene};
 
 /// A renderer that draws a [`Scene`] into a surface it owns. The
 /// [module docs](self) describe the lifecycle.
-pub trait Renderer: sealed::Canvas {
+pub trait Renderer: sealed::Canvas<Self::Error> {
+    /// Why sizing the surface failed. A backend that allocates no surface
+    /// never fails, and its error is [`Infallible`](std::convert::Infallible).
+    type Error;
+
     /// What a rendered frame borrows out, such as `&Pixmap` or `&[u8]`. It
     /// borrows `&mut self`, so the frame is read before the next `render`.
     type Output<'a>
@@ -40,7 +44,7 @@ pub trait Renderer: sealed::Canvas {
 
     /// Render a [`Scene`] and borrow the result. Fails only if sizing the
     /// surface fails.
-    fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, AllocError> {
+    fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, Self::Error> {
         self.ensure_size(scene.width(), scene.height())?;
         self.paint_elements(scene.elements());
         self.end_frame();
@@ -48,8 +52,7 @@ pub trait Renderer: sealed::Canvas {
     }
 }
 
-/// Sizing a surface failed. It is the only way a render fails, and only a
-/// backend that allocates a surface returns it. The pdf backend never does.
+/// Sizing the surface of the pixmap failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AllocError {
     pub width: u32,
@@ -71,10 +74,11 @@ pub(crate) mod sealed {
     /// The primitives a backend provides and the scene walker calls.
     /// `pub` in a private module, so nothing outside the crate can name or
     /// implement it.
-    pub trait Canvas: Sized {
+    /// `E` is [`super::Renderer::Error`].
+    pub trait Canvas<E>: Sized {
         /// Size the surface for a frame of `width` by `height` and clear it,
         /// reallocating only when the size changed.
-        fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), super::AllocError>;
+        fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), E>;
 
         fn draw_path(&mut self, path: &Path);
 

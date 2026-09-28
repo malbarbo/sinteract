@@ -19,6 +19,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::fmt::{self, Write};
 
 use base64::Engine as _;
@@ -27,8 +28,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use crate::asset::{Embed, embed};
 use crate::outline::PathSink;
 use crate::renderer::{
-    AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT,
-    frame_side, missing_box, missing_cross, sealed::Canvas,
+    MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side,
+    missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
     Bitmap, ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, Image, LineCap,
@@ -39,7 +40,7 @@ use crate::text::{Glyph, TextLayout};
 /// Render a [`crate::scene::Scene`] to an SVG document.
 pub fn render_to_svg(scene: &crate::scene::Scene) -> String {
     let mut renderer = SvgRenderer::new();
-    renderer.render(scene).expect("SVG rendering never fails");
+    let Ok(_) = renderer.render(scene);
     renderer.into_string()
 }
 
@@ -141,10 +142,9 @@ fn as_png<'a>(file: &'a [u8], mime: &'static str) -> Option<(&'static str, Cow<'
     Some((mime, Cow::Borrowed(file)))
 }
 
-impl Canvas for SvgRenderer {
-    /// Starts a new document. Nothing here allocates a surface, so it never
-    /// fails.
-    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
+impl Canvas<Infallible> for SvgRenderer {
+    /// Starts a new document.
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), Infallible> {
         self.width = frame_side(width);
         self.height = frame_side(height);
         self.defs.clear();
@@ -353,6 +353,8 @@ impl Canvas for SvgRenderer {
 }
 
 impl Renderer for SvgRenderer {
+    type Error = Infallible;
+
     type Output<'a> = &'a str;
 
     fn output(&self) -> &str {
@@ -922,8 +924,9 @@ mod tests {
         let mut scene = Scene::new(20.0, 20.0);
         scene.add_text(text("a"));
         let mut r = SvgRenderer::new();
-        let first = r.render(&scene).expect("render").to_owned();
-        let second = r.render(&scene).expect("render");
+        let Ok(first) = r.render(&scene);
+        let first = first.to_owned();
+        let Ok(second) = r.render(&scene);
         assert_eq!(first, second);
         assert_eq!(second.matches("<path id=\"g0\"").count(), 1);
     }
@@ -950,7 +953,7 @@ mod tests {
             });
         }
         let mut r = SvgRenderer::with_id_prefix("fig1-").expect("a valid prefix");
-        let svg = r.render(&scene).expect("render");
+        let Ok(svg) = r.render(&scene);
         for part in [
             "id=\"fig1-p0\"",
             "id=\"fig1-c0\"",

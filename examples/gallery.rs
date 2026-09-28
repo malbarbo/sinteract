@@ -170,9 +170,7 @@ fn png() -> Result<(), String> {
 
 fn svg() -> Result<(), String> {
     let mut renderer = SvgRenderer::new();
-    let svg = renderer
-        .render(&gallery(STILL))
-        .map_err(|e| e.to_string())?;
+    let Ok(svg) = renderer.render(&gallery(STILL));
     std::io::stdout()
         .write_all(svg.as_bytes())
         .map_err(|e| e.to_string())
@@ -180,9 +178,7 @@ fn svg() -> Result<(), String> {
 
 fn pdf() -> Result<(), String> {
     let mut renderer = PdfRenderer::new();
-    let pdf = renderer
-        .render(&gallery(STILL))
-        .map_err(|e| e.to_string())?;
+    let Ok(pdf) = renderer.render(&gallery(STILL));
     std::io::stdout().write_all(pdf).map_err(|e| e.to_string())
 }
 

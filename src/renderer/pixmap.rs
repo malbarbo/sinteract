@@ -209,7 +209,7 @@ impl Decoded {
     }
 }
 
-impl Canvas for PixmapRenderer {
+impl Canvas<AllocError> for PixmapRenderer {
     /// Reallocates the surface when the scaled size changed, then fills it
     /// with the background.
     fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
@@ -404,6 +404,8 @@ impl Canvas for PixmapRenderer {
 }
 
 impl Renderer for PixmapRenderer {
+    type Error = AllocError;
+
     type Output<'a> = &'a Pixmap;
 
     fn output(&self) -> &Pixmap {

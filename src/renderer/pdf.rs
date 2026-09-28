@@ -26,6 +26,7 @@
 //! do.
 
 use std::collections::{BTreeMap, HashMap};
+use std::convert::Infallible;
 
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle, MaskType};
 use pdf_writer::writers::{ColorSpace, Resources};
@@ -34,8 +35,8 @@ use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 use crate::asset::{Embed, JpegColor, MAX_IMAGE_PIXELS, embed};
 use crate::outline::PathSink;
 use crate::renderer::{
-    AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, frame_side, missing_box,
-    missing_cross, sealed::Canvas,
+    MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, frame_side, missing_box, missing_cross,
+    sealed::Canvas,
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, Gradient, GradientGeom, Image, LineCap, LineJoin, Paint, Path,
@@ -46,7 +47,7 @@ use crate::text::TextLayout;
 /// Render a [`crate::scene::Scene`] to PDF bytes.
 pub fn render_to_pdf(scene: &crate::scene::Scene) -> Vec<u8> {
     let mut renderer = PdfRenderer::new();
-    renderer.render(scene).expect("PDF rendering never fails");
+    let Ok(_) = renderer.render(scene);
     renderer.into_bytes()
 }
 
@@ -165,10 +166,9 @@ impl XImage {
     }
 }
 
-impl Canvas for PdfRenderer {
-    /// Starts a new page and writes the base transform. Nothing here
-    /// allocates a surface, so it never fails.
-    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), AllocError> {
+impl Canvas<Infallible> for PdfRenderer {
+    /// Starts a new page and writes the base transform.
+    fn ensure_size(&mut self, width: f32, height: f32) -> Result<(), Infallible> {
         self.width = frame_side(width);
         self.height = frame_side(height);
         self.gstates.clear();
@@ -303,6 +303,8 @@ impl Canvas for PdfRenderer {
 }
 
 impl Renderer for PdfRenderer {
+    type Error = Infallible;
+
     type Output<'a> = &'a [u8];
 
     fn output(&self) -> &[u8] {
@@ -1169,7 +1171,8 @@ mod tests {
         let mut scene = Scene::new(20.0, 20.0);
         scene.add_path(rect(red_fill(1.0), 0.0, 0.0, 10.0, 10.0));
         let mut renderer = PdfRenderer::new();
-        let rendered = renderer.render(&scene).expect("render").to_vec();
+        let Ok(rendered) = renderer.render(&scene);
+        let rendered = rendered.to_vec();
         assert!(!rendered.is_empty());
         assert_eq!(renderer.output(), &rendered[..]);
         assert_eq!(renderer.output(), &rendered[..]);
