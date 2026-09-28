@@ -1464,9 +1464,8 @@ struct KittyChunks<'a> {
     /// Empty until the first chunk, which carries the header.
     buf: &'a mut Vec<u8>,
     id: Option<u32>,
-    pending: [u8; CHUNK_BYTES],
-    /// The number of bytes in `pending`.
-    len: usize,
+    /// At most [`CHUNK_BYTES`].
+    pending: Vec<u8>,
 }
 
 impl<'a> KittyChunks<'a> {
@@ -1475,8 +1474,7 @@ impl<'a> KittyChunks<'a> {
         Self {
             buf,
             id,
-            pending: [0; CHUNK_BYTES],
-            len: 0,
+            pending: Vec::with_capacity(CHUNK_BYTES),
         }
     }
 
@@ -1497,18 +1495,14 @@ impl<'a> KittyChunks<'a> {
         } else {
             write!(self.buf, "\x1b_Gm={m},q=2;").expect("a Vec takes every write");
         }
-        let chunk = self
-            .pending
-            .get(..self.len)
-            .expect("len counts bytes of pending");
         let mut encoded = [0u8; CHUNK_BYTES / 3 * 4];
         let n = B64
-            .encode_slice(chunk, &mut encoded)
+            .encode_slice(&self.pending, &mut encoded)
             .expect("a chunk encodes into four bytes per three");
         self.buf
             .extend_from_slice(encoded.get(..n).expect("encode_slice fills a prefix"));
         self.buf.extend_from_slice(b"\x1b\\");
-        self.len = 0;
+        self.pending.clear();
     }
 }
 
@@ -1518,16 +1512,13 @@ impl Write for KittyChunks<'_> {
         if data.is_empty() {
             return Ok(0);
         }
-        if self.len == CHUNK_BYTES {
+        if self.pending.len() == CHUNK_BYTES {
             self.emit(true);
         }
-        let mut room = self
-            .pending
-            .get_mut(self.len..)
-            .expect("len counts bytes of pending");
-        let n = room.write(data)?;
-        self.len += n;
-        Ok(n)
+        let before = self.pending.len();
+        let room = CHUNK_BYTES - before;
+        self.pending.extend(data.iter().take(room));
+        Ok(self.pending.len() - before)
     }
 
     fn flush(&mut self) -> io::Result<()> {
