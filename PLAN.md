@@ -80,11 +80,14 @@ Regras da sessão com servidor:
 - quando uma view cai ou é trocada por outra, o servidor manda à engine
   um `Up` para cada tecla e botão que ela segurava, como a janela faz ao
   perder o foco;
-- a engine manda um asset logo antes do primeiro frame que o desenha. A
-  tabela `Assets` do módulo `asset` dá o `id` pelo conteúdo da imagem,
-  então um programa que monta a mesma imagem a cada frame a manda uma vez
-  só, e reduz uma imagem maior que 2048 por 2048 pixels para um PNG,
-  mantendo a proporção;
+- um bitmap guarda a sua `Image`, e a imagem viaja na cena. O front end
+  chama `fit_image` ao carregar a imagem, que reduz uma imagem maior que
+  2048 por 2048 pixels para um PNG, mantendo a proporção. A
+  `Session::write_frame` manda um asset logo antes do primeiro frame que
+  o desenha e dá o `id` pelo conteúdo da imagem, então um programa que
+  monta a mesma imagem a cada frame a manda uma vez só. Na view, o
+  `to_view::Reader` guarda as imagens dos assets e devolve cada frame
+  como uma `Scene` com as imagens;
 - uma imagem é um PNG, um JPEG, um GIF ou um WebP, e o formato vem dos
   primeiros bytes. O servidor não decodifica nada. Ele lê o tamanho no
   cabeçalho, que é o tamanho que o decodificador aloca, e o limite de
@@ -100,13 +103,16 @@ Regras da sessão com servidor:
   máximo oito imagens de 2048 por 2048 e 48 MiB. Para caber um asset
   novo, ele tira o que os frames usaram há mais tempo, fora os que o
   último frame de algum jogador desenha, e manda à engine um `lost` para
-  cada um. Um asset que não cabe nem assim se perde na hora. A engine
+  cada um. Um asset que não cabe nem assim se perde na hora. A `Session`
   manda de novo, com outro `id`, uma imagem perdida que um frame volta a
-  desenhar. O servidor não confia na engine para isso, e o jogo local usa
-  o mesmo `Cache` com o `Display`. Um bitmap sem imagem aparece na view
-  como uma caixa cinza com um X vermelho, no lugar da imagem, porque o
-  `transform` do bitmap leva o quadrado unitário ao canvas, qualquer que
-  seja o tamanho da imagem;
+  desenhar, e recusa um frame cujas imagens não cabem juntas numa sala.
+  O servidor não confia na engine para isso. No jogo local, o renderer
+  guarda as imagens decodificadas até oito imagens de 2048 por 2048, e
+  solta as que desenhou há mais tempo. Uma imagem que não decodifica
+  aparece como uma caixa cinza com um X vermelho, no lugar da imagem,
+  porque o `transform` do bitmap leva o quadrado unitário ao canvas,
+  qualquer que seja o tamanho da imagem, e a view pula um bitmap de um
+  `id` sem asset;
 - o servidor lê os `id`s dos bitmaps de cada frame e guarda o frame com
   os assets que ele desenha. Uma view recebe os que lhe faltam, o frame,
   e o `forget` de um asset que nem o frame na tela nem o próximo
@@ -212,8 +218,8 @@ Feito no sinteract:
 - a entrada com teclado, mouse, resize e pad de 12 botões;
 - a `Session`, com o `tick` do servidor e a fila que junta
   movimentos por jogador;
-- os assets com `lost` e `forget`, a tabela `Assets` da engine e o
-  `Cache` de uma sala;
+- a imagem na cena, os assets com `lost` e `forget`, a
+  `Session::write_frame`, o `to_view::Reader` e o `Cache` de uma sala;
 - o `ServerCore`, com as regras de uma sala e sem I/O, sobre
   `framing::split_frame`, `to_server::decode`, `to_view::arm` e
   `to_view::bitmap_ids`;

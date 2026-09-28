@@ -117,6 +117,8 @@ enum ValueError {
     /// A float that is not finite. The reader skips the element or the
     /// event that holds it.
     NotFinite,
+    /// A bitmap whose id names no image. The reader skips it.
+    NoImage,
 }
 
 impl From<Error> for ValueError {
@@ -144,12 +146,12 @@ impl From<std::str::Utf8Error> for ValueError {
 }
 
 /// `None` when reading an element or an event met a value from a newer
-/// schema or a float that is not finite, so the reader skips what holds it.
-/// Damage stays an error.
+/// schema, a float that is not finite or a bitmap with no image, so the
+/// reader skips what holds it. Damage stays an error.
 fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
     match read {
         Ok(v) => Ok(Some(v)),
-        Err(ValueError::Newer | ValueError::NotFinite) => Ok(None),
+        Err(ValueError::Newer | ValueError::NotFinite | ValueError::NoImage) => Ok(None),
         Err(ValueError::Malformed(e)) => Err(e),
     }
 }
@@ -257,9 +259,9 @@ mod tests {
     use crate::event_capnp::input_event;
     use crate::protocol_capnp::{engine_message, server_message, view_message};
     use crate::scene::{
-        Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, LineCap, LineJoin, Paint, Path,
-        PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment, SegmentKind, SpreadMode, Stop,
-        Text, TextSpec,
+        Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Image, LineCap, LineJoin, Paint,
+        Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment, SegmentKind, SpreadMode,
+        Stop, Text, TextSpec,
     };
     use crate::scene_capnp::element;
     use capnp::message::Builder as MessageBuilder;
@@ -337,7 +339,7 @@ mod tests {
                 // An asset mirrored horizontally, rotated 90°, centred at
                 // (70, 40).
                 clip.add_bitmap(Bitmap::fit(
-                    7,
+                    crate::asset::png_image(7, 1),
                     RotatedRect {
                         cx: 70.0,
                         cy: 40.0,
@@ -390,6 +392,16 @@ mod tests {
         std::num::NonZeroU32::new(n).unwrap()
     }
 
+    /// A bitmap of the image that a frame of the tests names by the id
+    /// `id`, as [`to_view::encode_frame`] writes it.
+    fn bitmap(id: u32) -> Bitmap {
+        Bitmap {
+            image: crate::asset::png_image(id, 1),
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            sampling: Sampling::Smooth,
+        }
+    }
+
     fn assert_scene_eq(a: &Scene, b: &Scene) {
         assert_eq!(a.width(), b.width());
         assert_eq!(a.height(), b.height());
@@ -425,8 +437,9 @@ mod tests {
     #[test]
     fn a_scene_round_trips_without_the_envelope() {
         let scene = sample_scene();
-        let bytes = scene::encode(&scene);
-        assert_scene_eq(&scene::decode(&bytes).expect("decode"), &scene);
+        let bytes = scene::encode(&scene, &Image::width);
+        let images = |id| Some(crate::asset::png_image(id, 1));
+        assert_scene_eq(&scene::decode(&bytes, &images).expect("decode"), &scene);
         assert!(
             bytes.len() < encode_frame(&scene).len(),
             "a bare scene should be smaller than the same scene in an EngineMessage"
@@ -614,26 +627,43 @@ mod tests {
     }
 
     #[test]
+    fn a_reader_draws_the_image_of_an_asset_until_its_forget() {
+        let image = crate::asset::png_image(3, 1);
+        let mut scene = Scene::new(4.0, 4.0);
+        scene.add_bitmap(bitmap(3));
+        let frame = encode_frame(&scene);
+        let mut reader = to_view::Reader::new();
+        let mut drawn = |payload: &[u8]| {
+            let scene = reader.read(payload).unwrap()?;
+            Some(match scene.elements() {
+                [Element::Bitmap(b)] => Some(b.image.clone()),
+                [] => None,
+                other => panic!("{other:?}"),
+            })
+        };
+        assert_eq!(drawn(&frame), Some(None));
+        assert_eq!(drawn(&encode_asset(3, image.file())), None);
+        assert_eq!(drawn(&frame), Some(Some(image.clone())));
+        assert_eq!(drawn(&to_view::encode_forget(3)), None);
+        assert_eq!(drawn(&frame), Some(None));
+        // An asset that is not an image leaves its id with no image.
+        drawn(&encode_asset(3, image.file()));
+        drawn(&encode_asset(3, b"GIF"));
+        assert_eq!(drawn(&frame), Some(None));
+    }
+
+    #[test]
     fn the_bitmap_ids_of_a_frame_come_without_a_decode_of_the_scene() {
         let mut scene = Scene::new(10.0, 10.0);
-        scene.add_bitmap(Bitmap {
-            id: 3,
-            ..Bitmap::default()
-        });
+        scene.add_bitmap(bitmap(3));
         let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
             .line_to(5.0, 0.0)
             .line_to(5.0, 5.0)
             .build();
         scene.clip(clip, |c| {
-            c.add_bitmap(Bitmap {
-                id: 9,
-                ..Bitmap::default()
-            });
+            c.add_bitmap(bitmap(9));
         });
-        scene.add_bitmap(Bitmap {
-            id: 3,
-            ..Bitmap::default()
-        });
+        scene.add_bitmap(bitmap(3));
         let ids = to_view::bitmap_ids(&encode_frame(&scene)).unwrap();
         assert_eq!(ids.into_iter().collect::<Vec<_>>(), [3, 9]);
         assert!(to_view::bitmap_ids(&encode_frame(&sample_scene())).is_ok());
@@ -825,10 +855,10 @@ mod tests {
     #[test]
     fn a_scene_whose_elements_share_a_path_is_an_error() {
         let bytes = with_shared_path::<crate::scene_capnp::scene::Owned>(
-            &scene::encode(&scene_of_paths()),
+            &scene::encode(&scene_of_paths(), &Image::width),
             |s| path_slots(s.get_elements().unwrap()),
         );
-        assert!(matches!(scene::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
+        assert!(matches!(scene::decode(&bytes, &|_| None), Err(e) if is_read_limit_exceeded(&e)));
     }
 
     /// `bytes` with the pointer in every slot after the first moved to the
@@ -1050,7 +1080,7 @@ mod tests {
             |clip| {
                 clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
                 clip.add_bitmap(Bitmap::fit(
-                    7,
+                    crate::asset::png_image(7, 1),
                     RotatedRect {
                         cx: 5.0,
                         cy: 5.0,
@@ -1281,7 +1311,7 @@ mod tests {
         for _ in 0..2 {
             scene.add_bitmap(Bitmap {
                 sampling: Sampling::Nearest,
-                ..Bitmap::default()
+                ..bitmap(1)
             });
         }
         // The sampling is the u16 at byte 28 of the data of a Bitmap.
@@ -1309,10 +1339,7 @@ mod tests {
         let stored = |opacity: f32| f32::from_bits(opacity.to_bits() ^ 1f32.to_bits());
         let mut scene = Scene::new(10.0, 10.0);
         scene.layer(marker, |layer| {
-            layer.add_bitmap(Bitmap {
-                id: 1,
-                ..Bitmap::default()
-            });
+            layer.add_bitmap(bitmap(1));
         });
         let bytes = encode_frame(&scene);
         let decoded = |opacity| {
@@ -1795,9 +1822,8 @@ mod tests {
             ..Text::default()
         });
         scene.add_bitmap(Bitmap {
-            id: 1,
             transform: [1.0, 0.0, 0.0, 1.0, mark, 0.0],
-            ..Bitmap::default()
+            ..bitmap(1)
         });
         scene.add_path(
             Path::builder(PathStyle::default(), 9.0, 9.0)

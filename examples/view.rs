@@ -29,7 +29,7 @@ use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
 use sinteract::server::{Conn, Next, ServerCore};
-use sinteract::wire::to_view::{self, Message};
+use sinteract::wire::to_view::Reader;
 
 /// How many reads of the engine the reader thread holds before it waits
 /// for the loop, so an engine that draws faster than the view does not
@@ -80,6 +80,7 @@ fn main() -> ExitCode {
     let wake = fr.sender();
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
+    let mut reader = Reader::new();
     let mut stats = Stats::default();
     loop {
         match fr.wait_event(None) {
@@ -92,7 +93,7 @@ fn main() -> ExitCode {
             // reader thread wakes the loop after each read.
             Err(Interrupt::Wake) => {
                 take_engine(&mut core, &from_reader);
-                if let Err(e) = show(fr.as_mut(), &mut core, conn, &mut stats) {
+                if let Err(e) = show(fr.as_mut(), &mut core, conn, &mut reader, &mut stats) {
                     if let Some(e) = e {
                         eprintln!("view: {e}");
                     }
@@ -238,13 +239,15 @@ fn take_engine(core: &mut ServerCore, from_reader: &Receiver<Vec<u8>>) {
     }
 }
 
-/// Show what the core has for the view: the forgets, the assets and the
-/// newest frame. Returns `Err` when the view is done, with the error of
-/// the display if it failed, or with `None` when the engine ended.
+/// Show the frames that the core has for the view. `reader` keeps the
+/// images of the assets that come before them. Returns `Err` when the view
+/// is done, with the error of the display if it failed, or with `None`
+/// when the engine ended.
 fn show(
     fr: &mut dyn Display,
     core: &mut ServerCore,
     conn: Conn,
+    reader: &mut Reader,
     stats: &mut Stats,
 ) -> Result<(), Option<PresentError>> {
     loop {
@@ -253,24 +256,13 @@ fn show(
             Next::Idle => return Ok(()),
             Next::Gone => return Err(None),
         };
-        match to_view::decode(&payload) {
-            Ok(Some(Message::Asset { id, blob })) => {
-                stats.assets += 1;
-                match fr.push_asset(id, &blob) {
-                    Ok(()) => {}
-                    // The rest of the frame still draws.
-                    Err(e @ PresentError::Asset(_)) => eprintln!("view: {e}"),
-                    Err(e) => return Err(Some(e)),
-                }
-            }
-            Ok(Some(Message::Frame { scene, .. })) => {
+        match reader.read(&payload) {
+            Ok(Some(scene)) => {
                 let start = Instant::now();
                 fr.present(scene)?;
                 stats.shown(start.elapsed());
             }
-            Ok(Some(Message::Forget(id))) => fr.forget_asset(id),
-            // The core passes no other message on.
-            Ok(Some(Message::Hello(_) | Message::TickTaken) | None) => {}
+            Ok(None) => {}
             Err(e) => eprintln!("view: {e}"),
         }
     }
@@ -284,8 +276,6 @@ struct Stats {
     tick_gap: Span,
     present: Span,
     last_tick: Option<Instant>,
-    /// The assets that went to the display.
-    assets: u32,
     first: Option<Instant>,
     last: Option<Instant>,
 }
@@ -317,8 +307,8 @@ impl Stats {
             0.0
         };
         eprintln!(
-            "view: {} frames, {:.1} fps, {} assets, tick every {}, present {}",
-            self.frames, fps, self.assets, self.tick_gap, self.present,
+            "view: {} frames, {:.1} fps, tick every {}, present {}",
+            self.frames, fps, self.tick_gap, self.present,
         );
     }
 }

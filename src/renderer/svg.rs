@@ -11,24 +11,25 @@
 //! gradient on a `<use>` starts again at each glyph. The text is not
 //! selectable.
 //!
-//! A bitmap is an `<image>` with the file of its asset in a data URL, in
-//! `<defs>` once and a `<use>` for each bitmap. A PNG and an upright JPEG go
-//! in as they are. With the feature `render`, any other image goes in as a
-//! PNG, so a GIF does not move and every viewer shows it.
+//! A bitmap is an `<image>` with the file of its image in a data URL, in
+//! `<defs>` once a frame and a `<use>` for each bitmap. A PNG and an
+//! upright JPEG go in as they are. With the feature `render`, any other
+//! image goes in as a PNG, so a GIF does not move and every viewer shows
+//! it.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{self, Write};
 
 use crate::asset::{Embed, embed};
 use crate::outline::PathSink;
 use crate::renderer::{
-    AllocError, AssetError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop,
-    TEXT_MITER_LIMIT, frame_side, sealed::Canvas, unit_square,
+    AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT,
+    frame_side, sealed::Canvas, unit_square,
 };
 use crate::scene::{
-    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, LineCap, LineJoin,
-    Paint, Path, Rgba, Sampling, SpreadMode, Text,
+    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, Image, LineCap,
+    LineJoin, Paint, Path, Rgba, Sampling, SpreadMode, Text,
 };
 use crate::text::{Glyph, TextLayout};
 
@@ -56,9 +57,9 @@ pub struct SvgRenderer {
     uses: Vec<(usize, f32)>,
     gradients: usize,
     clips: usize,
-    assets: Assets,
-    /// The ids of the images in `defs`.
-    images: HashSet<u32>,
+    /// The number of each image of the frame in `defs`, and `None` for one
+    /// that does not go in.
+    images: HashMap<Image, Option<usize>>,
     /// The start of every id in the document.
     prefix: String,
     /// The document of the last render.
@@ -78,8 +79,7 @@ impl SvgRenderer {
             uses: Vec::new(),
             gradients: 0,
             clips: 0,
-            assets: Assets::default(),
-            images: HashSet::new(),
+            images: HashMap::new(),
             prefix: String::new(),
             svg: String::new(),
         }
@@ -100,11 +100,6 @@ impl SvgRenderer {
         })
     }
 
-    /// The images that a [`Bitmap`] of the next frames names.
-    pub fn assets_mut(&mut self) -> &mut Assets {
-        &mut self.assets
-    }
-
     /// The document of the last render.
     pub fn into_string(self) -> String {
         self.svg
@@ -117,53 +112,30 @@ impl Default for SvgRenderer {
     }
 }
 
-/// The images that the bitmaps of a scene name by id, each as the data URL
-/// of a file.
-#[derive(Clone, Debug, Default)]
-pub struct Assets {
-    urls: HashMap<u32, String>,
+/// The file of `image` as a data URL, or `None` if it does not decode.
+fn data_url(image: &Image) -> Option<String> {
+    let file = image.file();
+    let (mime, file) = match embed(file).ok()? {
+        Embed::Png => ("image/png", Cow::Borrowed(file)),
+        Embed::Jpeg { .. } => ("image/jpeg", Cow::Borrowed(file)),
+        Embed::Decode { mime } => as_png(file, mime)?,
+    };
+    let mut url = format!("data:{mime};base64,");
+    write_base64(&file, &mut url);
+    Some(url)
 }
 
-impl Assets {
-    /// Keep the image in `blob`, a PNG, a JPEG, a GIF or a WebP of at most
-    /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS), for the
-    /// bitmaps of `id`, in place of the image that `id` named before.
-    pub fn insert(&mut self, id: u32, blob: &[u8]) -> Result<(), AssetError> {
-        let (mime, file) = match embed(blob).map_err(|e| AssetError(e.into()))? {
-            Embed::Png => ("image/png", Cow::Borrowed(blob)),
-            Embed::Jpeg { .. } => ("image/jpeg", Cow::Borrowed(blob)),
-            Embed::Decode { mime } => as_png(blob, mime)?,
-        };
-        let mut url = format!("data:{mime};base64,");
-        write_base64(&file, &mut url);
-        self.urls.insert(id, url);
-        Ok(())
-    }
-
-    /// Drop the image of `id`, if there is one.
-    pub fn remove(&mut self, id: u32) {
-        self.urls.remove(&id);
-    }
-}
-
-/// The image in `blob` as a PNG, the way up that the pixmap draws it.
+/// The image in `file` as a PNG, the way up that the pixmap draws it.
 #[cfg(feature = "render")]
-fn as_png<'a>(
-    blob: &'a [u8],
-    _mime: &'static str,
-) -> Result<(&'static str, Cow<'a, [u8]>), AssetError> {
-    let image = crate::asset::decode(blob, crate::asset::MAX_IMAGE_PIXELS).map_err(AssetError)?;
-    let png = image.encode_png().map_err(|e| AssetError(e.into()))?;
-    Ok(("image/png", Cow::Owned(png)))
+fn as_png<'a>(file: &'a [u8], _mime: &'static str) -> Option<(&'static str, Cow<'a, [u8]>)> {
+    let image = crate::asset::decode(file, crate::asset::MAX_IMAGE_PIXELS).ok()?;
+    Some(("image/png", Cow::Owned(image.encode_png().ok()?)))
 }
 
 /// Without a decoder, the image goes in as it is, of the media type `mime`.
 #[cfg(not(feature = "render"))]
-fn as_png<'a>(
-    blob: &'a [u8],
-    mime: &'static str,
-) -> Result<(&'static str, Cow<'a, [u8]>), AssetError> {
-    Ok((mime, Cow::Borrowed(blob)))
+fn as_png<'a>(file: &'a [u8], mime: &'static str) -> Option<(&'static str, Cow<'a, [u8]>)> {
+    Some((mime, Cow::Borrowed(file)))
 }
 
 impl Canvas for SvgRenderer {
@@ -293,22 +265,24 @@ impl Canvas for SvgRenderer {
         self.body.push_str("</g>\n");
     }
 
-    /// An id with no image draws a gray box with a red cross in its place,
-    /// as in the pixmap.
+    /// An image that does not decode draws a gray box with a red cross in
+    /// its place, as in the pixmap.
     fn draw_bitmap(&mut self, bitmap: &Bitmap) {
-        let id = bitmap.id;
         let prefix = &self.prefix;
-        let Some(url) = self.assets.urls.get(&id) else {
+        let next = self.images.len();
+        let id = *self.images.entry(bitmap.image.clone()).or_insert_with(|| {
+            let url = data_url(&bitmap.image)?;
+            _ = writeln!(
+                self.defs,
+                "<image id=\"{prefix}i{next}\" x=\"-0.5\" y=\"-0.5\" width=\"1\" height=\"1\" \
+                 preserveAspectRatio=\"none\" xlink:href=\"{url}\"/>"
+            );
+            Some(next)
+        });
+        let Some(id) = id else {
             write_missing(bitmap.transform, &mut self.body);
             return;
         };
-        if self.images.insert(id) {
-            _ = writeln!(
-                self.defs,
-                "<image id=\"{prefix}i{id}\" x=\"-0.5\" y=\"-0.5\" width=\"1\" height=\"1\" \
-                 preserveAspectRatio=\"none\" xlink:href=\"{url}\"/>"
-            );
-        }
         _ = write!(
             self.body,
             "<use xlink:href=\"#{prefix}i{id}\" transform=\"matrix("
@@ -686,9 +660,9 @@ mod tests {
         }
     }
 
-    fn bitmap(id: u32, sampling: Sampling) -> Bitmap {
+    fn bitmap(image: Image, sampling: Sampling) -> Bitmap {
         Bitmap {
-            id,
+            image,
             transform: [10.0, 0.0, 0.0, 10.0, 10.0, 10.0],
             sampling,
         }
@@ -721,27 +695,27 @@ mod tests {
 
     #[test]
     fn a_bitmap_is_a_use_of_its_image_in_defs() {
-        let mut renderer = SvgRenderer::new();
-        let png = crate::asset::png_head(2, 2);
-        renderer.assets_mut().insert(7, &png).unwrap();
         let mut scene = Scene::new(20.0, 20.0);
-        scene.add_bitmap(bitmap(7, Sampling::Smooth));
-        scene.add_bitmap(bitmap(7, Sampling::Nearest));
-        let svg = renderer.render(&scene).unwrap();
-        assert_eq!(svg.matches("<image ").count(), 1, "{svg}");
+        scene.add_bitmap(bitmap(crate::asset::png_image(3, 3), Sampling::Smooth));
+        scene.add_bitmap(bitmap(crate::asset::png_image(2, 2), Sampling::Smooth));
+        scene.add_bitmap(bitmap(crate::asset::png_image(2, 2), Sampling::Nearest));
+        let svg = render_to_svg(&scene);
+        assert_eq!(svg.matches("<image ").count(), 2, "{svg}");
         assert!(
             svg.contains("xlink:href=\"data:image/png;base64,iVBORw0KGgo"),
             "{svg}"
         );
-        let uses = "<use xlink:href=\"#i7\" transform=\"matrix(10 0 0 10 10 10)\"";
+        let uses = "<use xlink:href=\"#i1\" transform=\"matrix(10 0 0 10 10 10)\"";
         assert_eq!(svg.matches(uses).count(), 2, "{svg}");
         assert_eq!(svg.matches("optimizeSpeed").count(), 1, "{svg}");
     }
 
+    #[cfg(feature = "render")]
     #[test]
-    fn a_bitmap_with_no_image_is_a_gray_box_with_a_red_cross() {
+    fn a_bitmap_whose_image_does_not_decode_is_a_gray_box_with_a_red_cross() {
         let mut scene = Scene::new(20.0, 20.0);
-        scene.add_bitmap(bitmap(3, Sampling::Smooth));
+        let gif = Image::new(b"GIF89a\x01\0\x01\0\0\0\0\x2c\0\0\0\0\x01\0\x01\0".to_vec()).unwrap();
+        scene.add_bitmap(bitmap(gif, Sampling::Smooth));
         let svg = render_to_svg(&scene);
         let box_and_cross = "<path d=\"M5 5 L15 5 L15 15 L5 15 Z M5 5 L15 15 M15 5 L5 15\" \
                              fill=\"#c8c8c8\" stroke=\"#c80000\"/>";
@@ -755,9 +729,8 @@ mod tests {
         image::RgbaImage::new(2, 2)
             .write_to(&mut gif, image::ImageFormat::Gif)
             .unwrap();
-        let mut assets = Assets::default();
-        assets.insert(1, gif.get_ref()).unwrap();
-        assert!(assets.urls[&1].starts_with("data:image/png;base64,"));
+        let url = data_url(&Image::new(gif.into_inner()).unwrap()).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
     }
 
     fn black() -> Rgba {
@@ -1070,10 +1043,10 @@ mod tests {
         let zero = render_to_svg(&Scene::new(0.0, 0.0));
         assert_eq!(render_to_svg(&Scene::new(f32::INFINITY, f32::NAN)), zero);
         let (width, height) = (777.0, 778.0);
-        let bytes = crate::wire::scene::encode(&Scene::new(width, height));
+        let bytes = crate::wire::scene::encode(&Scene::new(width, height), &|_| 0);
         let bytes = crate::wire::with_float(&bytes, width, f32::INFINITY);
         let bytes = crate::wire::with_float(&bytes, height, f32::NAN);
-        let scene = crate::wire::scene::decode(&bytes).expect("decode");
+        let scene = crate::wire::scene::decode(&bytes, &|_| None).expect("decode");
         assert_eq!(render_to_svg(&scene), zero);
     }
 }

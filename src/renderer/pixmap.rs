@@ -11,15 +11,15 @@ use tiny_skia::{
     Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
-use crate::asset::MAX_IMAGE_PIXELS;
+use crate::asset::{MAX_IMAGE_PIXELS, MAX_LIVE_PIXELS};
 use crate::outline::PathSink;
 use crate::renderer::{
-    AllocError, AssetError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop,
-    TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
+    AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT,
+    frame_side, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Sampling,
-    SpreadMode, Stop, Text,
+    Bitmap, ClipPath, FillRule, GradientGeom, Image, LineCap, LineJoin, Paint, Path, Rgba,
+    Sampling, SpreadMode, Stop, Text,
 };
 use crate::text::TextLayout;
 
@@ -63,7 +63,7 @@ pub struct PixmapRenderer {
     /// The builder of the next path. A finished path clears back into it, so
     /// the next path reuses its capacity.
     builder: PathBuilder,
-    assets: Assets,
+    images: Decoded,
     /// The color of the pixmap before a frame draws on it.
     background: SkColor,
 }
@@ -82,14 +82,9 @@ impl PixmapRenderer {
             layer_stack: Vec::new(),
             layer_pool: Vec::new(),
             builder: PathBuilder::new(),
-            assets: Assets::default(),
+            images: Decoded::default(),
             background: SkColor::TRANSPARENT,
         })
-    }
-
-    /// The images that a [`Bitmap`] of the next frames names.
-    pub fn assets_mut(&mut self) -> &mut Assets {
-        &mut self.assets
     }
 
     /// Render the next frames at `scale`. The surface grows or shrinks at
@@ -131,26 +126,54 @@ impl Default for PixmapRenderer {
     }
 }
 
-/// The images that the bitmaps of a scene name by id, decoded.
-#[derive(Clone, Debug, Default)]
-pub struct Assets {
-    images: HashMap<u32, Pixmap>,
+/// The images that the bitmaps drew, decoded, so the next frames draw them
+/// without a decode. Past [`MAX_LIVE_PIXELS`], the images that a bitmap
+/// drew longest ago go first. An image that does not decode keeps `None`,
+/// so it draws the marker of a missing image without a second decode.
+#[derive(Default)]
+struct Decoded {
+    images: HashMap<Image, Use>,
+    /// The pixels of `images`, as their headers give them.
+    pixels: u64,
+    /// How many times a bitmap drew.
+    draws: u64,
 }
 
-impl Assets {
-    /// Decode the image in `blob`, a PNG, a JPEG, a GIF or a WebP of at most
-    /// [`MAX_IMAGE_PIXELS`], and keep it for the bitmaps of `id`, in place
-    /// of the image that `id` named before.
-    pub fn insert(&mut self, id: u32, blob: &[u8]) -> Result<(), AssetError> {
-        let image = crate::asset::decode(blob, MAX_IMAGE_PIXELS).map_err(AssetError)?;
-        self.images.insert(id, image);
-        Ok(())
-    }
+struct Use {
+    pixmap: Option<Pixmap>,
+    /// The value of `draws` when a bitmap last drew the image.
+    last: u64,
+}
 
-    /// Drop the image of `id`, if there is one.
-    pub fn remove(&mut self, id: u32) {
-        self.images.remove(&id);
+impl Decoded {
+    /// The pixels of `image`, decoded now if no bitmap drew it lately.
+    fn get(&mut self, image: &Image) -> Option<&Pixmap> {
+        self.draws += 1;
+        if !self.images.contains_key(image) {
+            self.pixels += pixels(image);
+            while self.pixels > MAX_LIVE_PIXELS {
+                let Some(oldest) = self
+                    .images
+                    .iter()
+                    .min_by_key(|(_, u)| u.last)
+                    .map(|(i, _)| i.clone())
+                else {
+                    break;
+                };
+                self.images.remove(&oldest);
+                self.pixels -= pixels(&oldest);
+            }
+            let pixmap = crate::asset::decode(image.file(), MAX_IMAGE_PIXELS).ok();
+            self.images.insert(image.clone(), Use { pixmap, last: 0 });
+        }
+        let used = self.images.get_mut(image).expect("the image is in");
+        used.last = self.draws;
+        used.pixmap.as_ref()
     }
+}
+
+fn pixels(image: &Image) -> u64 {
+    u64::from(image.width()) * u64::from(image.height())
 }
 
 impl Canvas for PixmapRenderer {
@@ -238,8 +261,8 @@ impl Canvas for PixmapRenderer {
         render_text(node, &mut self.pixmap, mask, self.base, &mut self.builder);
     }
 
-    /// Draw the image of `bitmap.id`. An id with no image draws a gray box
-    /// with a red cross in its place, so a missing image shows.
+    /// Draw the image of `bitmap`. An image that does not decode draws a
+    /// gray box with a red cross in its place, so a missing image shows.
     fn draw_bitmap(&mut self, bitmap: &Bitmap) {
         let mask = match in_effect(&self.clip_stack) {
             InEffect::Nothing => return,
@@ -248,7 +271,7 @@ impl Canvas for PixmapRenderer {
         };
         let [a, b, c, d, e, f] = bitmap.transform;
         let square = Transform::from_row(a, b, c, d, e, f).post_concat(self.base);
-        let Some(image) = self.assets.images.get(&bitmap.id) else {
+        let Some(image) = self.images.get(&bitmap.image) else {
             draw_missing(
                 &mut self.pixmap,
                 &mut self.builder,
@@ -939,17 +962,17 @@ mod tests {
 
     #[test]
     fn a_bitmap_stretches_its_image_over_the_rect() {
-        let pm = draw_red_blue_png(1);
+        let pm = draw_on_canvas(Bitmap::fit(red_blue_png(), WHOLE_CANVAS));
         assert_eq!(pixel_rgba(&pm, 2, 5), (255, 0, 0, 255));
         assert_eq!(pixel_rgba(&pm, 17, 5), (0, 0, 255, 255));
     }
 
     #[test]
     fn a_nearest_bitmap_keeps_the_edge_between_its_pixels_hard() {
-        let smooth = draw_red_blue_png_with(Bitmap::fit(1, WHOLE_CANVAS));
-        let nearest = draw_red_blue_png_with(Bitmap {
+        let smooth = draw_on_canvas(Bitmap::fit(red_blue_png(), WHOLE_CANVAS));
+        let nearest = draw_on_canvas(Bitmap {
             sampling: Sampling::Nearest,
-            ..Bitmap::fit(1, WHOLE_CANVAS)
+            ..Bitmap::fit(red_blue_png(), WHOLE_CANVAS)
         });
         // The pixels next to the middle blend red and blue unless the
         // sampling is nearest.
@@ -962,8 +985,10 @@ mod tests {
     }
 
     #[test]
-    fn a_bitmap_with_no_image_draws_a_gray_box_with_a_red_cross() {
-        let pm = draw_red_blue_png(2);
+    fn a_bitmap_whose_image_does_not_decode_draws_a_gray_box_with_a_red_cross() {
+        let mut r = PixmapRenderer::new(1.0, 20.0, 10.0).expect("alloc");
+        r.draw_bitmap(&Bitmap::fit(crate::asset::png_image(2, 1), WHOLE_CANVAS));
+        let pm = r.into_pixmap();
         assert_eq!(pixel_rgba(&pm, 3, 5), (200, 200, 200, 255));
         // The cross goes through the center, antialiased.
         let (r, g, _, a) = pixel_rgba(&pm, 10, 5);
@@ -971,26 +996,23 @@ mod tests {
     }
 
     #[test]
-    fn insert_refuses_what_is_not_a_png() {
-        let mut assets = Assets::default();
-        assert!(assets.insert(1, b"GIF89a").is_err());
+    fn the_decoded_images_past_the_limit_drop_the_one_drawn_longest_ago() {
+        // Eight of the largest images fill the limit.
+        let image = |k: u32| crate::asset::png_image(2048, 2048 - k);
+        let mut decoded = Decoded::default();
+        for k in 0..8 {
+            decoded.get(&image(k));
+        }
+        decoded.get(&image(0));
+        decoded.get(&image(8));
+        assert!(decoded.images.contains_key(&image(0)));
+        assert!(!decoded.images.contains_key(&image(1)));
+        assert_eq!(decoded.images.len(), 8);
+        let pixels: u64 = decoded.images.keys().map(pixels).sum();
+        assert_eq!(decoded.pixels, pixels);
     }
 
-    #[test]
-    fn remove_drops_the_image_of_an_id() {
-        let mut assets = Assets::default();
-        let png = Pixmap::new(1, 1)
-            .expect("alloc")
-            .encode_png()
-            .expect("encode");
-        assets.insert(1, &png).expect("a PNG decodes");
-        assets.remove(2);
-        assert!(assets.images.contains_key(&1));
-        assets.remove(1);
-        assert!(assets.images.is_empty());
-    }
-
-    /// The whole canvas of [`draw_red_blue_png_with`].
+    /// The whole canvas of [`draw_on_canvas`].
     const WHOLE_CANVAS: RotatedRect = RotatedRect {
         cx: 10.0,
         cy: 5.0,
@@ -999,24 +1021,19 @@ mod tests {
         angle_deg: 0.0,
     };
 
-    /// Keep a PNG of two pixels, red on the left and blue on the right, as
-    /// id 1, and draw the bitmap of `id` over a canvas of 20x10.
-    fn draw_red_blue_png(id: u32) -> Pixmap {
-        draw_red_blue_png_with(Bitmap::fit(id, WHOLE_CANVAS))
-    }
-
-    /// Keep the PNG of [`draw_red_blue_png`] as id 1, and draw `bitmap` over
-    /// a canvas of 20x10.
-    fn draw_red_blue_png_with(bitmap: Bitmap) -> Pixmap {
+    /// A PNG of two pixels, red on the left and blue on the right.
+    fn red_blue_png() -> Image {
         let mut png = Pixmap::new(2, 1).expect("alloc");
         png.pixels_mut().copy_from_slice(&[
             tiny_skia::ColorU8::from_rgba(255, 0, 0, 255).premultiply(),
             tiny_skia::ColorU8::from_rgba(0, 0, 255, 255).premultiply(),
         ]);
+        Image::new(png.encode_png().expect("encode")).expect("a PNG")
+    }
+
+    /// Draw `bitmap` over a canvas of 20x10.
+    fn draw_on_canvas(bitmap: Bitmap) -> Pixmap {
         let mut r = PixmapRenderer::new(1.0, 20.0, 10.0).expect("alloc");
-        r.assets_mut()
-            .insert(1, &png.encode_png().expect("encode"))
-            .expect("a PNG decodes");
         r.draw_bitmap(&bitmap);
         r.into_pixmap()
     }

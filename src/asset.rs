@@ -1,22 +1,20 @@
-//! The images of a room. [`Assets`] is the table of the engine, which gives
-//! an image its id and sends it before the first frame that draws it.
-//! [`Cache`] keeps the live assets of a room under the limits, in the
-//! server.
+//! The limits of the images of a room. [`fit_image`] shrinks an image to
+//! the limit of one image, and [`Cache`] keeps the live assets of a room
+//! under the limits, in the server.
 //!
 //! A limit counts the pixels, since each view decodes an asset to four
 //! bytes a pixel, and a small file can hold a large image. It also counts
 //! the bytes, which the server keeps and sends to each view.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::Arc;
 
-use crate::scene::{Bitmap, Element, RotatedRect, Scene};
+use crate::scene::Image;
 
 /// The most pixels of one image, 2048 by 2048.
 pub const MAX_IMAGE_PIXELS: u64 = 2048 * 2048;
 
-/// The most pixels of an image that [`Assets::image`] shrinks to
+/// The most pixels of an image that [`fit_image`] shrinks to
 /// [`MAX_IMAGE_PIXELS`], sixteen times as many, such as a photo of 8000 by
 /// 6000. A larger one would take the engine more than 256 MiB to decode.
 pub const MAX_SHRINK_PIXELS: u64 = 16 * MAX_IMAGE_PIXELS;
@@ -28,154 +26,6 @@ pub const MAX_LIVE_PIXELS: u64 = 8 * MAX_IMAGE_PIXELS;
 /// The most bytes of the live assets of a room. It is under the cap of the
 /// framing, so any asset under it fits in a message.
 pub const MAX_LIVE_BYTES: u64 = 48 << 20;
-
-/// The images of an engine. [`Assets::image`] gives an image its id, as a
-/// front end turns its image into a [`Bitmap`], and [`Assets::frame`] says
-/// which images go out before a frame. The same image keeps its id until
-/// the server loses it, so a program can make the same image each frame
-/// and send it once.
-///
-/// The front end calls `image` for the bitmaps of each frame, then
-/// `frame` for that frame, and [`Assets::lost`] for each lost of the
-/// server. An image that did not go out is gone after the next two calls
-/// of `frame`, and a lost one is gone at once, so the front end keeps no
-/// id from one frame to the next.
-#[derive(Debug, Default)]
-pub struct Assets {
-    ids: HashMap<Arc<[u8]>, u32>,
-    images: BTreeMap<u32, Entry>,
-    /// How many times `frame` ran.
-    frames: u64,
-    next_id: u32,
-}
-
-impl Assets {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The image in `blob`, with its id, or an error if it is not a PNG, a
-    /// JPEG, a GIF or a WebP. An image with more than [`MAX_IMAGE_PIXELS`]
-    /// shrinks to fit, with the feature `render`, up to
-    /// [`MAX_SHRINK_PIXELS`], and is an error past that or without the
-    /// feature. The size of the asset is the size on the screen, after the
-    /// EXIF orientation of a JPEG. A call hashes the whole blob.
-    pub fn image(&mut self, blob: &[u8]) -> Result<Asset, AssetError> {
-        if let Some(&id) = self.ids.get(blob) {
-            let entry = self.images.get_mut(&id).expect("an id names an image");
-            entry.seen = self.frames;
-            return Ok(entry.asset);
-        }
-        let source = Arc::<[u8]>::from(blob);
-        let head = head(blob).ok_or(AssetError::Unsupported)?;
-        let (width, height) = head.size;
-        let (png, size) = if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-            let shrunk = shrink(blob, width, height)?;
-            let size = image_size(&shrunk).expect("the shrunk image is a PNG");
-            (Arc::from(shrunk), size)
-        } else {
-            (source.clone(), (width, height))
-        };
-        let footprint = Footprint::new(Some(size), png.len())?;
-        // The student sees the image the way up that its EXIF gives.
-        let (width, height) = if head.turned() {
-            (height, width)
-        } else {
-            (width, height)
-        };
-        let id = self.next_id;
-        self.next_id = id
-            .checked_add(1)
-            .expect("an engine makes fewer than 2^32 images");
-        let asset = Asset { id, width, height };
-        self.ids.insert(source.clone(), id);
-        self.images.insert(
-            id,
-            Entry {
-                asset,
-                source,
-                png,
-                footprint,
-                sent: false,
-                seen: self.frames,
-            },
-        );
-        Ok(asset)
-    }
-
-    /// The id and the PNG of each image that `scene` draws and that has not
-    /// gone out, which go out before the frame. A bitmap whose id did not
-    /// come from [`Assets::image`] sends nothing. Returns
-    /// [`AssetError::Full`] and changes nothing if the images of `scene`
-    /// go over the limits of a room, since the server would lose one of
-    /// them each frame.
-    pub fn frame(&mut self, scene: &Scene) -> Result<Vec<Upload>, AssetError> {
-        let ids = bitmap_ids(scene);
-        let mut load = Load::default();
-        for entry in ids.iter().filter_map(|id| self.images.get(id)) {
-            load = load.with(entry.footprint)?;
-        }
-        let mut send = Vec::new();
-        for id in ids {
-            if let Some(entry) = self.images.get_mut(&id).filter(|e| !e.sent) {
-                entry.sent = true;
-                send.push((id, entry.png.clone()));
-            }
-        }
-        let frames = self.frames;
-        // An image that did not go out, from before the last frame.
-        let stale: Vec<u32> = self
-            .images
-            .iter()
-            .filter(|(_, entry)| !entry.sent && entry.seen < frames)
-            .map(|(&id, _)| id)
-            .collect();
-        for id in stale {
-            self.remove(id);
-        }
-        self.frames += 1;
-        Ok(send)
-    }
-
-    /// Say that the server lost the image `id`. The image gets a new id the
-    /// next time, and goes out again. An unknown id does nothing.
-    pub fn lost(&mut self, id: u32) {
-        self.remove(id);
-    }
-
-    fn remove(&mut self, id: u32) {
-        if let Some(entry) = self.images.remove(&id) {
-            self.ids.remove(&entry.source);
-        }
-    }
-}
-
-/// The id and the PNG of an image that goes out before a frame.
-pub type Upload = (u32, Arc<[u8]>);
-
-/// An image of [`Assets`], with its id and the size of the image from the
-/// program. A shrunk image keeps its size, since a [`Bitmap`] places the
-/// image with no regard to its pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Asset {
-    pub id: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl Asset {
-    /// The bitmap of the image, drawn into `rect`.
-    pub fn fit(self, rect: RotatedRect) -> Bitmap {
-        Bitmap::fit(self.id, rect)
-    }
-}
-
-/// The ids of the bitmaps that `scene` draws, in its clips too.
-pub fn bitmap_ids(scene: &Scene) -> BTreeSet<u32> {
-    let mut ids = BTreeSet::new();
-    add_bitmap_ids(scene.elements(), &mut ids);
-    ids
-}
 
 /// The live assets of a room, under the limits. [`Cache::asset`] keeps a
 /// new asset, and drops the ones that the frames used longest ago when it
@@ -316,6 +166,19 @@ impl Footprint {
             bytes: bytes as u64,
         })
     }
+}
+
+/// Returns an error if `images` go over the limits of a room together,
+/// since the server would lose one of them each frame.
+pub(crate) fn fit_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Result<(), AssetError> {
+    let mut load = Load::default();
+    for image in images {
+        load = load.with(Footprint {
+            pixels: u64::from(image.width()) * u64::from(image.height()),
+            bytes: image.file().len() as u64,
+        })?;
+    }
+    Ok(())
 }
 
 /// The live assets of a room, as the limits count them.
@@ -780,21 +643,6 @@ struct Live<T> {
     value: T,
 }
 
-/// An image of [`Assets`].
-#[derive(Debug)]
-struct Entry {
-    asset: Asset,
-    /// The image from the front end, which finds the image again.
-    source: Arc<[u8]>,
-    /// The PNG that goes out, which is `source` unless it shrank.
-    png: Arc<[u8]>,
-    footprint: Footprint,
-    /// Whether the image went out, and the server has not lost it since.
-    sent: bool,
-    /// The count of frames at the last call of [`Assets::image`] for it.
-    seen: u64,
-}
-
 /// The image in `blob`, of `width` by `height`, shrunk to at most
 /// [`MAX_IMAGE_PIXELS`] with its ratio, as a PNG, or an error if it has
 /// more than [`MAX_SHRINK_PIXELS`] or does not decode.
@@ -856,20 +704,6 @@ fn scaled(image: &tiny_skia::Pixmap, width: u32, height: u32) -> tiny_skia::Pixm
     out
 }
 
-fn add_bitmap_ids(elements: &[Element], ids: &mut BTreeSet<u32>) {
-    for element in elements {
-        match element {
-            Element::Bitmap(b) => {
-                ids.insert(b.id);
-            }
-            Element::Clipped { elements, .. } | Element::Layer { elements, .. } => {
-                add_bitmap_ids(elements, ids)
-            }
-            Element::Path(_) | Element::Text(_) => {}
-        }
-    }
-}
-
 /// The first 24 bytes of a PNG of `width` by `height`, all that
 /// [`image_size`] reads.
 #[cfg(test)]
@@ -880,117 +714,15 @@ pub(crate) fn png_head(width: u32, height: u32) -> Vec<u8> {
     head
 }
 
+/// An image of [`png_head`], which has a size and no pixels to decode.
+#[cfg(test)]
+pub(crate) fn png_image(width: u32, height: u32) -> crate::scene::Image {
+    Image::new(png_head(width, height)).expect("a PNG head is an image")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{ClipPath, FillRule};
-
-    /// A scene that draws the bitmaps of `ids`, the last one inside a clip.
-    fn drawing(ids: &[u32]) -> Scene {
-        let mut scene = Scene::new(10.0, 10.0);
-        let Some((last, rest)) = ids.split_last() else {
-            return scene;
-        };
-        for &id in rest {
-            scene.add_bitmap(Bitmap {
-                id,
-                ..Bitmap::default()
-            });
-        }
-        let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
-            .line_to(5.0, 0.0)
-            .line_to(5.0, 5.0)
-            .build();
-        scene.clip(clip, |c| {
-            c.add_bitmap(Bitmap {
-                id: *last,
-                ..Bitmap::default()
-            });
-        });
-        scene
-    }
-
-    fn sent(send: &[Upload]) -> Vec<u32> {
-        send.iter().map(|(id, _)| *id).collect()
-    }
-
-    fn id(assets: &mut Assets, png: &[u8]) -> u32 {
-        assets.image(png).unwrap().id
-    }
-
-    #[test]
-    fn the_same_image_gets_the_same_id_and_goes_out_once() {
-        let mut assets = Assets::new();
-        let a = id(&mut assets, &png_head(4, 4));
-        assert_eq!(id(&mut assets, &png_head(4, 4)), a);
-        let b = id(&mut assets, &png_head(5, 5));
-        assert_ne!(a, b);
-        let send = assets.frame(&drawing(&[a, b])).unwrap();
-        assert_eq!(sent(&send), [a, b]);
-        assert_eq!(&*send[0].1, &png_head(4, 4)[..]);
-        // An image that no frame draws for a while keeps its id.
-        assert!(assets.frame(&drawing(&[])).unwrap().is_empty());
-        assert!(assets.frame(&drawing(&[])).unwrap().is_empty());
-        assert_eq!(id(&mut assets, &png_head(4, 4)), a);
-        assert!(assets.frame(&drawing(&[a, b])).unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_lost_image_gets_a_new_id_and_goes_out_again() {
-        let mut assets = Assets::new();
-        let a = id(&mut assets, &png_head(4, 4));
-        assets.frame(&drawing(&[a])).unwrap();
-        assets.lost(a);
-        assets.lost(99);
-        let again = id(&mut assets, &png_head(4, 4));
-        assert_ne!(again, a);
-        assert_eq!(sent(&assets.frame(&drawing(&[a, again])).unwrap()), [again]);
-    }
-
-    #[test]
-    fn an_image_that_did_not_go_out_is_gone_after_two_frames() {
-        let mut assets = Assets::new();
-        let a = id(&mut assets, &png_head(4, 4));
-        assets.frame(&drawing(&[])).unwrap();
-        assert_eq!(id(&mut assets, &png_head(4, 4)), a);
-        assets.frame(&drawing(&[])).unwrap();
-        assets.frame(&drawing(&[])).unwrap();
-        assert_ne!(id(&mut assets, &png_head(4, 4)), a);
-    }
-
-    #[test]
-    fn an_image_that_is_not_a_png_or_is_too_large_gets_no_id() {
-        let mut assets = Assets::new();
-        assert_eq!(assets.image(b"GIF89a"), Err(AssetError::Unsupported));
-        assert_eq!(
-            assets.image(&png_head(8193, 8193)),
-            Err(AssetError::TooManyPixels {
-                width: 8193,
-                height: 8193
-            })
-        );
-    }
-
-    #[cfg(not(feature = "render"))]
-    #[test]
-    fn an_image_over_the_limit_is_an_error_without_the_renderer() {
-        let mut assets = Assets::new();
-        assert!(matches!(
-            assets.image(&png_head(2049, 2048)),
-            Err(AssetError::TooManyPixels { .. })
-        ));
-    }
-
-    #[cfg(feature = "render")]
-    #[test]
-    fn an_image_over_the_limit_goes_to_the_renderer_to_shrink() {
-        // The header of a large image, with no pixels to decode.
-        let mut assets = Assets::new();
-        assert_eq!(
-            assets.image(&png_head(2049, 2048)),
-            Err(AssetError::Unsupported)
-        );
-    }
 
     #[cfg(feature = "render")]
     #[test]
@@ -1039,25 +771,6 @@ mod tests {
             let (to_w, to_h) = shrunk_size(w, h, max);
             assert!(u64::from(to_w) * u64::from(to_h) <= MAX_IMAGE_PIXELS);
         }
-    }
-
-    #[test]
-    fn a_frame_whose_images_go_over_the_limits_is_an_error_and_changes_nothing() {
-        let mut assets = Assets::new();
-        let ids: Vec<u32> = (0..9)
-            .map(|k| id(&mut assets, &png_head(2048, 2048 - k)))
-            .collect();
-        assert!(matches!(
-            assets.frame(&drawing(&ids)),
-            Err(AssetError::Full { .. })
-        ));
-        assert_eq!(sent(&assets.frame(&drawing(&ids[..8])).unwrap()), ids[..8]);
-    }
-
-    #[test]
-    fn a_bitmap_of_an_unknown_id_sends_nothing() {
-        let mut assets = Assets::new();
-        assert!(assets.frame(&drawing(&[42])).unwrap().is_empty());
     }
 
     /// The footprint of the largest image, eight of which fill a room.
@@ -1136,60 +849,6 @@ mod tests {
         assert!(cache.contains(2) && !cache.contains(3));
     }
 
-    /// Send the images of `scene` from `assets` to `cache`, as a view does,
-    /// and tell `assets` of each one that `cache` drops. Returns the ids
-    /// that went out and the ids that were lost.
-    fn round_trip(
-        assets: &mut Assets,
-        cache: &mut Cache<()>,
-        scene: &Scene,
-    ) -> (Vec<u32>, Vec<u32>) {
-        let mut sent = Vec::new();
-        let mut lost = Vec::new();
-        for (id, blob) in assets.frame(scene).unwrap() {
-            sent.push(id);
-            let footprint = Footprint::of(&blob).unwrap();
-            for gone in cache.asset(id, footprint, ()).unwrap() {
-                assets.lost(gone);
-                lost.push(gone);
-            }
-        }
-        cache.frame(bitmap_ids(scene));
-        (sent, lost)
-    }
-
-    #[test]
-    fn an_engine_that_fills_the_room_loses_its_oldest_image_and_sends_it_again() {
-        let mut assets = Assets::new();
-        let mut cache = Cache::new();
-        // Ten images of nearly the largest size, one a frame, where eight
-        // fit.
-        let image = |k: u32| png_head(2048, 2048 - k);
-        let mut first = Vec::new();
-        for k in 0..10 {
-            let a = id(&mut assets, &image(k));
-            let (sent, lost) = round_trip(&mut assets, &mut cache, &drawing(&[a]));
-            assert_eq!(sent, [a]);
-            let expected = if k < 8 {
-                vec![]
-            } else {
-                vec![first[k as usize - 8]]
-            };
-            assert_eq!(lost, expected, "frame {k}");
-            first.push(a);
-        }
-        // The first image is lost, so it gets a new id and goes out again.
-        let again = id(&mut assets, &image(0));
-        assert_ne!(again, first[0]);
-        let (sent, lost) = round_trip(&mut assets, &mut cache, &drawing(&[again]));
-        assert_eq!((sent, lost), (vec![again], vec![first[2]]));
-        assert!(cache.contains(again) && !cache.contains(first[0]));
-        // An image that is still live keeps its id and does not go out.
-        assert_eq!(id(&mut assets, &image(9)), first[9]);
-        let (sent, _) = round_trip(&mut assets, &mut cache, &drawing(&[first[9]]));
-        assert!(sent.is_empty());
-    }
-
     #[test]
     fn the_size_comes_from_the_header_of_a_png() {
         assert_eq!(image_size(&png_head(640, 480)), Some((640, 480)));
@@ -1262,16 +921,13 @@ mod tests {
     }
 
     #[test]
-    fn an_image_has_the_size_on_the_screen_under_the_limit() {
-        let jpeg = jpeg_head_of(&[exif(true, 6), sof(640, 480)]);
-        let image = crate::scene::Image::new(jpeg).unwrap();
-        assert_eq!((image.width(), image.height()), (480, 640));
+    fn an_image_over_the_limit_or_of_no_format_is_an_error() {
         assert!(matches!(
-            crate::scene::Image::new(png_head(2049, 2048)),
+            Image::new(png_head(2049, 2048)),
             Err(AssetError::TooManyPixels { .. })
         ));
         assert!(matches!(
-            crate::scene::Image::new(b"GIF89a".to_vec()),
+            Image::new(b"GIF89a".to_vec()),
             Err(AssetError::Unsupported)
         ));
     }
@@ -1292,8 +948,8 @@ mod tests {
     #[test]
     fn a_turned_jpeg_has_the_size_on_the_screen_and_the_footprint_of_the_file() {
         let jpeg = jpeg_head_of(&[exif(true, 6), sof(640, 480)]);
-        let asset = Assets::new().image(&jpeg).unwrap();
-        assert_eq!((asset.width, asset.height), (480, 640));
+        let image = Image::new(jpeg.clone()).unwrap();
+        assert_eq!((image.width(), image.height()), (480, 640));
         assert_eq!(Footprint::of(&jpeg).map(|f| f.pixels), Ok(640 * 480));
     }
 

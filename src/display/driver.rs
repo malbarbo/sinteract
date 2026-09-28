@@ -8,7 +8,6 @@ use std::time::Instant;
 use super::inbox::Sender;
 use crate::event::{Event, Interrupt};
 use crate::renderer::AllocError;
-use crate::renderer::AssetError;
 use crate::scene::Scene;
 
 /// A session that shows scenes and delivers events. Opening is the
@@ -60,16 +59,6 @@ pub trait Display: sealed::Sealed {
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;
 
-    /// Upload a bitmap for `Bitmap.id`. Call it before the first
-    /// [`present`](Display::present) of a scene that names `id`.
-    fn push_asset(&mut self, id: u32, blob: &[u8]) -> Result<(), PresentError>;
-
-    /// Drop the bitmap of `id`. Call it after the
-    /// [`present`](Display::present) of a scene that no longer names `id`,
-    /// since a resize draws the last scene again. An `id` with no bitmap, or
-    /// a display after [`close`](Display::close), does nothing.
-    fn forget_asset(&mut self, id: u32);
-
     /// End the session. A second call does nothing, and drop calls it.
     fn close(&mut self);
 }
@@ -78,7 +67,7 @@ pub(super) mod sealed {
     pub trait Sealed {}
 }
 
-/// Why a frame or an asset did not reach the display.
+/// Why a frame did not reach the display.
 #[derive(Debug)]
 pub enum PresentError {
     /// The session ended at [`Display::close`]. [`Display::wait_event`]
@@ -90,9 +79,6 @@ pub enum PresentError {
     Io(io::Error),
     /// The surface of the window refused the frame.
     Platform(String),
-    /// The asset does not decode, so a bitmap of its id draws the marker of
-    /// a missing image.
-    Asset(AssetError),
 }
 
 impl fmt::Display for PresentError {
@@ -102,7 +88,6 @@ impl fmt::Display for PresentError {
             PresentError::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
             PresentError::Io(e) => write!(f, "cannot show the frame: {e}"),
             PresentError::Platform(e) => write!(f, "cannot show the frame: {e}"),
-            PresentError::Asset(e) => write!(f, "cannot keep the asset: {e}"),
         }
     }
 }
@@ -112,7 +97,6 @@ impl std::error::Error for PresentError {
         match self {
             PresentError::Alloc(e) => Some(e),
             PresentError::Io(e) => Some(e),
-            PresentError::Asset(e) => Some(e),
             PresentError::Closed | PresentError::Platform(_) => None,
         }
     }
@@ -121,12 +105,6 @@ impl std::error::Error for PresentError {
 impl From<AllocError> for PresentError {
     fn from(e: AllocError) -> Self {
         PresentError::Alloc(e)
-    }
-}
-
-impl From<AssetError> for PresentError {
-    fn from(e: AssetError) -> Self {
-        PresentError::Asset(e)
     }
 }
 

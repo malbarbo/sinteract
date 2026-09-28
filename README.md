@@ -36,8 +36,8 @@ scope, so a renderer only sees moves, lines, quadratics and cubics.
 
 A `Printer` prints images where the cursor sits. It fails to open when the
 terminal shows no graphics, so a REPL falls back to the text of the value.
-Its `Assets` hold the images that the bitmaps of the scenes name, in PNG,
-JPEG, GIF or WebP, and it keeps them from one print to the next.
+A bitmap holds its `Image`, a PNG, a JPEG, a GIF or a WebP, so a scene
+draws the same in a `Printer`, a `Display` or a document.
 
 For an animation, a `Display` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `Event`s. A frame that
@@ -47,9 +47,10 @@ caused them. The library writes nothing to stderr and ends no session on its
 own, so the program chooses the words and decides whether to stop. A
 `Sender` wakes it from another thread with a close or a bare wake. In a
 session with a server, the engine reads the input of the players with a
-`Session` and writes its frames as Cap'n Proto messages. The schema is in
-`schema/`, one file for the drawing, one for the input and one for the
-session, and `PLAN.md` describes the server and client modes.
+`Session` and writes its frames with it, as Cap'n Proto messages that
+carry each image once. The schema is in `schema/`, one file for the
+drawing, one for the input and one for the session, and `PLAN.md`
+describes the server and client modes.
 
 The scene, the rasterizer, the text measuring and the PDF and SVG writers
 build on `wasm32`, so a view in a browser can paint a scene without native

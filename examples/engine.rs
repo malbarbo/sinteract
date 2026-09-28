@@ -21,15 +21,14 @@
 #![cfg(unix)]
 
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::BufWriter;
 use std::os::fd::FromRawFd;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use sinteract::asset::{Asset, AssetError, Assets, Upload};
 use sinteract::display::{TerminalOptions, open_native};
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
-use sinteract::scene::{Paint, PathStyle, RotatedRect, Scene};
+use sinteract::scene::{Bitmap, Image, Paint, PathStyle, RotatedRect, Scene};
 use sinteract::session::{Session, SessionEvent};
 use sinteract::wire::to_view::{self, PlayerRange};
 
@@ -59,7 +58,6 @@ fn run_session(mut game: Game) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut session = Session::new();
-    let mut assets = Assets::new();
     // The end of fd 4, when the engine exits, ends the session for the
     // server.
     loop {
@@ -73,12 +71,11 @@ fn run_session(mut game: Game) -> ExitCode {
         match event {
             SessionEvent::Tick => {
                 game.tick();
-                if let Err(e) = draw(&game, &mut assets, &mut to_view) {
+                if let Err(e) = session.write_frame(&mut to_view, None, &game.scene()) {
                     eprintln!("engine: {e}");
                     break;
                 }
             }
-            SessionEvent::Lost(id) => assets.lost(id),
             SessionEvent::Input {
                 event: InputEvent::Key(k),
                 ..
@@ -106,9 +103,7 @@ fn run_session(mut game: Game) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Run `game` in a window of this process, or in the terminal. The
-/// display keeps every color of the paddle, 40 images at most, since no
-/// room limits it.
+/// Run `game` in a window of this process, or in the terminal.
 fn run_local(mut game: Game) -> ExitCode {
     let mut fr = match open_native("engine", WIDTH, HEIGHT, TerminalOptions::default()) {
         Ok(fr) => fr,
@@ -117,24 +112,11 @@ fn run_local(mut game: Game) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut assets = Assets::new();
     loop {
         match fr.wait_event(None) {
             Ok(Event::Tick) => {
                 game.tick();
-                let (scene, send) = match game.frame(&mut assets) {
-                    Ok(frame) => frame,
-                    Err(e) => {
-                        eprintln!("engine: {e}");
-                        break;
-                    }
-                };
-                for (id, png) in send {
-                    if let Err(e) = fr.push_asset(id, &png) {
-                        eprintln!("engine: {e}");
-                    }
-                }
-                if let Err(e) = fr.present(scene) {
+                if let Err(e) = fr.present(game.scene()) {
                     eprintln!("engine: {e}");
                     break;
                 }
@@ -155,16 +137,6 @@ fn run_local(mut game: Game) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Write a frame of `game` for every player, after the images that it
-/// draws and that have not gone out.
-fn draw(game: &Game, assets: &mut Assets, to_view: &mut impl Write) -> io::Result<()> {
-    let (scene, send) = game.frame(assets).map_err(io::Error::other)?;
-    for (id, png) in send {
-        to_view::write_asset(to_view, id, &png)?;
-    }
-    to_view::write_frame(to_view, None, &scene)
-}
-
 struct Game {
     balls: Vec<Ball>,
     paddle: f32,
@@ -172,9 +144,9 @@ struct Game {
     moves: u32,
     /// The size of the image of the paddle in pixels.
     image_size: (u32, u32),
-    /// The image of the paddle as a PNG, for the color of `moves`. A move
-    /// encodes it again, and a frame without a move reuses it.
-    paddle_png: Vec<u8>,
+    /// The image of the paddle, for the color of `moves`. A move encodes it
+    /// again, and a frame without a move reuses it.
+    paddle_image: Image,
     /// When the last tick arrived.
     last_tick: Option<Instant>,
 }
@@ -219,7 +191,7 @@ impl Game {
             paddle: (WIDTH - PADDLE_WIDTH) / 2.0,
             moves: 0,
             image_size,
-            paddle_png: paddle_png(0, image_size),
+            paddle_image: paddle_image(0, image_size),
             last_tick: None,
         }
     }
@@ -260,19 +232,11 @@ impl Game {
         };
         self.paddle = (self.paddle + step).clamp(0.0, WIDTH - PADDLE_WIDTH);
         self.moves = (self.moves + 1) % COLORS;
-        self.paddle_png = paddle_png(self.moves, self.image_size);
+        self.paddle_image = paddle_image(self.moves, self.image_size);
     }
 
-    /// The scene of the field, and the images that it draws and that have
-    /// not gone out.
-    fn frame(&self, assets: &mut Assets) -> Result<(Scene, Vec<Upload>), AssetError> {
-        let scene = self.scene(assets.image(&self.paddle_png)?);
-        let send = assets.frame(&scene)?;
-        Ok((scene, send))
-    }
-
-    /// The field, with the image `paddle` for the paddle.
-    fn scene(&self, paddle: Asset) -> Scene {
+    /// The field, with the paddle.
+    fn scene(&self) -> Scene {
         let mut scene = Scene::new(WIDTH, HEIGHT);
         let fill = |r, g, b| PathStyle {
             fill: Paint::rgba(r, g, b, 1.0),
@@ -297,16 +261,16 @@ impl Game {
             h: PADDLE_HEIGHT,
             angle_deg: 0.0,
         };
-        scene.add_bitmap(paddle.fit(rect));
+        scene.add_bitmap(Bitmap::fit(self.paddle_image.clone(), rect));
         scene
     }
 }
 
-/// The paddle of `size` pixels as a PNG, in a green that `moves` shifts.
+/// The paddle of `size` pixels, in a green that `moves` shifts.
 /// It encodes with [`png::Compression::Fast`], since the default level of
 /// `Pixmap::encode_png` takes about 17 ms for 1024 by 1024 pixels, a
 /// whole frame, and this one about 1.5 ms.
-fn paddle_png(moves: u32, size: (u32, u32)) -> Vec<u8> {
+fn paddle_image(moves: u32, size: (u32, u32)) -> Image {
     let (w, h) = size;
     let mut pixmap = tiny_skia::Pixmap::new(w, h).expect("the paddle has a size");
     let shade = (moves * 3) as u8;
@@ -327,5 +291,5 @@ fn paddle_png(moves: u32, size: (u32, u32)) -> Vec<u8> {
         .write_header()
         .and_then(|mut writer| writer.write_image_data(pixmap.data()))
         .expect("a pixmap encodes");
-    png
+    Image::new(png).expect("the paddle is a PNG under the limit")
 }

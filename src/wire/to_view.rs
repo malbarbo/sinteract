@@ -1,13 +1,16 @@
 //! The messages from the engine to the view, in the `EngineMessage` union.
 //!
 //! The engine says first how many players the game takes, in a hello for
-//! the server. Then it uploads each bitmap as an asset, before the first
+//! the server. Then it uploads each image as an asset, before the first
 //! frame that draws it, and sends a frame per repaint, for one player or
 //! for all of them. It tells the server as it takes each tick. The engine
 //! ends the session with the end of its stream. The server adds a forget
 //! for a view, when the view no longer needs an asset.
+//!
+//! [`crate::session::Session::write_frame`] writes the assets and the
+//! frame, and a view reads them back with a [`Reader`].
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
@@ -15,16 +18,70 @@ use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::asset::image_size;
 use crate::protocol_capnp::{engine_message, hello};
-use crate::scene::Scene;
+use crate::scene::{Image, Scene};
 
 use super::Error;
 use super::framing::{Side, write_framed};
 use super::protocol::{ReadError, decode_root, read_next};
 use super::scene::{read_bitmap_ids, read_scene, write_scene};
 
-/// One message of the engine, one variant per arm of `EngineMessage`.
+/// The images of the assets that a view keeps, which the frames draw.
+#[derive(Debug, Default)]
+pub struct Reader {
+    images: HashMap<u32, Image>,
+}
+
+impl Reader {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Read `payload`, a message with no envelope, as
+    /// [`crate::server::Next::Send`] carries it. A frame comes out as its
+    /// scene, with the image of each bitmap. An asset and a forget change
+    /// the images and return `None`, as does every other message. An asset
+    /// that is not an image that [`Image::new`] takes keeps no image, so a
+    /// bitmap of its id is skipped, as is a bitmap of an id with no asset.
+    pub fn read(&mut self, payload: &[u8]) -> Result<Option<Scene>, Error> {
+        decode_root::<engine_message::Owned, _>(payload, |msg| {
+            let Ok(which) = msg.which() else {
+                return Ok(None);
+            };
+            match which {
+                engine_message::Asset(a) => {
+                    let a = a?;
+                    match Image::new(a.get_blob()?.to_vec()) {
+                        Ok(image) => self.images.insert(a.get_id(), image),
+                        Err(_) => self.images.remove(&a.get_id()),
+                    };
+                    Ok(None)
+                }
+                engine_message::Frame(f) => {
+                    let images = |id| self.images.get(&id).cloned();
+                    Ok(Some(read_scene(f?.get_scene()?, &images)?))
+                }
+                engine_message::Forget(id) => {
+                    self.images.remove(&id);
+                    Ok(None)
+                }
+                engine_message::Hello(_) | engine_message::TickTaken(()) => Ok(None),
+            }
+        })
+    }
+
+    /// Read the messages of the engine from `r`, as [`Reader::read`] does,
+    /// up to the next frame. Returns `None` at the end of the stream.
+    pub fn read_frame(&mut self, r: &mut impl Read) -> Result<Option<Scene>, ReadError> {
+        read_next(r, Side::Engine, |payload| self.read(payload))
+    }
+}
+
+/// One message of the engine, one variant per arm of `EngineMessage`. A
+/// bitmap of the id `n` draws [`crate::asset::png_image`] of `n` by 1, as
+/// [`encode_frame`] writes it, and one of the id 0 is skipped.
+#[cfg(test)]
 #[derive(Clone, Debug)]
-pub enum Message {
+pub(crate) enum Message {
     Asset {
         id: u32,
         blob: Vec<u8>,
@@ -100,21 +157,23 @@ impl PlayerRange {
     }
 }
 
-/// Read the next message of the engine. Returns `None` at the end of the
-/// stream. A message of an arm from a newer schema is skipped, and the next
-/// one comes out.
-pub fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
+/// Read the next message of the engine, as [`decode`] does. Returns
+/// `None` at the end of the stream.
+#[cfg(test)]
+pub(crate) fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
     read_next(r, Side::Engine, decode)
 }
 
 /// Write a scene as a frame for `player`, or for every player when
-/// `player` is `None`.
+/// `player` is `None`, with the id that `ids` gives the image of each
+/// bitmap. The asset of each id goes out before, with [`write_asset`].
 pub fn write_frame(
     w: &mut impl Write,
     player: Option<NonZeroU32>,
     scene: &Scene,
+    ids: &dyn Fn(&Image) -> u32,
 ) -> io::Result<()> {
-    write_framed(w, Side::Engine, &frame_message(player, scene))
+    write_framed(w, Side::Engine, &frame_message(player, scene, ids))
 }
 
 /// Write the hello, the first message of the engine.
@@ -127,7 +186,7 @@ pub fn write_tick_taken(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::Engine, &tick_taken_message())
 }
 
-/// Write a bitmap upload as an asset.
+/// Write the file of an image as the asset `id`.
 pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
     write_framed(w, Side::Engine, &asset_message(id, blob))
 }
@@ -175,13 +234,14 @@ pub fn bitmap_ids(payload: &[u8]) -> Result<BTreeSet<u32>, Error> {
     .map(|ids| ids.unwrap_or_default())
 }
 
-/// Decode `payload`, a message with no envelope, as
-/// [`crate::server::Next::Send`] carries it. `None` for a message of an
+/// Decode `payload`, a message with no envelope. `None` for a message of an
 /// arm from a newer schema.
-pub fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
+#[cfg(test)]
+pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<engine_message::Owned, _>(payload, decode_message)
 }
 
+#[cfg(test)]
 fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Error> {
     let Ok(which) = msg.which() else {
         return Ok(None);
@@ -198,7 +258,9 @@ fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Er
             let f = f?;
             Ok(Some(Message::Frame {
                 player: NonZeroU32::new(f.get_player()),
-                scene: read_scene(f.get_scene()?)?,
+                scene: read_scene(f.get_scene()?, &|id| {
+                    Image::new(crate::asset::png_head(id, 1)).ok()
+                })?,
             }))
         }
         engine_message::Hello(h) => Ok(Some(Message::Hello(read_hello(h?)?))),
@@ -212,11 +274,15 @@ fn read_hello(h: hello::Reader<'_>) -> Result<PlayerRange, Error> {
     PlayerRange::new(min, max).ok_or(Error::PlayerRange { min, max })
 }
 
-fn frame_message(player: Option<NonZeroU32>, scene: &Scene) -> MessageBuilder<HeapAllocator> {
+fn frame_message(
+    player: Option<NonZeroU32>,
+    scene: &Scene,
+    ids: &dyn Fn(&Image) -> u32,
+) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let mut frame = builder.init_root::<engine_message::Builder>().init_frame();
     frame.set_player(player.map_or(0, NonZeroU32::get));
-    write_scene(frame.init_scene(), scene);
+    write_scene(frame.init_scene(), scene, ids);
     builder
 }
 
@@ -264,13 +330,14 @@ pub(crate) fn encode_frame(scene: &Scene) -> Vec<u8> {
     encode_frame_to(None, scene)
 }
 
-/// Encode a scene as a frame for `player`, with no envelope.
+/// Encode a scene as a frame for `player`, with no envelope. The id of an
+/// image is its width, as [`decode`] reads it.
 #[cfg(test)]
 pub(crate) fn encode_frame_to(player: Option<NonZeroU32>, scene: &Scene) -> Vec<u8> {
-    super::finish(frame_message(player, scene))
+    super::finish(frame_message(player, scene, &Image::width))
 }
 
-/// Encode a bitmap upload as an asset, with no envelope.
+/// Encode the file of an image as the asset `id`, with no envelope.
 #[cfg(test)]
 pub(crate) fn encode_asset(id: u32, blob: &[u8]) -> Vec<u8> {
     super::finish(asset_message(id, blob))

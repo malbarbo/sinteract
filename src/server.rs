@@ -788,7 +788,7 @@ fn clean_nickname(nickname: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Bitmap, Scene};
+    use crate::scene::{Bitmap, Image, RotatedRect, Scene};
     use crate::session::{Session, SessionEvent};
 
     /// A core with a session that reads what the core writes, which also
@@ -820,13 +820,32 @@ mod tests {
         }
 
         /// The events that the engine got since the last call, in a short
-        /// form. The tickTaken of the engine goes back to the core.
+        /// form, with each lost, which the session keeps to itself. The
+        /// tickTaken of the engine goes back to the core.
         fn events(&mut self) -> Vec<String> {
             let mut buf = Vec::new();
             self.core.take_engine_output(&mut buf);
-            self.engine.feed(&buf);
             let mut back = Vec::new();
-            let events = std::iter::from_fn(|| self.engine.next_event(&mut back))
+            let mut events = Vec::new();
+            let mut rest = &buf[..];
+            while let Some((payload, after)) = framing::split_frame(rest, Side::Server).unwrap() {
+                let message = rest.get(..rest.len() - after.len()).unwrap();
+                if let Ok(Some(to_engine::Message::Lost(id))) = to_engine::decode(payload) {
+                    events.push(format!("lost {id}"));
+                }
+                self.engine.feed(message);
+                events.extend(self.session_events(&mut back));
+                rest = after;
+            }
+            assert!(rest.is_empty());
+            assert!(self.core.from_engine(&back).is_empty());
+            events
+        }
+
+        /// The events that wait in the session of the engine, in a short
+        /// form. A tickTaken goes to `back`.
+        fn session_events(&mut self, back: &mut Vec<u8>) -> Vec<String> {
+            std::iter::from_fn(|| self.engine.next_event(back))
                 .map(|e| match e {
                     SessionEvent::Start(nicknames) => {
                         let members: Vec<_> = (1..)
@@ -836,7 +855,6 @@ mod tests {
                         format!("start {}", members.join(", "))
                     }
                     SessionEvent::Tick => "tick".into(),
-                    SessionEvent::Lost(id) => format!("lost {id}"),
                     SessionEvent::Input { player, event } => match event {
                         InputEvent::Key(k) if k.kind == KeyKind::Up => {
                             format!("{player} up {}", k.key)
@@ -861,9 +879,7 @@ mod tests {
                     SessionEvent::End(None) => "end".into(),
                     SessionEvent::End(Some(e)) => format!("broken {e}"),
                 })
-                .collect();
-            assert!(self.core.from_engine(&back).is_empty());
-            events
+                .collect()
         }
     }
 
@@ -905,13 +921,17 @@ mod tests {
     fn drawing(player: u32, width: f32, ids: &[u32]) -> Vec<u8> {
         let mut scene = Scene::new(width, 1.0);
         for &id in ids {
-            scene.add_bitmap(Bitmap {
-                id,
-                ..Bitmap::default()
-            });
+            let rect = RotatedRect {
+                cx: 0.0,
+                cy: 0.0,
+                w: 1.0,
+                h: 1.0,
+                angle_deg: 0.0,
+            };
+            scene.add_bitmap(Bitmap::fit(crate::asset::png_image(id, 1), rect));
         }
         let mut out = Vec::new();
-        to_view::write_frame(&mut out, NonZeroU32::new(player), &scene).unwrap();
+        to_view::write_frame(&mut out, NonZeroU32::new(player), &scene, &Image::width).unwrap();
         out
     }
 

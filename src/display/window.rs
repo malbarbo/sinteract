@@ -185,21 +185,6 @@ impl super::Display for Window {
         self.inbox.sender()
     }
 
-    /// Decode the asset as a PNG, a JPEG, a GIF or a WebP.
-    fn push_asset(&mut self, id: u32, blob: &[u8]) -> Result<(), PresentError> {
-        let Some(session) = self.session.as_mut() else {
-            return Err(PresentError::Closed);
-        };
-        session.renderer.assets_mut().insert(id, blob)?;
-        Ok(())
-    }
-
-    fn forget_asset(&mut self, id: u32) {
-        if let Some(session) = self.session.as_mut() {
-            session.renderer.assets_mut().remove(id);
-        }
-    }
-
     /// Destroy the window and give the event loop back.
     fn close(&mut self) {
         let Some(Session {

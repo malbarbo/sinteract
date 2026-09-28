@@ -614,6 +614,10 @@ impl Image {
     pub fn height(&self) -> u32 {
         self.0.height
     }
+
+    pub(crate) fn file(&self) -> &[u8] {
+        &self.0.file
+    }
 }
 
 impl PartialEq for Image {
@@ -644,34 +648,22 @@ impl std::fmt::Debug for Image {
     }
 }
 
-/// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
-/// the wire, and the renderer resolves it to pixels. `transform` maps the
-/// unit square centred on the origin, which the image fills whatever its
-/// size, to the canvas in the convention of [`Text::transform`]. So the
-/// place of a bitmap does not depend on the pixels of its image.
-/// [`Bitmap::fit`] computes it for a [`RotatedRect`].
-#[derive(Clone, Copy, Debug)]
+/// A bitmap. `transform` maps the unit square centred on the origin, which
+/// the image fills whatever its size, to the canvas in the convention of
+/// [`Text::transform`]. So the place of a bitmap does not depend on the
+/// pixels of its image. [`Bitmap::fit`] computes it for a [`RotatedRect`].
+#[derive(Clone, Debug)]
 pub struct Bitmap {
-    pub id: u32,
+    pub image: Image,
     pub transform: [f32; 6],
     pub sampling: Sampling,
 }
 
-impl Default for Bitmap {
-    fn default() -> Self {
-        Self {
-            id: 0,
-            transform: translate(0.0, 0.0),
-            sampling: Sampling::Smooth,
-        }
-    }
-}
-
 impl Bitmap {
-    /// The bitmap of the asset `id`, drawn into `rect`.
-    pub fn fit(id: u32, rect: RotatedRect) -> Self {
+    /// The bitmap of `image`, drawn into `rect`.
+    pub fn fit(image: Image, rect: RotatedRect) -> Self {
         Self {
-            id,
+            image,
             transform: rect.affine(1.0, 1.0),
             sampling: Sampling::Smooth,
         }
@@ -1730,8 +1722,7 @@ mod tests {
             h: 16.0,
             angle_deg: 90.0,
         };
-        let bitmap = Bitmap::fit(7, rect);
-        assert_eq!(bitmap.id, 7);
+        let bitmap = Bitmap::fit(crate::asset::png_image(1, 1), rect);
         let m = bitmap.transform;
         assert_eq!(apply_affine(m, 0.0, 0.0), (70.0, 40.0));
         let (x, y) = apply_affine(m, 0.5, 0.5);
@@ -1826,7 +1817,7 @@ mod tests {
             transform: [1.0, 0.0, 0.0, 1.0, inf, 0.0],
             ..text
         });
-        scene.add_bitmap(Bitmap::fit(1, a_unit_rect(nan)));
+        scene.add_bitmap(Bitmap::fit(crate::asset::png_image(1, 1), a_unit_rect(nan)));
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
     }
 

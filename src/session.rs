@@ -2,8 +2,9 @@
 //! that plays the part of the server, writes a `ServerMessage` stream to
 //! the engine, and the session turns the bytes into [`SessionEvent`]s with
 //! the rules of the protocol. The engine writes its frames back with
-//! [`crate::wire::to_view`], and the session writes a tickTaken there as
-//! it hands out each tick, so the server holds the next tick until then.
+//! [`Session::write_frame`], which sends each image once, before the first
+//! frame that draws it. The session writes a tickTaken there as it hands
+//! out each tick, so the server holds the next tick until then.
 //!
 //! The session does no I/O of its own. A host that moves the bytes itself,
 //! such as JavaScript through wasm or a loop over a socket that does not
@@ -12,11 +13,13 @@
 //! with a [`Read`] and a [`Write`] that block, such as an engine on fd 3
 //! and fd 4, calls [`Session::wait`].
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
+use crate::asset::{AssetError, fit_room};
 use crate::event::InputEvent;
+use crate::scene::{Element, Image, Scene};
 use crate::wire;
 use crate::wire::framing::{self, Side};
 use crate::wire::to_engine::{self, Message};
@@ -39,6 +42,9 @@ pub struct Session {
     scratch: Vec<u8>,
     state: State,
     events: VecDeque<SessionEvent>,
+    /// The id of each image that went out and that the server did not lose.
+    sent: HashMap<Image, u32>,
+    next_id: u32,
 }
 
 /// What [`Session::next_event`] and [`Session::wait`] deliver.
@@ -55,9 +61,6 @@ pub enum SessionEvent {
         player: NonZeroU32,
         event: InputEvent,
     },
-    /// The server dropped the asset of this id, so the engine sends the
-    /// image again before a frame that draws it.
-    Lost(u32),
     /// The session dropped a message that broke a rule, and goes on.
     Error(SessionError),
     /// The stream ended, which is how the server ends the session. It is
@@ -94,6 +97,40 @@ impl std::error::Error for SessionError {
             SessionError::Payload(e) => Some(e),
             SessionError::BeforeStart | SessionError::SecondStart => None,
         }
+    }
+}
+
+/// Why [`Session::write_frame`] did not write a frame.
+#[derive(Debug)]
+pub enum FrameError {
+    /// The images of the frame go over the limits of a room together, so
+    /// the server would lose one of them each frame. Nothing went out.
+    Full(AssetError),
+    /// A write failed. Part of the frame may have gone out.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for FrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FrameError::Full(e) => e.fmt(f),
+            FrameError::Io(e) => write!(f, "cannot write the frame: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for FrameError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            FrameError::Full(e) => Some(e),
+            FrameError::Io(e) => Some(e),
+        }
+    }
+}
+
+impl From<io::Error> for FrameError {
+    fn from(e: io::Error) -> Self {
+        FrameError::Io(e)
     }
 }
 
@@ -176,6 +213,38 @@ impl Session {
         }
     }
 
+    /// Write `scene` to `w` as a frame for `player`, or for every player
+    /// when `player` is `None`. The asset of each image that it draws goes
+    /// out before, unless it went out before and the server did not lose
+    /// it.
+    pub fn write_frame(
+        &mut self,
+        w: &mut impl Write,
+        player: Option<NonZeroU32>,
+        scene: &Scene,
+    ) -> Result<(), FrameError> {
+        let images = images_of(scene);
+        fit_room(images.iter().copied()).map_err(FrameError::Full)?;
+        for image in images {
+            if !self.sent.contains_key(image) {
+                let id = self.next_id;
+                self.next_id = id
+                    .checked_add(1)
+                    .expect("an engine sends fewer than 2^32 images");
+                to_view::write_asset(w, id, image.file())?;
+                self.sent.insert(image.clone(), id);
+            }
+        }
+        let id = |image: &Image| {
+            *self
+                .sent
+                .get(image)
+                .expect("every image of the scene went out")
+        };
+        to_view::write_frame(w, player, scene, &id)?;
+        Ok(())
+    }
+
     /// Turn every whole message in `bytes` into events.
     fn take_messages(&mut self) {
         let mut at = 0;
@@ -217,7 +286,12 @@ impl Session {
             }
             (true, Message::Start(_)) => SessionEvent::Error(SessionError::SecondStart),
             (true, Message::Tick) => SessionEvent::Tick,
-            (true, Message::Lost(id)) => SessionEvent::Lost(id),
+            // The next frame that draws the image sends it again, with a new
+            // id, as the schema says.
+            (true, Message::Lost(id)) => {
+                self.sent.retain(|_, sent| *sent != id);
+                return;
+            }
             (true, Message::Input { player, event }) => SessionEvent::Input { player, event },
         };
         self.push(event);
@@ -238,10 +312,7 @@ impl Session {
                     return;
                 }
             }
-            SessionEvent::Start(_)
-            | SessionEvent::Lost(_)
-            | SessionEvent::Error(_)
-            | SessionEvent::End(_) => {}
+            SessionEvent::Start(_) | SessionEvent::Error(_) | SessionEvent::End(_) => {}
         }
         self.events.push_back(event);
     }
@@ -256,7 +327,6 @@ impl Session {
                     return new.supersedes(event).then_some(old);
                 }
                 SessionEvent::Input { .. } => {}
-                SessionEvent::Lost(_) => {}
                 SessionEvent::Start(_)
                 | SessionEvent::Tick
                 | SessionEvent::Error(_)
@@ -273,6 +343,29 @@ impl Session {
         self.bytes = Vec::new();
         self.events.push_back(SessionEvent::End(broken));
     }
+}
+
+/// The images that `scene` draws, each once, in the order of their first
+/// bitmap.
+fn images_of(scene: &Scene) -> Vec<&Image> {
+    fn walk<'a>(elements: &'a [Element], seen: &mut HashSet<&'a Image>, out: &mut Vec<&'a Image>) {
+        for element in elements {
+            match element {
+                Element::Bitmap(b) => {
+                    if seen.insert(&b.image) {
+                        out.push(&b.image);
+                    }
+                }
+                Element::Clipped { elements, .. } | Element::Layer { elements, .. } => {
+                    walk(elements, seen, out)
+                }
+                Element::Path(_) | Element::Text(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(scene.elements(), &mut HashSet::new(), &mut out);
+    out
 }
 
 /// Write `out` to `w` and flush it, or do nothing when `out` is empty.
@@ -297,6 +390,7 @@ enum State {
 mod tests {
     use super::*;
     use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
+    use crate::scene::Bitmap;
     use crate::wire::framing::HEADER_BYTES;
 
     fn player(n: u32) -> NonZeroU32 {
@@ -370,7 +464,6 @@ mod tests {
             .map(|e| match e {
                 SessionEvent::Start(nicknames) => format!("start {}", nicknames.len()),
                 SessionEvent::Tick => "tick".into(),
-                SessionEvent::Lost(id) => format!("lost {id}"),
                 SessionEvent::Input { player, event } => match event {
                     InputEvent::Key(k) => format!("{player} key {}", k.key),
                     InputEvent::Mouse(m) => format!("{player} move {}", m.x),
@@ -472,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lost_comes_out_after_the_start_and_is_an_error_before_it() {
+    fn a_lost_is_an_error_before_the_start() {
         let mut lost = Vec::new();
         to_engine::write_lost(&mut lost, 7).unwrap();
         let mut stream = lost.clone();
@@ -488,8 +581,90 @@ mod tests {
         ));
         assert!(matches!(next(&mut session), Some(SessionEvent::Start(_))));
         assert!(matches!(next(&mut session), Some(SessionEvent::Tick)));
-        assert!(matches!(next(&mut session), Some(SessionEvent::Lost(7))));
         assert!(next(&mut session).is_none());
+    }
+
+    /// A scene that draws the images of `images`, the last one inside a
+    /// layer.
+    fn drawing(images: &[Image]) -> Scene {
+        let rect = crate::scene::RotatedRect {
+            cx: 1.0,
+            cy: 1.0,
+            w: 2.0,
+            h: 2.0,
+            angle_deg: 0.0,
+        };
+        let mut scene = Scene::new(4.0, 4.0);
+        let Some((last, rest)) = images.split_last() else {
+            return scene;
+        };
+        for image in rest {
+            scene.add_bitmap(Bitmap::fit(image.clone(), rect));
+        }
+        scene.layer(0.5, |layer| {
+            layer.add_bitmap(Bitmap::fit(last.clone(), rect))
+        });
+        scene
+    }
+
+    /// The messages that `session` writes for `scene`, in a short form.
+    fn written(session: &mut Session, scene: &Scene) -> Vec<String> {
+        let mut out = Vec::new();
+        session.write_frame(&mut out, None, scene).unwrap();
+        let mut r = &out[..];
+        std::iter::from_fn(|| to_view::read(&mut r).unwrap())
+            .map(|m| match m {
+                to_view::Message::Asset { id, .. } => format!("asset {id}"),
+                to_view::Message::Frame { .. } => "frame".into(),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_image_goes_out_once_before_the_first_frame_that_draws_it() {
+        let a = crate::asset::png_image(4, 4);
+        let b = crate::asset::png_image(5, 5);
+        let mut session = started(&[]);
+        let again = crate::asset::png_image(4, 4);
+        assert_eq!(
+            written(&mut session, &drawing(&[a.clone(), b, again])),
+            ["asset 0", "asset 1", "frame"]
+        );
+        assert_eq!(written(&mut session, &drawing(&[])), ["frame"]);
+        assert_eq!(written(&mut session, &drawing(&[a])), ["frame"]);
+    }
+
+    #[test]
+    fn a_lost_image_goes_out_again_with_a_new_id() {
+        let a = crate::asset::png_image(4, 4);
+        let b = crate::asset::png_image(5, 5);
+        let mut session = started(&[]);
+        written(&mut session, &drawing(&[a.clone(), b.clone()]));
+        let mut lost = Vec::new();
+        to_engine::write_lost(&mut lost, 0).unwrap();
+        to_engine::write_lost(&mut lost, 99).unwrap();
+        session.feed(&lost);
+        assert!(next(&mut session).is_none());
+        assert_eq!(
+            written(&mut session, &drawing(&[a, b])),
+            ["asset 2", "frame"]
+        );
+    }
+
+    #[test]
+    fn a_frame_whose_images_go_over_the_limits_of_a_room_writes_nothing() {
+        let images: Vec<Image> = (0..9)
+            .map(|k| crate::asset::png_image(2048, 2048 - k))
+            .collect();
+        let mut session = started(&[]);
+        let mut out = Vec::new();
+        assert!(matches!(
+            session.write_frame(&mut out, None, &drawing(&images)),
+            Err(FrameError::Full(AssetError::Full { .. }))
+        ));
+        assert!(out.is_empty());
+        assert_eq!(written(&mut session, &drawing(&images[..8])).len(), 9);
     }
 
     #[test]

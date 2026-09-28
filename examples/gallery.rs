@@ -20,6 +20,7 @@
 
 use std::io::Write;
 use std::process::ExitCode;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use sinteract::display::{Display, Printer, Terminal, TerminalOptions, Window, open_native};
@@ -29,8 +30,8 @@ use sinteract::renderer::pdf::PdfRenderer;
 use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
 use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
-    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, Dash, FillRule, FontStyle, LineCap, LineJoin, Paint,
-    Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, Text, TextSpec,
+    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, Dash, FillRule, FontStyle, Image, LineCap, LineJoin,
+    Paint, Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, Text, TextSpec,
 };
 
 /// Draws a cell into the box at `(x, y)`, at the time `t` in seconds.
@@ -65,33 +66,18 @@ const CELL_W: f32 = 200.0;
 const CELL_H: f32 = 150.0;
 const WIDTH: f32 = COLS as f32 * CELL_W;
 const HEIGHT: f32 = CELLS.len().div_ceil(COLS) as f32 * CELL_H;
-/// The id of the one bitmap asset.
-const BADGE: u32 = 1;
+/// The image of the badge, drawn by sinteract.
+static BADGE: LazyLock<Image> =
+    LazyLock::new(|| Image::new(badge_png()).expect("the badge is a PNG"));
 /// The size of the badge image in pixels.
 const BADGE_SIZE: (u32, u32) = (32, 24);
-/// An image of each format that an asset takes, from `examples/images`.
-const PNG: Photo = Photo {
-    id: 2,
-    blob: include_bytes!("images/dice.png"),
-    size: (250, 187),
-};
+/// An image of each format that a bitmap takes, from `examples/images`.
+static PNG: LazyLock<Image> = LazyLock::new(|| photo_of(include_bytes!("images/dice.png")));
 /// The pixels are stored on their side, 160 by 240, and the EXIF
 /// orientation turns them.
-const JPEG: Photo = Photo {
-    id: 3,
-    blob: include_bytes!("images/landscape.jpg"),
-    size: (240, 160),
-};
-const GIF: Photo = Photo {
-    id: 4,
-    blob: include_bytes!("images/horse.gif"),
-    size: (307, 230),
-};
-const WEBP: Photo = Photo {
-    id: 5,
-    blob: include_bytes!("images/cat.webp"),
-    size: (576, 531),
-};
+static JPEG: LazyLock<Image> = LazyLock::new(|| photo_of(include_bytes!("images/landscape.jpg")));
+static GIF: LazyLock<Image> = LazyLock::new(|| photo_of(include_bytes!("images/horse.gif")));
+static WEBP: LazyLock<Image> = LazyLock::new(|| photo_of(include_bytes!("images/cat.webp")));
 /// The time of the still images, which gives every rotation an angle.
 const STILL: f32 = 0.7;
 
@@ -129,17 +115,12 @@ fn main() -> ExitCode {
     }
 }
 
-/// An image in a file, and its size upright.
-struct Photo {
-    id: u32,
-    blob: &'static [u8],
-    size: (u32, u32),
+/// The image in `file`, one of `examples/images`.
+fn photo_of(file: &[u8]) -> Image {
+    Image::new(file.to_vec()).expect("an image of examples/images")
 }
 
 fn run(mut display: Box<dyn Display>) -> Result<(), String> {
-    for (id, blob) in images() {
-        display.push_asset(id, &blob).map_err(|e| e.to_string())?;
-    }
     let start = Instant::now();
     let mut frames = 0u32;
     let mut presenting = std::time::Duration::ZERO;
@@ -175,23 +156,11 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
 
 fn print() -> Result<(), String> {
     let mut printer = Printer::new().map_err(|e| e.to_string())?;
-    for (id, blob) in images() {
-        printer
-            .assets_mut()
-            .insert(id, &blob)
-            .map_err(|e| e.to_string())?;
-    }
     printer.print(&gallery(STILL)).map_err(|e| e.to_string())
 }
 
 fn png() -> Result<(), String> {
     let mut renderer = PixmapRenderer::new(2.0, WIDTH, HEIGHT).map_err(|e| e.to_string())?;
-    for (id, blob) in images() {
-        renderer
-            .assets_mut()
-            .insert(id, &blob)
-            .map_err(|e| e.to_string())?;
-    }
     let pixmap = renderer
         .render(&gallery(STILL))
         .map_err(|e| e.to_string())?;
@@ -201,12 +170,6 @@ fn png() -> Result<(), String> {
 
 fn svg() -> Result<(), String> {
     let mut renderer = SvgRenderer::new();
-    for (id, blob) in images() {
-        renderer
-            .assets_mut()
-            .insert(id, &blob)
-            .map_err(|e| e.to_string())?;
-    }
     let svg = renderer
         .render(&gallery(STILL))
         .map_err(|e| e.to_string())?;
@@ -217,27 +180,10 @@ fn svg() -> Result<(), String> {
 
 fn pdf() -> Result<(), String> {
     let mut renderer = PdfRenderer::new();
-    for (id, blob) in images() {
-        renderer
-            .assets_mut()
-            .insert(id, &blob)
-            .map_err(|e| e.to_string())?;
-    }
     let pdf = renderer
         .render(&gallery(STILL))
         .map_err(|e| e.to_string())?;
     std::io::stdout().write_all(pdf).map_err(|e| e.to_string())
-}
-
-/// The id and the bytes of every image that the gallery draws.
-fn images() -> [(u32, Vec<u8>); 5] {
-    [
-        (BADGE, badge_png()),
-        (PNG.id, PNG.blob.to_vec()),
-        (JPEG.id, JPEG.blob.to_vec()),
-        (GIF.id, GIF.blob.to_vec()),
-        (WEBP.id, WEBP.blob.to_vec()),
-    ]
 }
 
 /// A PNG of four colored quarters and a white dot, drawn by sinteract.
@@ -809,7 +755,7 @@ fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
         h,
         angle_deg: 0.0,
     };
-    s.add_bitmap(Bitmap::fit(BADGE, mirrored));
+    s.add_bitmap(Bitmap::fit(BADGE.clone(), mirrored));
     let flipped = RotatedRect {
         cx: x + 40.0,
         cy: y + 104.0,
@@ -817,7 +763,7 @@ fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
         h: -h,
         angle_deg: 0.0,
     };
-    s.add_bitmap(Bitmap::fit(BADGE, flipped));
+    s.add_bitmap(Bitmap::fit(BADGE.clone(), flipped));
 }
 
 fn png_image(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -838,8 +784,8 @@ fn webp_image(s: &mut Scene, x: f32, y: f32, _: f32) {
 
 /// `photo` as large as it fits in the box at `(x, y)`, under the label,
 /// with its own aspect.
-fn photo(s: &mut Scene, photo: &Photo, x: f32, y: f32) {
-    let (w, h) = (photo.size.0 as f32, photo.size.1 as f32);
+fn photo(s: &mut Scene, photo: &Image, x: f32, y: f32) {
+    let (w, h) = (photo.width() as f32, photo.height() as f32);
     let scale = f32::min((CELL_W - 20.0) / w, (CELL_H - 30.0) / h);
     let rect = RotatedRect {
         cx: x + CELL_W / 2.0,
@@ -848,7 +794,7 @@ fn photo(s: &mut Scene, photo: &Photo, x: f32, y: f32) {
         h: h * scale,
         angle_deg: 0.0,
     };
-    s.add_bitmap(Bitmap::fit(photo.id, rect));
+    s.add_bitmap(Bitmap::fit(photo.clone(), rect));
 }
 
 fn families(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -888,7 +834,7 @@ fn badge(cx: f32, cy: f32, scale: f32, angle_deg: f32) -> Bitmap {
         h: h as f32 * scale,
         angle_deg,
     };
-    Bitmap::fit(BADGE, rect)
+    Bitmap::fit(BADGE.clone(), rect)
 }
 
 /// A text at its natural size in `fill`, centred on `(cx, cy)` and rotated

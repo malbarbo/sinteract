@@ -34,12 +34,12 @@ use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 use crate::asset::{Embed, JpegColor, MAX_IMAGE_PIXELS, embed};
 use crate::outline::PathSink;
 use crate::renderer::{
-    AllocError, AssetError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, frame_side,
-    sealed::Canvas, unit_square,
+    AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, frame_side, sealed::Canvas,
+    unit_square,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, Gradient, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba,
-    Sampling, Stop, Text,
+    Bitmap, ClipPath, FillRule, Gradient, GradientGeom, Image, LineCap, LineJoin, Paint, Path,
+    Rgba, Sampling, Stop, Text,
 };
 use crate::text::TextLayout;
 
@@ -67,10 +67,12 @@ pub struct PdfRenderer {
     /// The content of each layer of the frame, as a form XObject. The index
     /// of a layer is its `/Fmn` name.
     forms: Vec<Vec<u8>>,
-    assets: Assets,
-    /// The id and the sampling of each image of the frame. The index of an
-    /// image is its `/Imn` name.
-    images: Vec<(u32, Sampling)>,
+    /// Each image of the frame, ready for the PDF, and `None` for one that
+    /// does not decode.
+    prepared: HashMap<Image, Option<XImage>>,
+    /// Each image of the frame with a sampling that a bitmap draws it with.
+    /// The index of an image is its `/Imn` name.
+    images: Vec<(Image, Sampling)>,
     /// The document of the last render.
     bytes: Vec<u8>,
 }
@@ -86,15 +88,10 @@ impl PdfRenderer {
             gradients: Vec::new(),
             layer_stack: Vec::new(),
             forms: Vec::new(),
-            assets: Assets::default(),
+            prepared: HashMap::new(),
             images: Vec::new(),
             bytes: Vec::new(),
         }
-    }
-
-    /// The images that a [`Bitmap`] of the next frames names.
-    pub fn assets_mut(&mut self) -> &mut Assets {
-        &mut self.assets
     }
 
     /// The document of the last render.
@@ -109,43 +106,9 @@ impl Default for PdfRenderer {
     }
 }
 
-/// The images that the bitmaps of a scene name by id, ready for a PDF.
-#[derive(Clone, Debug, Default)]
-pub struct Assets {
-    images: HashMap<u32, Image>,
-}
-
-impl Assets {
-    /// Keep the image in `blob`, a PNG, a JPEG, a GIF or a WebP of at most
-    /// [`MAX_IMAGE_PIXELS`], for the bitmaps of `id`, in place of the image
-    /// that `id` named before.
-    pub fn insert(&mut self, id: u32, blob: &[u8]) -> Result<(), AssetError> {
-        let image = match embed(blob).map_err(|e| AssetError(e.into()))? {
-            Embed::Jpeg { color, size } => Image {
-                size,
-                samples: Samples::Jpeg {
-                    file: blob.to_vec(),
-                    color,
-                },
-            },
-            Embed::Png | Embed::Decode { .. } => {
-                let pixmap = crate::asset::decode(blob, MAX_IMAGE_PIXELS).map_err(AssetError)?;
-                Image::deflated(&pixmap)
-            }
-        };
-        self.images.insert(id, image);
-        Ok(())
-    }
-
-    /// Drop the image of `id`, if there is one.
-    pub fn remove(&mut self, id: u32) {
-        self.images.remove(&id);
-    }
-}
-
-/// An image, with the width and the height of its samples.
+/// An image XObject, with the width and the height of its samples.
 #[derive(Clone, Debug)]
-struct Image {
+struct XImage {
     size: (u32, u32),
     samples: Samples,
 }
@@ -162,7 +125,24 @@ enum Samples {
     },
 }
 
-impl Image {
+impl XImage {
+    /// `image` ready for a PDF, or `None` if it does not decode.
+    fn of(image: &Image) -> Option<Self> {
+        let file = image.file();
+        Some(match embed(file).ok()? {
+            Embed::Jpeg { color, size } => XImage {
+                size,
+                samples: Samples::Jpeg {
+                    file: file.to_vec(),
+                    color,
+                },
+            },
+            Embed::Png | Embed::Decode { .. } => {
+                XImage::deflated(&crate::asset::decode(file, MAX_IMAGE_PIXELS).ok()?)
+            }
+        })
+    }
+
     /// The pixels of `pixmap`, out of premultiplied alpha.
     fn deflated(pixmap: &tiny_skia::Pixmap) -> Self {
         let pixels = pixmap.pixels();
@@ -175,7 +155,7 @@ impl Image {
         }
         let compress = |data: &[u8]| miniz_oxide::deflate::compress_to_vec_zlib(data, 6);
         let opaque = alpha.iter().all(|&a| a == u8::MAX);
-        Image {
+        XImage {
             size: (pixmap.width(), pixmap.height()),
             samples: Samples::Deflated {
                 rgb: compress(&rgb),
@@ -195,6 +175,7 @@ impl Canvas for PdfRenderer {
         self.gradients.clear();
         self.layer_stack.clear();
         self.forms.clear();
+        self.prepared.clear();
         self.images.clear();
         // The last document holds the last content stream, so its size is a
         // good guess at the size of this one.
@@ -234,18 +215,23 @@ impl Canvas for PdfRenderer {
         }
     }
 
-    /// An id with no image draws a gray box with a red cross in its place,
-    /// as in the pixmap.
+    /// An image that does not decode draws a gray box with a red cross in
+    /// its place, as in the pixmap.
     fn draw_bitmap(&mut self, bitmap: &Bitmap) {
-        if !self.assets.images.contains_key(&bitmap.id) {
+        let image = &bitmap.image;
+        let prepared = self
+            .prepared
+            .entry(image.clone())
+            .or_insert_with(|| XImage::of(image));
+        if prepared.is_none() {
             self.draw_missing(bitmap.transform);
             return;
         }
-        let key = (bitmap.id, bitmap.sampling);
-        let idx = match self.images.iter().position(|&k| k == key) {
+        let key = (image, bitmap.sampling);
+        let idx = match self.images.iter().position(|(i, s)| (i, *s) == key) {
             Some(idx) => idx,
             None => {
-                self.images.push(key);
+                self.images.push((image.clone(), bitmap.sampling));
                 self.images.len() - 1
             }
         };
@@ -510,7 +496,7 @@ impl PdfRenderer {
         let gstates = &self.gstates;
         let gradients = &self.gradients;
         let forms = &self.forms;
-        let assets = &self.assets;
+        let prepared = &self.prepared;
         let images = &self.images;
         // An empty content holds no buffer until the next render opens one.
         let buf = std::mem::replace(&mut self.content, Content::with_capacity(0)).finish();
@@ -563,15 +549,15 @@ impl PdfRenderer {
         let resources_id = alloc();
         let form_refs: Vec<Ref> = forms.iter().map(|_| alloc()).collect();
         // Each image, and the soft mask of its alphas if it has one.
-        let images: Vec<(&Image, Sampling, Ref, Option<Ref>)> = images
+        let images: Vec<(&XImage, Sampling, Ref, Option<Ref>)> = images
             .iter()
-            .map(|&(id, sampling)| {
-                let image = assets
-                    .images
-                    .get(&id)
-                    .expect("a bitmap lists only an id with an image");
+            .map(|(image, sampling)| {
+                let image = prepared
+                    .get(image)
+                    .and_then(Option::as_ref)
+                    .expect("a bitmap lists only an image that decodes");
                 let alpha = matches!(image.samples, Samples::Deflated { alpha: Some(_), .. });
-                (image, sampling, alloc(), alpha.then(&mut alloc))
+                (image, *sampling, alloc(), alpha.then(&mut alloc))
             })
             .collect();
 
@@ -735,7 +721,7 @@ fn image_name(idx: usize) -> String {
 
 /// Writes `image` under `id`, and its alphas under `mask`, which is `Some`
 /// when the image has alphas.
-fn write_image(pdf: &mut Pdf, image: &Image, sampling: Sampling, id: Ref, mask: Option<Ref>) {
+fn write_image(pdf: &mut Pdf, image: &XImage, sampling: Sampling, id: Ref, mask: Option<Ref>) {
     let side = |s: u32| i32::try_from(s).expect("a side of an image fits an i32");
     let (width, height) = (side(image.size.0), side(image.size.1));
     // A viewer may sample the image as it likes when this is true.
@@ -1383,30 +1369,22 @@ mod tests {
         assert!(!lines.contains(&"B"), "{s}");
     }
 
-    fn bitmap(id: u32, sampling: Sampling) -> Bitmap {
+    fn bitmap(image: &Image, sampling: Sampling) -> Bitmap {
         Bitmap {
-            id,
+            image: image.clone(),
             transform: [10.0, 0.0, 0.0, 10.0, 10.0, 10.0],
             sampling,
         }
-    }
-
-    /// The document of `scene`, with the image `blob` under the id 1.
-    fn pdf_with_image(scene: &Scene, blob: &[u8]) -> String {
-        let mut renderer = PdfRenderer::new();
-        renderer.assets_mut().insert(1, blob).unwrap();
-        let bytes = renderer.render(scene).unwrap();
-        String::from_utf8_lossy(bytes).into_owned()
     }
 
     #[test]
     fn a_png_with_alpha_is_an_image_with_a_soft_mask() {
         let mut pixmap = tiny_skia::Pixmap::new(2, 2).unwrap();
         pixmap.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 128));
-        let png = pixmap.encode_png().unwrap();
+        let png = Image::new(pixmap.encode_png().unwrap()).unwrap();
         let mut scene = Scene::new(20.0, 20.0);
-        scene.add_bitmap(bitmap(1, Sampling::Smooth));
-        let s = pdf_with_image(&scene, &png);
+        scene.add_bitmap(bitmap(&png, Sampling::Smooth));
+        let s = pdf_text(&scene);
         assert!(
             s.contains("q\n10 0 0 10 10 10 cm\n1 0 0 -1 -0.5 0.5 cm\n/Im0 Do\nQ"),
             "{s}"
@@ -1423,11 +1401,12 @@ mod tests {
         image::RgbImage::new(2, 2)
             .write_to(&mut jpeg, image::ImageFormat::Jpeg)
             .unwrap();
+        let jpeg = Image::new(jpeg.into_inner()).unwrap();
         let mut scene = Scene::new(20.0, 20.0);
-        scene.add_bitmap(bitmap(1, Sampling::Smooth));
-        scene.add_bitmap(bitmap(1, Sampling::Nearest));
-        scene.add_bitmap(bitmap(1, Sampling::Nearest));
-        let s = pdf_with_image(&scene, jpeg.get_ref());
+        scene.add_bitmap(bitmap(&jpeg, Sampling::Smooth));
+        scene.add_bitmap(bitmap(&jpeg, Sampling::Nearest));
+        scene.add_bitmap(bitmap(&jpeg, Sampling::Nearest));
+        let s = pdf_text(&scene);
         // One image for each sampling, since the sampling is in the image.
         assert_eq!(s.matches("/Subtype /Image").count(), 2, "{s}");
         assert_eq!(s.matches("/Filter /DCTDecode").count(), 2, "{s}");
@@ -1437,9 +1416,9 @@ mod tests {
     }
 
     #[test]
-    fn a_bitmap_with_no_image_is_a_gray_box_with_a_red_cross() {
+    fn a_bitmap_whose_image_does_not_decode_is_a_gray_box_with_a_red_cross() {
         let mut scene = Scene::new(20.0, 20.0);
-        scene.add_bitmap(bitmap(3, Sampling::Smooth));
+        scene.add_bitmap(bitmap(&crate::asset::png_image(1, 1), Sampling::Smooth));
         let s = pdf_text(&scene);
         assert!(
             s.contains("5 5 m\n15 5 l\n15 15 l\n5 15 l\nh\nB\n5 5 m\n15 15 l\n15 5 m\n5 15 l\nS"),

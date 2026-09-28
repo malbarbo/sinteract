@@ -6,7 +6,7 @@
 //! [`super::to_server`] and [`super::to_engine`] wrap the payloads of
 //! [`super::scene`] and [`super::event`] in them and unwrap them again.
 //! [`super::to_view`] and [`super::to_engine`] write them with the envelope
-//! of [`super::framing`], and [`super::to_view`] also reads them.
+//! of [`super::framing`], and [`super::to_view::Reader`] also reads them.
 
 use std::io::{self, Read};
 
@@ -54,7 +54,7 @@ impl std::error::Error for ReadError {
 pub(super) fn read_next<T>(
     r: &mut impl Read,
     side: Side,
-    decode: impl Fn(&[u8]) -> Result<Option<T>, Error>,
+    mut decode: impl FnMut(&[u8]) -> Result<Option<T>, Error>,
 ) -> Result<Option<T>, ReadError> {
     loop {
         let Some(words) = read_framed(r, side).map_err(ReadError::Broken)? else {

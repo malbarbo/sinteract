@@ -28,7 +28,7 @@ use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use super::tick_clock::TickClock;
 use crate::event::{Event, Interrupt, MouseEvent};
-use crate::renderer::pixmap::{Assets, PixmapRenderer};
+use crate::renderer::pixmap::PixmapRenderer;
 use crate::renderer::{AllocError, Renderer};
 use crate::scene::{Rgba, Scene};
 
@@ -224,19 +224,6 @@ impl super::Display for Terminal {
 
     fn sender(&self) -> Sender {
         self.inbox.sender()
-    }
-
-    /// Decode the asset as a PNG, a JPEG, a GIF or a WebP.
-    fn push_asset(&mut self, id: u32, blob: &[u8]) -> Result<(), PresentError> {
-        if self.live.is_none() {
-            return Err(PresentError::Closed);
-        }
-        self.renderer.assets_mut().insert(id, blob)?;
-        Ok(())
-    }
-
-    fn forget_asset(&mut self, id: u32) {
-        self.renderer.assets_mut().remove(id);
     }
 
     /// Stop the reader thread, wait for the frame that the writer holds,
@@ -485,11 +472,6 @@ impl Printer {
         Ok(Self {
             canvas: Canvas::new(Painter::for_stdout(backend)),
         })
-    }
-
-    /// The images that a [`crate::scene::Bitmap`] of the next prints names.
-    pub fn assets_mut(&mut self) -> &mut Assets {
-        self.canvas.renderer.assets_mut()
     }
 
     /// Print `scene` at the cursor, and leave the cursor on the line below

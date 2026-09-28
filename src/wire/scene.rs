@@ -7,9 +7,9 @@
 use std::collections::BTreeSet;
 
 use crate::scene::{
-    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LayerOpacity,
-    LineCap, LineJoin, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind,
-    Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
+    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, Image,
+    LayerOpacity, LineCap, LineJoin, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment,
+    SegmentKind, Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -24,21 +24,25 @@ use super::{Error, ValueError, finish, skip_unusable};
 /// Encode a scene as a message whose root is the `Scene` struct of
 /// `schema/scene.capnp`, with no session envelope around it. An engine that
 /// paints its own frames, such as the wasm worker that writes into shared
-/// memory, reads these bytes with the scene schema alone.
-pub fn encode(scene: &Scene) -> Vec<u8> {
+/// memory, reads these bytes with the scene schema alone. A bitmap goes out
+/// with the id that `ids` gives its image, and the images go some other
+/// way.
+pub fn encode(scene: &Scene, ids: &dyn Fn(&Image) -> u32) -> Vec<u8> {
     let mut builder = capnp::message::Builder::new_default();
-    write_scene(builder.init_root::<wire_scene::Builder>(), scene);
+    write_scene(builder.init_root::<wire_scene::Builder>(), scene, ids);
     finish(builder)
 }
 
-/// Decode a message that [`encode`] produced. A frame that arrived inside a
-/// session goes through [`super::to_view::read`] instead.
-pub fn decode(bytes: &[u8]) -> Result<Scene, Error> {
+/// Decode a message that [`encode`] produced. A bitmap takes the image that
+/// `images` gives its id, and a bitmap of an id with no image is skipped. A
+/// frame that arrived inside a session goes through
+/// [`super::to_view::Reader`] instead.
+pub fn decode(bytes: &[u8], images: &dyn Fn(u32) -> Option<Image>) -> Result<Scene, Error> {
     let reader = super::limit_traversal(capnp::serialize::read_message(
         std::io::Cursor::new(bytes),
         capnp::message::ReaderOptions::new(),
     )?);
-    read_scene(reader.get_root()?)
+    read_scene(reader.get_root()?, images)
 }
 
 fn line_cap_to_wire(c: LineCap) -> WLineCap {
@@ -299,8 +303,8 @@ fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ValueError>
     Ok(clip)
 }
 
-fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap) {
-    b.set_id(n.id);
+fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap, ids: &dyn Fn(&Image) -> u32) {
+    b.set_id(ids(&n.image));
     b.set_m0(n.transform[0]);
     b.set_m1(n.transform[1]);
     b.set_m2(n.transform[2]);
@@ -313,9 +317,12 @@ fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap) {
     });
 }
 
-fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ValueError> {
+fn read_bitmap(
+    r: bitmap::Reader<'_>,
+    images: &dyn Fn(u32) -> Option<Image>,
+) -> Result<Bitmap, ValueError> {
     let bitmap = Bitmap {
-        id: r.get_id(),
+        image: images(r.get_id()).ok_or(ValueError::NoImage)?,
         transform: [
             r.get_m0(),
             r.get_m1(),
@@ -500,53 +507,77 @@ fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ValueError> {
     Ok(path)
 }
 
-fn write_element(b: element::Builder<'_>, node: &Element) {
+fn write_element(b: element::Builder<'_>, node: &Element, ids: &dyn Fn(&Image) -> u32) {
     match node {
         Element::Path(p) => write_path(b.init_path(), p),
-        Element::Clipped { clip, elements } => write_clipped(b.init_clipped(), clip, elements),
+        Element::Clipped { clip, elements } => write_clipped(b.init_clipped(), clip, elements, ids),
         Element::Text(t) => write_text_node(b.init_text(), t),
-        Element::Bitmap(n) => write_bitmap(b.init_bitmap(), n),
-        Element::Layer { opacity, elements } => write_layer(b.init_layer(), *opacity, elements),
+        Element::Bitmap(n) => write_bitmap(b.init_bitmap(), n, ids),
+        Element::Layer { opacity, elements } => {
+            write_layer(b.init_layer(), *opacity, elements, ids)
+        }
     }
 }
 
-fn write_layer(mut b: wire_layer::Builder<'_>, opacity: f32, elements: &[Element]) {
+fn write_layer(
+    mut b: wire_layer::Builder<'_>,
+    opacity: f32,
+    elements: &[Element],
+    ids: &dyn Fn(&Image) -> u32,
+) {
     b.set_opacity(opacity);
-    write_element_list(b.init_elements(elements.len() as u32), elements);
+    write_element_list(b.init_elements(elements.len() as u32), elements, ids);
 }
 
-fn write_clipped(mut b: wire_clipped::Builder<'_>, clip: &ClipPath, elements: &[Element]) {
+fn write_clipped(
+    mut b: wire_clipped::Builder<'_>,
+    clip: &ClipPath,
+    elements: &[Element],
+    ids: &dyn Fn(&Image) -> u32,
+) {
     write_clip_path(b.reborrow().init_clip(), clip);
-    write_element_list(b.init_elements(elements.len() as u32), elements);
+    write_element_list(b.init_elements(elements.len() as u32), elements, ids);
 }
 
 fn write_element_list(
     mut list: capnp::struct_list::Builder<'_, element::Owned>,
     elements: &[Element],
+    ids: &dyn Fn(&Image) -> u32,
 ) {
     for (i, node) in elements.iter().enumerate() {
-        write_element(list.reborrow().get(i as u32), node);
+        write_element(list.reborrow().get(i as u32), node, ids);
     }
 }
 
-pub(super) fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
+/// Write `scene`, with the id that `ids` gives the image of each bitmap.
+pub(super) fn write_scene(
+    mut b: wire_scene::Builder<'_>,
+    scene: &Scene,
+    ids: &dyn Fn(&Image) -> u32,
+) {
     b.set_width(scene.width());
     b.set_height(scene.height());
     write_element_list(
         b.init_elements(scene.elements().len() as u32),
         scene.elements(),
+        ids,
     );
 }
 
 /// Push the element in `node` onto `out`. It skips an element of an arm from
-/// a newer schema, and one that holds a value from a newer schema or a float
-/// that is not finite. A layer that is opaque pushes what it holds, and one
-/// that is hidden pushes nothing.
-fn read_element(node: element::Reader<'_>, out: &mut Vec<Element>) -> Result<(), Error> {
+/// a newer schema, one that holds a value from a newer schema or a float
+/// that is not finite, and a bitmap of an id that `images` has no image
+/// for. A layer that is opaque pushes what it holds, and one that is hidden
+/// pushes nothing.
+fn read_element(
+    node: element::Reader<'_>,
+    out: &mut Vec<Element>,
+    images: &dyn Fn(u32) -> Option<Image>,
+) -> Result<(), Error> {
     let Ok(which) = node.which() else {
         return Ok(());
     };
-    match skip_unusable(read_known_element(which))? {
+    match skip_unusable(read_known_element(which, images))? {
         // The opacity of a layer from the wire can take any value.
         Some(Element::Layer {
             opacity,
@@ -561,21 +592,24 @@ fn read_element(node: element::Reader<'_>, out: &mut Vec<Element>) -> Result<(),
     Ok(())
 }
 
-fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, ValueError> {
+fn read_known_element(
+    which: element::WhichReader<'_>,
+    images: &dyn Fn(u32) -> Option<Image>,
+) -> Result<Element, ValueError> {
     use element::Which;
     Ok(match which {
         Which::Path(p) => Element::Path(read_path(p?)?),
         Which::Clipped(c) => {
             let c = c?;
             let clip = read_clip_path(c.get_clip()?)?;
-            let elements = read_element_list(c.get_elements()?)?;
+            let elements = read_element_list(c.get_elements()?, images)?;
             Element::Clipped { clip, elements }
         }
         Which::Text(t) => Element::Text(read_text_node(t?)?),
-        Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?)?),
+        Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?, images)?),
         Which::Layer(l) => {
             let l = l?;
-            let elements = read_element_list(l.get_elements()?)?;
+            let elements = read_element_list(l.get_elements()?, images)?;
             Element::Layer {
                 opacity: l.get_opacity(),
                 elements,
@@ -586,10 +620,11 @@ fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, ValueE
 
 fn read_element_list(
     list: capnp::struct_list::Reader<'_, element::Owned>,
+    images: &dyn Fn(u32) -> Option<Image>,
 ) -> Result<Vec<Element>, Error> {
     let mut out = Vec::with_capacity(list.len() as usize);
     for node in list {
-        read_element(node, &mut out)?;
+        read_element(node, &mut out, images)?;
     }
     Ok(out)
 }
@@ -624,9 +659,14 @@ fn add_bitmap_ids(
     Ok(())
 }
 
-pub(super) fn read_scene(r: wire_scene::Reader<'_>) -> Result<Scene, Error> {
+/// Read the scene in `r`, with the image that `images` gives the id of each
+/// bitmap.
+pub(super) fn read_scene(
+    r: wire_scene::Reader<'_>,
+    images: &dyn Fn(u32) -> Option<Image>,
+) -> Result<Scene, Error> {
     let elements = if r.has_elements() {
-        read_element_list(r.get_elements()?)?
+        read_element_list(r.get_elements()?, images)?
     } else {
         Vec::new()
     };

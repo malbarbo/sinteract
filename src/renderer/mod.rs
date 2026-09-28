@@ -64,23 +64,6 @@ impl std::fmt::Display for AllocError {
 
 impl std::error::Error for AllocError {}
 
-/// An asset that does not decode. The decoder stays private, so the error
-/// does not depend on the renderer that decodes.
-#[derive(Debug)]
-pub struct AssetError(Box<dyn std::error::Error + Send + Sync>);
-
-impl std::fmt::Display for AssetError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cannot decode the image: {}", self.0)
-    }
-}
-
-impl std::error::Error for AssetError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&*self.0)
-    }
-}
-
 pub(crate) mod sealed {
     use crate::scene::{Bitmap, ClipPath, Element, Path, Text};
 
@@ -96,7 +79,6 @@ pub(crate) mod sealed {
 
         fn draw_text(&mut self, text: &Text);
 
-        /// Draw the asset with id `bitmap.id`.
         fn draw_bitmap(&mut self, bitmap: &Bitmap);
 
         /// Run after the frame is painted. The pdf assembles its document
@@ -135,8 +117,8 @@ pub(crate) mod sealed {
     }
 }
 
-/// The fill and the stroke of the box that stands for a bitmap whose id has
-/// no image, with a cross from corner to corner.
+/// The fill and the stroke of the box that stands for a bitmap whose image
+/// does not decode, with a cross from corner to corner.
 pub(crate) const MISSING_FILL: Rgba = Rgba {
     r: 200,
     g: 200,
