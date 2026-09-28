@@ -297,15 +297,18 @@ pub(crate) enum Embed {
 pub(crate) fn embed(blob: &[u8]) -> Result<Embed, ImageError> {
     let head = head(blob).ok_or(ImageError::Unsupported)?;
     check_pixels(head.size, MAX_IMAGE_PIXELS)?;
-    Ok(match (head.format, head.jpeg_color) {
-        (Format::Png, _) => Embed::Png,
-        (Format::Jpeg, Some(color)) if head.orientation == 1 => Embed::Jpeg {
+    Ok(match head.format {
+        Format::Png => Embed::Png,
+        Format::Jpeg {
+            orientation: 1,
+            color: Some(color),
+        } => Embed::Jpeg {
             color,
             size: head.size,
         },
-        (Format::Jpeg, _) => Embed::Decode { mime: "image/jpeg" },
-        (Format::Gif, _) => Embed::Decode { mime: "image/gif" },
-        (Format::WebP, _) => Embed::Decode { mime: "image/webp" },
+        Format::Jpeg { .. } => Embed::Decode { mime: "image/jpeg" },
+        Format::Gif => Embed::Decode { mime: "image/gif" },
+        Format::WebP => Embed::Decode { mime: "image/webp" },
     })
 }
 
@@ -313,7 +316,13 @@ pub(crate) fn embed(blob: &[u8]) -> Result<Embed, ImageError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Format {
     Png,
-    Jpeg,
+    /// `orientation` is the EXIF orientation, from 1 to 8. `color` is the
+    /// color of a JPEG of 8 bits a sample in gray or in RGB, and `None` for
+    /// any other JPEG.
+    Jpeg {
+        orientation: u8,
+        color: Option<JpegColor>,
+    },
     Gif,
     WebP,
 }
@@ -324,12 +333,6 @@ struct Head {
     format: Format,
     /// The width and the height, both above 0.
     size: (u32, u32),
-    /// The EXIF orientation of a JPEG, from 1 to 8, and 1 for any other
-    /// format.
-    orientation: u8,
-    /// The color of a JPEG of 8 bits a sample in gray or in RGB, and `None`
-    /// for any other image.
-    jpeg_color: Option<JpegColor>,
 }
 
 /// The color space of a JPEG that a document can hold as it is.
@@ -343,7 +346,15 @@ impl Head {
     /// Returns `true` if the orientation swaps the width and the height,
     /// `false` otherwise.
     fn turned(self) -> bool {
-        self.orientation >= 5
+        self.orientation() >= 5
+    }
+
+    /// The EXIF orientation, from 1 to 8. Only a JPEG has one other than 1.
+    fn orientation(self) -> u8 {
+        match self.format {
+            Format::Jpeg { orientation, .. } => orientation,
+            Format::Png | Format::Gif | Format::WebP => 1,
+        }
     }
 }
 
@@ -364,24 +375,19 @@ fn pixels((width, height): (u32, u32)) -> u64 {
 /// The header of the image in `blob`, or `None` if `blob` is not a PNG, a
 /// JPEG, a GIF or a WebP, or gives a width or a height of 0.
 fn head(blob: &[u8]) -> Option<Head> {
-    let (format, size, orientation, jpeg_color) = if blob.starts_with(PNG_SIGNATURE) {
-        (Format::Png, png_size(blob)?, 1, None)
+    let (format, size) = if blob.starts_with(PNG_SIGNATURE) {
+        (Format::Png, png_size(blob)?)
     } else if blob.starts_with(b"\xff\xd8") {
         let (size, orientation, color) = jpeg_head(blob)?;
-        (Format::Jpeg, size, orientation, color)
+        (Format::Jpeg { orientation, color }, size)
     } else if blob.starts_with(b"GIF87a") || blob.starts_with(b"GIF89a") {
-        (Format::Gif, gif_size(blob)?, 1, None)
+        (Format::Gif, gif_size(blob)?)
     } else if blob.get(..4) == Some(b"RIFF") && blob.get(8..12) == Some(b"WEBP") {
-        (Format::WebP, webp_size(blob)?, 1, None)
+        (Format::WebP, webp_size(blob)?)
     } else {
         return None;
     };
-    (size.0 > 0 && size.1 > 0).then_some(Head {
-        format,
-        size,
-        orientation,
-        jpeg_color,
-    })
+    (size.0 > 0 && size.1 > 0).then_some(Head { format, size })
 }
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -592,7 +598,7 @@ pub(crate) fn decode(
     let (width, height) = head.size;
     let format = match head.format {
         Format::Png => ImageFormat::Png,
-        Format::Jpeg => ImageFormat::Jpeg,
+        Format::Jpeg { .. } => ImageFormat::Jpeg,
         Format::Gif => ImageFormat::Gif,
         Format::WebP => ImageFormat::WebP,
     };
@@ -613,7 +619,7 @@ pub(crate) fn decode(
     let mut image = DynamicImage::from_decoder(decoder)?;
     // A PNG or a WebP may hold an EXIF too, but the size of the asset, and
     // a browser, turn only a JPEG.
-    if let Some(orientation) = image::metadata::Orientation::from_exif(head.orientation) {
+    if let Some(orientation) = image::metadata::Orientation::from_exif(head.orientation()) {
         image.apply_orientation(orientation);
     }
     let size = tiny_skia::IntSize::from_wh(image.width(), image.height())
@@ -892,7 +898,13 @@ mod tests {
         let jpeg = jpeg_head_of(&[app(0xe0, b"JFIF\0"), sof(640, 480)]);
         assert_eq!(
             head(&jpeg).map(|h| (h.format, h.size)),
-            Some((Format::Jpeg, (640, 480)))
+            Some((
+                Format::Jpeg {
+                    orientation: 1,
+                    color: Some(JpegColor::Gray)
+                },
+                (640, 480)
+            ))
         );
         // Fill bytes before a marker, and a segment that has no length.
         let mut filled = jpeg[..2].to_vec();
@@ -910,14 +922,14 @@ mod tests {
     fn the_orientation_of_a_jpeg_comes_from_its_last_exif() {
         let turned = jpeg_head_of(&[exif(true, 6), sof(640, 480)]);
         let head = head(&turned).unwrap();
-        assert_eq!((head.size, head.orientation), ((640, 480), 6));
+        assert_eq!((head.size, head.orientation()), ((640, 480), 6));
         assert!(head.turned());
         let little = jpeg_head_of(&[exif(false, 8), sof(640, 480)]);
-        assert_eq!(super::head(&little).unwrap().orientation, 8);
+        assert_eq!(super::head(&little).unwrap().orientation(), 8);
         let last = jpeg_head_of(&[exif(true, 6), sof(640, 480), exif(true, 3)]);
-        assert_eq!(super::head(&last).unwrap().orientation, 3);
+        assert_eq!(super::head(&last).unwrap().orientation(), 3);
         let wrong = jpeg_head_of(&[exif(true, 9), sof(640, 480)]);
-        assert_eq!(super::head(&wrong).unwrap().orientation, 1);
+        assert_eq!(super::head(&wrong).unwrap().orientation(), 1);
     }
 
     #[test]
