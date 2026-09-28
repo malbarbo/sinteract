@@ -563,6 +563,8 @@ impl ServerCore {
     ) -> Result<(), EngineError> {
         let ids = to_view::bitmap_ids(&payload).map_err(EngineError::Payload)?;
         match player {
+            // The start seats at least one player, so a room with no seats
+            // has not started.
             None if self.seats.is_empty() => return Ok(()),
             Some(player) if !self.seats.contains_key(&player) => {
                 return Err(EngineError::NoSeat(player));
