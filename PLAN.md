@@ -74,9 +74,9 @@ Regras da sessão com servidor:
   WebSocket fecha continua na partida, parado, e a engine não fica sabendo;
 - o servidor dá a cada jogador um token, no link dele, que a página
   guarda no `sessionStorage`. Uma conexão que traz o token ocupa o lugar
-  do jogador, na primeira vez e depois de uma queda, e recebe todos os
-  assets e o frame mais novo. A conexão antiga, se ainda parece viva, não recebe nem muda mais
-  nada;
+  do jogador, na primeira vez e depois de uma queda, e recebe os assets do
+  frame mais novo e depois o frame. A conexão antiga, se ainda parece
+  viva, não recebe nem muda mais nada;
 - quando uma view cai ou é trocada por outra, o servidor manda à engine
   um `Up` para cada tecla e botão que ela segurava, como a janela faz ao
   perder o foco;
