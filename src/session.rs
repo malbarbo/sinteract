@@ -691,7 +691,8 @@ mod tests {
 
     #[test]
     fn a_message_of_an_unknown_arm_is_skipped() {
-        let unknown = wire::with_unknown_server_value(&tick()[HEADER_BYTES..], |m| wire::tag_of(m));
+        let unknown =
+            testing::with_unknown_server_value(&tick()[HEADER_BYTES..], |m| testing::tag_of(m));
         let mut stream = framed(&unknown);
         stream.extend_from_slice(&tick());
         let mut session = started(&stream);

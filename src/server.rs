@@ -1231,8 +1231,8 @@ mod tests {
     #[test]
     fn a_message_of_an_unknown_arm_is_dropped() {
         let (mut room, conns) = Room::playing(&["Ana"]);
-        let unknown = wire::with_unknown_view_value(&to_server::encode_input(&key("a")), |m| {
-            wire::tag_of(m.get_event().unwrap())
+        let unknown = testing::with_unknown_view_value(&to_server::encode_input(&key("a")), |m| {
+            testing::tag_of(m.get_event().unwrap())
         });
         room.core.from_view(conns[0], &unknown).unwrap();
         assert!(room.events().is_empty());

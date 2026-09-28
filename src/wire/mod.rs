@@ -161,101 +161,16 @@ fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
     }
 }
 
-/// [`with_unknown_value`] for the bytes of an `EngineMessage`.
-#[cfg(test)]
-pub(crate) fn with_unknown_engine_value(
-    bytes: &[u8],
-    find: impl FnOnce(crate::protocol_capnp::engine_message::Reader<'_>) -> *const u8,
-) -> Vec<u8> {
-    with_unknown_value::<crate::protocol_capnp::engine_message::Owned>(bytes, find)
-}
-
-/// [`with_unknown_value`] for the bytes of a `ServerMessage`.
-#[cfg(test)]
-pub(crate) fn with_unknown_server_value(
-    bytes: &[u8],
-    find: impl FnOnce(crate::protocol_capnp::server_message::Reader<'_>) -> *const u8,
-) -> Vec<u8> {
-    with_unknown_value::<crate::protocol_capnp::server_message::Owned>(bytes, find)
-}
-
-/// [`with_unknown_value`] for the bytes of a `ViewMessage`.
-#[cfg(test)]
-pub(crate) fn with_unknown_view_value(
-    bytes: &[u8],
-    find: impl FnOnce(crate::protocol_capnp::view_message::Reader<'_>) -> *const u8,
-) -> Vec<u8> {
-    with_unknown_value::<crate::protocol_capnp::view_message::Owned>(bytes, find)
-}
-
-/// Overwrite the two bytes that `find` points at with a value this crate
-/// does not know, as a peer with a newer schema writes it. `find` points at
-/// the tag of a union, at an enum field, or at the first two verbs of a
-/// path.
-/// `bytes` holds a message whose root is `T`, and the compiler cannot infer
-/// `T` from `find`, so each root has a wrapper.
-#[cfg(test)]
-fn with_unknown_value<T: capnp::traits::Owned>(
-    bytes: &[u8],
-    find: impl FnOnce(T::Reader<'_>) -> *const u8,
-) -> Vec<u8> {
-    // The reader needs the bytes aligned to words.
-    let mut words = capnp::Word::allocate_zeroed_vec(bytes.len() / 8);
-    capnp::Word::words_to_bytes_mut(&mut words).copy_from_slice(bytes);
-    let buf = capnp::Word::words_to_bytes(&words);
-    let msg = capnp::serialize::read_message_from_flat_slice_no_alloc(
-        &mut &buf[..],
-        capnp::message::ReaderOptions::new(),
-    )
-    .expect("parse");
-    let at = find(msg.get_root().expect("root")) as usize - buf.as_ptr() as usize;
-    let mut out = bytes.to_vec();
-    out[at..at + 2].copy_from_slice(&0xfff0u16.to_le_bytes());
-    out
-}
-
-/// Where the data section of a struct starts, for [`with_unknown_value`].
-/// A union with no field before it keeps its tag there.
-#[cfg(test)]
-pub(crate) fn tag_of<'a>(r: impl capnp::traits::IntoInternalStructReader<'a>) -> *const u8 {
-    capnp::raw::get_struct_data_section(r).as_ptr()
-}
-
-/// The scene of a frame, for [`with_unknown_engine_value`].
-#[cfg(test)]
-pub(crate) fn frame_of(
-    m: crate::protocol_capnp::engine_message::Reader<'_>,
-) -> crate::scene_capnp::scene::Reader<'_> {
-    let Ok(crate::protocol_capnp::engine_message::Frame(f)) = m.which() else {
-        panic!("not a frame");
-    };
-    f.expect("frame").get_scene().expect("scene")
-}
-
-/// Replace every float `from` in `bytes` with `to`, as a peer that writes a
-/// float that is not finite does. A `Scene` never holds one, so a test
-/// encodes a marker and swaps it. Cap'n Proto aligns a float to 4 bytes.
-#[cfg(test)]
-pub(crate) fn with_float(bytes: &[u8], from: f32, to: f32) -> Vec<u8> {
-    let mut out = bytes.to_vec();
-    let mut swapped = false;
-    for chunk in out.as_chunks_mut::<4>().0 {
-        if *chunk == from.to_le_bytes() {
-            *chunk = to.to_le_bytes();
-            swapped = true;
-        }
-    }
-    assert!(swapped, "no {from} in the bytes");
-    out
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use super::testing::{Message, encode_asset, encode_frame};
+    use super::testing::{
+        Message, encode_asset, encode_frame, frame_of, tag_of, with_float,
+        with_unknown_engine_value, with_unknown_server_value, with_unknown_view_value,
+    };
     use super::*;
     use crate::event::{
         InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons,
