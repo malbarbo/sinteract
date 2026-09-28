@@ -4,7 +4,7 @@ use capnp::message::ReaderOptions;
 use capnp::serialize;
 
 use crate::renderer::sealed::Canvas;
-use crate::scene::{Path, frame_size};
+use crate::scene::{LayerOpacity, Path, frame_size};
 use crate::scene_capnp::{element, scene as wire_scene};
 
 use crate::renderer::AllocError;
@@ -53,10 +53,10 @@ impl From<AllocError> for Error {
 
 /// Decode one scene that [`super::scene::encode`] wrote from `reader` and
 /// paint it onto `paint`. The reader is walked lazily, so the element list
-/// never becomes a `Vec<Element>`, and a `Clipped` subtree recurses through
-/// [`Paint::with_clip`]. Every path decodes into one scratch [`Path`] that
-/// the whole frame reuses, so decoding allocates about as much as the
-/// longest path.
+/// never becomes a `Vec<Element>`, and a `Clipped` or a `Layer` subtree
+/// recurses through [`Canvas::with_clip`] or [`Canvas::with_layer`]. Every
+/// path decodes into one scratch [`Path`] that the whole frame reuses, so
+/// decoding allocates about as much as the longest path.
 ///
 /// The surface is sized once, after the dimensions are known and before any
 /// element is painted.
@@ -116,6 +116,16 @@ fn stream_elements<P: Canvas>(
             Which::Bitmap(b) => {
                 if let Some(b) = skip_unusable(read_bitmap(b?))? {
                     paint.draw_bitmap(&b);
+                }
+            }
+            Which::Layer(l) => {
+                let l = l?;
+                let children = l.get_elements()?;
+                match LayerOpacity::of(l.get_opacity()) {
+                    LayerOpacity::Hidden => {}
+                    LayerOpacity::Opaque => stream_elements(paint, children, scratch)?,
+                    LayerOpacity::Translucent(opacity) => paint
+                        .with_layer(opacity, |p2| stream_elements(p2, children, &mut *scratch))?,
                 }
             }
         }

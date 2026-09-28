@@ -779,7 +779,9 @@ fn add_bitmap_ids(elements: &[Element], ids: &mut BTreeSet<u32>) {
             Element::Bitmap(b) => {
                 ids.insert(b.id);
             }
-            Element::Clipped { elements, .. } => add_bitmap_ids(elements, ids),
+            Element::Clipped { elements, .. } | Element::Layer { elements, .. } => {
+                add_bitmap_ids(elements, ids)
+            }
             Element::Path(_) | Element::Text(_) => {}
         }
     }

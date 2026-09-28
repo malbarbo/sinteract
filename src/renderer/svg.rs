@@ -265,6 +265,15 @@ impl Canvas for SvgRenderer {
         };
         inside(&mut *guard.canvas)
     }
+
+    fn with_layer<T>(&mut self, opacity: f32, inside: impl FnOnce(&mut Self) -> T) -> T {
+        _ = writeln!(self.body, "<g opacity=\"{opacity}\">");
+        let guard = RestoreOnDrop {
+            canvas: self,
+            restore: |c: &mut Self| c.body.push_str("</g>\n"),
+        };
+        inside(&mut *guard.canvas)
+    }
 }
 
 impl Renderer for SvgRenderer {
@@ -766,6 +775,16 @@ mod tests {
             svg.contains("gradientTransform=\"matrix(0.5 -0 -0 0.5 -5 -2)\""),
             "{svg}"
         );
+    }
+
+    #[test]
+    fn a_layer_is_a_group_with_its_opacity() {
+        let mut scene = Scene::new(20.0, 20.0);
+        scene.layer(0.25, |layer| layer.add_text(text("a")));
+        let svg = render_to_svg(&scene);
+        let open = svg.find("<g opacity=\"0.25\">").expect("a layer group");
+        let glyph = svg.find("<use ").expect("a glyph");
+        assert!(open < glyph && svg[glyph..].contains("</g>\n</g>"), "{svg}");
     }
 
     #[test]

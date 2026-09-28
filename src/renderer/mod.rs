@@ -127,8 +127,14 @@ pub(crate) mod sealed {
         /// `inside` unwinds.
         fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T;
 
-        /// Paint the elements in order. A `Clipped` subtree recurses inside
-        /// [`Self::with_clip`].
+        /// Run `inside` into a transparent layer, draw the layer with
+        /// `opacity`, and return what `inside` returned. `opacity` is above 0
+        /// and below 1. A backend draws the layer in a drop guard, as
+        /// [`Self::with_clip`] pops its clip.
+        fn with_layer<T>(&mut self, opacity: f32, inside: impl FnOnce(&mut Self) -> T) -> T;
+
+        /// Paint the elements in order. A `Clipped` or a `Layer` subtree
+        /// recurses inside [`Self::with_clip`] or [`Self::with_layer`].
         fn paint_elements(&mut self, elements: &[Element]) {
             for node in elements {
                 match node {
@@ -137,6 +143,9 @@ pub(crate) mod sealed {
                     Element::Bitmap(b) => self.draw_bitmap(b),
                     Element::Clipped { clip, elements } => {
                         self.with_clip(clip, |c| c.paint_elements(elements));
+                    }
+                    Element::Layer { opacity, elements } => {
+                        self.with_layer(*opacity, |c| c.paint_elements(elements));
                     }
                 }
             }

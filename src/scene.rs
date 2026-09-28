@@ -903,6 +903,13 @@ pub enum Element {
     },
     Text(Text),
     Bitmap(Bitmap),
+    /// The elements draw into a transparent layer, and the layer draws with
+    /// `opacity`, so two of them that overlap do not darken where they meet.
+    /// `opacity` is above 0 and below 1.
+    Layer {
+        opacity: f32,
+        elements: Vec<Element>,
+    },
 }
 
 impl Element {
@@ -916,15 +923,41 @@ impl Element {
             }
             Self::Text(t) => t.is_finite(),
             Self::Bitmap(b) => b.is_finite(),
+            Self::Layer { opacity, elements } => {
+                opacity.is_finite() && elements.iter().all(Self::is_finite)
+            }
+        }
+    }
+}
+
+/// What a layer of some opacity does with the elements it holds.
+pub(crate) enum LayerOpacity {
+    /// They draw nothing, because the opacity is 0 or less, or not finite.
+    Hidden,
+    /// They draw as if no layer held them, because the opacity is 1 or more.
+    Opaque,
+    /// They draw in a layer of this opacity.
+    Translucent(f32),
+}
+
+impl LayerOpacity {
+    pub(crate) fn of(opacity: f32) -> Self {
+        if !opacity.is_finite() || opacity <= 0.0 {
+            Self::Hidden
+        } else if opacity >= 1.0 {
+            Self::Opaque
+        } else {
+            Self::Translucent(opacity)
         }
     }
 }
 
 /// The draw list a front end builds and a
 /// [`Renderer`](crate::renderer::Renderer) replays. [`Self::path`] returns a
-/// [`PathScope`] that commits its path on drop, and [`Self::clip`] wraps the
-/// elements that its closure draws into an [`Element::Clipped`], so a clip
-/// cannot be left open. A move that no segment follows draws nothing, so the
+/// [`PathScope`] that commits its path on drop, and [`Self::clip`] and
+/// [`Self::layer`] wrap the elements that their closure draws into an
+/// [`Element::Clipped`] or an [`Element::Layer`], so a clip or a layer cannot
+/// be left open. A move that no segment follows draws nothing, so the
 /// builders drop it. A `PathScope` with no segment past its moves commits
 /// nothing, and [`PathBuilder::build`] returns a path with no segments.
 ///
@@ -1016,6 +1049,29 @@ impl Scene {
                 clip,
                 elements: clipped.elements,
             });
+        }
+        result
+    }
+
+    /// Draw what `inside` draws with `opacity`, as one layer, so two
+    /// elements inside that overlap do not darken where they meet. `inside`
+    /// draws into an empty scene of this size. An opacity of 1 or more adds
+    /// the elements with no layer, and one of 0 or less, or not finite, drops
+    /// them. Returns what `inside` returns.
+    pub fn layer<T>(&mut self, opacity: f32, inside: impl FnOnce(&mut Scene) -> T) -> T {
+        let mut layer = Scene {
+            width: self.width,
+            height: self.height,
+            elements: Vec::new(),
+        };
+        let result = inside(&mut layer);
+        match LayerOpacity::of(opacity) {
+            LayerOpacity::Hidden => {}
+            LayerOpacity::Opaque => self.elements.append(&mut layer.elements),
+            LayerOpacity::Translucent(opacity) => self.elements.push(Element::Layer {
+                opacity,
+                elements: layer.elements,
+            }),
         }
         result
     }
@@ -1477,6 +1533,29 @@ mod tests {
         let [Element::Clipped { elements, .. }] = &scene.elements[..] else {
             panic!("expected one clip, got {:?}", scene.elements);
         };
+        assert_eq!(elements.len(), 1);
+    }
+
+    #[test]
+    fn a_layer_holds_what_its_closure_draws_only_when_it_is_translucent() {
+        let mut scene = Scene::new(20.0, 20.0);
+        for opacity in [0.5, 1.0, 2.0, 0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let drawn = scene.layer(opacity, |layer| {
+                layer.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+                opacity
+            });
+            assert!(drawn.to_bits() == opacity.to_bits());
+        }
+        // 1 and 2 add the path with no layer, and the rest drop it.
+        let [
+            Element::Layer { opacity, elements },
+            Element::Path(_),
+            Element::Path(_),
+        ] = &scene.elements[..]
+        else {
+            panic!("expected a layer and two paths, got {:?}", scene.elements);
+        };
+        assert_eq!(*opacity, 0.5);
         assert_eq!(elements.len(), 1);
     }
 

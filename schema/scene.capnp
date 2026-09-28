@@ -233,12 +233,22 @@ struct Element {
         clipped @1 :Clipped;
         text    @2 :TextNode;
         bitmap  @3 :Bitmap;
+        layer   @4 :Layer;
     }
 }
 
 struct Clipped {
     clip     @0 :ClipPath;
     elements @1 :List(Element);
+}
+
+# The elements draw into a transparent layer, and the layer draws with
+# `opacity`, so two of them that overlap do not darken where they meet. An
+# opacity of 1 or more draws the elements with no layer, and one of 0 or
+# less draws nothing.
+struct Layer {
+    elements @0 :List(Element);
+    opacity  @1 :Float32 = 1.0;
 }
 
 # A width or a height that describes no frame, which is one that is not

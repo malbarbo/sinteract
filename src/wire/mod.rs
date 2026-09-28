@@ -1321,6 +1321,38 @@ mod tests {
     }
 
     #[test]
+    fn a_layer_from_the_wire_draws_only_when_it_is_translucent() {
+        // The opacity of the layer is a marker that the peer swaps. Cap'n
+        // Proto stores a float XORed with its default, which is 1.
+        let marker = 0.123;
+        let stored = |opacity: f32| f32::from_bits(opacity.to_bits() ^ 1f32.to_bits());
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.layer(marker, |layer| {
+            layer.add_bitmap(Bitmap {
+                id: 1,
+                ..Bitmap::default()
+            });
+        });
+        let bytes = encode_frame(&scene);
+        let decoded = |opacity| {
+            let bytes = with_float(&bytes, stored(marker), stored(opacity));
+            let Message::Frame { scene, .. } = decode(&bytes).unwrap() else {
+                panic!("expected Frame");
+            };
+            scene
+        };
+        assert_scene_eq(&scene, &decoded(marker));
+        let [Element::Bitmap(_)] = decoded(1.5).elements() else {
+            panic!("an opaque layer draws what it holds with no layer");
+        };
+        for hidden in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(decoded(hidden).elements().is_empty(), "{hidden}");
+        }
+        let ids = to_view::bitmap_ids(&bytes).unwrap();
+        assert_eq!(ids.into_iter().collect::<Vec<_>>(), [1]);
+    }
+
+    #[test]
     fn a_paint_of_an_unknown_arm_draws_its_fallback_color() {
         // The writer of a newer schema sets the fallback, which this crate
         // never writes, so the path is built by hand.

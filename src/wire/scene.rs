@@ -7,14 +7,14 @@
 use std::collections::BTreeSet;
 
 use crate::scene::{
-    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LineCap,
-    LineJoin, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind, Segments,
-    SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
+    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LayerOpacity,
+    LineCap, LineJoin, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind,
+    Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
     Sampling as WSampling, SpreadMode as WSpreadMode, bitmap, clip_path as wire_clip_path,
-    clipped as wire_clipped, element, paint as wire_paint, path as wire_path,
+    clipped as wire_clipped, element, layer as wire_layer, paint as wire_paint, path as wire_path,
     path_style as wire_path_style, rgba as wire_rgba, scene as wire_scene, stop as wire_stop,
     text_node,
 };
@@ -513,7 +513,13 @@ fn write_element(b: element::Builder<'_>, node: &Element) {
         Element::Clipped { clip, elements } => write_clipped(b.init_clipped(), clip, elements),
         Element::Text(t) => write_text_node(b.init_text(), t),
         Element::Bitmap(n) => write_bitmap(b.init_bitmap(), n),
+        Element::Layer { opacity, elements } => write_layer(b.init_layer(), *opacity, elements),
     }
+}
+
+fn write_layer(mut b: wire_layer::Builder<'_>, opacity: f32, elements: &[Element]) {
+    b.set_opacity(opacity);
+    write_element_list(b.init_elements(elements.len() as u32), elements);
 }
 
 fn write_clipped(mut b: wire_clipped::Builder<'_>, clip: &ClipPath, elements: &[Element]) {
@@ -539,14 +545,27 @@ pub(super) fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene) {
     );
 }
 
-/// `None` for an element of an arm from a newer schema, or for one that
-/// holds a value from a newer schema or a float that is not finite, which
-/// the reader skips.
-fn read_element(node: element::Reader<'_>) -> Result<Option<Element>, Error> {
+/// Push the element in `node` onto `out`. It skips an element of an arm from
+/// a newer schema, and one that holds a value from a newer schema or a float
+/// that is not finite. A layer that is opaque pushes what it holds, and one
+/// that is hidden pushes nothing.
+fn read_element(node: element::Reader<'_>, out: &mut Vec<Element>) -> Result<(), Error> {
     let Ok(which) = node.which() else {
-        return Ok(None);
+        return Ok(());
     };
-    skip_unusable(read_known_element(which))
+    match skip_unusable(read_known_element(which))? {
+        // The opacity of a layer from the wire can take any value.
+        Some(Element::Layer {
+            opacity,
+            mut elements,
+        }) => match LayerOpacity::of(opacity) {
+            LayerOpacity::Hidden => {}
+            LayerOpacity::Opaque => out.append(&mut elements),
+            LayerOpacity::Translucent(opacity) => out.push(Element::Layer { opacity, elements }),
+        },
+        element => out.extend(element),
+    }
+    Ok(())
 }
 
 fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, ValueError> {
@@ -561,20 +580,30 @@ fn read_known_element(which: element::WhichReader<'_>) -> Result<Element, ValueE
         }
         Which::Text(t) => Element::Text(read_text_node(t?)?),
         Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?)?),
+        Which::Layer(l) => {
+            let l = l?;
+            let elements = read_element_list(l.get_elements()?)?;
+            Element::Layer {
+                opacity: l.get_opacity(),
+                elements,
+            }
+        }
     })
 }
 
 fn read_element_list(
     list: capnp::struct_list::Reader<'_, element::Owned>,
 ) -> Result<Vec<Element>, Error> {
-    list.iter()
-        .filter_map(|node| read_element(node).transpose())
-        .collect()
+    let mut out = Vec::with_capacity(list.len() as usize);
+    for node in list {
+        read_element(node, &mut out)?;
+    }
+    Ok(out)
 }
 
 /// Add to `ids` the id of each bitmap of the scene in `r`, and in what a
-/// clip holds, with no decode of the rest. An element of an arm from a
-/// newer schema holds no bitmap.
+/// clip or a layer holds, with no decode of the rest. An element of an arm
+/// from a newer schema holds no bitmap.
 pub(super) fn read_bitmap_ids(
     r: wire_scene::Reader<'_>,
     ids: &mut BTreeSet<u32>,
@@ -595,6 +624,7 @@ fn add_bitmap_ids(
                 ids.insert(b?.get_id());
             }
             Ok(element::Which::Clipped(c)) => add_bitmap_ids(c?.get_elements()?, ids)?,
+            Ok(element::Which::Layer(l)) => add_bitmap_ids(l?.get_elements()?, ids)?,
             Ok(element::Which::Path(_) | element::Which::Text(_)) | Err(_) => {}
         }
     }

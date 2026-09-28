@@ -53,6 +53,12 @@ pub struct PixmapRenderer {
     /// Masks popped off `clip_stack`, for the next push. Every mask is
     /// canvas-sized, so any one fits.
     mask_pool: Vec<Mask>,
+    /// The pixmap under each layer in effect, with the opacity that the
+    /// layer draws onto it with. `pixmap` is the top layer.
+    layer_stack: Vec<(Pixmap, f32)>,
+    /// Layers drawn and popped off, for the next layer. Every layer is
+    /// canvas-sized, as a mask is.
+    layer_pool: Vec<Pixmap>,
     /// The builder of the next path. A finished path clears back into it, so
     /// the next path reuses its capacity.
     builder: PathBuilder,
@@ -72,6 +78,8 @@ impl PixmapRenderer {
             base,
             clip_stack: Vec::new(),
             mask_pool: Vec::new(),
+            layer_stack: Vec::new(),
+            layer_pool: Vec::new(),
             builder: PathBuilder::new(),
             assets: Assets::default(),
             background: SkColor::TRANSPARENT,
@@ -104,6 +112,7 @@ impl PixmapRenderer {
         let size = |p: &Pixmap| (p.width(), p.height());
         if size(&pixmap) != size(&self.pixmap) {
             self.mask_pool.clear();
+            self.layer_pool.clear();
         }
         std::mem::replace(&mut self.pixmap, pixmap)
     }
@@ -153,8 +162,10 @@ impl Canvas for PixmapRenderer {
         self.mask_pool
             .extend(self.clip_stack.drain(..).filter_map(Clip::into_mask));
         if (out_w, out_h) != (self.pixmap.width(), self.pixmap.height()) {
-            // Masks are canvas-sized, so a resize invalidates every pooled one.
+            // Masks and layers are canvas-sized, so a resize invalidates every
+            // pooled one.
             self.mask_pool.clear();
+            self.layer_pool.clear();
             self.pixmap = new_pixmap(out_w, out_h)?;
         }
         self.pixmap.fill(self.background);
@@ -280,6 +291,37 @@ impl Canvas for PixmapRenderer {
         };
         inside(&mut *guard.canvas)
     }
+
+    /// Past [`MAX_LAYER_DEPTH`] layers, a layer draws into the one below it
+    /// with no opacity of its own, so the memory stays bounded.
+    fn with_layer<T>(&mut self, opacity: f32, inside: impl FnOnce(&mut Self) -> T) -> T {
+        let hidden = matches!(self.clip_stack.last(), Some(Clip::Hidden));
+        if hidden || self.layer_stack.len() >= MAX_LAYER_DEPTH {
+            return inside(self);
+        }
+        let layer = self.take_layer();
+        let under = std::mem::replace(&mut self.pixmap, layer);
+        self.layer_stack.push((under, opacity));
+        let guard = RestoreOnDrop {
+            canvas: self,
+            restore: |c: &mut Self| {
+                let Some((under, opacity)) = c.layer_stack.pop() else {
+                    return;
+                };
+                let layer = std::mem::replace(&mut c.pixmap, under);
+                // The clips in effect already masked what went into the
+                // layer, and the layer is canvas-sized, so it draws as it is.
+                let paint = PixmapPaint {
+                    opacity,
+                    ..PixmapPaint::default()
+                };
+                c.pixmap
+                    .draw_pixmap(0, 0, layer.as_ref(), &paint, Transform::identity(), None);
+                c.layer_pool.push(layer);
+            },
+        };
+        inside(&mut *guard.canvas)
+    }
 }
 
 impl Renderer for PixmapRenderer {
@@ -321,6 +363,18 @@ impl PixmapRenderer {
         });
         self.builder = path.clear();
         mask.map_or(Clip::Hidden, Clip::Mask)
+    }
+
+    /// A transparent canvas-sized layer, from the pool when one is there.
+    fn take_layer(&mut self) -> Pixmap {
+        match self.layer_pool.pop() {
+            Some(mut layer) => {
+                layer.fill(SkColor::TRANSPARENT);
+                layer
+            }
+            None => new_pixmap(self.pixmap.width(), self.pixmap.height())
+                .expect("a layer has the size of the pixmap, which allocated"),
+        }
     }
 
     /// A cleared canvas-sized mask, from the pool when one is there.
@@ -400,6 +454,10 @@ fn base(scale: f32) -> Transform {
 /// mask have the size of the frame, and a failed allocation aborts the
 /// process, so a larger frame is an [`AllocError`].
 pub const MAX_FRAME_PIXELS: u64 = 1 << 26;
+
+/// The most layers in effect at once. Each one holds a pixmap of the size of
+/// the frame.
+pub const MAX_LAYER_DEPTH: usize = 4;
 
 /// A transparent pixmap of `width` by `height`, or an error for one of more
 /// than [`MAX_FRAME_PIXELS`].
@@ -990,6 +1048,53 @@ mod tests {
 
         assert_same_pixels(pm_atomic, pm_streamed);
         assert_eq!(pixel_rgba(pm_streamed, 5, 5), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn two_squares_in_a_layer_do_not_darken_where_they_overlap() {
+        let mut scene = Scene::new(30.0, 20.0);
+        scene.layer(0.5, |layer| {
+            layer.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
+            layer.add_path(rect(solid(0, 0, 255), 10.0, 0.0, 20.0, 20.0));
+        });
+        let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
+        assert_eq!(pixel_rgba(&pm, 5, 10), pixel_rgba(&pm, 15, 10));
+        assert_eq!(pixel_rgba(&pm, 15, 10).3, 128);
+
+        let bytes = crate::wire::scene::encode(&scene);
+        let mut r = PixmapRenderer::default();
+        assert_same_pixels(&pm, r.render_stream(&bytes[..]).expect("render"));
+    }
+
+    #[test]
+    fn a_layer_inside_a_clip_draws_only_inside_the_clip() {
+        let mut scene = Scene::new(20.0, 20.0);
+        scene.clip(square_clip(0.0, 0.0, 10.0), |clip| {
+            clip.layer(0.5, |layer| {
+                layer.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
+            });
+        });
+        let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
+        assert_eq!(pixel_rgba(&pm, 5, 5).3, 128);
+        assert_eq!(pixel_rgba(&pm, 15, 15).3, 0);
+    }
+
+    #[test]
+    fn a_layer_past_the_most_layers_draws_with_no_opacity_of_its_own() {
+        fn nest(scene: &mut Scene, depth: usize) {
+            if depth == 0 {
+                scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 10.0, 10.0));
+            } else {
+                scene.layer(0.5, |layer| nest(layer, depth - 1));
+            }
+        }
+        let alpha = |depth| {
+            let mut scene = Scene::new(10.0, 10.0);
+            nest(&mut scene, depth);
+            pixel_rgba(&render_to_pixmap(&scene, 1.0).expect("pixmap"), 5, 5).3
+        };
+        assert!(alpha(MAX_LAYER_DEPTH) < alpha(MAX_LAYER_DEPTH - 1));
+        assert_eq!(alpha(MAX_LAYER_DEPTH + 2), alpha(MAX_LAYER_DEPTH));
     }
 
     #[test]

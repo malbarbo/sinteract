@@ -198,6 +198,10 @@ impl Canvas for PdfRenderer {
         };
         inside(&mut *guard.canvas)
     }
+
+    fn with_layer<T>(&mut self, _opacity: f32, inside: impl FnOnce(&mut Self) -> T) -> T {
+        inside(self)
+    }
 }
 
 impl Renderer for PdfRenderer {

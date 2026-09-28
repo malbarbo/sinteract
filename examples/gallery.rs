@@ -37,7 +37,7 @@ use sinteract::scene::{
 type DrawCell = fn(s: &mut Scene, x: f32, y: f32, t: f32);
 
 /// The cells in reading order, each with its label.
-const CELLS: [(&str, DrawCell); 20] = [
+const CELLS: [(&str, DrawCell); 21] = [
     ("fill and stroke", fill_and_stroke),
     ("line quad cubic arc", segments),
     ("caps", caps),
@@ -50,6 +50,7 @@ const CELLS: [(&str, DrawCell); 20] = [
     ("gradient stroke", gradient_stroke),
     ("rotated clip", rotated_clip),
     ("path and nested clip", nested_clip),
+    ("translucent paints, then a layer", layer),
     ("weights and styles", text_styles),
     ("text transforms", text_transforms),
     ("bitmaps", bitmaps),
@@ -63,7 +64,7 @@ const COLS: usize = 4;
 const CELL_W: f32 = 200.0;
 const CELL_H: f32 = 150.0;
 const WIDTH: f32 = COLS as f32 * CELL_W;
-const HEIGHT: f32 = (CELLS.len() / COLS) as f32 * CELL_H;
+const HEIGHT: f32 = CELLS.len().div_ceil(COLS) as f32 * CELL_H;
 /// The id of the one bitmap asset.
 const BADGE: u32 = 1;
 /// The size of the badge image in pixels.
@@ -599,6 +600,29 @@ fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
             }
         });
     });
+}
+
+/// Two circles of half opacity darken where they overlap, and two opaque
+/// circles in a layer of half opacity do not.
+fn layer(s: &mut Scene, x: f32, y: f32, _: f32) {
+    let pair = |s: &mut Scene, x: f32, alpha: f32| {
+        circle(
+            s,
+            fill(Paint::rgba(230, 60, 60, alpha)),
+            x + 30.0,
+            y + 50.0,
+            28.0,
+        );
+        circle(
+            s,
+            fill(Paint::rgba(60, 90, 230, alpha)),
+            x + 60.0,
+            y + 70.0,
+            28.0,
+        );
+    };
+    pair(s, x + 5.0, 0.5);
+    s.layer(0.5, |layer| pair(layer, x + 105.0, 1.0));
 }
 
 fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
