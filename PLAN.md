@@ -214,8 +214,9 @@ Feito no sinteract:
   movimentos por jogador;
 - os assets com `lost` e `forget`, a tabela `Assets` da engine e o
   `Cache` de uma sala;
-- as funções do servidor: `framing::parse_header`, `to_server::decode` e
-  `to_view::arm`;
+- o `ServerCore`, com as regras de uma sala e sem I/O, sobre
+  `framing::split_frame`, `to_server::decode`, `to_view::arm` e
+  `to_view::bitmap_ids`;
 - a feature `render`, que um servidor desliga.
 
 Falta:
