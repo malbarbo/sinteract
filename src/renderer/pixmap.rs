@@ -15,7 +15,7 @@ use crate::asset::{MAX_IMAGE_PIXELS, MAX_LIVE_PIXELS};
 use crate::outline::PathSink;
 use crate::renderer::{
     AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT,
-    frame_side, sealed::Canvas,
+    frame_side, missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, GradientGeom, Image, LineCap, LineJoin, Paint, Path, Rgba,
@@ -752,20 +752,16 @@ fn draw_missing(
     if !rect_within_reach(unit, transform) {
         return;
     }
-    let mut corners = [
-        SkPoint::from_xy(-0.5, -0.5),
-        SkPoint::from_xy(0.5, -0.5),
-        SkPoint::from_xy(0.5, 0.5),
-        SkPoint::from_xy(-0.5, 0.5),
+    let t = [
+        transform.sx,
+        transform.ky,
+        transform.kx,
+        transform.sy,
+        transform.tx,
+        transform.ty,
     ];
-    transform.map_points(&mut corners);
-    let [p0, p1, p2, p3] = corners;
     let mut b = std::mem::take(builder);
-    b.move_to(p0.x, p0.y);
-    b.line_to(p1.x, p1.y);
-    b.line_to(p2.x, p2.y);
-    b.line_to(p3.x, p3.y);
-    b.close();
+    missing_box(t, &mut b);
     let Some(outline) = b.finish() else {
         return;
     };
@@ -779,10 +775,7 @@ fn draw_missing(
     pixmap.fill_path(&outline, &gray, SkFillRule::Winding, identity, mask);
     pixmap.stroke_path(&outline, &red, &stroke, identity, mask);
     let mut b = outline.clear();
-    b.move_to(p0.x, p0.y);
-    b.line_to(p2.x, p2.y);
-    b.move_to(p1.x, p1.y);
-    b.line_to(p3.x, p3.y);
+    missing_cross(t, &mut b);
     let Some(cross) = b.finish() else {
         return;
     };

@@ -34,8 +34,8 @@ use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 use crate::asset::{Embed, JpegColor, MAX_IMAGE_PIXELS, embed};
 use crate::outline::PathSink;
 use crate::renderer::{
-    AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, frame_side, sealed::Canvas,
-    unit_square,
+    AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, frame_side, missing_box,
+    missing_cross, sealed::Canvas,
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, Gradient, GradientGeom, Image, LineCap, LineJoin, Paint, Path,
@@ -378,7 +378,6 @@ impl PdfRenderer {
     /// Draws the gray box with a red cross that stands for a bitmap of
     /// `transform` whose image does not decode.
     fn draw_missing(&mut self, transform: [f32; 6]) {
-        let [p0, p1, p2, p3] = unit_square(transform);
         let c = &mut self.content;
         c.save_state();
         let [r, g, b] = rgb_components(MISSING_FILL);
@@ -386,16 +385,9 @@ impl PdfRenderer {
         let [r, g, b] = rgb_components(MISSING_STROKE);
         c.set_stroke_rgb(r, g, b);
         c.set_line_width(1.0);
-        c.move_to(p0.0, p0.1);
-        for (x, y) in [p1, p2, p3] {
-            c.line_to(x, y);
-        }
-        c.close_path();
+        missing_box(transform, &mut PdfOutline::new(c));
         c.fill_nonzero_and_stroke();
-        c.move_to(p0.0, p0.1);
-        c.line_to(p2.0, p2.1);
-        c.move_to(p1.0, p1.1);
-        c.line_to(p3.0, p3.1);
+        missing_cross(transform, &mut PdfOutline::new(c));
         c.stroke();
         c.restore_state();
     }

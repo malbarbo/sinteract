@@ -25,7 +25,7 @@ use crate::asset::{Embed, embed};
 use crate::outline::PathSink;
 use crate::renderer::{
     AllocError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT,
-    frame_side, sealed::Canvas, unit_square,
+    frame_side, missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
     Bitmap, ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, Image, LineCap,
@@ -522,18 +522,10 @@ impl fmt::Display for Hex {
 /// Writes the gray box with a red cross that stands for a bitmap of
 /// `transform` whose image does not decode.
 fn write_missing(transform: [f32; 6], out: &mut String) {
-    let [p0, p1, p2, p3] = unit_square(transform);
     out.push_str("<path d=\"");
     let mut d = PathData::new(out);
-    d.move_to(p0.0, p0.1);
-    for (x, y) in [p1, p2, p3] {
-        d.line_to(x, y);
-    }
-    d.close();
-    d.move_to(p0.0, p0.1);
-    d.line_to(p2.0, p2.1);
-    d.move_to(p1.0, p1.1);
-    d.line_to(p3.0, p3.1);
+    missing_box(transform, &mut d);
+    missing_cross(transform, &mut d);
     out.push('"');
     write_color(MISSING_FILL, "fill", "fill-opacity", out);
     write_color(MISSING_STROKE, "stroke", "stroke-opacity", out);
