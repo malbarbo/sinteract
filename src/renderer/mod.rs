@@ -7,10 +7,10 @@
 //! that can fail, and it returns a [`Result`].
 //!
 //! The primitives live on `Canvas`, in a module private to the crate, so a
-//! backend implements them and the scene and stream walkers call them, but
-//! an application cannot name them. `render` and `render_stream` are
-//! provided, so the order of sizing, painting and closing a frame is the
-//! trait's and not each backend's. The one public method, `output`, only
+//! backend implements them and the scene walker calls them, but an
+//! application cannot name them. `render` is provided, so the order of
+//! sizing, painting and closing a frame is the trait's and not each
+//! backend's. The one public method, `output`, only
 //! borrows the last frame.
 //!
 //! Coordinates are CSS pixels, with y down and the origin at the top left,
@@ -23,12 +23,10 @@ pub mod pdf;
 pub mod pixmap;
 pub mod svg;
 
-use std::io::Read;
-
 use crate::scene::{Rgba, Scene};
 
-/// A renderer that draws a [`Scene`] or a streamed frame into a surface it
-/// owns. The [module docs](self) describe the lifecycle.
+/// A renderer that draws a [`Scene`] into a surface it owns. The
+/// [module docs](self) describe the lifecycle.
 pub trait Renderer: sealed::Canvas {
     /// What a rendered frame borrows out, such as `&Pixmap` or `&[u8]`. It
     /// borrows `&mut self`, so the frame is read before the next `render`.
@@ -44,19 +42,6 @@ pub trait Renderer: sealed::Canvas {
     fn render(&mut self, scene: &Scene) -> Result<Self::Output<'_>, AllocError> {
         self.ensure_size(scene.width(), scene.height())?;
         self.paint_elements(scene.elements());
-        self.end_frame();
-        Ok(self.output())
-    }
-
-    /// Decode one scene that
-    /// [`wire::scene::encode`](crate::wire::scene::encode) wrote from
-    /// `reader` and render it without building the
-    /// [`Element`](crate::scene::Element) tree.
-    fn render_stream(
-        &mut self,
-        reader: impl Read,
-    ) -> Result<Self::Output<'_>, crate::wire::StreamError> {
-        crate::wire::stream_frame(self, reader)?;
         self.end_frame();
         Ok(self.output())
     }
@@ -99,7 +84,7 @@ impl std::error::Error for AssetError {
 pub(crate) mod sealed {
     use crate::scene::{Bitmap, ClipPath, Element, Path, Text};
 
-    /// The primitives a backend provides and the walkers of the crate call.
+    /// The primitives a backend provides and the scene walker calls.
     /// `pub` in a private module, so nothing outside the crate can name or
     /// implement it.
     pub trait Canvas: Sized {

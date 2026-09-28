@@ -1012,25 +1012,6 @@ mod tests {
     }
 
     #[test]
-    fn render_stream_matches_render() {
-        let mut scene = Scene::new(40.0, 40.0);
-        {
-            let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
-                .line_to(20.0, 0.0)
-                .line_to(20.0, 20.0)
-                .build();
-            scene.clip(clip, |clipped| {
-                clipped.add_path(rect(red_fill(0.5), 0.0, 0.0, 40.0, 40.0));
-                clipped.add_text(text("Hi"));
-            });
-        }
-        let bytes = crate::wire::scene::encode(&scene);
-        let mut r = SvgRenderer::new();
-        let streamed = r.render_stream(&bytes[..]).expect("decode + render");
-        assert_eq!(streamed, render_to_svg(&scene));
-    }
-
-    #[test]
     fn a_second_render_starts_a_new_document() {
         let mut scene = Scene::new(20.0, 20.0);
         scene.add_text(text("a"));
@@ -1092,7 +1073,7 @@ mod tests {
         let bytes = crate::wire::scene::encode(&Scene::new(width, height));
         let bytes = crate::wire::with_float(&bytes, width, f32::INFINITY);
         let bytes = crate::wire::with_float(&bytes, height, f32::NAN);
-        let mut r = SvgRenderer::new();
-        assert_eq!(r.render_stream(&bytes[..]).expect("decode + render"), zero);
+        let scene = crate::wire::scene::decode(&bytes).expect("decode");
+        assert_eq!(render_to_svg(&scene), zero);
     }
 }

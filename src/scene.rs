@@ -1090,9 +1090,8 @@ impl Scene {
 }
 
 /// A width or a height of a frame. A size that describes no frame, which is
-/// one that is not finite or is not above zero, is 0, the empty frame. The
-/// stream, which sizes a frame without a [`Scene`], applies it too.
-pub(crate) fn frame_size(size: f32) -> f32 {
+/// one that is not finite or is not above zero, is 0, the empty frame.
+fn frame_size(size: f32) -> f32 {
     if size.is_finite() && size > 0.0 {
         size
     } else {

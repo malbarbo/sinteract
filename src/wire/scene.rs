@@ -290,8 +290,8 @@ fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
 }
 
 /// A clip that is not finite is [`ValueError::NotFinite`], before its
-/// children are read, so the decoder and the stream skip them alike.
-pub(super) fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ValueError> {
+/// children are read.
+fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ValueError> {
     let mut clip = ClipPath::default();
     clip.fill_rule = fill_rule_from_wire(r.get_fill_rule()?);
     read_segments(clip.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
@@ -313,7 +313,7 @@ fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap) {
     });
 }
 
-pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ValueError> {
+fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ValueError> {
     let bitmap = Bitmap {
         id: r.get_id(),
         transform: [
@@ -352,7 +352,7 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     b.set_text(&*n.spec.text);
 }
 
-pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
+fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
     let text = Text {
         fill: read_paint(r.get_fill()?)?,
         stroke: read_paint(r.get_stroke()?)?,
@@ -491,19 +491,12 @@ fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
     write_coords(&mut b.init_coords(coord_count(p.segments())), p.segments());
 }
 
-/// Decode into `path`, reusing its allocations. The streaming decoder keeps
-/// one for a whole frame.
-pub(super) fn read_path_into(r: wire_path::Reader<'_>, path: &mut Path) -> Result<(), ValueError> {
+fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ValueError> {
+    let mut path = Path::default();
     path.style = read_path_style(r.get_style()?)?;
     read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
     finite(path.is_finite())?;
     path.style.normalize();
-    Ok(())
-}
-
-fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ValueError> {
-    let mut path = Path::default();
-    read_path_into(r, &mut path)?;
     Ok(path)
 }
 

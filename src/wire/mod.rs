@@ -4,9 +4,7 @@
 //! [`crate::event`] to and from the Cap'n Proto structs. Neither knows that
 //! a session exists. [`to_view`], [`to_server`] and [`to_engine`] wrap the
 //! payloads in the message of their direction and unwrap them again, and
-//! own everything about the session. A private third module decodes a
-//! scene straight onto a renderer, for
-//! [`Renderer::render_stream`](crate::renderer::Renderer::render_stream).
+//! own everything about the session.
 //!
 //! The engine runs the program and writes with [`to_view`]. A view draws
 //! the frames, sends the input and encodes with [`to_server`]. The server
@@ -27,7 +25,6 @@ pub mod event;
 pub mod framing;
 mod protocol;
 pub mod scene;
-mod stream;
 pub mod to_engine;
 pub mod to_server;
 pub mod to_view;
@@ -35,8 +32,6 @@ pub mod to_view;
 use capnp::message::{self, ReaderOptions, ReaderSegments};
 
 pub use protocol::ReadError;
-pub use stream::Error as StreamError;
-pub(crate) use stream::stream_frame;
 
 /// Serialize a finished builder. `write_message` into a `Vec` cannot fail.
 pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAllocator>) -> Vec<u8> {
@@ -184,15 +179,6 @@ pub(crate) fn with_unknown_view_value(
     find: impl FnOnce(crate::protocol_capnp::view_message::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
     with_unknown_value::<crate::protocol_capnp::view_message::Owned>(bytes, find)
-}
-
-/// [`with_unknown_value`] for the bytes of a bare `Scene`.
-#[cfg(all(test, feature = "render"))]
-pub(crate) fn with_unknown_scene_value(
-    bytes: &[u8],
-    find: impl FnOnce(crate::scene_capnp::scene::Reader<'_>) -> *const u8,
-) -> Vec<u8> {
-    with_unknown_value::<crate::scene_capnp::scene::Owned>(bytes, find)
 }
 
 /// Overwrite the two bytes that `find` points at with a value this crate
@@ -843,11 +829,6 @@ mod tests {
             |s| path_slots(s.get_elements().unwrap()),
         );
         assert!(matches!(scene::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
-        let mut svg = crate::renderer::svg::SvgRenderer::new();
-        assert!(matches!(
-            crate::renderer::Renderer::render_stream(&mut svg, &bytes[..]),
-            Err(StreamError::Payload(e)) if is_read_limit_exceeded(&e)
-        ));
     }
 
     /// `bytes` with the pointer in every slot after the first moved to the

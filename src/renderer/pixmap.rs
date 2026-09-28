@@ -1033,23 +1033,6 @@ mod tests {
     }
 
     #[test]
-    fn render_stream_matches_render_for_flat_path() {
-        let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        let bytes = crate::wire::scene::encode(&scene);
-
-        let mut r_atomic = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
-        let pm_atomic = r_atomic.render(&scene).expect("render");
-
-        // A different size, so render_stream has to resize.
-        let mut r_stream = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
-        let pm_streamed = r_stream.render_stream(&bytes[..]).expect("decode + render");
-
-        assert_same_pixels(pm_atomic, pm_streamed);
-        assert_eq!(pixel_rgba(pm_streamed, 5, 5), (255, 0, 0, 255));
-    }
-
-    #[test]
     fn two_squares_in_a_layer_do_not_darken_where_they_overlap() {
         let mut scene = Scene::new(30.0, 20.0);
         scene.layer(0.5, |layer| {
@@ -1059,10 +1042,6 @@ mod tests {
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 5, 10), pixel_rgba(&pm, 15, 10));
         assert_eq!(pixel_rgba(&pm, 15, 10).3, 128);
-
-        let bytes = crate::wire::scene::encode(&scene);
-        let mut r = PixmapRenderer::default();
-        assert_same_pixels(&pm, r.render_stream(&bytes[..]).expect("render"));
     }
 
     #[test]
@@ -1169,95 +1148,6 @@ mod tests {
         assert_eq!(pixel_rgba(&pm, 4, 4), (0, 0, 255, 255));
         assert_eq!(pixel_rgba(&pm, 14, 4), (0, 0, 255, 255));
         assert_eq!(pixel_rgba(&pm, 9, 4).3, 0);
-    }
-
-    #[test]
-    fn streamed_paths_do_not_inherit_the_scratch() {
-        // Every path of a frame decodes into one reused Path. A stale segment
-        // would show after a long path followed by a short one.
-        let mut scene = Scene::new(20.0, 20.0);
-        {
-            let mut p = scene.path(solid(0, 0, 255), 0.0, 0.0);
-            p.line_to(20.0, 0.0);
-            p.line_to(20.0, 8.0);
-            p.cubic_to(14.0, 10.0, 6.0, 10.0, 0.0, 8.0);
-        }
-        {
-            let mut p = scene.path(solid(255, 0, 0), 0.0, 12.0);
-            p.line_to(20.0, 20.0);
-        }
-        let bytes = crate::wire::scene::encode(&scene);
-
-        let mut direct = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
-        let expected = direct.render(&scene).expect("render").clone();
-
-        let mut streamed = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
-        let got = streamed.render_stream(&bytes[..]).expect("decode + render");
-
-        assert_same_pixels(&expected, got);
-    }
-
-    #[test]
-    fn render_stream_handles_nested_clip() {
-        let mut scene = Scene::new(20.0, 20.0);
-        scene.clip(square_clip(0.0, 0.0, 10.0), |clip| {
-            clip.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 20.0, 20.0));
-        });
-        let bytes = crate::wire::scene::encode(&scene);
-
-        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
-        let pm = r.render_stream(&bytes[..]).expect("decode + render");
-        assert_eq!(pixel_rgba(pm, 5, 5), (0, 0, 255, 255));
-        assert_eq!(pixel_rgba(pm, 15, 15).3, 0);
-    }
-
-    #[test]
-    fn render_stream_skips_an_element_of_an_unknown_arm() {
-        // A red path that becomes an arm of a newer schema, under a blue one.
-        let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
-        let bytes =
-            crate::wire::with_unknown_scene_value(&crate::wire::scene::encode(&scene), |m| {
-                crate::wire::tag_of(m.get_elements().unwrap().get(0))
-            });
-
-        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
-        let pm = r.render_stream(&bytes[..]).expect("decode + render");
-        assert_eq!(pixel_rgba(pm, 2, 2), (0, 0, 255, 255));
-        assert_eq!(pixel_rgba(pm, 7, 7).3, 0);
-    }
-
-    #[test]
-    fn render_stream_skips_an_element_that_holds_an_unknown_value() {
-        // A red path with a paint arm of a newer schema, a clip with verbs of
-        // a newer schema around another red path, and a blue path.
-        use crate::scene_capnp::element::Which;
-        use crate::wire::scene::encode;
-        use crate::wire::{tag_of, with_unknown_scene_value};
-        let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        scene.clip(square_clip(0.0, 0.0, 10.0), |clip| {
-            clip.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        });
-        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
-        let bytes = with_unknown_scene_value(&encode(&scene), |m| {
-            let Ok(Which::Path(p)) = m.get_elements().unwrap().get(0).which() else {
-                panic!("expected Path");
-            };
-            tag_of(p.unwrap().get_style().unwrap().get_fill().unwrap())
-        });
-        let bytes = with_unknown_scene_value(&bytes, |m| {
-            let Ok(Which::Clipped(c)) = m.get_elements().unwrap().get(1).which() else {
-                panic!("expected Clipped");
-            };
-            c.unwrap().get_clip().unwrap().get_verbs().unwrap().as_ptr()
-        });
-
-        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
-        let pm = r.render_stream(&bytes[..]).expect("decode + render");
-        assert_eq!(pixel_rgba(pm, 2, 2), (0, 0, 255, 255));
-        assert_eq!(pixel_rgba(pm, 7, 7).3, 0);
     }
 
     #[test]
@@ -1389,30 +1279,6 @@ mod tests {
         });
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 50, 20).3, 0);
-    }
-
-    #[test]
-    fn render_stream_skips_an_element_that_holds_a_non_finite_float() {
-        // A red path with a miter limit and a clip with a coordinate that
-        // become NaN on the wire, the clip around another red path, and a
-        // blue path.
-        let mark = 777.0;
-        let mut scene = Scene::new(10.0, 10.0);
-        let red = PathStyle {
-            miter_limit: mark,
-            ..solid(255, 0, 0)
-        };
-        scene.add_path(rect(red, 0.0, 0.0, 10.0, 10.0));
-        scene.clip(square_clip(0.0, 0.0, mark), |clip| {
-            clip.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 10.0, 10.0));
-        });
-        scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 5.0, 5.0));
-        let bytes = crate::wire::with_float(&crate::wire::scene::encode(&scene), mark, f32::NAN);
-
-        let mut r = PixmapRenderer::new(1.0, 1.0, 1.0).expect("alloc");
-        let pm = r.render_stream(&bytes[..]).expect("decode + render");
-        assert_eq!(pixel_rgba(pm, 2, 2), (0, 0, 255, 255));
-        assert_eq!(pixel_rgba(pm, 7, 7).3, 0);
     }
 
     #[test]
