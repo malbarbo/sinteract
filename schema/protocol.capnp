@@ -92,6 +92,10 @@ struct PlayerEvent {
     event  @1 :Input.InputEvent;
 }
 
+# Time for the engine to draw the next frames. A struct and not a Void, so
+# that a sequence number can join it as a field.
+struct Tick {}
+
 # Server to engine. A start and a tick are about the whole session.
 struct ServerMessage {
     union {
@@ -100,7 +104,7 @@ struct ServerMessage {
         # The first message of the session.
         start @1 :Start;
         # Time for the engine to draw the next frames.
-        tick  @2 :Input.Tick;
+        tick  @2 :Tick;
         # The server dropped the asset of this id, to keep the room under
         # its limits. The engine sends the image again, under a new id,
         # before a frame that draws it.

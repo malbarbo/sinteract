@@ -115,7 +115,3 @@ struct InputEvent {
         pad    @3 :PadEvent;
     }
 }
-
-# Time for the next frame. A struct and not a Void, so that a sequence
-# number can join it as a field.
-struct Tick {}
