@@ -21,7 +21,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use crossterm::style::Print;
 use crossterm::{cursor, execute, queue, terminal};
-use tiny_skia::Pixmap;
+use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 use super::driver::{NoGraphics, OpenError, PresentError, sealed};
 use super::inbox::{Inbox, Next, Sender};
@@ -1214,10 +1214,7 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>)
     // common case in a drawing, and a cell row covers two pixel rows. A
     // frame of many colors grows the buffer once and keeps the room.
     buf.reserve(pixmap.width() as usize * pixmap.height() as usize * 2);
-    // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
-    let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
-    while let Some(top) = rows.next() {
-        let bottom = rows.next().unwrap_or_default();
+    for (top, bottom) in pixel_pairs(pixmap) {
         // The reset at the end of a row leaves the terminal with the default
         // colors, which no cell carries, so the first cell sets both.
         let mut shown = None;
@@ -1286,13 +1283,8 @@ fn update_text_blocks<W: Write>(
     let mut state = None;
     // Where the cursor sits after the cell written last.
     let mut at = None;
-    // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
-    let mut rows = pixmap.pixels().chunks(cols);
-    for (r, shown) in screen.shown.chunks_mut(cols).enumerate() {
-        let top = rows
-            .next()
-            .expect("each row of cells has a top row of pixels");
-        let bottom = rows.next().unwrap_or_default();
+    let rows = screen.shown.chunks_mut(cols).zip(pixel_pairs(pixmap));
+    for (r, (shown, (top, bottom))) in rows.enumerate() {
         for (x, (slot, &t)) in shown.iter_mut().zip(top).enumerate() {
             let cell = Cell::new(t, bottom.get(x));
             if !all && *slot == cell {
@@ -1312,6 +1304,19 @@ fn update_text_blocks<W: Write>(
         // Part of the frame reached the terminal, and which part is unknown.
         screen.forget();
     })
+}
+
+/// The rows of pixels of `pixmap` in pairs, one for each row of cells. The
+/// last row of an odd height has an empty row below it.
+fn pixel_pairs(
+    pixmap: &Pixmap,
+) -> impl Iterator<Item = (&[PremultipliedColorU8], &[PremultipliedColorU8])> {
+    let cols = pixmap.width() as usize;
+    // `chunks` panics on a size of 0, and a pixmap is never 0 pixels wide.
+    pixmap
+        .pixels()
+        .chunks(2 * cols)
+        .map(move |pair| pair.split_at_checked(cols).unwrap_or((pair, &[])))
 }
 
 /// The two colors of a half-block cell. The upper pixel of the pair is the
