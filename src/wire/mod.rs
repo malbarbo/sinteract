@@ -602,8 +602,7 @@ mod tests {
             to_view::arm(&asset).unwrap(),
             Some(to_view::Arm::Asset {
                 id: 1,
-                size: None,
-                bytes: 4
+                footprint: Err(crate::asset::ImageError::Unsupported)
             })
         );
         let png = to_view::encode_asset(2, &crate::asset::png_head(3, 5));
@@ -611,8 +610,7 @@ mod tests {
             to_view::arm(&png).unwrap(),
             Some(to_view::Arm::Asset {
                 id: 2,
-                size: Some((3, 5)),
-                bytes: 24
+                footprint: crate::asset::Footprint::of(&crate::asset::png_head(3, 5))
             })
         );
         let unknown = with_unknown_engine_value(&asset, |m| tag_of(m));

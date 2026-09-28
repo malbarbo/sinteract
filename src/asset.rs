@@ -135,20 +135,14 @@ impl Footprint {
     /// The footprint of `blob`, or an error if it is not a PNG, a JPEG, a
     /// GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
     pub fn of(blob: &[u8]) -> Result<Footprint, ImageError> {
-        Footprint::new(image_size(blob), blob.len())
-    }
-
-    /// The footprint of a blob of `bytes` bytes whose header gives `size`,
-    /// as [`image_size`] reads it.
-    pub fn new(size: Option<(u32, u32)>, bytes: usize) -> Result<Footprint, ImageError> {
-        let (width, height) = size.ok_or(ImageError::Unsupported)?;
+        let (width, height) = image_size(blob).ok_or(ImageError::Unsupported)?;
         let pixels = u64::from(width) * u64::from(height);
         if pixels > MAX_IMAGE_PIXELS {
             return Err(ImageError::TooManyPixels { width, height });
         }
         Ok(Footprint {
             pixels,
-            bytes: bytes as u64,
+            bytes: blob.len() as u64,
         })
     }
 }
@@ -295,7 +289,7 @@ pub(crate) fn screen_size(file: &[u8]) -> Result<(u32, u32), ImageError> {
 /// width or a height of 0. It is the size that a decoder allocates, before
 /// the EXIF orientation of a JPEG turns it. It reads the header and decodes
 /// nothing.
-pub fn image_size(blob: &[u8]) -> Option<(u32, u32)> {
+fn image_size(blob: &[u8]) -> Option<(u32, u32)> {
     head(blob).map(|head| head.size)
 }
 
@@ -786,7 +780,10 @@ mod tests {
 
     /// The footprint of the largest image, eight of which fill a room.
     fn largest() -> Footprint {
-        Footprint::new(Some((2048, 2048)), 1).unwrap()
+        Footprint {
+            pixels: MAX_IMAGE_PIXELS,
+            bytes: 1,
+        }
     }
 
     fn ids(ids: &[u32]) -> BTreeSet<u32> {
@@ -840,8 +837,14 @@ mod tests {
     #[test]
     fn an_asset_that_does_not_fit_beside_the_new_ones_changes_nothing() {
         let mut cache = full();
-        let small = Footprint::new(Some((10, 10)), 100).unwrap();
-        let heavy = Footprint::new(Some((1, 1)), MAX_LIVE_BYTES as usize).unwrap();
+        let small = Footprint {
+            pixels: 100,
+            bytes: 100,
+        };
+        let heavy = Footprint {
+            pixels: 1,
+            bytes: MAX_LIVE_BYTES,
+        };
         assert_eq!(cache.asset(8, heavy, ()), Ok(()));
         assert!(matches!(cache.asset(9, small, ()), Err(RoomFull { .. })));
         assert!(!cache.contains(9));
@@ -1158,13 +1161,19 @@ mod tests {
         for _ in 0..8 {
             load = load.with(largest).unwrap();
         }
-        let one = Footprint::new(Some((1, 1)), 1).unwrap();
+        let one = Footprint {
+            pixels: 1,
+            bytes: 1,
+        };
         assert!(matches!(load.with(one), Err(RoomFull { .. })));
         assert_eq!(
             load.without(largest).with(one).unwrap().without(one),
             load.without(largest)
         );
-        let heavy = Footprint::new(Some((1, 1)), MAX_LIVE_BYTES as usize).unwrap();
+        let heavy = Footprint {
+            pixels: 1,
+            bytes: MAX_LIVE_BYTES,
+        };
         let load = Load::default().with(heavy).unwrap();
         assert_eq!(
             load.with(one),

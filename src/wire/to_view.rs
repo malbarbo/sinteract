@@ -16,7 +16,7 @@ use std::num::NonZeroU32;
 
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
-use crate::asset::image_size;
+use crate::asset::{Footprint, ImageError};
 use crate::protocol_capnp::{engine_message, hello};
 use crate::scene::{Image, Scene};
 
@@ -101,14 +101,11 @@ pub(crate) enum Message {
 /// came.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Arm {
-    /// An asset, with what the limits of [`crate::asset`] count.
+    /// An asset, with what the limits of [`crate::asset`] count, or why
+    /// its blob cannot be an asset.
     Asset {
         id: u32,
-        /// The size from the header of the image, or `None` if the blob is
-        /// not an image that a view decodes.
-        size: Option<(u32, u32)>,
-        /// The length of the blob.
-        bytes: usize,
+        footprint: Result<Footprint, ImageError>,
     },
     /// A frame for `player`, or for every player when `player` is `None`.
     Frame {
@@ -201,11 +198,9 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
         Ok(Some(match which {
             engine_message::Asset(a) => {
                 let a = a?;
-                let blob = a.get_blob()?;
                 Arm::Asset {
                     id: a.get_id(),
-                    size: image_size(blob),
-                    bytes: blob.len(),
+                    footprint: Footprint::of(a.get_blob()?),
                 }
             }
             engine_message::Frame(f) => Arm::Frame {

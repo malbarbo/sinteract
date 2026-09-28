@@ -433,8 +433,8 @@ impl ServerCore {
                     // A room that closed before the hello never starts.
                     Phase::Closing | Phase::Over => {}
                 },
-                Ok(Some(Arm::Asset { id, size, bytes })) => {
-                    if let Err(e) = self.keep_asset(id, size, bytes, payload) {
+                Ok(Some(Arm::Asset { id, footprint })) => {
+                    if let Err(e) = self.keep_asset(id, footprint, payload) {
                         errors.push(e);
                     }
                 }
@@ -538,12 +538,10 @@ impl ServerCore {
     fn keep_asset(
         &mut self,
         id: u32,
-        size: Option<(u32, u32)>,
-        bytes: usize,
+        footprint: Result<Footprint, ImageError>,
         payload: Arc<[u8]>,
     ) -> Result<(), EngineError> {
-        let footprint =
-            Footprint::new(size, bytes).map_err(|error| EngineError::Asset { id, error })?;
+        let footprint = footprint.map_err(|error| EngineError::Asset { id, error })?;
         if self.cache.contains(id) {
             return Err(EngineError::LiveId(id));
         }
