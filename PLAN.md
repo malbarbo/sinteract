@@ -226,8 +226,7 @@ Feito no sinteract:
 - a imagem na cena, os assets com `lost` e `forget`, a
   `Session::write_frame`, o `to_view::Reader` e o `Cache` de uma sala;
 - o `ServerCore`, com as regras de uma sala e sem I/O, sobre
-  `framing::split_frame`, `to_server::decode`, `to_view::arm` e
-  `to_view::bitmap_ids`;
+  `framing::split_frame`, `to_server::decode` e `to_view::arm`;
 - a feature `render`, que um servidor desliga.
 
 Falta:

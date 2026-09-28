@@ -4,6 +4,7 @@
 //! value out of range. The helpers at the end change the bytes of a message
 //! as a newer peer, or one that writes a float that is not finite, would.
 
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::num::NonZeroU32;
 
@@ -51,6 +52,15 @@ pub(crate) fn read(r: &mut impl Read) -> Result<Option<Message>, Error> {
 /// arm from a newer schema.
 pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
     decode_root::<engine_message::Owned, _>(payload, decode_message)
+}
+
+/// The ids of the bitmaps of the frame in `payload`, as [`to_view::arm`]
+/// reads them.
+pub(crate) fn bitmap_ids(payload: &[u8]) -> BTreeSet<u32> {
+    match to_view::arm(payload) {
+        Ok(Some(to_view::Arm::Frame { ids, .. })) => ids,
+        other => panic!("expected a frame, got {other:?}"),
+    }
 }
 
 fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Error> {

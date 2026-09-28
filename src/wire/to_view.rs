@@ -73,7 +73,7 @@ impl Reader {
 /// The arm of a message of the engine, with the player of a frame. A
 /// server routes a message by its arm and passes the payload on as it
 /// came.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Arm {
     /// An asset, with what the limits of [`crate::asset`] count, or why
     /// its blob cannot be an asset.
@@ -81,9 +81,12 @@ pub enum Arm {
         id: u32,
         footprint: Result<Footprint, ImageError>,
     },
-    /// A frame for `player`, or for every player when `player` is `None`.
+    /// A frame for `player`, or for every player when `player` is `None`,
+    /// with the ids of its bitmaps. They may include a bitmap that a view
+    /// does not draw, such as one in a hidden layer.
     Frame {
         player: Option<NonZeroU32>,
+        ids: BTreeSet<u32>,
     },
     Hello(PlayerRange),
     Forget(u32),
@@ -157,8 +160,9 @@ pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
     write_framed(w, Side::Engine, &asset_message(id, blob))
 }
 
-/// The arm of `payload`, a message with no envelope, without a decode of
-/// the scene of a frame or of the image of an asset. `None` for an arm
+/// The arm of `payload`, a message with no envelope. Of a frame it reads
+/// the ids of the bitmaps and not the rest of the scene, and of an asset
+/// it does not decode the image. `None` for an arm
 /// from a newer schema. A hello whose players are not a [`PlayerRange`]
 /// is an error.
 pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
@@ -174,29 +178,20 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
                     footprint: Footprint::of(a.get_blob()?),
                 }
             }
-            engine_message::Frame(f) => Arm::Frame {
-                player: NonZeroU32::new(f?.get_player()),
-            },
+            engine_message::Frame(f) => {
+                let f = f?;
+                let mut ids = BTreeSet::new();
+                read_bitmap_ids(f.get_scene()?, &mut ids)?;
+                Arm::Frame {
+                    player: NonZeroU32::new(f.get_player()),
+                    ids,
+                }
+            }
             engine_message::Hello(h) => Arm::Hello(read_hello(h?)?),
             engine_message::Forget(id) => Arm::Forget(id),
             engine_message::TickTaken(()) => Arm::TickTaken,
         }))
     })
-}
-
-/// The ids of the bitmaps of the frame in `payload`, a message with no
-/// envelope, with no decode of the rest of the scene. They may include a
-/// bitmap that a view does not draw, such as one in a hidden layer. A
-/// message that is not a frame has none.
-pub fn bitmap_ids(payload: &[u8]) -> Result<BTreeSet<u32>, Error> {
-    decode_root::<engine_message::Owned, _>(payload, |msg| {
-        let mut ids = BTreeSet::new();
-        if let Ok(engine_message::Frame(f)) = msg.which() {
-            read_bitmap_ids(f?.get_scene()?, &mut ids)?;
-        }
-        Ok(Some(ids))
-    })
-    .map(|ids| ids.unwrap_or_default())
 }
 
 pub(super) fn read_hello(h: hello::Reader<'_>) -> Result<PlayerRange, Error> {

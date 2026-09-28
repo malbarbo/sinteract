@@ -500,13 +500,17 @@ mod tests {
         let frame = testing::encode_frame(&Scene::new(4.0, 3.0));
         assert_eq!(
             to_view::arm(&frame).unwrap(),
-            Some(to_view::Arm::Frame { player: None })
+            Some(to_view::Arm::Frame {
+                player: None,
+                ids: [].into()
+            })
         );
         let framed = testing::encode_frame_to(Some(nonzero(2)), &Scene::new(4.0, 3.0));
         assert_eq!(
             to_view::arm(&framed).unwrap(),
             Some(to_view::Arm::Frame {
-                player: Some(nonzero(2))
+                player: Some(nonzero(2)),
+                ids: [].into()
             })
         );
         let asset = testing::encode_asset(1, &[0; 4]);
@@ -566,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn the_bitmap_ids_of_a_frame_come_without_a_decode_of_the_scene() {
+    fn the_arm_of_a_frame_holds_the_ids_of_its_bitmaps() {
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_bitmap(bitmap(3));
         let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
@@ -577,12 +581,9 @@ mod tests {
             c.add_bitmap(bitmap(9));
         });
         scene.add_bitmap(bitmap(3));
-        let ids = to_view::bitmap_ids(&encode_frame(&scene)).unwrap();
+        let ids = testing::bitmap_ids(&encode_frame(&scene));
         assert_eq!(ids.into_iter().collect::<Vec<_>>(), [3, 9]);
-        assert!(to_view::bitmap_ids(&encode_frame(&sample_scene())).is_ok());
-        let asset = encode_asset(1, &[0; 4]);
-        assert!(to_view::bitmap_ids(&asset).unwrap().is_empty());
-        assert!(to_view::bitmap_ids(&[0; 8]).is_err());
+        testing::bitmap_ids(&encode_frame(&sample_scene()));
     }
 
     #[test]
@@ -1266,7 +1267,7 @@ mod tests {
         for hidden in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             assert!(decoded(hidden).elements().is_empty(), "{hidden}");
         }
-        let ids = to_view::bitmap_ids(&bytes).unwrap();
+        let ids = testing::bitmap_ids(&bytes);
         assert_eq!(ids.into_iter().collect::<Vec<_>>(), [1]);
     }
 
@@ -1832,14 +1833,14 @@ mod tests {
         let seven = || vec![Element::Bitmap(bitmap(7))];
         let deepest = nested(crate::scene::MAX_NESTING, seven());
         let bytes = encode_frame(&deepest);
-        assert_eq!(to_view::bitmap_ids(&bytes).unwrap(), [7].into());
+        assert_eq!(testing::bitmap_ids(&bytes), [7].into());
         let Message::Frame { scene, .. } = decode(&bytes).unwrap() else {
             panic!("expected Frame");
         };
         assert_scene_eq(&scene, &deepest);
         for depth in [crate::scene::MAX_NESTING + 1, 40] {
             let bytes = encode_frame(&nested(depth, seven()));
-            assert!(to_view::bitmap_ids(&bytes).unwrap().is_empty());
+            assert!(testing::bitmap_ids(&bytes).is_empty());
             let Message::Frame { scene, .. } = decode(&bytes).unwrap() else {
                 panic!("expected Frame");
             };

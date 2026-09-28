@@ -459,8 +459,8 @@ impl ServerCore {
                         *tick_pending = false;
                     }
                 }
-                Ok(Some(Arm::Frame { player })) => {
-                    if let Err(e) = self.keep_frame(player, payload) {
+                Ok(Some(Arm::Frame { player, ids })) => {
+                    if let Err(e) = self.keep_frame(player, &ids, payload) {
                         errors.push(e);
                     }
                 }
@@ -568,16 +568,16 @@ impl ServerCore {
     }
 
     /// Keep the frame in `payload` for `player`, or for every player when
-    /// `player` is `None`, with the assets that it draws, and drop the
-    /// assets that the frames used longest ago to fit the limits. A frame
-    /// for every player before the start reaches no screen, so it changes
-    /// nothing.
+    /// `player` is `None`, with the assets of its bitmap `ids`, and drop
+    /// the assets that the frames used longest ago to fit the limits. A
+    /// frame for every player before the start reaches no screen, so it
+    /// changes nothing.
     fn keep_frame(
         &mut self,
         player: Option<NonZeroU32>,
+        ids: &BTreeSet<u32>,
         payload: Arc<[u8]>,
     ) -> Result<(), EngineError> {
-        let ids = to_view::bitmap_ids(&payload).map_err(EngineError::Payload)?;
         let Some(seats) = self.phase.seats() else {
             return player.map_or(Ok(()), |player| Err(EngineError::NoSeat(player)));
         };
@@ -590,7 +590,7 @@ impl ServerCore {
             .iter()
             .filter_map(|id| Some((*id, self.cache.get(*id)?.clone())))
             .collect();
-        for gone in self.cache.frame(&ids) {
+        for gone in self.cache.frame(ids) {
             self.lose(gone);
         }
         let shot = Shot {
