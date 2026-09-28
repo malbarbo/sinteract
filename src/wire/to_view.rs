@@ -173,7 +173,11 @@ pub fn write_frame(
 
 /// Write the hello, the first message of the engine.
 pub fn write_hello(w: &mut impl Write, players: PlayerRange) -> io::Result<()> {
-    write_framed(w, Side::Engine, &hello_message(players))
+    write_framed(
+        w,
+        Side::Engine,
+        &hello_message(players.min.get(), players.max.get()),
+    )
 }
 
 /// Write that the engine took a tick.
@@ -279,11 +283,12 @@ fn frame_message(
     builder
 }
 
-fn hello_message(players: PlayerRange) -> MessageBuilder<HeapAllocator> {
+/// A hello for `min` to `max` players, which a test may set out of range.
+fn hello_message(min: u32, max: u32) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let mut hello = builder.init_root::<engine_message::Builder>().init_hello();
-    hello.set_min_players(players.min.get());
-    hello.set_max_players(players.max.get());
+    hello.set_min_players(min);
+    hello.set_max_players(max);
     builder
 }
 
@@ -340,9 +345,5 @@ pub(crate) fn encode_asset(id: u32, blob: &[u8]) -> Vec<u8> {
 /// passes a range that [`write_hello`] cannot.
 #[cfg(test)]
 pub(crate) fn encode_hello(min: u32, max: u32) -> Vec<u8> {
-    let mut builder = MessageBuilder::new_default();
-    let mut hello = builder.init_root::<engine_message::Builder>().init_hello();
-    hello.set_min_players(min);
-    hello.set_max_players(max);
-    super::finish(builder)
+    super::finish(hello_message(min, max))
 }
