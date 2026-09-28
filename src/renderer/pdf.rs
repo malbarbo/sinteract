@@ -16,11 +16,15 @@
 //! other way to repeat, so reflect and repeat need a sampled function,
 //! which this backend does not write. A frame that uses them differs here
 //! from the raster and the svg.
+//!
+//! A shading has no alpha. A gradient whose stops differ in alpha draws its
+//! colors under a soft mask, a gray shading of its alphas, as Cairo and Skia
+//! do.
 
 use std::collections::BTreeMap;
 
-use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
-use pdf_writer::writers::Resources;
+use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle, MaskType};
+use pdf_writer::writers::{ColorSpace, Resources};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::outline::PathSink;
@@ -105,76 +109,32 @@ impl Canvas for PdfRenderer {
 
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
-        let do_fill = style.draws_fill();
-        let do_stroke = style.draws_stroke();
-        if !do_fill && !do_stroke {
+        let fill = style.draws_fill().then_some(&style.fill);
+        let stroke = style.draws_stroke().then_some(&style.stroke);
+        if fill.is_none() && stroke.is_none() {
             return;
         }
         // A path with no segments must not leave a `q ... Q` with no geometry.
         if path.segments().next().is_none() {
             return;
         }
-
-        self.begin_paint(
-            do_fill.then_some(&style.fill),
-            do_stroke.then_some(&style.stroke),
-        );
-        if do_stroke {
-            self.content.set_line_width(style.stroke_width);
-            self.content.set_line_cap(pdf_line_cap(style.line_cap));
-            self.content.set_line_join(pdf_line_join(style.line_join));
-            if style.line_join == LineJoin::Miter {
-                self.content.set_miter_limit(style.miter_limit);
-            }
-            if let Some(dash) = &style.dash {
-                self.content
-                    .set_dash_pattern(dash.array().iter().copied(), dash.offset());
-            }
+        for (fill, stroke) in passes(fill, stroke) {
+            self.paint_path(path, fill, stroke);
         }
-        path.outline(&mut PdfOutline::new(&mut self.content));
-        paint(&mut self.content, do_fill, do_stroke, style.fill_rule);
-        // restore_state also resets the pattern color space.
-        self.content.restore_state();
     }
 
     fn draw_text(&mut self, node: &Text) {
-        let do_fill = node.draws_fill();
-        let do_stroke = node.draws_stroke();
-        if !do_fill && !do_stroke {
+        let fill = node.draws_fill().then_some(&node.fill);
+        let stroke = node.draws_stroke().then_some(&node.stroke);
+        if fill.is_none() && stroke.is_none() {
             return;
         }
         let Some(layout) = TextLayout::new(&node.spec) else {
             return;
         };
-
-        // A pattern maps to the default space of the page, so the `cm` of the
-        // text below leaves a gradient in canvas space.
-        self.begin_paint(
-            do_fill.then_some(&node.fill),
-            do_stroke.then_some(&node.stroke),
-        );
-        if do_stroke {
-            // The default miter limit is TEXT_MITER_LIMIT.
-            self.content.set_line_width(node.stroke_width);
+        for (fill, stroke) in passes(fill, stroke) {
+            self.paint_text(node, &layout, fill, stroke);
         }
-        self.content.transform(node.transform);
-
-        let mut out = PdfOutline::new(&mut self.content);
-        layout.outline(&mut out);
-        // A text of spaces has no outline, and a paint with no path is
-        // an error.
-        if !out.empty {
-            paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
-        }
-
-        if node.underline {
-            // The underline paints on its own. In one path, a glyph that winds
-            // the other way from the rectangle would cancel it where the two
-            // cross.
-            layout.outline_underline(&mut PdfOutline::new(&mut self.content));
-            paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
-        }
-        self.content.restore_state();
     }
 
     fn end_frame(&mut self) {
@@ -243,20 +203,94 @@ impl Renderer for PdfRenderer {
 }
 
 impl PdfRenderer {
-    /// Saves the graphics state, then sets the alpha and binds the paint of
-    /// each side that draws, `None` for a side that does not. PDF forbids a
-    /// color operator inside a path object, so this goes before the path.
+    /// Draws `path` with each side that is `Some`.
+    fn paint_path(&mut self, path: &Path, fill: Option<&Paint>, stroke: Option<&Paint>) {
+        let style = &path.style;
+        self.begin_paint(fill, stroke);
+        if stroke.is_some() {
+            self.content.set_line_width(style.stroke_width);
+            self.content.set_line_cap(pdf_line_cap(style.line_cap));
+            self.content.set_line_join(pdf_line_join(style.line_join));
+            if style.line_join == LineJoin::Miter {
+                self.content.set_miter_limit(style.miter_limit);
+            }
+            if let Some(dash) = &style.dash {
+                self.content
+                    .set_dash_pattern(dash.array().iter().copied(), dash.offset());
+            }
+        }
+        path.outline(&mut PdfOutline::new(&mut self.content));
+        paint(
+            &mut self.content,
+            fill.is_some(),
+            stroke.is_some(),
+            style.fill_rule,
+        );
+        // restore_state also resets the pattern color space.
+        self.content.restore_state();
+    }
+
+    /// Draws the glyphs of `layout`, and the underline of `node`, with each
+    /// side that is `Some`.
+    fn paint_text(
+        &mut self,
+        node: &Text,
+        layout: &TextLayout,
+        fill: Option<&Paint>,
+        stroke: Option<&Paint>,
+    ) {
+        let (do_fill, do_stroke) = (fill.is_some(), stroke.is_some());
+        // A pattern and a soft mask map to the space in effect before the
+        // `cm` of the text below, so a gradient stays in canvas space.
+        self.begin_paint(fill, stroke);
+        if do_stroke {
+            // The default miter limit is TEXT_MITER_LIMIT.
+            self.content.set_line_width(node.stroke_width);
+        }
+        self.content.transform(node.transform);
+
+        let mut out = PdfOutline::new(&mut self.content);
+        layout.outline(&mut out);
+        // A text of spaces has no outline, and a paint with no path is
+        // an error.
+        if !out.empty {
+            paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
+        }
+
+        if node.underline {
+            // The underline paints on its own. In one path, a glyph that winds
+            // the other way from the rectangle would cancel it where the two
+            // cross.
+            layout.outline_underline(&mut PdfOutline::new(&mut self.content));
+            paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
+        }
+        self.content.restore_state();
+    }
+
+    /// Saves the graphics state, then binds the paint of each side that
+    /// draws, `None` for a side that does not, and sets its alpha. PDF
+    /// forbids a color operator inside a path object, so this goes before the
+    /// path.
     fn begin_paint(&mut self, fill: Option<&Paint>, stroke: Option<&Paint>) {
         self.content.save_state();
-        // A shading has no alpha, so a gradient takes the alpha of its first
-        // stop for the whole path.
-        let alpha = |paint: Option<&Paint>| paint.map_or(1.0, |p| p.primary_color().a);
-        self.apply_alpha(alpha(fill), alpha(stroke));
+        let mut mask = None;
         if let Some(paint) = fill {
-            self.bind_paint(paint, PaintTarget::Fill);
+            mask = mask.or(self.bind_paint(paint, PaintTarget::Fill));
         }
         if let Some(paint) = stroke {
-            self.bind_paint(paint, PaintTarget::Stroke);
+            mask = mask.or(self.bind_paint(paint, PaintTarget::Stroke));
+        }
+        match mask {
+            // `passes` draws a side with a soft mask alone, because the mask
+            // applies to both sides.
+            Some(idx) => {
+                self.content.set_parameters(Name(mask_name(idx).as_bytes()));
+            }
+            None => {
+                // The stops of a gradient here share one alpha.
+                let alpha = |paint: Option<&Paint>| paint.map_or(1.0, |p| p.primary_color().a);
+                self.apply_alpha(alpha(fill), alpha(stroke));
+            }
         }
     }
 
@@ -275,8 +309,9 @@ impl PdfRenderer {
     }
 
     /// Sets the fill or the stroke paint. A gradient goes through the Pattern
-    /// color space and its `/Pn` name.
-    fn bind_paint(&mut self, paint: &Paint, target: PaintTarget) {
+    /// color space and its `/Pn` name. Returns the index of the gradient if
+    /// it draws under a soft mask, `None` otherwise.
+    fn bind_paint(&mut self, paint: &Paint, target: PaintTarget) -> Option<usize> {
         let gradient = match paint {
             Paint::Solid(c) => {
                 let [r, g, b] = rgb_components(*c);
@@ -284,11 +319,12 @@ impl PdfRenderer {
                     PaintTarget::Fill => self.content.set_fill_rgb(r, g, b),
                     PaintTarget::Stroke => self.content.set_stroke_rgb(r, g, b),
                 };
-                return;
+                return None;
             }
             Paint::Gradient(g) => g,
         };
-        let name = pattern_name(self.push_gradient(gradient));
+        let idx = self.push_gradient(gradient);
+        let name = pattern_name(idx);
         let name = Name(name.as_bytes());
         let pattern = pdf_writer::types::ColorSpaceOperand::Pattern;
         match target {
@@ -301,6 +337,7 @@ impl PdfRenderer {
                 self.content.set_stroke_pattern(None, name)
             }
         };
+        varying_alpha(gradient).then_some(idx)
     }
 
     /// Returns the index of `g`, the `n` of its `/Pn` name.
@@ -347,13 +384,32 @@ impl PdfRenderer {
             .iter()
             .map(|g| {
                 let functions = (0..g.function_count()).map(|_| alloc()).collect();
+                let shading = alloc();
+                let pattern = alloc();
+                let mask = if g.masked {
+                    Some(MaskRefs {
+                        functions: (0..g.function_count()).map(|_| alloc()).collect(),
+                        shading: alloc(),
+                        form: alloc(),
+                        gstate: alloc(),
+                    })
+                } else {
+                    None
+                };
                 GradientRefs {
                     functions,
-                    shading: alloc(),
-                    pattern: alloc(),
+                    shading,
+                    pattern,
+                    mask,
                 }
             })
             .collect();
+        let masks = || {
+            gradient_refs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, g)| g.mask.as_ref().map(|m| (i, m)))
+        };
         // The page and the forms share one dictionary of resources.
         let resources_id = alloc();
         let form_refs: Vec<Ref> = forms.iter().map(|_| alloc()).collect();
@@ -376,12 +432,22 @@ impl PdfRenderer {
         }
         {
             let mut resources: Resources<'_> = pdf.indirect(resources_id).start();
-            if !gstates.is_empty() {
+            if !gstates.is_empty() || masks().next().is_some() {
                 let mut gs_dict = resources.ext_g_states();
                 for (k, &idx) in gstates.values().enumerate() {
                     gs_dict.pair(Name(gs_name(idx).as_bytes()), gstate_ref(k));
                 }
+                for (i, m) in masks() {
+                    gs_dict.pair(Name(mask_name(i).as_bytes()), m.gstate);
+                }
                 gs_dict.finish();
+            }
+            if masks().next().is_some() {
+                let mut shadings = resources.shadings();
+                for (i, m) in masks() {
+                    shadings.pair(Name(alpha_name(i).as_bytes()), m.shading);
+                }
+                shadings.finish();
             }
             if !gradient_refs.is_empty() {
                 let mut pat_dict = resources.patterns();
@@ -415,6 +481,29 @@ impl PdfRenderer {
 
         for (gradient, refs) in gradients.iter().zip(gradient_refs.iter()) {
             gradient.write(&mut pdf, refs);
+        }
+
+        // A soft mask draws the alphas of its gradient in gray, and its
+        // luminosity becomes the alpha of what draws under it.
+        for (i, m) in masks() {
+            let mut content = Content::new();
+            content.shading(Name(alpha_name(i).as_bytes()));
+            let content = content.finish();
+            let mut x = pdf.form_xobject(m.form, &content);
+            // The mask maps to the space in effect at its `gs`, which is in
+            // pixels on the page and in a form alike.
+            x.bbox(Rect::new(0.0, 0.0, w, h));
+            x.pair(Name(b"Resources"), resources_id);
+            x.group()
+                .transparency()
+                .isolated(true)
+                .color_space()
+                .device_gray();
+            x.finish();
+            pdf.ext_graphics(m.gstate)
+                .soft_mask()
+                .subtype(MaskType::Luminosity)
+                .group(m.form);
         }
 
         for (form, &r) in forms.iter().zip(&form_refs) {
@@ -470,6 +559,41 @@ fn pattern_name(idx: usize) -> String {
 
 fn form_name(idx: usize) -> String {
     format!("Fm{idx}")
+}
+
+/// The name of the ExtGState with the soft mask of the gradient at `idx`.
+fn mask_name(idx: usize) -> String {
+    format!("Sm{idx}")
+}
+
+/// The name of the shading of the alphas of the gradient at `idx`.
+fn alpha_name(idx: usize) -> String {
+    format!("Sa{idx}")
+}
+
+/// The fill and the stroke of one element, in one pass, or in two when one
+/// side draws under a soft mask, which would mask the other side too.
+fn passes<'a>(
+    fill: Option<&'a Paint>,
+    stroke: Option<&'a Paint>,
+) -> impl Iterator<Item = (Option<&'a Paint>, Option<&'a Paint>)> {
+    let masked = |p: Option<&Paint>| matches!(p, Some(Paint::Gradient(g)) if varying_alpha(g));
+    if fill.is_some() && stroke.is_some() && (masked(fill) || masked(stroke)) {
+        [(fill, None), (None, stroke)].into_iter().take(2)
+    } else {
+        [(fill, stroke), (None, None)].into_iter().take(1)
+    }
+}
+
+/// Returns `true` if the stops of `g` differ in alpha, `false` otherwise. A
+/// shading has no alpha, so such a gradient draws under a soft mask.
+fn varying_alpha(g: &Gradient) -> bool {
+    match g.stops() {
+        [first, rest @ ..] => rest
+            .iter()
+            .any(|s| alpha_key(s.color.a) != alpha_key(first.color.a)),
+        [] => false,
+    }
 }
 
 const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
@@ -579,6 +703,8 @@ struct Shading {
     /// Maps the gradient to the page, or to the form of the layer that holds
     /// it.
     matrix: [f32; 6],
+    /// `true` if the gradient draws under a soft mask of its alphas.
+    masked: bool,
 }
 
 impl Shading {
@@ -614,6 +740,7 @@ impl Shading {
             geom: g.geom(),
             stops,
             matrix,
+            masked: varying_alpha(g),
         }
     }
 
@@ -627,23 +754,47 @@ impl Shading {
     }
 
     /// Writes the functions, the shading and the pattern of the gradient into
-    /// `pdf`, under the ids of `refs`.
+    /// `pdf`, under the ids of `refs`, and the shading of its alphas if it
+    /// has a soft mask.
     fn write(&self, pdf: &mut Pdf, refs: &GradientRefs) {
-        let stops = &self.stops;
+        let function = self.write_functions(pdf, &refs.functions, rgb_components);
+        self.write_shading(pdf, refs.shading, function, |cs| cs.device_rgb());
+        {
+            let mut pat = pdf.shading_pattern(refs.pattern);
+            // The `cm` of a content stream does not apply to a pattern.
+            pat.matrix(self.matrix);
+            pat.shading_ref(refs.shading);
+            pat.finish();
+        }
+        if let Some(mask) = &refs.mask {
+            let alpha = |c: Rgba| [alpha_value(alpha_key(c.a))];
+            let function = self.write_functions(pdf, &mask.functions, alpha);
+            self.write_shading(pdf, mask.shading, function, |cs| cs.device_gray());
+        }
+    }
 
-        for (&[from, to], &r) in stops.array_windows().zip(&refs.functions) {
+    /// Writes the functions of the `N` components that `channel` takes from
+    /// the color of each stop, under the ids of `refs`. Returns the id of the
+    /// function that a shading references.
+    fn write_functions<const N: usize>(
+        &self,
+        pdf: &mut Pdf,
+        refs: &[Ref],
+        channel: impl Fn(Rgba) -> [f32; N],
+    ) -> Ref {
+        let stops = &self.stops;
+        let range = || std::iter::repeat_n([0.0, 1.0], N).flatten();
+
+        for (&[from, to], &r) in stops.array_windows().zip(refs) {
             let mut f = pdf.exponential_function(r);
             f.domain([0.0, 1.0]);
-            f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-            f.c0(rgb_components(from.color));
-            f.c1(rgb_components(to.color));
+            f.range(range());
+            f.c0(channel(from.color));
+            f.c1(channel(to.color));
             f.n(1.0);
             f.finish();
         }
-        let (&main_fn_ref, subs) = refs
-            .functions
-            .split_last()
-            .expect("a gradient has a function");
+        let (&main_fn_ref, subs) = refs.split_last().expect("a gradient has a function");
         // With one interval, the only function is the exponential one.
         if let [_, inner @ .., _] = stops.as_slice()
             && !subs.is_empty()
@@ -655,42 +806,43 @@ impl Shading {
             );
             let mut stitch = pdf.stitching_function(main_fn_ref);
             stitch.domain([0.0, 1.0]);
-            stitch.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+            stitch.range(range());
             stitch.functions(subs.iter().copied());
             stitch.bounds(inner.iter().map(|s| s.offset));
             // Each sub-function maps its interval back to [0, 1].
             stitch.encode(subs.iter().flat_map(|_| [0.0, 1.0]));
             stitch.finish();
         }
+        main_fn_ref
+    }
 
-        {
-            let mut sh = pdf.function_shading(refs.shading);
-            sh.color_space().device_rgb();
-            match self.geom {
-                GradientGeom::Linear { x0, y0, x1, y1 } => {
-                    sh.shading_type(FunctionShadingType::Axial);
-                    sh.coords([x0, y0, x1, y1]);
-                }
-                GradientGeom::Radial { cx, cy, radius } => {
-                    sh.shading_type(FunctionShadingType::Radial);
-                    // One center and a zero inner radius, as in SVG.
-                    sh.coords([cx, cy, 0.0, cx, cy, radius]);
-                }
+    /// Writes the shading of the gradient under `id`, with the function
+    /// `function` in the color space that `color_space` sets.
+    fn write_shading(
+        &self,
+        pdf: &mut Pdf,
+        id: Ref,
+        function: Ref,
+        color_space: impl FnOnce(ColorSpace<'_>),
+    ) {
+        let mut sh = pdf.function_shading(id);
+        color_space(sh.color_space());
+        match self.geom {
+            GradientGeom::Linear { x0, y0, x1, y1 } => {
+                sh.shading_type(FunctionShadingType::Axial);
+                sh.coords([x0, y0, x1, y1]);
             }
-            // A Type 2 or 3 shading only pads, so Reflect and Repeat render as
-            // Pad. They would need a Type 4 function.
-            sh.extend([true, true]);
-            sh.function(main_fn_ref);
-            sh.finish();
+            GradientGeom::Radial { cx, cy, radius } => {
+                sh.shading_type(FunctionShadingType::Radial);
+                // One center and a zero inner radius, as in SVG.
+                sh.coords([cx, cy, 0.0, cx, cy, radius]);
+            }
         }
-
-        {
-            let mut pat = pdf.shading_pattern(refs.pattern);
-            // The `cm` of a content stream does not apply to a pattern.
-            pat.matrix(self.matrix);
-            pat.shading_ref(refs.shading);
-            pat.finish();
-        }
+        // A Type 2 or 3 shading only pads, so Reflect and Repeat render as
+        // Pad. They would need a Type 4 function.
+        sh.extend([true, true]);
+        sh.function(function);
+        sh.finish();
     }
 }
 
@@ -701,6 +853,19 @@ struct GradientRefs {
     functions: Vec<Ref>,
     shading: Ref,
     pattern: Ref,
+    mask: Option<MaskRefs>,
+}
+
+/// The indirect objects of the soft mask of one gradient.
+struct MaskRefs {
+    /// The functions of the alphas, as in [`GradientRefs::functions`].
+    functions: Vec<Ref>,
+    /// The shading of the alphas, in gray.
+    shading: Ref,
+    /// The transparency group that draws `shading`.
+    form: Ref,
+    /// The ExtGState that sets the soft mask.
+    gstate: Ref,
 }
 
 fn rgb_components(c: Rgba) -> [f32; 3] {
@@ -944,6 +1109,60 @@ mod tests {
             .collect();
         assert_eq!(resources.len(), 2, "{s}");
         assert_eq!(resources[0], resources[1], "{s}");
+    }
+
+    #[test]
+    fn a_gradient_with_varying_alpha_draws_under_a_soft_mask() {
+        let mut scene = Scene::new(100.0, 40.0);
+        let clear = Rgba {
+            a: 0.0,
+            ..opaque(0, 0, 255)
+        };
+        let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, clear)];
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops));
+        scene.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
+        let s = pdf_text(&scene);
+        assert!(s.contains("/Sm0 gs"), "{s}");
+        assert!(s.contains("/S /Luminosity"), "{s}");
+        assert!(s.contains("/CS /DeviceGray"), "{s}");
+        assert!(s.contains("/Sa0 sh"), "{s}");
+        assert!(s.contains("/C0 [1]") && s.contains("/C1 [0]"), "{s}");
+        assert!(!s.contains("/ca"), "{s}");
+    }
+
+    #[test]
+    fn a_gradient_with_one_alpha_draws_with_that_alpha() {
+        let mut scene = Scene::new(100.0, 40.0);
+        let half = |r, g, b| Rgba {
+            a: 0.5,
+            ..opaque(r, g, b)
+        };
+        let stops = vec![stop(0.0, half(255, 0, 0)), stop(1.0, half(0, 0, 255))];
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops));
+        scene.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
+        let s = pdf_text(&scene);
+        assert!(s.contains("/ca 0.5"), "{s}");
+        assert!(!s.contains("/SMask"), "{s}");
+    }
+
+    #[test]
+    fn a_soft_mask_on_one_side_draws_the_fill_and_the_stroke_apart() {
+        let mut scene = Scene::new(100.0, 40.0);
+        let clear = Rgba {
+            a: 0.0,
+            ..opaque(0, 0, 255)
+        };
+        let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, clear)];
+        let style = PathStyle {
+            stroke: Paint::rgba(0, 0, 0, 1.0),
+            stroke_width: 2.0,
+            ..gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops))
+        };
+        scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
+        let s = pdf_text(&scene);
+        let lines: Vec<_> = s.lines().collect();
+        assert!(lines.contains(&"f") && lines.contains(&"S"), "{s}");
+        assert!(!lines.contains(&"B"), "{s}");
     }
 
     #[test]
