@@ -392,6 +392,7 @@ mod tests {
     use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
     use crate::scene::Bitmap;
     use crate::wire::framing::HEADER_BYTES;
+    use crate::wire::testing;
 
     fn player(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).unwrap()
@@ -612,10 +613,10 @@ mod tests {
         let mut out = Vec::new();
         session.write_frame(&mut out, None, scene).unwrap();
         let mut r = &out[..];
-        std::iter::from_fn(|| to_view::read(&mut r).unwrap())
+        std::iter::from_fn(|| testing::read(&mut r).unwrap())
             .map(|m| match m {
-                to_view::Message::Asset { id, .. } => format!("asset {id}"),
-                to_view::Message::Frame { .. } => "frame".into(),
+                testing::Message::Asset { id, .. } => format!("asset {id}"),
+                testing::Message::Frame { .. } => "frame".into(),
                 other => format!("{other:?}"),
             })
             .collect()
@@ -676,7 +677,7 @@ mod tests {
 
     #[test]
     fn a_message_that_does_not_decode_is_an_error_and_the_session_goes_on() {
-        let mut stream = framed(&to_engine::encode_input(0, &key("a")));
+        let mut stream = framed(&testing::encode_input(0, &key("a")));
         stream.extend_from_slice(&tick());
         let mut session = started(&stream);
         assert!(matches!(
@@ -811,8 +812,8 @@ mod tests {
             Some(SessionEvent::Tick)
         ));
         assert!(matches!(
-            to_view::read(&mut &out[..]),
-            Ok(Some(to_view::Message::TickTaken))
+            testing::read(&mut &out[..]),
+            Ok(Some(testing::Message::TickTaken))
         ));
     }
 
@@ -833,8 +834,8 @@ mod tests {
             Ok(SessionEvent::Tick)
         ));
         assert!(matches!(
-            to_view::read(&mut &w.get_ref()[..]),
-            Ok(Some(to_view::Message::TickTaken))
+            testing::read(&mut &w.get_ref()[..]),
+            Ok(Some(testing::Message::TickTaken))
         ));
     }
 

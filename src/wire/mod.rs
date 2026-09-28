@@ -25,6 +25,8 @@ pub mod event;
 pub mod framing;
 mod protocol;
 pub mod scene;
+#[cfg(test)]
+pub(crate) mod testing;
 pub mod to_engine;
 pub mod to_server;
 pub mod to_view;
@@ -253,7 +255,7 @@ pub(crate) fn with_float(bytes: &[u8], from: f32, to: f32) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::to_view::{Message, encode_asset, encode_frame};
+    use super::testing::{Message, encode_asset, encode_frame};
     use super::*;
     use crate::event::{
         InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons,
@@ -359,17 +361,17 @@ mod tests {
     /// Decode a message of the engine of an arm this schema knows, as
     /// [`to_view::read`] does after the envelope.
     fn decode(bytes: &[u8]) -> Result<Message, Error> {
-        Ok(to_view::decode(bytes)?.expect("an arm this schema knows"))
+        Ok(testing::decode(bytes)?.expect("an arm this schema knows"))
     }
 
     /// Whether [`to_view::read`] skips the payload in `bytes`.
     fn is_skipped(bytes: &[u8]) -> bool {
-        matches!(to_view::decode(bytes), Ok(None))
+        matches!(testing::decode(bytes), Ok(None))
     }
 
     /// Encode the input `ev` of player 1, with no envelope.
     fn encode_event(ev: &InputEvent) -> Vec<u8> {
-        to_engine::encode_input(1, ev)
+        testing::encode_input(1, ev)
     }
 
     /// Decode a message of the server of an arm this schema knows, as
@@ -388,7 +390,7 @@ mod tests {
     }
 
     fn read_server(r: &mut &[u8]) -> Result<Option<to_engine::Message>, Error> {
-        protocol::read_next(r, framing::Side::Server, to_engine::decode)
+        testing::read_next(r, framing::Side::Server, to_engine::decode)
     }
 
     fn nonzero(n: u32) -> std::num::NonZeroU32 {
@@ -426,7 +428,7 @@ mod tests {
 
     #[test]
     fn a_frame_round_trips_with_its_player() {
-        let bytes = to_view::encode_frame_to(Some(nonzero(2)), &Scene::new(4.0, 3.0));
+        let bytes = testing::encode_frame_to(Some(nonzero(2)), &Scene::new(4.0, 3.0));
         assert!(matches!(
             decode(&bytes).expect("decode"),
             Message::Frame { player: Some(p), .. } if p == nonzero(2)
@@ -585,19 +587,19 @@ mod tests {
 
     #[test]
     fn the_arm_of_a_message_of_the_engine_comes_without_a_decode() {
-        let frame = to_view::encode_frame(&Scene::new(4.0, 3.0));
+        let frame = testing::encode_frame(&Scene::new(4.0, 3.0));
         assert_eq!(
             to_view::arm(&frame).unwrap(),
             Some(to_view::Arm::Frame { player: None })
         );
-        let framed = to_view::encode_frame_to(Some(nonzero(2)), &Scene::new(4.0, 3.0));
+        let framed = testing::encode_frame_to(Some(nonzero(2)), &Scene::new(4.0, 3.0));
         assert_eq!(
             to_view::arm(&framed).unwrap(),
             Some(to_view::Arm::Frame {
                 player: Some(nonzero(2))
             })
         );
-        let asset = to_view::encode_asset(1, &[0; 4]);
+        let asset = testing::encode_asset(1, &[0; 4]);
         assert_eq!(
             to_view::arm(&asset).unwrap(),
             Some(to_view::Arm::Asset {
@@ -605,7 +607,7 @@ mod tests {
                 footprint: Err(crate::asset::ImageError::Unsupported)
             })
         );
-        let png = to_view::encode_asset(2, &crate::asset::png_head(3, 5));
+        let png = testing::encode_asset(2, &crate::asset::png_head(3, 5));
         assert_eq!(
             to_view::arm(&png).unwrap(),
             Some(to_view::Arm::Asset {
@@ -618,7 +620,7 @@ mod tests {
         assert!(to_view::arm(&[0; 8]).is_err());
         let players = to_view::PlayerRange::new(2, 4).unwrap();
         assert_eq!(
-            to_view::arm(&to_view::encode_hello(2, 4)).unwrap(),
+            to_view::arm(&testing::encode_hello(2, 4)).unwrap(),
             Some(to_view::Arm::Hello(players))
         );
         assert_eq!(
@@ -695,7 +697,7 @@ mod tests {
             Some(to_view::Arm::TickTaken)
         );
         assert!(matches!(
-            to_view::read(&mut &stream[..]).unwrap(),
+            testing::read(&mut &stream[..]).unwrap(),
             Some(Message::TickTaken)
         ));
     }
@@ -707,7 +709,7 @@ mod tests {
         let players = to_view::PlayerRange::new(1, 3).unwrap();
         let mut stream = Vec::new();
         to_view::write_hello(&mut stream, players).unwrap();
-        match to_view::read(&mut &stream[..]).unwrap() {
+        match testing::read(&mut &stream[..]).unwrap() {
             Some(Message::Hello(got)) => assert_eq!(got, players),
             other => panic!("got {other:?}"),
         }
@@ -717,7 +719,7 @@ mod tests {
     fn a_hello_that_is_not_a_range_is_an_error() {
         for (min, max) in [(0, 2), (3, 2), (1, to_view::MAX_PLAYERS + 1)] {
             assert!(matches!(
-                to_view::arm(&to_view::encode_hello(min, max)),
+                to_view::arm(&testing::encode_hello(min, max)),
                 Err(Error::PlayerRange { .. })
             ));
         }
@@ -810,7 +812,7 @@ mod tests {
             width: 1.0,
             height: 1.0,
         };
-        let payload = to_engine::encode_input(0, &resize);
+        let payload = testing::encode_input(0, &resize);
         let mut stream = framing::header(framing::Side::Server, payload.len() as u32).to_vec();
         stream.extend_from_slice(&payload);
         to_engine::write_tick(&mut stream).unwrap();
@@ -847,7 +849,7 @@ mod tests {
             with_shared_path::<engine_message::Owned>(&encode_frame(&scene_of_paths()), |m| {
                 path_slots(frame_of(m).get_elements().unwrap())
             });
-        assert!(matches!(to_view::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
+        assert!(matches!(testing::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
     }
 
     #[test]
@@ -1119,7 +1121,7 @@ mod tests {
         // The reader checks the player only for an event that it keeps, so
         // player 0 is no error here.
         for player in [1, 0] {
-            let event = to_engine::encode_input(
+            let event = testing::encode_input(
                 player,
                 &InputEvent::Resize {
                     width: 1.0,

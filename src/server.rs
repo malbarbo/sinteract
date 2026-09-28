@@ -853,6 +853,7 @@ mod tests {
     use super::*;
     use crate::scene::{Bitmap, Image, RotatedRect, Scene};
     use crate::session::{Session, SessionEvent};
+    use crate::wire::testing;
 
     /// A core with a session that reads what the core writes, which also
     /// checks that the core writes nothing that a session rejects.
@@ -1039,15 +1040,15 @@ mod tests {
         };
         let mut framed = framing::header(Side::Engine, payload.len() as u32).to_vec();
         framed.extend_from_slice(&payload);
-        match to_view::read(&mut &framed[..]).unwrap().unwrap() {
-            to_view::Message::Asset { id, .. } => format!("asset {id}"),
-            to_view::Message::Frame { player, scene } => match player {
+        match testing::read(&mut &framed[..]).unwrap().unwrap() {
+            testing::Message::Asset { id, .. } => format!("asset {id}"),
+            testing::Message::Frame { player, scene } => match player {
                 Some(p) => format!("frame {p} {}", scene.width()),
                 None => format!("frame all {}", scene.width()),
             },
-            to_view::Message::Hello(_) => "hello".into(),
-            to_view::Message::Forget(id) => format!("forget {id}"),
-            to_view::Message::TickTaken => "tick taken".into(),
+            testing::Message::Hello(_) => "hello".into(),
+            testing::Message::Forget(id) => format!("forget {id}"),
+            testing::Message::TickTaken => "tick taken".into(),
         }
     }
 
@@ -1112,7 +1113,7 @@ mod tests {
     fn a_first_hello_that_does_not_decode_ends_the_room_with_its_error() {
         let mut core = ServerCore::new();
         let mut out = Vec::new();
-        let payload = to_view::encode_hello(0, 1);
+        let payload = testing::encode_hello(0, 1);
         out.extend_from_slice(&framing::header(Side::Engine, payload.len() as u32));
         out.extend_from_slice(&payload);
         assert!(matches!(

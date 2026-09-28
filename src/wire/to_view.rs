@@ -23,11 +23,7 @@ use crate::scene::{Image, Scene};
 use super::Error;
 use super::framing::{Side, write_framed};
 use super::protocol::decode_root;
-#[cfg(test)]
-use super::protocol::read_next;
 use super::scene::{read_bitmap_ids, read_scene, write_scene};
-#[cfg(test)]
-use std::io::Read;
 
 /// The images of the assets that a view keeps, which the frames draw.
 #[derive(Debug, Default)]
@@ -72,28 +68,6 @@ impl Reader {
             }
         })
     }
-}
-
-/// One message of the engine, one variant per arm of `EngineMessage`. A
-/// bitmap of the id `n` draws [`crate::asset::png_image`] of `n` by 1, as
-/// [`encode_frame`] writes it, and one of the id 0 is skipped.
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(crate) enum Message {
-    Asset {
-        id: u32,
-        blob: Vec<u8>,
-    },
-    /// A frame for `player`, or for every player when `player` is `None`.
-    Frame {
-        player: Option<NonZeroU32>,
-        scene: Scene,
-    },
-    Hello(PlayerRange),
-    /// The view drops the asset of this id. Only a server sends it.
-    Forget(u32),
-    /// The engine took a tick. It goes to the server alone.
-    TickTaken,
 }
 
 /// The arm of a message of the engine, with the player of a frame. A
@@ -150,13 +124,6 @@ impl PlayerRange {
     pub fn contains(self, players: usize) -> bool {
         (self.min.get() as usize..=self.max.get() as usize).contains(&players)
     }
-}
-
-/// Read the next message of the engine, as [`decode`] does. Returns
-/// `None` at the end of the stream.
-#[cfg(test)]
-pub(crate) fn read(r: &mut impl Read) -> Result<Option<Message>, Error> {
-    read_next(r, Side::Engine, decode)
 }
 
 /// Write a scene as a frame for `player`, or for every player when
@@ -232,47 +199,12 @@ pub fn bitmap_ids(payload: &[u8]) -> Result<BTreeSet<u32>, Error> {
     .map(|ids| ids.unwrap_or_default())
 }
 
-/// Decode `payload`, a message with no envelope. `None` for a message of an
-/// arm from a newer schema.
-#[cfg(test)]
-pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
-    decode_root::<engine_message::Owned, _>(payload, decode_message)
-}
-
-#[cfg(test)]
-fn decode_message(msg: engine_message::Reader<'_>) -> Result<Option<Message>, Error> {
-    let Ok(which) = msg.which() else {
-        return Ok(None);
-    };
-    match which {
-        engine_message::Asset(a) => {
-            let a = a?;
-            Ok(Some(Message::Asset {
-                id: a.get_id(),
-                blob: a.get_blob()?.to_vec(),
-            }))
-        }
-        engine_message::Frame(f) => {
-            let f = f?;
-            Ok(Some(Message::Frame {
-                player: NonZeroU32::new(f.get_player()),
-                scene: read_scene(f.get_scene()?, &|id| {
-                    Image::new(crate::asset::png_head(id, 1)).ok()
-                })?,
-            }))
-        }
-        engine_message::Hello(h) => Ok(Some(Message::Hello(read_hello(h?)?))),
-        engine_message::Forget(id) => Ok(Some(Message::Forget(id))),
-        engine_message::TickTaken(()) => Ok(Some(Message::TickTaken)),
-    }
-}
-
-fn read_hello(h: hello::Reader<'_>) -> Result<PlayerRange, Error> {
+pub(super) fn read_hello(h: hello::Reader<'_>) -> Result<PlayerRange, Error> {
     let (min, max) = (h.get_min_players(), h.get_max_players());
     PlayerRange::new(min, max).ok_or(Error::PlayerRange { min, max })
 }
 
-fn frame_message(
+pub(super) fn frame_message(
     player: Option<NonZeroU32>,
     scene: &Scene,
     ids: &dyn Fn(&Image) -> u32,
@@ -285,7 +217,7 @@ fn frame_message(
 }
 
 /// A hello for `min` to `max` players, which a test may set out of range.
-fn hello_message(min: u32, max: u32) -> MessageBuilder<HeapAllocator> {
+pub(super) fn hello_message(min: u32, max: u32) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let mut hello = builder.init_root::<engine_message::Builder>().init_hello();
     hello.set_min_players(min);
@@ -309,7 +241,7 @@ fn tick_taken_message() -> MessageBuilder<HeapAllocator> {
     builder
 }
 
-fn asset_message(id: u32, blob: &[u8]) -> MessageBuilder<HeapAllocator> {
+pub(super) fn asset_message(id: u32, blob: &[u8]) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let mut asset = builder.init_root::<engine_message::Builder>().init_asset();
     asset.set_id(id);
@@ -321,30 +253,4 @@ fn asset_message(id: u32, blob: &[u8]) -> MessageBuilder<HeapAllocator> {
 /// it to a view.
 pub fn encode_forget(id: u32) -> Vec<u8> {
     super::finish(forget_message(id))
-}
-
-/// Encode a scene as a frame for every player, with no envelope.
-#[cfg(test)]
-pub(crate) fn encode_frame(scene: &Scene) -> Vec<u8> {
-    encode_frame_to(None, scene)
-}
-
-/// Encode a scene as a frame for `player`, with no envelope. The id of an
-/// image is its width, as [`decode`] reads it.
-#[cfg(test)]
-pub(crate) fn encode_frame_to(player: Option<NonZeroU32>, scene: &Scene) -> Vec<u8> {
-    super::finish(frame_message(player, scene, &Image::width))
-}
-
-/// Encode the file of an image as the asset `id`, with no envelope.
-#[cfg(test)]
-pub(crate) fn encode_asset(id: u32, blob: &[u8]) -> Vec<u8> {
-    super::finish(asset_message(id, blob))
-}
-
-/// Encode a hello of `min` to `max` players, with no envelope. A test
-/// passes a range that [`write_hello`] cannot.
-#[cfg(test)]
-pub(crate) fn encode_hello(min: u32, max: u32) -> Vec<u8> {
-    super::finish(hello_message(min, max))
 }

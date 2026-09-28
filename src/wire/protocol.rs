@@ -7,38 +7,12 @@
 //! [`super::to_view`] and [`super::to_engine`] write them with the envelope
 //! of [`super::framing`].
 
-#[cfg(test)]
-use std::io::Read;
-
 use capnp::Word;
 use capnp::message::ReaderOptions;
 use capnp::serialize;
 use capnp::traits::Owned;
 
 use super::Error;
-#[cfg(test)]
-use super::framing::{Side, read_framed};
-
-/// Read the messages that `side` wrote until `decode` returns one. `decode`
-/// returns `None` for a message of an arm from a newer schema, which
-/// `read_next` skips. `None` at the end of the stream. A message that does
-/// not decode is an error, and the next read goes on after it.
-#[cfg(test)]
-pub(super) fn read_next<T>(
-    r: &mut impl Read,
-    side: Side,
-    mut decode: impl FnMut(&[u8]) -> Result<Option<T>, Error>,
-) -> Result<Option<T>, Error> {
-    loop {
-        let Some(words) = read_framed(r, side).expect("the stream of a test is whole") else {
-            return Ok(None);
-        };
-        let payload = Word::words_to_bytes(&words);
-        if let Some(message) = decode(payload)? {
-            return Ok(Some(message));
-        }
-    }
-}
 
 /// Open `payload` as a message whose root is `T`, and hand the root to
 /// `decode`. Cap'n Proto reads a payload in place when it starts on a word,
@@ -86,7 +60,7 @@ fn aligned_copy(payload: &[u8]) -> Vec<Word> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::to_view::{self, Message, encode_asset};
+    use super::super::testing::{self, Message, encode_asset};
 
     #[test]
     fn a_payload_that_does_not_start_on_a_word_decodes() {
@@ -94,7 +68,7 @@ mod tests {
         let (buffer, start) = unaligned(&asset);
         let payload = &buffer[start..start + asset.len()];
         assert!(matches!(
-            to_view::decode(payload),
+            testing::decode(payload),
             Ok(Some(Message::Asset { id: 7, .. }))
         ));
     }
@@ -103,18 +77,18 @@ mod tests {
     fn a_payload_that_is_not_whole_words_is_an_error_on_both_paths() {
         let asset = encode_asset(7, &[1, 2, 3]);
         let cut = &asset[..asset.len() - 3];
-        assert!(to_view::decode(cut).is_err());
+        assert!(testing::decode(cut).is_err());
         let (buffer, start) = unaligned(cut);
-        assert!(to_view::decode(&buffer[start..start + cut.len()]).is_err());
+        assert!(testing::decode(&buffer[start..start + cut.len()]).is_err());
     }
 
     #[test]
     fn a_payload_with_bytes_after_the_message_is_an_error_on_both_paths() {
         let mut long = encode_asset(7, &[1, 2, 3]);
         long.extend_from_slice(&[0; 8]);
-        assert!(to_view::decode(&long).is_err());
+        assert!(testing::decode(&long).is_err());
         let (buffer, start) = unaligned(&long);
-        assert!(to_view::decode(&buffer[start..start + long.len()]).is_err());
+        assert!(testing::decode(&buffer[start..start + long.len()]).is_err());
     }
 
     /// A buffer that holds `bytes` from `start`, one byte past a word.

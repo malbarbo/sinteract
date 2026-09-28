@@ -110,7 +110,7 @@ fn nonzero_player(player: u32) -> Result<NonZeroU32, Error> {
     NonZeroU32::new(player).ok_or(Error::NoPlayer)
 }
 
-fn input_message(player: u32, ev: &InputEvent) -> MessageBuilder<HeapAllocator> {
+pub(super) fn input_message(player: u32, ev: &InputEvent) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let mut event = builder.init_root::<server_message::Builder>().init_event();
     event.set_player(player);
@@ -139,11 +139,4 @@ fn start_message<S: AsRef<str>>(nicknames: &[S]) -> MessageBuilder<HeapAllocator
         list.reborrow().get(i).set_nickname(nickname.as_ref());
     }
     builder
-}
-
-/// Encode the input `ev` of `player`, with no envelope. A test passes 0,
-/// which [`write_input`] cannot.
-#[cfg(test)]
-pub(crate) fn encode_input(player: u32, ev: &InputEvent) -> Vec<u8> {
-    super::finish(input_message(player, ev))
 }
