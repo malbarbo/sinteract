@@ -51,7 +51,9 @@ não, porque o servidor sabe o player pela conexão.
 Um leitor pula a mensagem, o elemento ou o evento de um braço que não
 conhece, e o valor de enum ou o byte de verbo que não conhece. Uma paint de
 braço novo desenha a cor `fallback`. Um schema evolui só acrescentando
-campos com default.
+campos com default. Um leitor não percorre mais words do que a mensagem
+tem. Uma mensagem com dois ponteiros para o mesmo alvo pode passar disso,
+e então o leitor a recusa.
 
 A engine não sabe de rede. O servidor tira o player da conexão de cada
 view, então uma view não joga em nome de outra.
