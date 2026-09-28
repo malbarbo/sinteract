@@ -376,7 +376,7 @@ impl PdfRenderer {
     }
 
     /// Draws the gray box with a red cross that stands for a bitmap of
-    /// `transform` whose id has no image.
+    /// `transform` whose image does not decode.
     fn draw_missing(&mut self, transform: [f32; 6]) {
         let [p0, p1, p2, p3] = unit_square(transform);
         let c = &mut self.content;

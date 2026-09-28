@@ -520,7 +520,7 @@ impl fmt::Display for Hex {
 }
 
 /// Writes the gray box with a red cross that stands for a bitmap of
-/// `transform` whose id has no image.
+/// `transform` whose image does not decode.
 fn write_missing(transform: [f32; 6], out: &mut String) {
     let [p0, p1, p2, p3] = unit_square(transform);
     out.push_str("<path d=\"");
