@@ -51,7 +51,6 @@ use crate::wire::to_view::{self, Arm, PlayerRange};
 /// the end.
 #[derive(Debug)]
 pub struct ServerCore {
-    seats: BTreeMap<NonZeroU32, Seat>,
     phase: Phase,
     /// The bytes of the engine that do not make a whole message yet.
     from_engine: Vec<u8>,
@@ -61,6 +60,8 @@ pub struct ServerCore {
 }
 
 type Assets = BTreeMap<u32, Arc<[u8]>>;
+
+type Seats = BTreeMap<NonZeroU32, Seat>;
 
 /// The connection of a view to the seat of a player. A connect gives the
 /// seat a new generation, so the old connection of the seat, which may
@@ -225,7 +226,6 @@ const UNDER_THE_CAP: &str = "a message for the engine is under the cap of the fr
 impl ServerCore {
     pub fn new() -> Self {
         ServerCore {
-            seats: BTreeMap::new(),
             phase: Phase::Waiting,
             from_engine: Vec::new(),
             cache: Cache::new(),
@@ -237,7 +237,9 @@ impl ServerCore {
     pub fn players(&self) -> Option<PlayerRange> {
         match self.phase {
             Phase::Ready { takes, .. } => Some(takes),
-            Phase::Waiting | Phase::Playing { .. } | Phase::Closing | Phase::Over => None,
+            Phase::Waiting | Phase::Playing { .. } | Phase::Closing { .. } | Phase::Over { .. } => {
+                None
+            }
         }
     }
 
@@ -259,18 +261,19 @@ impl ServerCore {
                 takes: *takes,
             });
         }
-        self.seats = (1..)
+        let seats: Seats = (1..)
             .map_while(NonZeroU32::new)
             .zip(nicknames)
             .map(|(player, nickname)| (player, Seat::new(clean_nickname(nickname.as_ref()))))
             .collect();
-        let nicknames: Vec<&str> = self.seats.values().map(|s| s.nickname.as_str()).collect();
+        let nicknames: Vec<&str> = seats.values().map(|s| s.nickname.as_str()).collect();
         let mut to_engine = Vec::new();
         to_engine::write_start(&mut to_engine, &nicknames).expect(UNDER_THE_CAP);
         for id in lost.drain(..) {
             to_engine::write_lost(&mut to_engine, id).expect(UNDER_THE_CAP);
         }
         self.phase = Phase::Playing {
+            seats,
             to_engine,
             tick_pending: false,
         };
@@ -282,7 +285,11 @@ impl ServerCore {
     /// each key and button that the view held. A second call, and a call
     /// for an old connection of the seat, do nothing.
     pub fn leave(&mut self, conn: Conn) {
-        let Some(seat) = self.seats.get_mut(&conn.player) else {
+        let Some(seat) = self
+            .phase
+            .seats()
+            .and_then(|seats| seats.get_mut(&conn.player))
+        else {
             return;
         };
         if seat.generation != conn.generation {
@@ -300,10 +307,10 @@ impl ServerCore {
     /// newest frame. The engine gets an `Up` for each key and button that
     /// the old view held, since the old view may never have left.
     pub fn connect(&mut self, player: NonZeroU32) -> Option<Conn> {
-        if matches!(self.phase, Phase::Over) {
+        if matches!(self.phase, Phase::Over { .. }) {
             return None;
         }
-        let seat = self.seats.get_mut(&player)?;
+        let seat = self.phase.seats()?.get_mut(&player)?;
         seat.generation = seat
             .generation
             .checked_add(1)
@@ -325,6 +332,7 @@ impl ServerCore {
         if let Phase::Playing {
             to_engine,
             tick_pending: tick_pending @ false,
+            ..
         } = &mut self.phase
         {
             to_engine::write_tick(to_engine).expect(UNDER_THE_CAP);
@@ -337,18 +345,25 @@ impl ServerCore {
     /// closes the pipe of the engine, and the end of the pipe tells the
     /// engine to end. The engine may still send its last frames.
     pub fn close(&mut self) {
-        match self.phase {
-            Phase::Waiting | Phase::Ready { .. } | Phase::Playing { .. } => {
-                self.phase = Phase::Closing;
+        match &mut self.phase {
+            Phase::Waiting | Phase::Ready { .. } => {
+                self.phase = Phase::Closing {
+                    seats: Seats::new(),
+                }
             }
-            Phase::Closing | Phase::Over => {}
+            Phase::Playing { seats, .. } => {
+                self.phase = Phase::Closing {
+                    seats: std::mem::take(seats),
+                }
+            }
+            Phase::Closing { .. } | Phase::Over { .. } => {}
         }
     }
 
     /// Returns `true` if the engine ended, `false` otherwise. The timer of
     /// the tick and the task that reads the engine stop here.
     pub fn is_over(&self) -> bool {
-        matches!(self.phase, Phase::Over)
+        matches!(self.phase, Phase::Over { .. })
     }
 
     /// Take a message that the view of `conn` sent over its WebSocket, and
@@ -368,10 +383,10 @@ impl ServerCore {
     /// core drops the input of an old connection, and a `Down` of a new key
     /// when the view holds 32 keys, since it could not release the key.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
-        let Some((view, _)) = view_of(&mut self.seats, conn) else {
+        let Some((seats, to_engine)) = self.phase.playing() else {
             return;
         };
-        let Phase::Playing { to_engine, .. } = &mut self.phase else {
+        let Some((view, _)) = view_of(seats, conn) else {
             return;
         };
         if !view.held.track(event) {
@@ -392,7 +407,7 @@ impl ServerCore {
     /// the order of the stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
         let mut errors = Vec::new();
-        if matches!(self.phase, Phase::Over) {
+        if matches!(self.phase, Phase::Over { .. }) {
             return errors;
         }
         self.from_engine.extend_from_slice(bytes);
@@ -431,7 +446,7 @@ impl ServerCore {
                         errors.push(EngineError::SecondHello)
                     }
                     // A room that closed before the hello never starts.
-                    Phase::Closing | Phase::Over => {}
+                    Phase::Closing { .. } | Phase::Over { .. } => {}
                 },
                 Ok(Some(Arm::Asset { id, footprint })) => {
                     if let Err(e) = self.keep_asset(id, footprint, payload) {
@@ -460,7 +475,7 @@ impl ServerCore {
     /// Say that the stream of the engine ended, which ends the room. The
     /// part of a message that is left breaks the stream.
     pub fn engine_ended(&mut self) -> Option<EngineError> {
-        if matches!(self.phase, Phase::Over) {
+        if matches!(self.phase, Phase::Over { .. }) {
             return None;
         }
         let broken = (!self.from_engine.is_empty())
@@ -479,7 +494,7 @@ impl ServerCore {
     /// When the room is over, the view gets [`Next::Gone`] after its last
     /// frame, as does an old connection.
     pub fn next_for(&mut self, conn: Conn) -> Next {
-        let Some((view, frame)) = view_of(&mut self.seats, conn) else {
+        let Some((view, frame)) = self.phase.seats().and_then(|seats| view_of(seats, conn)) else {
             return Next::Gone;
         };
         if view.target.is_none() && !view.frame_sent {
@@ -509,10 +524,11 @@ impl ServerCore {
             return Next::Send(target.frame);
         }
         match self.phase {
-            Phase::Waiting | Phase::Ready { .. } | Phase::Playing { .. } | Phase::Closing => {
-                Next::Idle
-            }
-            Phase::Over => Next::Gone,
+            Phase::Waiting
+            | Phase::Ready { .. }
+            | Phase::Playing { .. }
+            | Phase::Closing { .. } => Next::Idle,
+            Phase::Over { .. } => Next::Gone,
         }
     }
 
@@ -528,7 +544,7 @@ impl ServerCore {
                 true
             }
             Phase::Waiting | Phase::Ready { .. } => true,
-            Phase::Closing | Phase::Over => false,
+            Phase::Closing { .. } | Phase::Over { .. } => false,
         }
     }
 
@@ -562,14 +578,13 @@ impl ServerCore {
         payload: Arc<[u8]>,
     ) -> Result<(), EngineError> {
         let ids = to_view::bitmap_ids(&payload).map_err(EngineError::Payload)?;
-        match player {
-            // The start seats at least one player, so a room with no seats
-            // has not started.
-            None if self.seats.is_empty() => return Ok(()),
-            Some(player) if !self.seats.contains_key(&player) => {
-                return Err(EngineError::NoSeat(player));
-            }
-            _ => {}
+        let Some(seats) = self.phase.seats() else {
+            return player.map_or(Ok(()), |player| Err(EngineError::NoSeat(player)));
+        };
+        if let Some(player) = player
+            && !seats.contains_key(&player)
+        {
+            return Err(EngineError::NoSeat(player));
         }
         let assets: Assets = ids
             .iter()
@@ -583,7 +598,9 @@ impl ServerCore {
             assets: Arc::new(assets),
         };
         for (_, seat) in self
-            .seats
+            .phase
+            .seats()
+            .expect("a frame before the start returned above")
             .iter_mut()
             .filter(|(p, _)| player.is_none_or(|player| **p == player))
         {
@@ -604,7 +621,7 @@ impl ServerCore {
             }
             Phase::Ready { lost, .. } => lost.push(id),
             // No asset comes before the hello.
-            Phase::Waiting | Phase::Closing | Phase::Over => {}
+            Phase::Waiting | Phase::Closing { .. } | Phase::Over { .. } => {}
         }
     }
 
@@ -623,7 +640,8 @@ impl ServerCore {
     /// End the room. The engine no longer reads, so the core drops the
     /// messages for it.
     fn end(&mut self) {
-        self.phase = Phase::Over;
+        let seats = self.phase.seats().map(std::mem::take).unwrap_or_default();
+        self.phase = Phase::Over { seats };
         self.from_engine = Vec::new();
     }
 }
@@ -766,21 +784,51 @@ enum Phase {
         lost: Vec<u32>,
     },
     Playing {
+        seats: Seats,
         /// The messages for the engine that the host has not taken yet.
         to_engine: Vec<u8>,
         /// The engine did not take the last tick yet.
         tick_pending: bool,
     },
-    Closing,
-    Over,
+    /// The seats stay, so a view still gets the last frames. A room that
+    /// closes before the start has none.
+    Closing {
+        seats: Seats,
+    },
+    Over {
+        seats: Seats,
+    },
+}
+
+impl Phase {
+    /// The seats of the room, or `None` while it waits for the hello or for
+    /// the start.
+    fn seats(&mut self) -> Option<&mut Seats> {
+        match self {
+            Phase::Playing { seats, .. } | Phase::Closing { seats } | Phase::Over { seats } => {
+                Some(seats)
+            }
+            Phase::Waiting | Phase::Ready { .. } => None,
+        }
+    }
+
+    /// The seats and the messages for the engine, or `None` if the room
+    /// does not play.
+    fn playing(&mut self) -> Option<(&mut Seats, &mut Vec<u8>)> {
+        match self {
+            Phase::Playing {
+                seats, to_engine, ..
+            } => Some((seats, to_engine)),
+            Phase::Waiting | Phase::Ready { .. } | Phase::Closing { .. } | Phase::Over { .. } => {
+                None
+            }
+        }
+    }
 }
 
 /// The view of `conn` and the newest frame of its seat, if `conn` is the
 /// connection that takes the seat and has not left.
-fn view_of(
-    seats: &mut BTreeMap<NonZeroU32, Seat>,
-    conn: Conn,
-) -> Option<(&mut View, Option<&Shot>)> {
+fn view_of(seats: &mut Seats, conn: Conn) -> Option<(&mut View, Option<&Shot>)> {
     let seat = seats
         .get_mut(&conn.player)
         .filter(|seat| seat.generation == conn.generation)?;
