@@ -59,7 +59,10 @@ pub fn write_lost(w: &mut impl Write, id: u32) -> io::Result<()> {
 /// `nicknames`, numbered from 1 in their order. More than
 /// [`MAX_PLAYERS`] players is [`io::ErrorKind::InvalidInput`].
 pub fn write_start<S: AsRef<str>>(w: &mut impl Write, nicknames: &[S]) -> io::Result<()> {
-    if nicknames.len() > MAX_PLAYERS as usize {
+    let Some(len) = u32::try_from(nicknames.len())
+        .ok()
+        .filter(|&len| len <= MAX_PLAYERS)
+    else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
@@ -67,8 +70,8 @@ pub fn write_start<S: AsRef<str>>(w: &mut impl Write, nicknames: &[S]) -> io::Re
                 nicknames.len()
             ),
         ));
-    }
-    write_framed(w, Side::Server, &start_message(nicknames))
+    };
+    write_framed(w, Side::Server, &start_message(len, nicknames))
 }
 
 /// Decode `payload`. `None` for a message or an event of an arm from a
@@ -130,10 +133,10 @@ fn lost_message(id: u32) -> MessageBuilder<HeapAllocator> {
     builder
 }
 
-fn start_message<S: AsRef<str>>(nicknames: &[S]) -> MessageBuilder<HeapAllocator> {
+/// A start of the `len` players of `nicknames`.
+fn start_message<S: AsRef<str>>(len: u32, nicknames: &[S]) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     let start = builder.init_root::<server_message::Builder>().init_start();
-    let len = u32::try_from(nicknames.len()).expect("a start has at most MAX_PLAYERS players");
     let mut list = start.init_members(len);
     for (i, nickname) in (0..len).zip(nicknames) {
         list.reborrow().get(i).set_nickname(nickname.as_ref());
