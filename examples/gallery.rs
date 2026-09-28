@@ -25,7 +25,7 @@ use std::time::Instant;
 use sinteract::display::{Display, Printer, Terminal, TerminalOptions, Window, open_native};
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::renderer::Renderer;
-use sinteract::renderer::pdf::render_to_pdf;
+use sinteract::renderer::pdf::PdfRenderer;
 use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
 use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
@@ -115,9 +115,7 @@ fn main() -> ExitCode {
         Some("print") => print(),
         Some("png") => png(),
         Some("svg") => svg(),
-        Some("pdf") => std::io::stdout()
-            .write_all(&render_to_pdf(&gallery(STILL)))
-            .map_err(|e| e.to_string()),
+        Some("pdf") => pdf(),
         Some(other) => Err(format!(
             "unknown mode {other}, try window, terminal, print, png, svg or pdf"
         )),
@@ -215,6 +213,20 @@ fn svg() -> Result<(), String> {
     std::io::stdout()
         .write_all(svg.as_bytes())
         .map_err(|e| e.to_string())
+}
+
+fn pdf() -> Result<(), String> {
+    let mut renderer = PdfRenderer::new();
+    for (id, blob) in images() {
+        renderer
+            .assets_mut()
+            .insert(id, &blob)
+            .map_err(|e| e.to_string())?;
+    }
+    let pdf = renderer
+        .render(&gallery(STILL))
+        .map_err(|e| e.to_string())?;
+    std::io::stdout().write_all(pdf).map_err(|e| e.to_string())
 }
 
 /// The id and the bytes of every image that the gallery draws.

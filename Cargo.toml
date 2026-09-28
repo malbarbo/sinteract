@@ -12,7 +12,7 @@ default = ["native-fonts", "render", "terminal", "window"]
 # The pixmap and PDF renderers and the Sixel encoder. Without it, a server
 # that only encodes and decodes messages keeps the scene, the text, the SVG
 # renderer and the codec.
-render = ["dep:tiny-skia", "dep:png", "dep:image", "dep:pdf-writer", "dep:icy_sixel"]
+render = ["dep:tiny-skia", "dep:png", "dep:image", "dep:pdf-writer", "dep:miniz_oxide", "dep:icy_sixel"]
 # Look up a family the embedded fonts do not cover among the fonts installed
 # on the system. Turning it off drops fontdb and leaves only the embedded
 # families. The query needs a font directory, so wasm32 leaves it out even
@@ -40,6 +40,8 @@ capnp = "0.25"
 # These make no syscalls, so text and pdf build on wasm too.
 ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 pdf-writer = { version = "0.14", optional = true }
+# Compresses the pixels of an image in a PDF. png already depends on it.
+miniz_oxide = { version = "0.8", optional = true }
 # Pure Rust, so the Sixel encoder builds on wasm too. The fork adds the
 # encoder that keeps its buffers between frames. Go back to the release
 # once it has the change. Cargo.lock is not in the repository, so the
