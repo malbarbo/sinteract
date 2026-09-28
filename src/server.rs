@@ -281,11 +281,11 @@ impl ServerCore {
     }
 
     /// A connection of a view to the seat of `player`, or `None` if the
-    /// room has no such seat, as before the start, or is over. The host checks the token of the
-    /// player first. The old connection of the seat gets [`Next::Gone`],
-    /// and the new one starts with no asset and gets the newest frame. The
-    /// engine gets an `Up` for each key and button that the old view held,
-    /// since the old view may never have left.
+    /// room has no such seat, as before the start, or is over. The host checks
+    /// the token of the player first. The old connection of the seat gets
+    /// [`Next::Gone`], and the new one starts with no asset and gets the
+    /// newest frame. The engine gets an `Up` for each key and button that
+    /// the old view held, since the old view may never have left.
     pub fn connect(&mut self, player: NonZeroU32) -> Option<Conn> {
         if matches!(self.phase, Phase::Over) {
             return None;
@@ -352,8 +352,8 @@ impl ServerCore {
     }
 
     /// Pass `event` of the view of `conn` to the engine, in the game. The
-    /// core drops the input of an old connection, and a `Down` of a new key when the view holds 32 keys, since it could not release the
-    /// key.
+    /// core drops the input of an old connection, and a `Down` of a new key
+    /// when the view holds 32 keys, since it could not release the key.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
         let Some((view, _)) = view_of(&mut self.seats, conn) else {
             return;

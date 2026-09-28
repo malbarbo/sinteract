@@ -48,8 +48,9 @@ pub trait Renderer: sealed::Canvas {
         Ok(self.output())
     }
 
-    /// Decode one scene that [`wire::scene::encode`](crate::wire::scene::encode)
-    /// wrote from `reader` and render it without building the
+    /// Decode one scene that
+    /// [`wire::scene::encode`](crate::wire::scene::encode) wrote from
+    /// `reader` and render it without building the
     /// [`Element`](crate::scene::Element) tree.
     fn render_stream(
         &mut self,

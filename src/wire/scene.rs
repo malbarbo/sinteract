@@ -400,7 +400,8 @@ fn write_verbs(out: capnp::data::Builder<'_>, segs: Segments<'_>) {
     }
 }
 
-/// Write the coordinates in verb order, the layout that [`read_segments`] reads.
+/// Write the coordinates in verb order, the layout that
+/// [`read_segments`] reads.
 fn write_coords(out: &mut capnp::primitive_list::Builder<'_, f32>, segs: Segments<'_>) {
     let mut i = 0;
     for seg in segs {

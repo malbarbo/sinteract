@@ -4,8 +4,8 @@
 //! the server. Then it uploads each bitmap as an asset, before the first
 //! frame that draws it, and sends a frame per repaint, for one player or
 //! for all of them. It tells the server as it takes each tick. The engine
-//! ends the session with the end of its stream. The server adds a forget for a view, when the view no longer
-//! needs an asset.
+//! ends the session with the end of its stream. The server adds a forget
+//! for a view, when the view no longer needs an asset.
 
 use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
@@ -133,8 +133,9 @@ pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
 }
 
 /// The arm of `payload`, a message with no envelope, without a decode of
-/// the scene of a frame or of the image of an asset. `None` for an arm from a newer schema. A hello
-/// whose players are not a [`PlayerRange`] is an error.
+/// the scene of a frame or of the image of an asset. `None` for an arm
+/// from a newer schema. A hello whose players are not a [`PlayerRange`]
+/// is an error.
 pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
     decode_root::<engine_message::Owned, _>(payload, |msg| {
         let Ok(which) = msg.which() else {

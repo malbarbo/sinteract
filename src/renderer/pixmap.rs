@@ -653,7 +653,8 @@ fn stroke_within_reach(path: &SkPath, stroke: &Stroke, transform: Transform) -> 
 }
 
 /// The inherent methods of [`PathBuilder`], so paths, clips and glyphs build
-/// through [`crate::scene::Segments::outline`] and [`crate::text::TextLayout::outline`].
+/// through [`crate::scene::Segments::outline`] and
+/// [`crate::text::TextLayout::outline`].
 impl PathSink for PathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
         PathBuilder::move_to(self, x, y);

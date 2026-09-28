@@ -889,13 +889,14 @@ impl Element {
     }
 }
 
-/// The draw list a front end builds and a [`Renderer`](crate::renderer::Renderer)
-/// replays. [`Self::path`] returns a [`PathScope`] that commits its path on
-/// drop, and [`Self::clip`] returns a [`ClipScope`] that wraps the elements
-/// drawn while it lives into an [`Element::Clipped`] on drop, so a clip
-/// cannot be left open. A move that no segment follows draws nothing, so the
-/// builders drop it. A `PathScope` with no segment past its moves commits
-/// nothing, and [`PathBuilder::build`] returns a path with no segments.
+/// The draw list a front end builds and a
+/// [`Renderer`](crate::renderer::Renderer) replays. [`Self::path`] returns a
+/// [`PathScope`] that commits its path on drop, and [`Self::clip`] returns a
+/// [`ClipScope`] that wraps the elements drawn while it lives into an
+/// [`Element::Clipped`] on drop, so a clip cannot be left open. A move that no
+/// segment follows draws nothing, so the builders drop it. A `PathScope` with
+/// no segment past its moves commits nothing, and [`PathBuilder::build`]
+/// returns a path with no segments.
 ///
 /// An arc is stored as cubics, so a renderer sees only move, line, quad and
 /// cubic.
@@ -1073,8 +1074,8 @@ impl Drop for PathScope<'_> {
 }
 
 /// The clip under construction by [`Scene::clip`]. It draws into the scene
-/// with the methods of [`Scene`], and `mark` is where its elements begin. On drop
-/// it moves `elements[mark..]` into an [`Element::Clipped`] at `mark`. A
+/// with the methods of [`Scene`], and `mark` is where its elements begin. On
+/// drop it moves `elements[mark..]` into an [`Element::Clipped`] at `mark`. A
 /// nested scope has a later mark and drops first, so the tree is well formed.
 ///
 /// The scope only appends to the scene, so the scene cannot be replaced

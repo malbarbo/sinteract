@@ -191,9 +191,9 @@ impl Canvas for SvgRenderer {
         let [a, b, c, d, e, f] = node.transform;
         let body = &mut self.body;
         _ = writeln!(body, "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">");
-        // The fills of all the glyphs go down before any stroke, as in the other
-        // renderers, which paint the text as one path. A <use> that fills and
-        // strokes would cover the stroke of the glyph before it.
+        // The fills of all the glyphs go down before any stroke, as in the
+        // other renderers, which paint the text as one path. A <use> that
+        // fills and strokes would cover the stroke of the glyph before it.
         if do_fill {
             body.push_str("<g");
             write_color(node.fill, "fill", "fill-opacity", body);

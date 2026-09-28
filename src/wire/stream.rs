@@ -52,8 +52,8 @@ impl From<AllocError> for Error {
 }
 
 /// Decode one scene that [`super::scene::encode`] wrote from `reader` and
-/// paint it onto `paint`. The reader is walked lazily, so the element list never becomes
-/// a `Vec<Element>`, and a `Clipped` subtree recurses through
+/// paint it onto `paint`. The reader is walked lazily, so the element list
+/// never becomes a `Vec<Element>`, and a `Clipped` subtree recurses through
 /// [`Paint::with_clip`]. Every path decodes into one scratch [`Path`] that
 /// the whole frame reuses, so decoding allocates about as much as the
 /// longest path.

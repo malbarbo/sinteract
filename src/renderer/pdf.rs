@@ -150,7 +150,8 @@ impl Canvas for PdfRenderer {
 
         let mut out = PdfOutline::new(&mut self.content);
         layout.outline(&mut out);
-        // A text of spaces has no outline, and a paint with no path is an error.
+        // A text of spaces has no outline, and a paint with no path is
+        // an error.
         if !out.empty {
             paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
         }
@@ -609,8 +610,8 @@ impl Shading {
 
         {
             let mut pat = pdf.shading_pattern(refs.pattern);
-            // A pattern draws in the space of the page, so the `cm` at the top of
-            // the content stream does not apply to it.
+            // A pattern draws in the space of the page, so the `cm` at the top
+            // of the content stream does not apply to it.
             pat.matrix(matrix);
             pat.shading_ref(refs.shading);
             pat.finish();
