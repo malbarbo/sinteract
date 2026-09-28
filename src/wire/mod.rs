@@ -431,6 +431,39 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_in_many_segments_round_trips() {
+        let scene = sample_scene();
+        let bytes = in_small_segments(&encode_frame(&scene));
+        // The segment table starts with the number of segments less one.
+        let segments = u32::from_le_bytes(bytes[..4].try_into().unwrap()) + 1;
+        assert!(segments > 1, "{segments} segment");
+        match decode(&bytes).expect("decode") {
+            Message::Frame { scene: d, .. } => assert_scene_eq(&scene, &d),
+            other => panic!("expected Frame, got {other:?}"),
+        }
+    }
+
+    /// `bytes` copied into segments of 8 words, or of the size of an object
+    /// that does not fit in 8. The copy needs far and double-far pointers.
+    fn in_small_segments(bytes: &[u8]) -> Vec<u8> {
+        let mut words = capnp::Word::allocate_zeroed_vec(bytes.len() / 8);
+        capnp::Word::words_to_bytes_mut(&mut words).copy_from_slice(bytes);
+        let msg = capnp::serialize::read_message_from_flat_slice(
+            &mut capnp::Word::words_to_bytes(&words),
+            capnp::message::ReaderOptions::new(),
+        )
+        .unwrap();
+        let mut copy = MessageBuilder::new(
+            capnp::message::HeapAllocator::new()
+                .first_segment_words(8)
+                .allocation_strategy(capnp::message::AllocationStrategy::FixedSize),
+        );
+        copy.set_root(msg.get_root::<capnp::any_pointer::Reader>().unwrap())
+            .unwrap();
+        capnp::serialize::write_message_to_words(&copy)
+    }
+
+    #[test]
     fn key_event_round_trip() {
         let key = KeyEvent {
             kind: KeyKind::Down,
