@@ -1,5 +1,10 @@
 //! The value types of a [`Scene`] and the builders that make them.
 
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use crate::asset::AssetError;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rgba {
     pub r: u8,
@@ -563,6 +568,80 @@ fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
 
 fn all_finite(values: &[f32]) -> bool {
     values.iter().all(|v| v.is_finite())
+}
+
+/// The file of a PNG, a JPEG, a GIF or a WebP of at most
+/// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS), with its size on
+/// the screen. A clone shares the file. Two images are equal when their
+/// files are, so a renderer or a session finds an image again by its
+/// content.
+#[derive(Clone)]
+pub struct Image(Arc<ImageData>);
+
+struct ImageData {
+    file: Box<[u8]>,
+    /// The hash of `file`, so a lookup does not read the file again.
+    hash: u64,
+    width: u32,
+    height: u32,
+}
+
+impl Image {
+    /// Read the header of `file` and hash it. Returns an error if `file` is
+    /// not a PNG, a JPEG, a GIF or a WebP, or has more than
+    /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS).
+    /// [`crate::asset::fit_image`] shrinks a larger one first. The size is
+    /// the one after the EXIF orientation of a JPEG.
+    pub fn new(file: Vec<u8>) -> Result<Image, AssetError> {
+        let (width, height) = crate::asset::screen_size(&file)?;
+        let hash = {
+            let mut hasher = std::hash::DefaultHasher::new();
+            file.hash(&mut hasher);
+            hasher.finish()
+        };
+        Ok(Image(Arc::new(ImageData {
+            file: file.into_boxed_slice(),
+            hash,
+            width,
+            height,
+        })))
+    }
+
+    pub fn width(&self) -> u32 {
+        self.0.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.0.height
+    }
+}
+
+impl PartialEq for Image {
+    fn eq(&self, other: &Image) -> bool {
+        self.0.hash == other.0.hash
+            && (Arc::ptr_eq(&self.0, &other.0) || self.0.file == other.0.file)
+    }
+}
+
+impl Eq for Image {}
+
+impl Hash for Image {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0.hash);
+    }
+}
+
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Image({}x{}, {} bytes, {:016x})",
+            self.0.width,
+            self.0.height,
+            self.0.file.len(),
+            self.0.hash
+        )
+    }
 }
 
 /// A bitmap. `id` names an asset uploaded before, with `Message::Asset` on
@@ -1627,6 +1706,19 @@ mod tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn two_images_of_the_same_file_are_equal() {
+        use std::collections::HashSet;
+        let file = crate::asset::png_head(2, 3);
+        let a = Image::new(file.clone()).unwrap();
+        let b = Image::new(file).unwrap();
+        let c = Image::new(crate::asset::png_head(3, 2)).unwrap();
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(HashSet::from([a.clone(), b, c]).len(), 2);
+        assert_eq!((a.width(), a.height()), (2, 3));
     }
 
     #[test]

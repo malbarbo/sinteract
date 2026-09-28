@@ -388,6 +388,37 @@ impl fmt::Display for AssetError {
 
 impl std::error::Error for AssetError {}
 
+/// `file`, or a PNG of it shrunk to [`MAX_IMAGE_PIXELS`] with its ratio if
+/// it is larger, for [`Image::new`](crate::scene::Image::new). A front end
+/// calls it once, as it loads the image. An image shrinks, with the feature
+/// `render`, up to [`MAX_SHRINK_PIXELS`], and is an error past that or
+/// without the feature. It is an error too if `file` is not a PNG, a JPEG,
+/// a GIF or a WebP.
+pub fn fit_image(file: Vec<u8>) -> Result<Vec<u8>, AssetError> {
+    let (width, height) = head(&file).ok_or(AssetError::Unsupported)?.size;
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        shrink(&file, width, height)
+    } else {
+        Ok(file)
+    }
+}
+
+/// The size on the screen of the image in `file`, after the EXIF
+/// orientation of a JPEG, or an error if it is not a PNG, a JPEG, a GIF or
+/// a WebP, or has more than [`MAX_IMAGE_PIXELS`].
+pub(crate) fn screen_size(file: &[u8]) -> Result<(u32, u32), AssetError> {
+    let head = head(file).ok_or(AssetError::Unsupported)?;
+    let (width, height) = head.size;
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        return Err(AssetError::TooManyPixels { width, height });
+    }
+    Ok(if head.turned() {
+        (height, width)
+    } else {
+        (width, height)
+    })
+}
+
 /// The width and the height from the header of the image in `blob`, or
 /// `None` if `blob` is not a PNG, a JPEG, a GIF or a WebP, or gives a
 /// width or a height of 0. It is the size that a decoder allocates, before
@@ -1228,6 +1259,34 @@ mod tests {
         assert_eq!(super::head(&last).unwrap().orientation, 3);
         let wrong = jpeg_head_of(&[exif(true, 9), sof(640, 480)]);
         assert_eq!(super::head(&wrong).unwrap().orientation, 1);
+    }
+
+    #[test]
+    fn an_image_has_the_size_on_the_screen_under_the_limit() {
+        let jpeg = jpeg_head_of(&[exif(true, 6), sof(640, 480)]);
+        let image = crate::scene::Image::new(jpeg).unwrap();
+        assert_eq!((image.width(), image.height()), (480, 640));
+        assert!(matches!(
+            crate::scene::Image::new(png_head(2049, 2048)),
+            Err(AssetError::TooManyPixels { .. })
+        ));
+        assert!(matches!(
+            crate::scene::Image::new(b"GIF89a".to_vec()),
+            Err(AssetError::Unsupported)
+        ));
+    }
+
+    #[test]
+    fn fit_image_keeps_an_image_under_the_limit() {
+        assert_eq!(fit_image(png_head(2, 3)), Ok(png_head(2, 3)));
+        assert_eq!(fit_image(b"GIF".to_vec()), Err(AssetError::Unsupported));
+        // The header of a large image, with no pixels to shrink.
+        let large = fit_image(png_head(2049, 2048));
+        if cfg!(feature = "render") {
+            assert_eq!(large, Err(AssetError::Unsupported));
+        } else {
+            assert!(matches!(large, Err(AssetError::TooManyPixels { .. })));
+        }
     }
 
     #[test]
