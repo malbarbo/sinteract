@@ -140,8 +140,9 @@ impl Default for PixmapRenderer {
 /// without a decode. Past [`MAX_LIVE_PIXELS`], the images that a bitmap
 /// drew longest ago go first, but not one that the frame drew, so a frame
 /// of more images than fit keeps the ones that fit and decodes the others
-/// at each draw. An image that does not decode keeps `None`, so it draws
-/// the marker of a missing image without a second decode.
+/// at each draw, once for the draws of one image in a row. An image that
+/// does not decode keeps `None`, so it draws the marker of a missing image
+/// without a second decode.
 #[derive(Default)]
 struct Decoded {
     images: HashMap<Image, Use>,
@@ -151,8 +152,9 @@ struct Decoded {
     draws: u64,
     /// The value of `draws` when the frame began.
     frame_start: u64,
-    /// The last image that did not fit, decoded for one bitmap.
-    spill: Option<Pixmap>,
+    /// The last image that did not fit, decoded, so the bitmaps that draw
+    /// it in a row decode it once.
+    spill: Option<(Image, Option<Pixmap>)>,
 }
 
 struct Use {
@@ -178,10 +180,14 @@ impl Decoded {
                 .filter(|(_, u)| before(u))
                 .map(|(i, _)| i.pixels())
                 .sum();
-            let pixmap = crate::asset::decode(image.file(), MAX_IMAGE_PIXELS).ok();
+            let spilled = self.spill.take_if(|(spilled, _)| spilled == image);
+            let pixmap = match spilled {
+                Some((_, pixmap)) => pixmap,
+                None => crate::asset::decode(image.file(), MAX_IMAGE_PIXELS).ok(),
+            };
             if self.pixels - may_go + need > MAX_LIVE_PIXELS {
-                self.spill = pixmap;
-                return self.spill.as_ref();
+                let (_, pixmap) = self.spill.insert((image.clone(), pixmap));
+                return pixmap.as_ref();
             }
             while self.pixels + need > MAX_LIVE_PIXELS {
                 let oldest = self
@@ -1076,6 +1082,26 @@ mod tests {
             assert!(decoded.images.contains_key(&image(k)), "{k}");
         }
         assert_eq!(decoded.images.len(), 8);
+    }
+
+    #[test]
+    fn an_image_past_the_limit_drawn_in_a_row_decodes_once() {
+        let image = |k: u32| crate::asset::png_image(2048, 2048 - k);
+        let mut decoded = Decoded::default();
+        decoded.next_frame();
+        for k in 0..9 {
+            decoded.get(&image(k));
+        }
+        assert!(decoded.spill.as_ref().is_some_and(|(i, _)| *i == image(8)));
+        // A head alone does not decode, so a second decode would give `None`.
+        decoded.spill = Some((image(8), Pixmap::new(1, 1)));
+        assert!(decoded.get(&image(8)).is_some());
+        assert!(decoded.get(&image(9)).is_none());
+        // In the next frame the spilled image fits, with the same pixels.
+        decoded.spill = Some((image(8), Pixmap::new(1, 1)));
+        decoded.next_frame();
+        assert!(decoded.get(&image(8)).is_some());
+        assert!(decoded.images.contains_key(&image(8)));
     }
 
     /// The whole canvas of [`draw_on_canvas`].
