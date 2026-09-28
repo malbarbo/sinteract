@@ -32,6 +32,8 @@ pub mod to_engine;
 pub mod to_server;
 pub mod to_view;
 
+use capnp::message::{self, ReaderOptions, ReaderSegments};
+
 pub use protocol::ReadError;
 pub use stream::Error as StreamError;
 pub(crate) use stream::stream_frame;
@@ -42,6 +44,17 @@ pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAlloca
     capnp::serialize::write_message(&mut bytes, &builder)
         .expect("write_message into Vec is infallible");
     bytes
+}
+
+/// `msg` with a traversal limit of its own size. A walk that follows each
+/// pointer once can take all of it, so a second walk opens the message
+/// again. A second pointer to a target, and a list of Void or of empty
+/// structs, cost more words than they hold, so a message that has them can
+/// fail to decode.
+fn limit_traversal<S: ReaderSegments>(msg: message::Reader<S>) -> message::Reader<S> {
+    let mut options = ReaderOptions::new();
+    options.traversal_limit_in_words(Some(msg.size_in_words()));
+    message::Reader::new(msg.into_segments(), options)
 }
 
 /// A payload is malformed. It says the scene, the event or the message is
@@ -792,6 +805,95 @@ mod tests {
     fn garbage_bytes_fail_to_decode() {
         let r = decode(&[0xff; 8]);
         assert!(r.is_err(), "expected decode error, got {r:?}");
+    }
+
+    #[test]
+    fn a_frame_whose_elements_share_a_path_is_an_error() {
+        let bytes =
+            with_shared_path::<engine_message::Owned>(&encode_frame(&scene_of_paths()), |m| {
+                path_slots(frame_of(m).get_elements().unwrap())
+            });
+        assert!(matches!(to_view::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
+    }
+
+    #[test]
+    fn a_scene_whose_elements_share_a_path_is_an_error() {
+        let bytes = with_shared_path::<crate::scene_capnp::scene::Owned>(
+            &scene::encode(&scene_of_paths()),
+            |s| path_slots(s.get_elements().unwrap()),
+        );
+        assert!(matches!(scene::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
+        let mut svg = crate::renderer::svg::SvgRenderer::new();
+        assert!(matches!(
+            crate::renderer::Renderer::render_stream(&mut svg, &bytes[..]),
+            Err(StreamError::Payload(e)) if is_read_limit_exceeded(&e)
+        ));
+    }
+
+    /// `bytes` with the pointer in every slot after the first moved to the
+    /// path of the first slot. `slots` finds the slots with [`path_slots`].
+    /// `bytes` holds one segment, so an offset from each slot reaches the
+    /// first path.
+    fn with_shared_path<T: capnp::traits::Owned>(
+        bytes: &[u8],
+        slots: impl FnOnce(T::Reader<'_>) -> Vec<*const u8>,
+    ) -> Vec<u8> {
+        let mut words = capnp::Word::allocate_zeroed_vec(bytes.len() / 8);
+        capnp::Word::words_to_bytes_mut(&mut words).copy_from_slice(bytes);
+        let buf = capnp::Word::words_to_bytes(&words);
+        let msg = capnp::serialize::read_message_from_flat_slice(
+            &mut &buf[..],
+            capnp::message::ReaderOptions::new(),
+        )
+        .expect("parse");
+        assert_eq!(msg.get_segments().len(), 1, "one segment");
+        let slots: Vec<usize> = slots(msg.get_root().expect("root"))
+            .into_iter()
+            .map(|p| p as usize - buf.as_ptr() as usize)
+            .collect();
+        let first = u64::from_le_bytes(buf[slots[0]..slots[0] + 8].try_into().unwrap());
+        // A struct pointer holds in bits 2..32 the offset in words from its
+        // end to the struct, and in its high half the sizes of the struct.
+        let path = (slots[0] + 8) as i64 + i64::from((first as u32 as i32) >> 2) * 8;
+        let mut out = bytes.to_vec();
+        for &at in &slots[1..] {
+            let offset = (path - (at + 8) as i64) / 8;
+            let shared = (first & 0xffff_ffff_0000_0000) | u64::from(((offset as i32) << 2) as u32);
+            out[at..at + 8].copy_from_slice(&shared.to_le_bytes());
+        }
+        out
+    }
+
+    /// The address of the pointer from each element of `list` to its path.
+    fn path_slots(list: capnp::struct_list::Reader<'_, element::Owned>) -> Vec<*const u8> {
+        list.iter()
+            .map(|e| {
+                assert!(matches!(e.which(), Ok(element::Which::Path(_))));
+                capnp::raw::get_list_bytes(capnp::raw::get_struct_pointer_section(e)).as_ptr()
+            })
+            .collect()
+    }
+
+    /// 32 paths in one segment. The first has 100 points, so a reader that
+    /// walks it for every element walks more words than the message holds.
+    fn scene_of_paths() -> Scene {
+        let mut scene = Scene::new(100.0, 100.0);
+        {
+            let mut p = scene.path(PathStyle::default(), 0.0, 0.0);
+            for i in 1..100 {
+                p.line_to(i as f32, (i % 7) as f32);
+            }
+        }
+        for i in 1..32 {
+            scene
+                .path(PathStyle::default(), 0.0, 0.0)
+                .line_to(i as f32, 1.0);
+        }
+        scene
+    }
+
+    fn is_read_limit_exceeded(e: &Error) -> bool {
+        matches!(e, Error::Parse(e) if e.kind == capnp::ErrorKind::ReadLimitExceeded)
     }
 
     #[test]

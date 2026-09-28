@@ -64,7 +64,7 @@ pub(crate) fn stream_frame<P: Canvas, R: std::io::Read>(
     paint: &mut P,
     reader: R,
 ) -> Result<(), Error> {
-    let msg = serialize::read_message(reader, ReaderOptions::new())?;
+    let msg = super::limit_traversal(serialize::read_message(reader, ReaderOptions::new())?);
     let scene: wire_scene::Reader = msg.get_root()?;
     paint.ensure_size(
         frame_size(scene.get_width()),

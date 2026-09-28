@@ -33,10 +33,10 @@ pub fn encode(scene: &Scene) -> Vec<u8> {
 /// Decode a message that [`encode`] produced. A frame that arrived inside a
 /// session goes through [`super::to_view::read`] instead.
 pub fn decode(bytes: &[u8]) -> Result<Scene, Error> {
-    let reader = capnp::serialize::read_message(
+    let reader = super::limit_traversal(capnp::serialize::read_message(
         std::io::Cursor::new(bytes),
         capnp::message::ReaderOptions::new(),
-    )?;
+    )?);
     read_scene(reader.get_root()?)
 }
 

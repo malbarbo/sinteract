@@ -90,7 +90,10 @@ pub(super) fn decode_root<T: Owned, M>(
         copy = aligned_copy(payload);
         Word::words_to_bytes(&copy)
     };
-    let reader = serialize::read_message_from_flat_slice(&mut bytes, ReaderOptions::new())?;
+    let reader = super::limit_traversal(serialize::read_message_from_flat_slice(
+        &mut bytes,
+        ReaderOptions::new(),
+    )?);
     if !bytes.is_empty() {
         return Err(capnp::Error::failed(format!(
             "{} bytes follow the message in its payload",
