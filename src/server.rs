@@ -111,6 +111,9 @@ pub enum EngineError {
     /// A forget came from the engine, which never sends one. The core drops
     /// it and goes on.
     Forget(u32),
+    /// A frame came for a player that has no seat in the room. The core
+    /// drops it and goes on.
+    NoSeat(NonZeroU32),
 }
 
 /// Why [`ServerCore::start`] did not start the room.
@@ -150,6 +153,9 @@ impl std::fmt::Display for EngineError {
             EngineError::SecondHello => f.write_str("a hello came after the first one"),
             EngineError::Asset { id, error } => write!(f, "asset {id}: {error}"),
             EngineError::Forget(id) => write!(f, "a forget of {id} came from the engine"),
+            EngineError::NoSeat(player) => {
+                write!(f, "a frame came for player {player}, who has no seat")
+            }
         }
     }
 }
@@ -160,7 +166,10 @@ impl std::error::Error for EngineError {
             EngineError::Payload(e) => Some(e),
             EngineError::Broken(e) => Some(e),
             EngineError::Asset { error, .. } => Some(error),
-            EngineError::NoHello | EngineError::SecondHello | EngineError::Forget(_) => None,
+            EngineError::NoHello
+            | EngineError::SecondHello
+            | EngineError::Forget(_)
+            | EngineError::NoSeat(_) => None,
         }
     }
 }
@@ -372,10 +381,11 @@ impl ServerCore {
     /// asset, and a frame goes to its player, or to every player, with the
     /// assets that it draws. At each frame the core drops the assets that
     /// the frames used longest ago to fit the limits of the room, with a
-    /// lost to the engine for each. Before the start a frame has no
-    /// player, and the core drops it. A broken stream ends the room, and
-    /// the core ignores what comes after the end. Returns what went wrong,
-    /// in the order of the stream.
+    /// lost to the engine for each. Before the start a frame for every
+    /// player goes to no one, and the core drops it. A frame for a player
+    /// with no seat is an error. A broken stream ends the room, and the
+    /// core ignores what comes after the end. Returns what went wrong, in
+    /// the order of the stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
         let mut errors = Vec::new();
         if matches!(self.phase, Phase::Over) {
@@ -432,7 +442,7 @@ impl ServerCore {
                 }
                 Ok(Some(Arm::Frame { player })) => {
                     if let Err(e) = self.keep_frame(player, payload) {
-                        errors.push(EngineError::Payload(e));
+                        errors.push(e);
                     }
                 }
                 Ok(None) => {}
@@ -541,19 +551,20 @@ impl ServerCore {
     /// Keep the frame in `payload` for `player`, or for every player when
     /// `player` is `None`, with the assets that it draws, and drop the
     /// assets that the frames used longest ago to fit the limits. A frame
-    /// for no seat reaches no screen, so it changes nothing.
+    /// for every player before the start reaches no screen, so it changes
+    /// nothing.
     fn keep_frame(
         &mut self,
         player: Option<NonZeroU32>,
         payload: Arc<[u8]>,
-    ) -> Result<(), wire::Error> {
-        let ids = to_view::bitmap_ids(&payload)?;
-        let seats = match player {
-            None => self.seats.len(),
-            Some(player) => usize::from(self.seats.contains_key(&player)),
-        };
-        if seats == 0 {
-            return Ok(());
+    ) -> Result<(), EngineError> {
+        let ids = to_view::bitmap_ids(&payload).map_err(EngineError::Payload)?;
+        match player {
+            None if self.seats.is_empty() => return Ok(()),
+            Some(player) if !self.seats.contains_key(&player) => {
+                return Err(EngineError::NoSeat(player));
+            }
+            _ => {}
         }
         let assets: Assets = ids
             .iter()
@@ -1354,6 +1365,26 @@ mod tests {
             ]
         ));
         assert!(!room.core.is_over());
+    }
+
+    #[test]
+    fn a_frame_for_a_player_with_no_seat_is_an_error_and_the_room_goes_on() {
+        let mut core = ServerCore::new();
+        assert!(core.from_engine(&hello(1, 2)).is_empty());
+        assert!(core.from_engine(&frame(0, 1.0)).is_empty());
+        assert!(matches!(
+            core.from_engine(&frame(1, 1.0))[..],
+            [EngineError::NoSeat(p)] if p == player(1)
+        ));
+        core.start(&["Ana"]).unwrap();
+        let ana = core.connect(player(1)).unwrap();
+        let mut stream = frame(2, 1.0);
+        stream.extend_from_slice(&frame(1, 2.0));
+        assert!(matches!(
+            core.from_engine(&stream)[..],
+            [EngineError::NoSeat(p)] if p == player(2)
+        ));
+        assert_eq!(sent(&mut core, ana), ["frame 1 2", "idle"]);
     }
 
     #[test]
