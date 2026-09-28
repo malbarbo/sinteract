@@ -60,6 +60,9 @@ pub struct PixmapRenderer {
     /// Layers drawn and popped off, for the next layer. Every layer is
     /// canvas-sized, as a mask is.
     layer_pool: Vec<Pixmap>,
+    /// The opacity of each layer in effect past [`MAX_LAYER_DEPTH`], which
+    /// every element takes on its own.
+    fades: Vec<f32>,
     /// The builder of the next path. A finished path clears back into it, so
     /// the next path reuses its capacity.
     builder: PathBuilder,
@@ -81,6 +84,7 @@ impl PixmapRenderer {
             mask_pool: Vec::new(),
             layer_stack: Vec::new(),
             layer_pool: Vec::new(),
+            fades: Vec::new(),
             builder: PathBuilder::new(),
             images: Decoded::default(),
             background: SkColor::TRANSPARENT,
@@ -116,6 +120,12 @@ impl PixmapRenderer {
     /// The pixmap of the last render.
     pub fn into_pixmap(self) -> Pixmap {
         self.pixmap
+    }
+
+    /// The opacity that each element takes from the layers past
+    /// [`MAX_LAYER_DEPTH`].
+    fn fade(&self) -> f32 {
+        self.fades.iter().product()
     }
 }
 
@@ -238,7 +248,7 @@ impl Canvas for PixmapRenderer {
             return;
         };
         if do_fill && within_reach(&sk_path, self.base, 0.0) {
-            let paint = sk_paint(paint_to_shader(&style.fill));
+            let paint = sk_paint(paint_to_shader(&style.fill, self.fade()));
             self.pixmap.fill_path(
                 &sk_path,
                 &paint,
@@ -248,7 +258,7 @@ impl Canvas for PixmapRenderer {
             );
         }
         if do_stroke {
-            let paint = sk_paint(paint_to_shader(&style.stroke));
+            let paint = sk_paint(paint_to_shader(&style.stroke, self.fade()));
             // A Dash is even and not empty, holds no negative length, sums
             // above zero and is finite, which is all StrokeDash asks for, so
             // it never refuses. One that did would draw the stroke solid.
@@ -280,12 +290,21 @@ impl Canvas for PixmapRenderer {
             InEffect::Everything => None,
             InEffect::Through(mask) => Some(mask),
         };
-        render_text(node, &mut self.pixmap, mask, self.base, &mut self.builder);
+        let fade = self.fade();
+        render_text(
+            node,
+            &mut self.pixmap,
+            mask,
+            self.base,
+            fade,
+            &mut self.builder,
+        );
     }
 
     /// Draw the image of `bitmap`. An image that does not decode draws a
     /// gray box with a red cross in its place, so a missing image shows.
     fn draw_bitmap(&mut self, bitmap: &Bitmap) {
+        let fade = self.fade();
         let mask = match in_effect(&self.clip_stack) {
             InEffect::Nothing => return,
             InEffect::Everything => None,
@@ -299,6 +318,7 @@ impl Canvas for PixmapRenderer {
                 &mut self.builder,
                 square,
                 self.base.sx,
+                fade,
                 mask,
             );
             return;
@@ -317,6 +337,7 @@ impl Canvas for PixmapRenderer {
                     Sampling::Smooth => FilterQuality::Bilinear,
                     Sampling::Nearest => FilterQuality::Nearest,
                 },
+                opacity: fade,
                 ..PixmapPaint::default()
             };
             self.pixmap
@@ -339,11 +360,21 @@ impl Canvas for PixmapRenderer {
     }
 
     /// Past [`MAX_LAYER_DEPTH`] layers, a layer draws into the one below it
-    /// with no opacity of its own, so the memory stays bounded.
+    /// and each of its elements takes the opacity, so the memory stays
+    /// bounded. The elements differ from a group only where they overlap.
     fn with_layer<T>(&mut self, opacity: f32, inside: impl FnOnce(&mut Self) -> T) -> T {
-        let hidden = matches!(self.clip_stack.last(), Some(Clip::Hidden));
-        if hidden || self.layer_stack.len() >= MAX_LAYER_DEPTH {
+        if matches!(self.clip_stack.last(), Some(Clip::Hidden)) {
             return inside(self);
+        }
+        if self.layer_stack.len() >= MAX_LAYER_DEPTH {
+            self.fades.push(opacity);
+            let guard = RestoreOnDrop {
+                canvas: self,
+                restore: |c: &mut Self| {
+                    c.fades.pop();
+                },
+            };
+            return inside(&mut *guard.canvas);
         }
         let layer = self.take_layer();
         let under = std::mem::replace(&mut self.pixmap, layer);
@@ -559,12 +590,12 @@ fn sk_paint(shader: SkShader<'static>) -> SkPaint<'static> {
 /// first stop. Nothing that tiny-skia refuses arrives here today, because the
 /// scene removes each such case. The fallback keeps the path drawn if a later
 /// change lets one through.
-fn paint_to_shader(p: &Paint) -> SkShader<'static> {
+fn paint_to_shader(p: &Paint, fade: f32) -> SkShader<'static> {
     let g = match p {
-        Paint::Solid(c) => return SkShader::SolidColor(sk_color(*c)),
+        Paint::Solid(c) => return SkShader::SolidColor(sk_color(faded(*c, fade))),
         Paint::Gradient(g) => g,
     };
-    let stops = sk_stops(g.stops());
+    let stops = sk_stops(g.stops(), fade);
     let spread = sk_spread(g.spread());
     match g.geom() {
         GradientGeom::Linear { x0, y0, x1, y1 } => tiny_skia::LinearGradient::new(
@@ -587,17 +618,22 @@ fn paint_to_shader(p: &Paint) -> SkShader<'static> {
             )
         }
     }
-    .unwrap_or_else(|| SkShader::SolidColor(sk_color(p.primary_color())))
+    .unwrap_or_else(|| SkShader::SolidColor(sk_color(faded(p.primary_color(), fade))))
+}
+
+/// `c` with its alpha times `fade`.
+fn faded(c: Rgba, fade: f32) -> Rgba {
+    Rgba { a: c.a * fade, ..c }
 }
 
 fn sk_color(c: Rgba) -> SkColor {
     SkColor::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8)
 }
 
-fn sk_stops(stops: &[Stop]) -> Vec<SkStop> {
+fn sk_stops(stops: &[Stop], fade: f32) -> Vec<SkStop> {
     stops
         .iter()
-        .map(|s| SkStop::new(s.offset, sk_color(s.color)))
+        .map(|s| SkStop::new(s.offset, sk_color(faded(s.color, fade))))
         .collect()
 }
 
@@ -614,6 +650,7 @@ fn render_text(
     pixmap: &mut Pixmap,
     mask: Option<&Mask>,
     base: Transform,
+    fade: f32,
     builder: &mut PathBuilder,
 ) {
     let Some(layout) = TextLayout::new(&node.spec) else {
@@ -629,11 +666,11 @@ fn render_text(
     let paints = TextPaints {
         fill: node
             .draws_fill()
-            .then(|| text_paint(&node.fill, local))
+            .then(|| text_paint(&node.fill, local, fade))
             .flatten(),
         stroke: node
             .draws_stroke()
-            .then(|| text_paint(&node.stroke, local))
+            .then(|| text_paint(&node.stroke, local, fade))
             .flatten(),
         width: node.stroke_width,
     };
@@ -661,8 +698,8 @@ struct TextPaints {
 /// so a gradient takes the inverse of `local` to stay in canvas space.
 /// Returns `None` for a gradient under a `local` with no inverse, which
 /// squashes the text to a line.
-fn text_paint(paint: &Paint, local: Transform) -> Option<SkPaint<'static>> {
-    let mut shader = paint_to_shader(paint);
+fn text_paint(paint: &Paint, local: Transform, fade: f32) -> Option<SkPaint<'static>> {
+    let mut shader = paint_to_shader(paint, fade);
     if let Paint::Gradient(_) = paint {
         shader.transform(local.invert()?);
     }
@@ -712,6 +749,7 @@ fn draw_missing(
     builder: &mut PathBuilder,
     transform: Transform,
     width: f32,
+    fade: f32,
     mask: Option<&Mask>,
 ) {
     let unit = SkRect::from_xywh(-0.5, -0.5, 1.0, 1.0).expect("the unit square is a rect");
@@ -735,8 +773,8 @@ fn draw_missing(
     let Some(outline) = b.finish() else {
         return;
     };
-    let gray = sk_paint(SkShader::SolidColor(sk_color(MISSING_FILL)));
-    let red = sk_paint(SkShader::SolidColor(sk_color(MISSING_STROKE)));
+    let gray = sk_paint(SkShader::SolidColor(sk_color(faded(MISSING_FILL, fade))));
+    let red = sk_paint(SkShader::SolidColor(sk_color(faded(MISSING_STROKE, fade))));
     let stroke = Stroke {
         width,
         ..Stroke::default()
@@ -1114,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn a_layer_past_the_most_layers_draws_with_no_opacity_of_its_own() {
+    fn a_layer_past_the_most_layers_fades_its_elements() {
         fn nest(scene: &mut Scene, depth: usize) {
             if depth == 0 {
                 scene.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 10.0, 10.0));
@@ -1127,8 +1165,11 @@ mod tests {
             nest(&mut scene, depth);
             pixel_rgba(&render_to_pixmap(&scene, 1.0).expect("pixmap"), 5, 5).3
         };
-        assert!(alpha(MAX_LAYER_DEPTH) < alpha(MAX_LAYER_DEPTH - 1));
-        assert_eq!(alpha(MAX_LAYER_DEPTH + 2), alpha(MAX_LAYER_DEPTH));
+        for depth in 1..MAX_LAYER_DEPTH + 3 {
+            assert!(alpha(depth) < alpha(depth - 1), "{depth}");
+        }
+        // Six halves of 255.
+        assert_eq!(alpha(MAX_LAYER_DEPTH + 2), 4);
     }
 
     #[test]
