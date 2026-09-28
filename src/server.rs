@@ -30,7 +30,7 @@ use std::io;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use crate::asset::{AssetError, Cache, Footprint};
+use crate::asset::{Cache, Footprint, ImageError};
 use crate::event::{
     InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
     PadButton, PadEvent,
@@ -104,10 +104,12 @@ pub enum EngineError {
     NoHello,
     /// A hello came after the first one. The core drops it and goes on.
     SecondHello,
-    /// The asset `id` is not an image that a view decodes, is larger than
-    /// an image can be, or came for an id that names a live asset. The
-    /// core drops it and goes on.
-    Asset { id: u32, error: AssetError },
+    /// The asset `id` is not an image that a view decodes, or is larger
+    /// than an image can be. The core drops it and goes on.
+    Asset { id: u32, error: ImageError },
+    /// An asset came for an id that names a live asset. The core drops it
+    /// and goes on.
+    LiveId(u32),
     /// A forget came from the engine, which never sends one. The core drops
     /// it and goes on.
     Forget(u32),
@@ -152,6 +154,7 @@ impl std::fmt::Display for EngineError {
             EngineError::NoHello => f.write_str("the first message is not a hello"),
             EngineError::SecondHello => f.write_str("a hello came after the first one"),
             EngineError::Asset { id, error } => write!(f, "asset {id}: {error}"),
+            EngineError::LiveId(id) => write!(f, "asset {id}: the id already names a live asset"),
             EngineError::Forget(id) => write!(f, "a forget of {id} came from the engine"),
             EngineError::NoSeat(player) => {
                 write!(f, "a frame came for player {player}, who has no seat")
@@ -168,6 +171,7 @@ impl std::error::Error for EngineError {
             EngineError::Asset { error, .. } => Some(error),
             EngineError::NoHello
             | EngineError::SecondHello
+            | EngineError::LiveId(_)
             | EngineError::Forget(_)
             | EngineError::NoSeat(_) => None,
         }
@@ -538,12 +542,13 @@ impl ServerCore {
         bytes: usize,
         payload: Arc<[u8]>,
     ) -> Result<(), EngineError> {
-        let refused = |error| EngineError::Asset { id, error };
-        let footprint = Footprint::new(size, bytes).map_err(refused)?;
-        match self.cache.asset(id, footprint, payload) {
-            Ok(()) => {}
-            Err(AssetError::Full { .. }) => self.lose(id),
-            Err(error) => return Err(refused(error)),
+        let footprint =
+            Footprint::new(size, bytes).map_err(|error| EngineError::Asset { id, error })?;
+        if self.cache.contains(id) {
+            return Err(EngineError::LiveId(id));
+        }
+        if self.cache.asset(id, footprint, payload).is_err() {
+            self.lose(id);
         }
         Ok(())
     }
@@ -1351,16 +1356,13 @@ mod tests {
             [
                 EngineError::Asset {
                     id: 1,
-                    error: AssetError::TooManyPixels { .. }
+                    error: ImageError::TooManyPixels { .. }
                 },
                 EngineError::Asset {
                     id: 2,
-                    error: AssetError::Unsupported
+                    error: ImageError::Unsupported
                 },
-                EngineError::Asset {
-                    id: 3,
-                    error: AssetError::LiveId
-                },
+                EngineError::LiveId(3),
                 EngineError::Forget(3),
             ]
         ));

@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
-use crate::asset::{AssetError, fit_room};
+use crate::asset::{RoomFull, fit_room};
 use crate::event::InputEvent;
 use crate::scene::{Element, Image, Scene};
 use crate::wire;
@@ -105,7 +105,7 @@ impl std::error::Error for SessionError {
 pub enum FrameError {
     /// The images of the frame go over the limits of a room together, so
     /// the server would lose one of them each frame. Nothing went out.
-    Full(AssetError),
+    Full(RoomFull),
     /// A write failed. Part of the frame may have gone out.
     Io(io::Error),
 }
@@ -661,7 +661,7 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             session.write_frame(&mut out, None, &drawing(&images)),
-            Err(FrameError::Full(AssetError::Full { .. }))
+            Err(FrameError::Full(RoomFull { .. }))
         ));
         assert!(out.is_empty());
         assert_eq!(written(&mut session, &drawing(&images[..8])).len(), 9);

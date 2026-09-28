@@ -3,7 +3,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::asset::AssetError;
+use crate::asset::ImageError;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rgba {
@@ -592,7 +592,7 @@ impl Image {
     /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS).
     /// [`crate::asset::fit_image`] shrinks a larger one first. The size is
     /// the one after the EXIF orientation of a JPEG.
-    pub fn new(file: Vec<u8>) -> Result<Image, AssetError> {
+    pub fn new(file: Vec<u8>) -> Result<Image, ImageError> {
         let (width, height) = crate::asset::screen_size(&file)?;
         let hash = {
             let mut hasher = std::hash::DefaultHasher::new();

@@ -67,14 +67,12 @@ impl<T> Cache<T> {
         self.live.get(&id).map(|live| &live.value)
     }
 
-    /// Keep the asset `id` with `value` until the next frame. Returns
-    /// [`AssetError::LiveId`] if `id` is live, and [`AssetError::Full`] if
-    /// the asset does not fit beside the others that came after the last
-    /// frame, since no frame can draw them all. An error changes nothing.
-    pub fn asset(&mut self, id: u32, footprint: Footprint, value: T) -> Result<(), AssetError> {
-        if self.contains(id) {
-            return Err(AssetError::LiveId);
-        }
+    /// Keep the asset `id`, which is not live, with `value` until the next
+    /// frame. Returns an error if the asset does not fit beside the others
+    /// that came after the last frame, since no frame can draw them all. An
+    /// error changes nothing.
+    pub fn asset(&mut self, id: u32, footprint: Footprint, value: T) -> Result<(), RoomFull> {
+        assert!(!self.contains(id), "the asset {id} is live");
         self.new = self.new.with(footprint)?;
         self.live.insert(
             id,
@@ -136,17 +134,17 @@ pub struct Footprint {
 impl Footprint {
     /// The footprint of `blob`, or an error if it is not a PNG, a JPEG, a
     /// GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
-    pub fn of(blob: &[u8]) -> Result<Footprint, AssetError> {
+    pub fn of(blob: &[u8]) -> Result<Footprint, ImageError> {
         Footprint::new(image_size(blob), blob.len())
     }
 
     /// The footprint of a blob of `bytes` bytes whose header gives `size`,
     /// as [`image_size`] reads it.
-    pub fn new(size: Option<(u32, u32)>, bytes: usize) -> Result<Footprint, AssetError> {
-        let (width, height) = size.ok_or(AssetError::Unsupported)?;
+    pub fn new(size: Option<(u32, u32)>, bytes: usize) -> Result<Footprint, ImageError> {
+        let (width, height) = size.ok_or(ImageError::Unsupported)?;
         let pixels = u64::from(width) * u64::from(height);
         if pixels > MAX_IMAGE_PIXELS {
-            return Err(AssetError::TooManyPixels { width, height });
+            return Err(ImageError::TooManyPixels { width, height });
         }
         Ok(Footprint {
             pixels,
@@ -157,7 +155,7 @@ impl Footprint {
 
 /// Returns an error if `images` go over the limits of a room together,
 /// since the server would lose one of them each frame.
-pub(crate) fn fit_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Result<(), AssetError> {
+pub(crate) fn fit_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Result<(), RoomFull> {
     let mut load = Load::default();
     for image in images {
         load = load.with(Footprint {
@@ -178,13 +176,13 @@ struct Load {
 impl Load {
     /// The load with `asset` on top, or an error if that goes over
     /// [`MAX_LIVE_PIXELS`] or [`MAX_LIVE_BYTES`].
-    fn with(self, asset: Footprint) -> Result<Load, AssetError> {
+    fn with(self, asset: Footprint) -> Result<Load, RoomFull> {
         let load = self.plus(Load {
             pixels: asset.pixels,
             bytes: asset.bytes,
         });
         if !load.fits() {
-            return Err(AssetError::Full {
+            return Err(RoomFull {
                 pixels: load.pixels,
                 bytes: load.bytes,
             });
@@ -216,40 +214,50 @@ impl Load {
 
 /// Why an image cannot be an asset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AssetError {
+pub enum ImageError {
     /// The blob does not start as a PNG, a JPEG, a GIF or a WebP does,
     /// which are the formats that a view decodes.
     Unsupported,
     /// The image has more than [`MAX_IMAGE_PIXELS`].
     TooManyPixels { width: u32, height: u32 },
-    /// The images would hold these many pixels and bytes together, over
-    /// [`MAX_LIVE_PIXELS`] or [`MAX_LIVE_BYTES`].
-    Full { pixels: u64, bytes: u64 },
-    /// The id already names a live asset of the room.
-    LiveId,
 }
 
-impl fmt::Display for AssetError {
+impl fmt::Display for ImageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AssetError::Unsupported => {
+            ImageError::Unsupported => {
                 f.write_str("the image is not a PNG, a JPEG, a GIF or a WebP")
             }
-            AssetError::TooManyPixels { width, height } => write!(
+            ImageError::TooManyPixels { width, height } => write!(
                 f,
                 "the image of {width}x{height} has more than {MAX_IMAGE_PIXELS} pixels"
             ),
-            AssetError::Full { pixels, bytes } => write!(
-                f,
-                "the images of the room would take {pixels} pixels and {bytes} bytes, \
-                 over {MAX_LIVE_PIXELS} pixels or {MAX_LIVE_BYTES} bytes"
-            ),
-            AssetError::LiveId => f.write_str("the id already names a live asset"),
         }
     }
 }
 
-impl std::error::Error for AssetError {}
+impl std::error::Error for ImageError {}
+
+/// The images of a room would hold these many pixels and bytes together,
+/// over [`MAX_LIVE_PIXELS`] or [`MAX_LIVE_BYTES`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoomFull {
+    pub pixels: u64,
+    pub bytes: u64,
+}
+
+impl fmt::Display for RoomFull {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the images of the room would take {} pixels and {} bytes, \
+             over {MAX_LIVE_PIXELS} pixels or {MAX_LIVE_BYTES} bytes",
+            self.pixels, self.bytes
+        )
+    }
+}
+
+impl std::error::Error for RoomFull {}
 
 /// `file`, or a PNG of it shrunk to [`MAX_IMAGE_PIXELS`] with its ratio if
 /// it is larger, for [`Image::new`](crate::scene::Image::new). A front end
@@ -257,8 +265,8 @@ impl std::error::Error for AssetError {}
 /// `render`, up to [`MAX_SHRINK_PIXELS`], and is an error past that or
 /// without the feature. It is an error too if `file` is not a PNG, a JPEG,
 /// a GIF or a WebP.
-pub fn fit_image(file: Vec<u8>) -> Result<Vec<u8>, AssetError> {
-    let (width, height) = head(&file).ok_or(AssetError::Unsupported)?.size;
+pub fn fit_image(file: Vec<u8>) -> Result<Vec<u8>, ImageError> {
+    let (width, height) = head(&file).ok_or(ImageError::Unsupported)?.size;
     if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
         shrink(&file, width, height)
     } else {
@@ -269,11 +277,11 @@ pub fn fit_image(file: Vec<u8>) -> Result<Vec<u8>, AssetError> {
 /// The size on the screen of the image in `file`, after the EXIF
 /// orientation of a JPEG, or an error if it is not a PNG, a JPEG, a GIF or
 /// a WebP, or has more than [`MAX_IMAGE_PIXELS`].
-pub(crate) fn screen_size(file: &[u8]) -> Result<(u32, u32), AssetError> {
-    let head = head(file).ok_or(AssetError::Unsupported)?;
+pub(crate) fn screen_size(file: &[u8]) -> Result<(u32, u32), ImageError> {
+    let head = head(file).ok_or(ImageError::Unsupported)?;
     let (width, height) = head.size;
     if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-        return Err(AssetError::TooManyPixels { width, height });
+        return Err(ImageError::TooManyPixels { width, height });
     }
     Ok(if head.turned() {
         (height, width)
@@ -307,11 +315,11 @@ pub(crate) enum Embed {
 
 /// How a document takes the image in `blob`, or an error if it is not a
 /// PNG, a JPEG, a GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
-pub(crate) fn embed(blob: &[u8]) -> Result<Embed, AssetError> {
-    let head = head(blob).ok_or(AssetError::Unsupported)?;
+pub(crate) fn embed(blob: &[u8]) -> Result<Embed, ImageError> {
+    let head = head(blob).ok_or(ImageError::Unsupported)?;
     let (width, height) = head.size;
     if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-        return Err(AssetError::TooManyPixels { width, height });
+        return Err(ImageError::TooManyPixels { width, height });
     }
     Ok(match (head.format, head.jpeg_color) {
         (Format::Png, _) => Embed::Png,
@@ -589,10 +597,10 @@ pub(crate) fn decode(
 ) -> Result<tiny_skia::Pixmap, Box<dyn std::error::Error + Send + Sync>> {
     use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 
-    let head = head(blob).ok_or(AssetError::Unsupported)?;
+    let head = head(blob).ok_or(ImageError::Unsupported)?;
     let (width, height) = head.size;
     if u64::from(width) * u64::from(height) > max_pixels {
-        return Err(AssetError::TooManyPixels { width, height }.into());
+        return Err(ImageError::TooManyPixels { width, height }.into());
     }
     let format = match head.format {
         Format::Png => ImageFormat::Png,
@@ -650,17 +658,17 @@ struct Live<T> {
 /// [`MAX_IMAGE_PIXELS`] with its ratio, as a PNG, or an error if it has
 /// more than [`MAX_SHRINK_PIXELS`] or does not decode.
 #[cfg(feature = "render")]
-fn shrink(blob: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
+fn shrink(blob: &[u8], width: u32, height: u32) -> Result<Vec<u8>, ImageError> {
     if u64::from(width) * u64::from(height) > MAX_SHRINK_PIXELS {
-        return Err(AssetError::TooManyPixels { width, height });
+        return Err(ImageError::TooManyPixels { width, height });
     }
     shrink_to(blob, MAX_IMAGE_PIXELS)
 }
 
 /// Without the renderer, an image over the limit cannot shrink.
 #[cfg(not(feature = "render"))]
-fn shrink(_blob: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AssetError> {
-    Err(AssetError::TooManyPixels { width, height })
+fn shrink(_blob: &[u8], width: u32, height: u32) -> Result<Vec<u8>, ImageError> {
+    Err(ImageError::TooManyPixels { width, height })
 }
 
 /// The largest size with the ratio of `width` by `height` and at most
@@ -681,8 +689,8 @@ fn shrunk_size(width: u32, height: u32, pixels: u64) -> (u32, u32) {
 /// pixels, which a single scale of a large ratio would skip, and a last
 /// scale reaches the size.
 #[cfg(feature = "render")]
-fn shrink_to(blob: &[u8], pixels: u64) -> Result<Vec<u8>, AssetError> {
-    let mut image = decode(blob, MAX_SHRINK_PIXELS).map_err(|_| AssetError::Unsupported)?;
+fn shrink_to(blob: &[u8], pixels: u64) -> Result<Vec<u8>, ImageError> {
+    let mut image = decode(blob, MAX_SHRINK_PIXELS).map_err(|_| ImageError::Unsupported)?;
     let (width, height) = shrunk_size(image.width(), image.height(), pixels);
     while image.width() / 2 >= width && image.height() / 2 >= height {
         image = scaled(&image, image.width() / 2, image.height() / 2);
@@ -830,23 +838,12 @@ mod tests {
     }
 
     #[test]
-    fn an_asset_of_a_live_id_is_an_error_and_changes_nothing() {
-        let mut cache = Cache::new();
-        assert_eq!(cache.asset(1, largest(), 'a'), Ok(()));
-        assert_eq!(cache.asset(1, largest(), 'b'), Err(AssetError::LiveId));
-        assert_eq!(cache.get(1), Some(&'a'));
-    }
-
-    #[test]
     fn an_asset_that_does_not_fit_beside_the_new_ones_changes_nothing() {
         let mut cache = full();
         let small = Footprint::new(Some((10, 10)), 100).unwrap();
         let heavy = Footprint::new(Some((1, 1)), MAX_LIVE_BYTES as usize).unwrap();
         assert_eq!(cache.asset(8, heavy, ()), Ok(()));
-        assert!(matches!(
-            cache.asset(9, small, ()),
-            Err(AssetError::Full { .. })
-        ));
+        assert!(matches!(cache.asset(9, small, ()), Err(RoomFull { .. })));
         assert!(!cache.contains(9));
         assert_eq!(cache.frame(&ids(&[8])), [0, 1, 2, 3, 4, 5, 6, 7]);
         assert_eq!(cache.asset(9, small, ()), Ok(()));
@@ -887,12 +884,12 @@ mod tests {
         assert_eq!(embed(&jpeg_head_of(&[lossless])), decode);
         assert_eq!(
             embed(&png_head(4096, 4096)),
-            Err(AssetError::TooManyPixels {
+            Err(ImageError::TooManyPixels {
                 width: 4096,
                 height: 4096
             })
         );
-        assert_eq!(embed(b"not an image"), Err(AssetError::Unsupported));
+        assert_eq!(embed(b"not an image"), Err(ImageError::Unsupported));
     }
 
     #[test]
@@ -932,24 +929,24 @@ mod tests {
     fn an_image_over_the_limit_or_of_no_format_is_an_error() {
         assert!(matches!(
             Image::new(png_head(2049, 2048)),
-            Err(AssetError::TooManyPixels { .. })
+            Err(ImageError::TooManyPixels { .. })
         ));
         assert!(matches!(
             Image::new(b"GIF89a".to_vec()),
-            Err(AssetError::Unsupported)
+            Err(ImageError::Unsupported)
         ));
     }
 
     #[test]
     fn fit_image_keeps_an_image_under_the_limit() {
         assert_eq!(fit_image(png_head(2, 3)), Ok(png_head(2, 3)));
-        assert_eq!(fit_image(b"GIF".to_vec()), Err(AssetError::Unsupported));
+        assert_eq!(fit_image(b"GIF".to_vec()), Err(ImageError::Unsupported));
         // The header of a large image, with no pixels to shrink.
         let large = fit_image(png_head(2049, 2048));
         if cfg!(feature = "render") {
-            assert_eq!(large, Err(AssetError::Unsupported));
+            assert_eq!(large, Err(ImageError::Unsupported));
         } else {
-            assert!(matches!(large, Err(AssetError::TooManyPixels { .. })));
+            assert!(matches!(large, Err(ImageError::TooManyPixels { .. })));
         }
     }
 
@@ -1144,14 +1141,14 @@ mod tests {
         );
         assert_eq!(
             Footprint::of(&png_head(2049, 2048)),
-            Err(AssetError::TooManyPixels {
+            Err(ImageError::TooManyPixels {
                 width: 2049,
                 height: 2048
             })
         );
         // A product of two large sides does not wrap.
         assert!(Footprint::of(&png_head(u32::MAX, u32::MAX)).is_err());
-        assert_eq!(Footprint::of(b"GIF89a"), Err(AssetError::Unsupported));
+        assert_eq!(Footprint::of(b"GIF89a"), Err(ImageError::Unsupported));
     }
 
     #[test]
@@ -1162,7 +1159,7 @@ mod tests {
             load = load.with(largest).unwrap();
         }
         let one = Footprint::new(Some((1, 1)), 1).unwrap();
-        assert!(matches!(load.with(one), Err(AssetError::Full { .. })));
+        assert!(matches!(load.with(one), Err(RoomFull { .. })));
         assert_eq!(
             load.without(largest).with(one).unwrap().without(one),
             load.without(largest)
@@ -1171,7 +1168,7 @@ mod tests {
         let load = Load::default().with(heavy).unwrap();
         assert_eq!(
             load.with(one),
-            Err(AssetError::Full {
+            Err(RoomFull {
                 pixels: 2,
                 bytes: MAX_LIVE_BYTES + 1
             })
