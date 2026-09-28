@@ -775,14 +775,23 @@ fn alpha_name(idx: usize) -> String {
     format!("Sa{idx}")
 }
 
-/// The fill and the stroke of one element, in one pass, or in two when one
-/// side draws under a soft mask, which would mask the other side too.
+/// The fill and the stroke of one element, in one pass, or in two when a
+/// side is translucent. One pass paints both as a knockout group, so the
+/// stroke would hide the fill under it instead of blending over it, as the
+/// other renderers do. A soft mask on one side would also mask the other.
 fn passes<'a>(
     fill: Option<&'a Paint>,
     stroke: Option<&'a Paint>,
 ) -> impl Iterator<Item = (Option<&'a Paint>, Option<&'a Paint>)> {
-    let masked = |p: Option<&Paint>| matches!(p, Some(Paint::Gradient(g)) if varying_alpha(g));
-    if fill.is_some() && stroke.is_some() && (masked(fill) || masked(stroke)) {
+    let translucent = |p: Option<&Paint>| match p {
+        Some(Paint::Solid(c)) => alpha_key(c.a) < alpha_key(1.0),
+        Some(Paint::Gradient(g)) => g
+            .stops()
+            .iter()
+            .any(|s| alpha_key(s.color.a) < alpha_key(1.0)),
+        None => false,
+    };
+    if fill.is_some() && stroke.is_some() && (translucent(fill) || translucent(stroke)) {
         [(fill, None), (None, stroke)].into_iter().take(2)
     } else {
         [(fill, stroke), (None, None)].into_iter().take(1)
@@ -1361,6 +1370,22 @@ mod tests {
             stroke: Paint::rgba(0, 0, 0, 1.0),
             stroke_width: 2.0,
             ..gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops))
+        };
+        scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
+        let s = pdf_text(&scene);
+        let lines: Vec<_> = s.lines().collect();
+        assert!(lines.contains(&"f") && lines.contains(&"S"), "{s}");
+        assert!(!lines.contains(&"B"), "{s}");
+    }
+
+    #[test]
+    fn a_translucent_fill_and_stroke_draw_apart() {
+        let mut scene = Scene::new(100.0, 40.0);
+        let style = PathStyle {
+            fill: Paint::rgba(255, 0, 0, 0.5),
+            stroke: Paint::rgba(0, 0, 255, 0.5),
+            stroke_width: 4.0,
+            ..PathStyle::default()
         };
         scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
         let s = pdf_text(&scene);
