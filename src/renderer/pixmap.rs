@@ -173,32 +173,29 @@ impl Decoded {
         self.draws += 1;
         if !self.images.contains_key(image) {
             let need = image.pixels();
-            let before = |u: &Use| u.last <= self.frame_start;
-            let may_go: u64 = self
+            let mut may_go: Vec<(u64, Image)> = self
                 .images
                 .iter()
-                .filter(|(_, u)| before(u))
-                .map(|(i, _)| i.pixels())
-                .sum();
+                .filter(|(_, u)| u.last <= self.frame_start)
+                .map(|(i, u)| (u.last, i.clone()))
+                .collect();
+            let room: u64 = may_go.iter().map(|(_, i)| i.pixels()).sum();
             let spilled = self.spill.take_if(|(spilled, _)| spilled == image);
             let pixmap = match spilled {
                 Some((_, pixmap)) => pixmap,
                 None => crate::asset::decode(image.file(), MAX_IMAGE_PIXELS).ok(),
             };
-            if self.pixels - may_go + need > MAX_LIVE_PIXELS {
+            if self.pixels - room + need > MAX_LIVE_PIXELS {
                 let (_, pixmap) = self.spill.insert((image.clone(), pixmap));
                 return pixmap.as_ref();
             }
-            while self.pixels + need > MAX_LIVE_PIXELS {
-                let oldest = self
-                    .images
-                    .iter()
-                    .filter(|(_, u)| before(u))
-                    .min_by_key(|(_, u)| u.last)
-                    .map(|(i, _)| i.clone())
-                    .expect("may_go makes room");
-                self.images.remove(&oldest);
-                self.pixels -= oldest.pixels();
+            may_go.sort_unstable_by_key(|(last, _)| *last);
+            for (_, old) in may_go {
+                if self.pixels + need <= MAX_LIVE_PIXELS {
+                    break;
+                }
+                self.images.remove(&old);
+                self.pixels -= old.pixels();
             }
             self.pixels += need;
             self.images.insert(image.clone(), Use { pixmap, last: 0 });
