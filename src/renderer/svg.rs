@@ -21,6 +21,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
+
 use crate::asset::{Embed, embed};
 use crate::outline::PathSink;
 use crate::renderer::{
@@ -121,7 +124,7 @@ fn data_url(image: &Image) -> Option<String> {
         Embed::Decode { mime } => as_png(file, mime)?,
     };
     let mut url = format!("data:{mime};base64,");
-    write_base64(&file, &mut url);
+    B64.encode_string(&file, &mut url);
     Some(url)
 }
 
@@ -532,36 +535,6 @@ fn write_missing(transform: [f32; 6], out: &mut String) {
     out.push_str("/>\n");
 }
 
-/// Appends `data` in base64 to `out`.
-fn write_base64(data: &[u8], out: &mut String) {
-    let digit = |n: u32| {
-        let v = (n & 63) as u8;
-        char::from(match v {
-            0..=25 => b'A' + v,
-            26..=51 => b'a' + v - 26,
-            52..=61 => b'0' + v - 52,
-            62 => b'+',
-            _ => b'/',
-        })
-    };
-    let (chunks, rest) = data.as_chunks::<3>();
-    for &[a, b, c] in chunks {
-        let n = u32::from_be_bytes([0, a, b, c]);
-        out.extend([18, 12, 6, 0].map(|shift| digit(n >> shift)));
-    }
-    match *rest {
-        [a] => {
-            let n = u32::from(a) << 16;
-            out.extend([digit(n >> 18), digit(n >> 12), '=', '=']);
-        }
-        [a, b] => {
-            let n = u32::from(a) << 16 | u32::from(b) << 8;
-            out.extend([digit(n >> 18), digit(n >> 12), digit(n >> 6), '=']);
-        }
-        _ => {}
-    }
-}
-
 fn write_list(values: &[f32], out: &mut String) {
     for (i, v) in values.iter().enumerate() {
         if i > 0 {
@@ -657,31 +630,6 @@ mod tests {
             image,
             transform: [10.0, 0.0, 0.0, 10.0, 10.0, 10.0],
             sampling,
-        }
-    }
-
-    #[test]
-    fn base64_pads_the_last_bytes() {
-        let digits: Vec<u8> = (0..16u32)
-            .flat_map(|i| {
-                let n = (4 * i) << 18 | (4 * i + 1) << 12 | (4 * i + 2) << 6 | (4 * i + 3);
-                [(n >> 16) as u8, (n >> 8) as u8, n as u8]
-            })
-            .collect();
-        let cases: [(&[u8], &str); 5] = [
-            (
-                &digits,
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
-            ),
-            (b"Man", "TWFu"),
-            (b"Ma", "TWE="),
-            (b"M", "TQ=="),
-            (b"", ""),
-        ];
-        for (data, want) in cases {
-            let mut out = String::new();
-            write_base64(data, &mut out);
-            assert_eq!(out, want);
         }
     }
 

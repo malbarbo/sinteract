@@ -25,7 +25,6 @@ terminal = [
     "render",
     "dep:crossterm",
     "dep:vtparse",
-    "dep:base64",
     "dep:libc",
     "dep:windows-sys",
 ]
@@ -34,6 +33,8 @@ window = ["render", "dep:winit", "dep:softbuffer", "dep:libc", "dep:objc2"]
 [dependencies]
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"], optional = true }
 kurbo = { version = "0.13", default-features = false, features = ["std"] }
+# The terminal sends a Kitty frame, and svg embeds an image, in base64.
+base64 = "0.22"
 # The bindings for the files in schema/ are generated offline and committed
 # in src/wire/*_capnp.rs, so the build does not need the capnp CLI.
 capnp = "0.25"
@@ -61,7 +62,6 @@ crossterm = { version = "0.29", optional = true, default-features = false, featu
 # Parses what the terminal sends, the replies to the probe in term_query and
 # the keys in vt_input.
 vtparse = { version = "0.6", optional = true }
-base64 = { version = "0.22", optional = true }
 winit = { version = "0.30", optional = true, default-features = false, features = [
     "x11",
     "wayland",
