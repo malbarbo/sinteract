@@ -615,6 +615,11 @@ impl Image {
         self.0.height
     }
 
+    /// The width by the height, which a limit of [`crate::asset`] counts.
+    pub(crate) fn pixels(&self) -> u64 {
+        u64::from(self.0.width) * u64::from(self.0.height)
+    }
+
     pub(crate) fn file(&self) -> &[u8] {
         &self.0.file
     }

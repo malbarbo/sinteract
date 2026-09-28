@@ -191,7 +191,7 @@ pub(crate) fn fit_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Resul
     let mut load = Footprint::NONE;
     for image in images {
         load = load.with(Footprint {
-            pixels: u64::from(image.width()) * u64::from(image.height()),
+            pixels: image.pixels(),
             bytes: image.file().len() as u64,
         })?;
     }

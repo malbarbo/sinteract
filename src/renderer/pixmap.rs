@@ -170,13 +170,13 @@ impl Decoded {
     fn get(&mut self, image: &Image) -> Option<&Pixmap> {
         self.draws += 1;
         if !self.images.contains_key(image) {
-            let need = pixels(image);
+            let need = image.pixels();
             let before = |u: &Use| u.last <= self.frame_start;
             let may_go: u64 = self
                 .images
                 .iter()
                 .filter(|(_, u)| before(u))
-                .map(|(i, _)| pixels(i))
+                .map(|(i, _)| i.pixels())
                 .sum();
             let pixmap = crate::asset::decode(image.file(), MAX_IMAGE_PIXELS).ok();
             if self.pixels - may_go + need > MAX_LIVE_PIXELS {
@@ -192,7 +192,7 @@ impl Decoded {
                     .map(|(i, _)| i.clone())
                     .expect("may_go makes room");
                 self.images.remove(&oldest);
-                self.pixels -= pixels(&oldest);
+                self.pixels -= oldest.pixels();
             }
             self.pixels += need;
             self.images.insert(image.clone(), Use { pixmap, last: 0 });
@@ -201,10 +201,6 @@ impl Decoded {
         used.last = self.draws;
         used.pixmap.as_ref()
     }
-}
-
-fn pixels(image: &Image) -> u64 {
-    u64::from(image.width()) * u64::from(image.height())
 }
 
 impl Canvas for PixmapRenderer {
@@ -1069,7 +1065,7 @@ mod tests {
         assert!(decoded.images.contains_key(&image(0)));
         assert!(!decoded.images.contains_key(&image(1)));
         assert_eq!(decoded.images.len(), 8);
-        let pixels: u64 = decoded.images.keys().map(pixels).sum();
+        let pixels: u64 = decoded.images.keys().map(Image::pixels).sum();
         assert_eq!(decoded.pixels, pixels);
     }
 
