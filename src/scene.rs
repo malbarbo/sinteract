@@ -765,13 +765,11 @@ impl Segment {
         }
     }
 
-    /// The coordinates in wire order. Only the first [`SegmentKind::coords`]
-    /// slots mean anything. A fixed array spares the encoder an allocation
-    /// per segment.
-    pub(crate) fn wire_coords(self) -> [f32; 6] {
+    /// Call `f` with the coordinates in wire order.
+    pub(crate) fn with_coords<R>(self, f: impl FnOnce(&[f32]) -> R) -> R {
         match self {
-            Self::Move { x, y } | Self::Line { x, y } => [x, y, 0.0, 0.0, 0.0, 0.0],
-            Self::Quad { cx, cy, x, y } => [cx, cy, x, y, 0.0, 0.0],
+            Self::Move { x, y } | Self::Line { x, y } => f(&[x, y]),
+            Self::Quad { cx, cy, x, y } => f(&[cx, cy, x, y]),
             Self::Cubic {
                 c1x,
                 c1y,
@@ -779,13 +777,13 @@ impl Segment {
                 c2y,
                 x,
                 y,
-            } => [c1x, c1y, c2x, c2y, x, y],
+            } => f(&[c1x, c1y, c2x, c2y, x, y]),
         }
     }
 
     /// Returns `true` if every coordinate is finite, `false` otherwise.
     pub(crate) fn is_finite(self) -> bool {
-        all_finite(&self.wire_coords())
+        self.with_coords(all_finite)
     }
 }
 
