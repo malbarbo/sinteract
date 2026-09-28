@@ -593,17 +593,12 @@ impl ServerCore {
             .iter()
             .filter_map(|id| Some((*id, self.cache.get(*id)?.clone())))
             .collect();
-        for gone in self.cache.frame(ids) {
-            self.lose(gone);
-        }
+        let gone = self.cache.frame(ids);
         let shot = Shot {
             frame: payload,
             assets: Arc::new(assets),
         };
-        for (_, seat) in self
-            .phase
-            .seats()
-            .expect("a frame before the start returned above")
+        for (_, seat) in seats
             .iter_mut()
             .filter(|(p, _)| player.is_none_or(|player| **p == player))
         {
@@ -611,6 +606,9 @@ impl ServerCore {
             if let Some(view) = &mut seat.view {
                 view.frame_sent = false;
             }
+        }
+        for id in gone {
+            self.lose(id);
         }
         Ok(())
     }
