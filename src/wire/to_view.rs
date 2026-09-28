@@ -11,7 +11,7 @@
 //! frame, and a view reads them back with a [`Reader`].
 
 use std::collections::{BTreeSet, HashMap};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::num::NonZeroU32;
 
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
@@ -22,8 +22,12 @@ use crate::scene::{Image, Scene};
 
 use super::Error;
 use super::framing::{Side, write_framed};
-use super::protocol::{ReadError, decode_root, read_next};
+use super::protocol::decode_root;
+#[cfg(test)]
+use super::protocol::read_next;
 use super::scene::{read_bitmap_ids, read_scene, write_scene};
+#[cfg(test)]
+use std::io::Read;
 
 /// The images of the assets that a view keeps, which the frames draw.
 #[derive(Debug, Default)]
@@ -67,12 +71,6 @@ impl Reader {
                 engine_message::Hello(_) | engine_message::TickTaken(()) => Ok(None),
             }
         })
-    }
-
-    /// Read the messages of the engine from `r`, as [`Reader::read`] does,
-    /// up to the next frame. Returns `None` at the end of the stream.
-    pub fn read_frame(&mut self, r: &mut impl Read) -> Result<Option<Scene>, ReadError> {
-        read_next(r, Side::Engine, |payload| self.read(payload))
     }
 }
 
@@ -160,7 +158,7 @@ impl PlayerRange {
 /// Read the next message of the engine, as [`decode`] does. Returns
 /// `None` at the end of the stream.
 #[cfg(test)]
-pub(crate) fn read(r: &mut impl Read) -> Result<Option<Message>, ReadError> {
+pub(crate) fn read(r: &mut impl Read) -> Result<Option<Message>, Error> {
     read_next(r, Side::Engine, decode)
 }
 

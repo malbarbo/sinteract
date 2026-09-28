@@ -31,8 +31,6 @@ pub mod to_view;
 
 use capnp::message::{self, ReaderOptions, ReaderSegments};
 
-pub use protocol::ReadError;
-
 /// Serialize a finished builder. `write_message` into a `Vec` cannot fail.
 pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAllocator>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(256);
@@ -389,7 +387,7 @@ mod tests {
         matches!(to_engine::decode(bytes), Ok(None))
     }
 
-    fn read_server(r: &mut &[u8]) -> Result<Option<to_engine::Message>, ReadError> {
+    fn read_server(r: &mut &[u8]) -> Result<Option<to_engine::Message>, Error> {
         protocol::read_next(r, framing::Side::Server, to_engine::decode)
     }
 
@@ -819,10 +817,7 @@ mod tests {
         stream.extend_from_slice(&payload);
         to_engine::write_tick(&mut stream).unwrap();
         let mut r = &stream[..];
-        assert!(matches!(
-            read_server(&mut r),
-            Err(ReadError::Payload(Error::NoPlayer))
-        ));
+        assert!(matches!(read_server(&mut r), Err(Error::NoPlayer)));
         assert!(matches!(
             read_server(&mut r),
             Ok(Some(to_engine::Message::Tick))
