@@ -98,13 +98,17 @@ impl<T> Cache<T> {
         self.frames += 1;
         let mut load = self.load.plus(self.new);
         self.new = Footprint::NONE;
+        let mut dropped = Vec::new();
+        if load.fits() {
+            self.load = load;
+            return dropped;
+        }
         let mut may_go: Vec<(bool, u64, u32)> = self
             .live
             .iter()
             .map(|(&id, live)| (ids.contains(&id), live.used, id))
             .collect();
         may_go.sort_unstable();
-        let mut dropped = Vec::new();
         for (_, _, id) in may_go {
             if load.fits() {
                 break;
