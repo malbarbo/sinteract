@@ -27,6 +27,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle, MaskType};
 use pdf_writer::writers::{ColorSpace, Resources};
@@ -70,10 +71,10 @@ pub struct PdfRenderer {
     forms: Vec<Vec<u8>>,
     /// Each image of the frame, ready for the PDF, and `None` for one that
     /// does not decode.
-    prepared: HashMap<Image, Option<XImage>>,
+    prepared: HashMap<Image, Option<Arc<XImage>>>,
     /// Each image of the frame with a sampling that a bitmap draws it with.
     /// The index of an image is its `/Imn` name.
-    images: Vec<(Image, Sampling)>,
+    images: Vec<(Arc<XImage>, Sampling)>,
     /// The document of the last render.
     bytes: Vec<u8>,
 }
@@ -222,16 +223,17 @@ impl Canvas<Infallible> for PdfRenderer {
         let prepared = self
             .prepared
             .entry(image.clone())
-            .or_insert_with(|| XImage::of(image));
-        if prepared.is_none() {
+            .or_insert_with(|| XImage::of(image).map(Arc::new));
+        let Some(prepared) = prepared else {
             self.draw_missing(bitmap.transform);
             return;
-        }
-        let key = (image, bitmap.sampling);
-        let idx = match self.images.iter().position(|(i, s)| (i, *s) == key) {
+        };
+        let listed =
+            |(x, s): &(Arc<XImage>, Sampling)| Arc::ptr_eq(x, prepared) && *s == bitmap.sampling;
+        let idx = match self.images.iter().position(listed) {
             Some(idx) => idx,
             None => {
-                self.images.push((image.clone(), bitmap.sampling));
+                self.images.push((Arc::clone(prepared), bitmap.sampling));
                 self.images.len() - 1
             }
         };
@@ -490,7 +492,6 @@ impl PdfRenderer {
         let gstates = &self.gstates;
         let gradients = &self.gradients;
         let forms = &self.forms;
-        let prepared = &self.prepared;
         let images = &self.images;
         // An empty content holds no buffer until the next render opens one.
         let buf = std::mem::replace(&mut self.content, Content::with_capacity(0)).finish();
@@ -546,12 +547,8 @@ impl PdfRenderer {
         let images: Vec<(&XImage, Sampling, Ref, Option<Ref>)> = images
             .iter()
             .map(|(image, sampling)| {
-                let image = prepared
-                    .get(image)
-                    .and_then(Option::as_ref)
-                    .expect("a bitmap lists only an image that decodes");
                 let alpha = matches!(image.samples, Samples::Deflated { alpha: Some(_), .. });
-                (image, *sampling, alloc(), alpha.then(&mut alloc))
+                (&**image, *sampling, alloc(), alpha.then(&mut alloc))
             })
             .collect();
 
