@@ -503,8 +503,8 @@ impl Default for Text {
 #[derive(Clone, Debug)]
 pub struct TextSpec {
     pub size: f32,
-    /// A `Box<str>` saves 8 bytes over a `String`, which keeps [`Element`]
-    /// the size of its `Path` variant.
+    /// A `Box<str>` saves 8 bytes over a `String`, and [`Text`] is the
+    /// largest variant of [`Element`].
     pub family: Box<str>,
     pub weight: u16,
     pub style: FontStyle,
