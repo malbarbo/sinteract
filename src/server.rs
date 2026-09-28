@@ -547,6 +547,7 @@ impl ServerCore {
         player: Option<NonZeroU32>,
         payload: Arc<[u8]>,
     ) -> Result<(), wire::Error> {
+        let ids = to_view::bitmap_ids(&payload)?;
         let seats = match player {
             None => self.seats.len(),
             Some(player) => usize::from(self.seats.contains_key(&player)),
@@ -554,7 +555,6 @@ impl ServerCore {
         if seats == 0 {
             return Ok(());
         }
-        let ids = to_view::bitmap_ids(&payload)?;
         let assets: Assets = ids
             .iter()
             .filter_map(|id| Some((*id, self.cache.get(*id)?.clone())))
@@ -1354,6 +1354,21 @@ mod tests {
             ]
         ));
         assert!(!room.core.is_over());
+    }
+
+    #[test]
+    fn a_frame_with_a_damaged_scene_is_an_error_before_the_start_too() {
+        let mut core = ServerCore::new();
+        assert!(core.from_engine(&hello(1, 1)).is_empty());
+        // Cut the segment after the root, the message and the frame, so the
+        // pointer of the scene points out of it.
+        let mut payload = frame(0, 1.0)[framing::HEADER_BYTES..].to_vec();
+        payload[4..8].copy_from_slice(&5u32.to_le_bytes());
+        payload.truncate(8 + 5 * 8);
+        let mut stream = framing::header(Side::Engine, payload.len() as u32).to_vec();
+        stream.extend_from_slice(&payload);
+        let errors = core.from_engine(&stream);
+        assert!(matches!(errors[..], [EngineError::Payload(_)]));
     }
 
     #[test]
