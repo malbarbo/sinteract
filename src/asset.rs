@@ -1,6 +1,6 @@
 //! The limits of the images of a room. [`fit_image`] shrinks an image to
-//! the limit of one image, and [`Cache`] keeps the live assets of a room
-//! under the limits, in the server.
+//! the limit of one image, and the server keeps the live assets of a room
+//! under the limits.
 //!
 //! A limit counts the pixels, since each view decodes an asset to four
 //! bytes a pixel, and a small file can hold a large image. It also counts
@@ -37,7 +37,7 @@ pub const MAX_LIVE_BYTES: u64 = 48 << 20;
 /// does not tell the players apart, since the views of a room mostly draw
 /// the same images. Each asset keeps a `T`, such as its message.
 #[derive(Debug)]
-pub struct Cache<T> {
+pub(crate) struct Cache<T> {
     live: BTreeMap<u32, Live<T>>,
     /// The load of the assets up to the last frame, under the limits.
     load: Footprint,
