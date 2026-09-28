@@ -61,8 +61,8 @@ pub struct PdfRenderer {
     /// The gradients of the frame. The index of a gradient is its `/Pn` name
     /// in the content stream and in the pattern dictionary.
     gradients: Vec<Shading>,
-    /// The content under each layer in effect, with the opacity that the
-    /// layer draws onto it with. `content` is the top layer.
+    /// The content under each layer in effect, with the opacity of the layer.
+    /// `content` is the top layer.
     layer_stack: Vec<(Content, f32)>,
     /// The content of each layer of the frame, as a form XObject. The index
     /// of a layer is its `/Fmn` name.

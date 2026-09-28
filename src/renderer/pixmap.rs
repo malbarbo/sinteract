@@ -54,8 +54,8 @@ pub struct PixmapRenderer {
     /// Masks popped off `clip_stack`, for the next push. Every mask is
     /// canvas-sized, so any one fits.
     mask_pool: Vec<Mask>,
-    /// The pixmap under each layer in effect, with the opacity that the
-    /// layer draws onto it with. `pixmap` is the top layer.
+    /// The pixmap under each layer in effect, with the opacity of the layer.
+    /// `pixmap` is the top layer.
     layer_stack: Vec<(Pixmap, f32)>,
     /// Layers drawn and popped off, for the next layer. Every layer is
     /// canvas-sized, as a mask is.
