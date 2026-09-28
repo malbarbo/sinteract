@@ -22,8 +22,7 @@ use super::framing::{Side, write_framed};
 use super::protocol::{ReadError, decode_root, read_next};
 use super::scene::{read_bitmap_ids, read_scene, write_scene};
 
-/// One message of the engine, one variant per arm of `EngineMessage`. An
-/// asset goes to every player.
+/// One message of the engine, one variant per arm of `EngineMessage`.
 #[derive(Clone, Debug)]
 pub enum Message {
     Asset {
