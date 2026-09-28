@@ -576,6 +576,7 @@ fn all_finite(values: &[f32]) -> bool {
 pub struct Bitmap {
     pub id: u32,
     pub transform: [f32; 6],
+    pub sampling: Sampling,
 }
 
 impl Default for Bitmap {
@@ -583,6 +584,7 @@ impl Default for Bitmap {
         Self {
             id: 0,
             transform: translate(0.0, 0.0),
+            sampling: Sampling::Smooth,
         }
     }
 }
@@ -593,6 +595,7 @@ impl Bitmap {
         Self {
             id,
             transform: rect.affine(1.0, 1.0),
+            sampling: Sampling::Smooth,
         }
     }
 
@@ -601,6 +604,17 @@ impl Bitmap {
     pub(crate) fn is_finite(&self) -> bool {
         all_finite(&self.transform)
     }
+}
+
+/// How a [`Bitmap`] reads its image between pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Sampling {
+    /// Blends the pixels around the point, so a scaled image looks smooth.
+    #[default]
+    Smooth = 0,
+    /// Takes the nearest pixel, so a scaled image keeps hard pixel edges.
+    Nearest = 1,
 }
 
 /// The verb byte of a [`Segment`] on the wire. Only the codec uses it. The

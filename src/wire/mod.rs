@@ -272,8 +272,8 @@ mod tests {
     use crate::protocol_capnp::{engine_message, server_message, view_message};
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, LineCap, LineJoin, Paint, Path,
-        PathStyle, Rgba, RotatedRect, Scene, Segment, SegmentKind, SpreadMode, Stop, Text,
-        TextSpec,
+        PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment, SegmentKind, SpreadMode, Stop,
+        Text, TextSpec,
     };
     use crate::scene_capnp::element;
     use capnp::message::Builder as MessageBuilder;
@@ -1280,6 +1280,32 @@ mod tests {
     }
 
     #[test]
+    fn a_bitmap_keeps_its_sampling_and_an_unknown_sampling_draws_smooth() {
+        let mut scene = Scene::new(10.0, 10.0);
+        for _ in 0..2 {
+            scene.add_bitmap(Bitmap {
+                sampling: Sampling::Nearest,
+                ..Bitmap::default()
+            });
+        }
+        // The sampling is the u16 at byte 28 of the data of a Bitmap.
+        let bytes = with_unknown_engine_value(&encode_frame(&scene), |m| {
+            let element::Which::Bitmap(b) = element_at(m, 1) else {
+                panic!("expected Bitmap");
+            };
+            tag_of(b.unwrap()).wrapping_add(28)
+        });
+        let Message::Frame { scene: d, .. } = decode(&bytes).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Bitmap(kept), Element::Bitmap(newer)] = d.elements() else {
+            panic!("expected two Bitmaps, got {:?}", d.elements());
+        };
+        assert_eq!(kept.sampling, Sampling::Nearest);
+        assert_eq!(newer.sampling, Sampling::Smooth);
+    }
+
+    #[test]
     fn a_paint_of_an_unknown_arm_draws_its_fallback_color() {
         // The writer of a newer schema sets the fallback, which this crate
         // never writes, so the path is built by hand.
@@ -1743,6 +1769,7 @@ mod tests {
         scene.add_bitmap(Bitmap {
             id: 1,
             transform: [1.0, 0.0, 0.0, 1.0, mark, 0.0],
+            ..Bitmap::default()
         });
         scene.add_path(
             Path::builder(PathStyle::default(), 9.0, 9.0)

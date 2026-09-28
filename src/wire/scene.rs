@@ -8,14 +8,15 @@ use std::collections::BTreeSet;
 
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, LineCap,
-    LineJoin, Paint, Path, PathStyle, Rgba, Scene, Segment, SegmentKind, Segments, SpreadMode,
-    Stop, Text, TextSpec, end_segments, push_segment,
+    LineJoin, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind, Segments,
+    SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
-    SpreadMode as WSpreadMode, bitmap, clip_path as wire_clip_path, clipped as wire_clipped,
-    element, paint as wire_paint, path as wire_path, path_style as wire_path_style,
-    rgba as wire_rgba, scene as wire_scene, stop as wire_stop, text_node,
+    Sampling as WSampling, SpreadMode as WSpreadMode, bitmap, clip_path as wire_clip_path,
+    clipped as wire_clipped, element, paint as wire_paint, path as wire_path,
+    path_style as wire_path_style, rgba as wire_rgba, scene as wire_scene, stop as wire_stop,
+    text_node,
 };
 
 use super::{Error, ValueError, finish, skip_unusable};
@@ -306,6 +307,10 @@ fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap) {
     b.set_m3(n.transform[3]);
     b.set_m4(n.transform[4]);
     b.set_m5(n.transform[5]);
+    b.set_sampling(match n.sampling {
+        Sampling::Smooth => WSampling::Smooth,
+        Sampling::Nearest => WSampling::Nearest,
+    });
 }
 
 pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ValueError> {
@@ -319,6 +324,11 @@ pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ValueError> {
             r.get_m4(),
             r.get_m5(),
         ],
+        // A sampling from a newer schema is a hint, so it draws smooth.
+        sampling: match r.get_sampling() {
+            Ok(WSampling::Nearest) => Sampling::Nearest,
+            Ok(WSampling::Smooth) | Err(_) => Sampling::Smooth,
+        },
     };
     finite(bitmap.is_finite())?;
     Ok(bitmap)

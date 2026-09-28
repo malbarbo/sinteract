@@ -30,7 +30,7 @@ use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
 use sinteract::renderer::svg::render_to_svg;
 use sinteract::scene::{
     Bitmap, ClipPath, DEFAULT_MITER_LIMIT, Dash, FillRule, FontStyle, LineCap, LineJoin, Paint,
-    Path, PathStyle, Rgba, RotatedRect, Scene, SpreadMode, Stop, Text, TextSpec,
+    Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, Text, TextSpec,
 };
 
 /// Draws a cell into the box at `(x, y)`, at the time `t` in seconds.
@@ -742,7 +742,11 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
 
 fn bitmaps(s: &mut Scene, x: f32, y: f32, t: f32) {
     s.add_bitmap(badge(x + 40.0, y + 20.0, 1.2, 0.0));
-    s.add_bitmap(badge(x + 130.0, y + 60.0, 2.5, 20.0 + t * 45.0));
+    // The nearest sampling keeps the pixels of the enlarged badge hard.
+    s.add_bitmap(Bitmap {
+        sampling: Sampling::Nearest,
+        ..badge(x + 130.0, y + 60.0, 2.5, 20.0 + t * 45.0)
+    });
     // A negative width mirrors the image, and a negative height flips it.
     let (w, h) = (BADGE_SIZE.0 as f32 * 1.2, BADGE_SIZE.1 as f32 * 1.2);
     let mirrored = RotatedRect {

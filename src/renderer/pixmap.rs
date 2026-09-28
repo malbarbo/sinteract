@@ -17,8 +17,8 @@ use crate::renderer::{
     AllocError, AssetError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, SpreadMode,
-    Stop, Text,
+    Bitmap, ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Sampling,
+    SpreadMode, Stop, Text,
 };
 use crate::text::TextLayout;
 
@@ -256,7 +256,10 @@ impl Canvas for PixmapRenderer {
             .is_some_and(|rect| rect_within_reach(rect, transform));
         if reach {
             let paint = PixmapPaint {
-                quality: FilterQuality::Bilinear,
+                quality: match bitmap.sampling {
+                    Sampling::Smooth => FilterQuality::Bilinear,
+                    Sampling::Nearest => FilterQuality::Nearest,
+                },
                 ..PixmapPaint::default()
             };
             self.pixmap
@@ -795,6 +798,23 @@ mod tests {
     }
 
     #[test]
+    fn a_nearest_bitmap_keeps_the_edge_between_its_pixels_hard() {
+        let smooth = draw_red_blue_png_with(Bitmap::fit(1, WHOLE_CANVAS));
+        let nearest = draw_red_blue_png_with(Bitmap {
+            sampling: Sampling::Nearest,
+            ..Bitmap::fit(1, WHOLE_CANVAS)
+        });
+        // The pixels next to the middle blend red and blue unless the
+        // sampling is nearest.
+        for x in [9, 10] {
+            let (r, _, b, _) = pixel_rgba(&smooth, x, 5);
+            assert!(r > 0 && b > 0, "{x}: {r} {b}");
+        }
+        assert_eq!(pixel_rgba(&nearest, 9, 5), (255, 0, 0, 255));
+        assert_eq!(pixel_rgba(&nearest, 10, 5), (0, 0, 255, 255));
+    }
+
+    #[test]
     fn a_bitmap_with_no_image_draws_a_gray_box_with_a_red_cross() {
         let pm = draw_red_blue_png(2);
         assert_eq!(pixel_rgba(&pm, 3, 5), (200, 200, 200, 255));
@@ -823,9 +843,24 @@ mod tests {
         assert!(assets.images.is_empty());
     }
 
+    /// The whole canvas of [`draw_red_blue_png_with`].
+    const WHOLE_CANVAS: RotatedRect = RotatedRect {
+        cx: 10.0,
+        cy: 5.0,
+        w: 20.0,
+        h: 10.0,
+        angle_deg: 0.0,
+    };
+
     /// Keep a PNG of two pixels, red on the left and blue on the right, as
     /// id 1, and draw the bitmap of `id` over a canvas of 20x10.
     fn draw_red_blue_png(id: u32) -> Pixmap {
+        draw_red_blue_png_with(Bitmap::fit(id, WHOLE_CANVAS))
+    }
+
+    /// Keep the PNG of [`draw_red_blue_png`] as id 1, and draw `bitmap` over
+    /// a canvas of 20x10.
+    fn draw_red_blue_png_with(bitmap: Bitmap) -> Pixmap {
         let mut png = Pixmap::new(2, 1).expect("alloc");
         png.pixels_mut().copy_from_slice(&[
             tiny_skia::ColorU8::from_rgba(255, 0, 0, 255).premultiply(),
@@ -835,14 +870,7 @@ mod tests {
         r.assets_mut()
             .insert(1, &png.encode_png().expect("encode"))
             .expect("a PNG decodes");
-        let rect = RotatedRect {
-            cx: 10.0,
-            cy: 5.0,
-            w: 20.0,
-            h: 10.0,
-            angle_deg: 0.0,
-        };
-        r.draw_bitmap(&Bitmap::fit(id, rect));
+        r.draw_bitmap(&bitmap);
         r.into_pixmap()
     }
 

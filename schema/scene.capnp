@@ -11,7 +11,8 @@
 # A reader skips an element whose arm it does not know, and an element that
 # holds a value it does not know, such as a paint arm, an enum value or a
 # verb byte, and draws the rest. A clip that holds one is skipped with all it
-# holds. A paint of an arm it does not know draws its fallback color, when
+# holds. A hint, such as a sampling, is the exception, and a value it does
+# not know takes the default. A paint of an arm it does not know draws its fallback color, when
 # the writer set one, instead. Damage, such as a bad pointer or verbs that
 # disagree with their coords, makes the whole scene unusable.
 #
@@ -151,13 +152,20 @@ struct ClipPath {
 # TextNode. The producer puts the size, the rotation and the mirroring into
 # it (see sinteract::scene::Bitmap::fit).
 struct Bitmap {
-    id @0 :UInt32;
-    m0 @1 :Float32;
-    m1 @2 :Float32;
-    m2 @3 :Float32;
-    m3 @4 :Float32;
-    m4 @5 :Float32;
-    m5 @6 :Float32;
+    id       @0 :UInt32;
+    m0       @1 :Float32;
+    m1       @2 :Float32;
+    m2       @3 :Float32;
+    m3       @4 :Float32;
+    m4       @5 :Float32;
+    m5       @6 :Float32;
+    # A hint, so a reader draws a sampling it does not know as smooth.
+    sampling @7 :Sampling;
+}
+
+enum Sampling {
+    smooth  @0;
+    nearest @1;
 }
 
 # A glyph is drawn in text space, with `size` units to the em and the origin

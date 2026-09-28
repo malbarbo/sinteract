@@ -73,11 +73,13 @@ change is more than one, and it becomes more than one commit.
   appending fields with defaults. Never reorder or renumber, and let a
   union only grow. A reader skips an element, an event or a message of an
   arm it does not know, and an element or an event that holds a value it
-  does not know, such as an enum value or a verb byte. A paint of an arm it
-  does not know draws its fallback color, so a writer of a new paint arm
-  sets `fallback` and `hasFallback`. Damage is still an error. A reader
-  walks a message once. The traversal limit is the size of the message,
-  so a second walk opens the message again.
+  does not know, such as an enum value or a verb byte. A hint, such as the
+  sampling of a bitmap, is the exception, and a value it does not know
+  takes the default. A paint of an arm it does not know draws its fallback
+  color, so a writer of a new paint arm sets `fallback` and `hasFallback`.
+  Damage is still an error. A reader walks a message once. The traversal
+  limit is the size of the message, so a second walk opens the message
+  again.
 - `src/wire/*_capnp.rs` are generated and committed, so the build does not
   need the `capnp` CLI. Regenerate them with the command at the top of
   `schema/scene.capnp`. Do not edit them by hand.
