@@ -100,10 +100,11 @@ Regras da sessão com servidor:
   `imageOrientation: "from-image"`. Um PNG ou um WebP com EXIF não gira.
   De um GIF ou de um WebP animado, só o primeiro quadro aparece;
 - o servidor guarda os assets num `Cache` do módulo `asset`, com no
-  máximo oito imagens de 2048 por 2048 e 48 MiB. Para caber um asset
-  novo, ele tira o que os frames usaram há mais tempo, fora os que o
-  último frame de algum jogador desenha, e manda à engine um `lost` para
-  cada um. Um asset que não cabe nem assim se perde na hora. A `Session`
+  máximo oito imagens de 2048 por 2048 e 48 MiB. A cada frame, ele tira
+  o que os frames usaram há mais tempo até caber, por último os assets
+  que esse frame desenha, e manda à engine um `lost` para cada um. Um
+  asset que não cabe junto com os que chegaram depois do último frame se
+  perde na hora. A `Session`
   manda de novo, com outro `id`, uma imagem perdida que um frame volta a
   desenhar, e recusa um frame cujas imagens não cabem juntas numa sala.
   O servidor não confia na engine para isso. No jogo local, o renderer

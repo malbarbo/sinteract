@@ -369,13 +369,13 @@ impl ServerCore {
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
     /// message too. The first message is the hello. Then the core keeps an
-    /// asset under the limits of the room, and drops the assets that the
-    /// frames used longest ago to fit it, with a lost to the engine for
-    /// each. A frame goes to its player, or to every player, with the
-    /// assets that it draws. Before the start a frame has no player, and the
-    /// core drops it. A broken stream ends the room, and the core ignores what
-    /// comes after the end. Returns what went wrong, in the order of the
-    /// stream.
+    /// asset, and a frame goes to its player, or to every player, with the
+    /// assets that it draws. At each frame the core drops the assets that
+    /// the frames used longest ago to fit the limits of the room, with a
+    /// lost to the engine for each. Before the start a frame has no
+    /// player, and the core drops it. A broken stream ends the room, and
+    /// the core ignores what comes after the end. Returns what went wrong,
+    /// in the order of the stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
         let mut errors = Vec::new();
         if matches!(self.phase, Phase::Over) {
@@ -518,9 +518,9 @@ impl ServerCore {
         }
     }
 
-    /// Keep the asset `id`, and drop the ones that it takes the place of,
-    /// or refuse it if the id is live or the image is too large. An asset
-    /// that does not fit beside the ones of the last frame is lost at once.
+    /// Keep the asset `id`, or refuse it if the id is live or the image is
+    /// too large. An asset that does not fit beside the others that came
+    /// after the last frame is lost at once.
     fn keep_asset(
         &mut self,
         id: u32,
@@ -531,11 +531,7 @@ impl ServerCore {
         let refused = |error| EngineError::Asset { id, error };
         let footprint = Footprint::new(size, bytes).map_err(refused)?;
         match self.cache.asset(id, footprint, payload) {
-            Ok(dropped) => {
-                for gone in dropped {
-                    self.lose(gone);
-                }
-            }
+            Ok(()) => {}
             Err(AssetError::Full { .. }) => self.lose(id),
             Err(error) => return Err(refused(error)),
         }
@@ -543,8 +539,9 @@ impl ServerCore {
     }
 
     /// Keep the frame in `payload` for `player`, or for every player when
-    /// `player` is `None`, with the assets that it draws. A frame for no
-    /// seat reaches no screen, so it changes nothing.
+    /// `player` is `None`, with the assets that it draws, and drop the
+    /// assets that the frames used longest ago to fit the limits. A frame
+    /// for no seat reaches no screen, so it changes nothing.
     fn keep_frame(
         &mut self,
         player: Option<NonZeroU32>,
@@ -562,7 +559,9 @@ impl ServerCore {
             .iter()
             .filter_map(|id| Some((*id, self.cache.get(*id)?.clone())))
             .collect();
-        self.cache.frame(ids);
+        for gone in self.cache.frame(&ids) {
+            self.lose(gone);
+        }
         let shot = Shot {
             frame: payload,
             assets: Arc::new(assets),
@@ -1288,16 +1287,30 @@ mod tests {
     }
 
     #[test]
-    fn an_asset_that_does_not_fit_beside_the_screens_is_lost_at_once() {
+    fn a_frame_keeps_an_old_asset_that_it_draws_beside_a_new_one() {
         let (mut room, conns) = Room::playing(&["Ana"]);
         let mut stream = fill(1);
-        stream.extend_from_slice(&drawing(1, 1.0, &[1, 2, 3, 4, 5, 6, 7, 8]));
+        stream.extend_from_slice(&drawing(1, 1.0, &[2, 3, 4, 5, 6, 7, 8]));
         stream.extend_from_slice(&asset(9));
-        stream.extend_from_slice(&drawing(1, 2.0, &[9]));
+        stream.extend_from_slice(&drawing(1, 2.0, &[1, 9]));
+        assert!(room.core.from_engine(&stream).is_empty());
+        assert_eq!(room.events(), ["lost 2"]);
+        assert_eq!(
+            sent(&mut room.core, conns[0]),
+            ["asset 1", "asset 9", "frame 1 2", "idle"]
+        );
+    }
+
+    #[test]
+    fn an_asset_that_does_not_fit_beside_the_new_ones_is_lost_at_once() {
+        let (mut room, conns) = Room::playing(&["Ana"]);
+        let mut stream = fill(1);
+        stream.extend_from_slice(&asset(9));
+        stream.extend_from_slice(&drawing(1, 1.0, &[9]));
         assert!(room.core.from_engine(&stream).is_empty());
         assert_eq!(room.events(), ["lost 9"]);
         // The frame goes without the image.
-        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1 2", "idle"]);
+        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1 1", "idle"]);
     }
 
     #[test]
