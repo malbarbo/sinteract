@@ -109,7 +109,9 @@ Regras da sessão com servidor:
   desenhar, e recusa um frame cujas imagens não cabem juntas numa sala.
   O servidor não confia na engine para isso. No jogo local, o renderer
   guarda as imagens decodificadas até oito imagens de 2048 por 2048, e
-  solta as que desenhou há mais tempo. Uma imagem que não decodifica
+  solta as que desenhou há mais tempo, mas não uma que o frame desenhou.
+  Num frame com mais imagens do que cabem, as que não cabem decodificam
+  a cada bitmap. Uma imagem que não decodifica
   aparece como uma caixa cinza com um X vermelho, no lugar da imagem,
   porque o `transform` do bitmap leva o quadrado unitário ao canvas,
   qualquer que seja o tamanho da imagem, e a view pula um bitmap de um

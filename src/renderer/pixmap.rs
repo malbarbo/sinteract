@@ -128,8 +128,10 @@ impl Default for PixmapRenderer {
 
 /// The images that the bitmaps drew, decoded, so the next frames draw them
 /// without a decode. Past [`MAX_LIVE_PIXELS`], the images that a bitmap
-/// drew longest ago go first. An image that does not decode keeps `None`,
-/// so it draws the marker of a missing image without a second decode.
+/// drew longest ago go first, but not one that the frame drew, so a frame
+/// of more images than fit keeps the ones that fit and decodes the others
+/// at each draw. An image that does not decode keeps `None`, so it draws
+/// the marker of a missing image without a second decode.
 #[derive(Default)]
 struct Decoded {
     images: HashMap<Image, Use>,
@@ -137,6 +139,10 @@ struct Decoded {
     pixels: u64,
     /// How many times a bitmap drew.
     draws: u64,
+    /// The value of `draws` when the frame began.
+    frame_start: u64,
+    /// The last image that did not fit, decoded for one bitmap.
+    spill: Option<Pixmap>,
 }
 
 struct Use {
@@ -146,24 +152,39 @@ struct Use {
 }
 
 impl Decoded {
+    fn next_frame(&mut self) {
+        self.frame_start = self.draws;
+    }
+
     /// The pixels of `image`, decoded now if no bitmap drew it lately.
     fn get(&mut self, image: &Image) -> Option<&Pixmap> {
         self.draws += 1;
         if !self.images.contains_key(image) {
-            self.pixels += pixels(image);
-            while self.pixels > MAX_LIVE_PIXELS {
-                let Some(oldest) = self
+            let need = pixels(image);
+            let before = |u: &Use| u.last <= self.frame_start;
+            let may_go: u64 = self
+                .images
+                .iter()
+                .filter(|(_, u)| before(u))
+                .map(|(i, _)| pixels(i))
+                .sum();
+            let pixmap = crate::asset::decode(image.file(), MAX_IMAGE_PIXELS).ok();
+            if self.pixels - may_go + need > MAX_LIVE_PIXELS {
+                self.spill = pixmap;
+                return self.spill.as_ref();
+            }
+            while self.pixels + need > MAX_LIVE_PIXELS {
+                let oldest = self
                     .images
                     .iter()
+                    .filter(|(_, u)| before(u))
                     .min_by_key(|(_, u)| u.last)
                     .map(|(i, _)| i.clone())
-                else {
-                    break;
-                };
+                    .expect("may_go makes room");
                 self.images.remove(&oldest);
                 self.pixels -= pixels(&oldest);
             }
-            let pixmap = crate::asset::decode(image.file(), MAX_IMAGE_PIXELS).ok();
+            self.pixels += need;
             self.images.insert(image.clone(), Use { pixmap, last: 0 });
         }
         let used = self.images.get_mut(image).expect("the image is in");
@@ -193,6 +214,7 @@ impl Canvas for PixmapRenderer {
             self.pixmap = new_pixmap(out_w, out_h)?;
         }
         self.pixmap.fill(self.background);
+        self.images.next_frame();
         Ok(())
     }
 
@@ -1003,6 +1025,7 @@ mod tests {
         for k in 0..8 {
             decoded.get(&image(k));
         }
+        decoded.next_frame();
         decoded.get(&image(0));
         decoded.get(&image(8));
         assert!(decoded.images.contains_key(&image(0)));
@@ -1010,6 +1033,22 @@ mod tests {
         assert_eq!(decoded.images.len(), 8);
         let pixels: u64 = decoded.images.keys().map(pixels).sum();
         assert_eq!(decoded.pixels, pixels);
+    }
+
+    #[test]
+    fn a_frame_past_the_limit_keeps_the_images_that_fit() {
+        let image = |k: u32| crate::asset::png_image(2048, 2048 - k);
+        let mut decoded = Decoded::default();
+        for _ in 0..2 {
+            decoded.next_frame();
+            for k in 0..10 {
+                decoded.get(&image(k));
+            }
+        }
+        for k in 0..8 {
+            assert!(decoded.images.contains_key(&image(k)), "{k}");
+        }
+        assert_eq!(decoded.images.len(), 8);
     }
 
     /// The whole canvas of [`draw_on_canvas`].
