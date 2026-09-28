@@ -25,7 +25,7 @@ pub mod svg;
 
 use std::io::Read;
 
-use crate::scene::Scene;
+use crate::scene::{Rgba, Scene};
 
 /// A renderer that draws a [`Scene`] or a streamed frame into a surface it
 /// owns. The [module docs](self) describe the lifecycle.
@@ -111,7 +111,7 @@ pub(crate) mod sealed {
 
         fn draw_text(&mut self, text: &Text);
 
-        /// Draw the asset with id `bitmap.id`. Only the pixmap does, so the
+        /// Draw the asset with id `bitmap.id`. The pdf does not, so the
         /// default skips it.
         fn draw_bitmap(&mut self, bitmap: &Bitmap) {
             let _ = bitmap;
@@ -151,6 +151,29 @@ pub(crate) mod sealed {
             }
         }
     }
+}
+
+/// The fill and the stroke of the box that stands for a bitmap whose id has
+/// no image, with a cross from corner to corner.
+pub(crate) const MISSING_FILL: Rgba = Rgba {
+    r: 200,
+    g: 200,
+    b: 200,
+    a: 1.0,
+};
+pub(crate) const MISSING_STROKE: Rgba = Rgba {
+    r: 200,
+    g: 0,
+    b: 0,
+    a: 1.0,
+};
+
+/// The corners of the unit square centred on the origin under `t`, in
+/// order around it. A bitmap covers this square.
+pub(crate) fn unit_square(t: [f32; 6]) -> [(f32, f32); 4] {
+    let [a, b, c, d, e, f] = t;
+    [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
+        .map(|(x, y)| (a * x + c * y + e, b * x + d * y + f))
 }
 
 /// The miter limit of a text stroke. A glyph is a closed smooth contour, so

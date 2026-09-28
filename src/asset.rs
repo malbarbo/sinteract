@@ -397,6 +397,40 @@ pub fn image_size(blob: &[u8]) -> Option<(u32, u32)> {
     head(blob).map(|head| head.size)
 }
 
+/// How a document that holds the files of its images, such as an SVG or a
+/// PDF, takes an image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Embed {
+    /// A PNG, which a document holds as it is.
+    Png,
+    /// A JPEG that its EXIF does not turn, which a document holds as it is.
+    Jpeg { color: JpegColor, size: (u32, u32) },
+    /// Any other image, of the media type `mime`. A document holds it
+    /// decoded, since a GIF may move, a WebP does not show everywhere, and a
+    /// document may not turn a JPEG.
+    Decode { mime: &'static str },
+}
+
+/// How a document takes the image in `blob`, or an error if it is not a
+/// PNG, a JPEG, a GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
+pub(crate) fn embed(blob: &[u8]) -> Result<Embed, AssetError> {
+    let head = head(blob).ok_or(AssetError::Unsupported)?;
+    let (width, height) = head.size;
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        return Err(AssetError::TooManyPixels { width, height });
+    }
+    Ok(match (head.format, head.jpeg_color) {
+        (Format::Png, _) => Embed::Png,
+        (Format::Jpeg, Some(color)) if head.orientation == 1 => Embed::Jpeg {
+            color,
+            size: head.size,
+        },
+        (Format::Jpeg, _) => Embed::Decode { mime: "image/jpeg" },
+        (Format::Gif, _) => Embed::Decode { mime: "image/gif" },
+        (Format::WebP, _) => Embed::Decode { mime: "image/webp" },
+    })
+}
+
 /// The format of an image, from its first bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Format {
@@ -415,6 +449,16 @@ struct Head {
     /// The EXIF orientation of a JPEG, from 1 to 8, and 1 for any other
     /// format.
     orientation: u8,
+    /// The color of a JPEG of 8 bits a sample in gray or in RGB, and `None`
+    /// for any other image.
+    jpeg_color: Option<JpegColor>,
+}
+
+/// The color space of a JPEG that a document can hold as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JpegColor {
+    Gray,
+    Rgb,
 }
 
 impl Head {
@@ -428,15 +472,15 @@ impl Head {
 /// The header of the image in `blob`, or `None` if `blob` is not a PNG, a
 /// JPEG, a GIF or a WebP, or gives a width or a height of 0.
 fn head(blob: &[u8]) -> Option<Head> {
-    let (format, size, orientation) = if blob.starts_with(PNG_SIGNATURE) {
-        (Format::Png, png_size(blob)?, 1)
+    let (format, size, orientation, jpeg_color) = if blob.starts_with(PNG_SIGNATURE) {
+        (Format::Png, png_size(blob)?, 1, None)
     } else if blob.starts_with(b"\xff\xd8") {
-        let (size, orientation) = jpeg_head(blob)?;
-        (Format::Jpeg, size, orientation)
+        let (size, orientation, color) = jpeg_head(blob)?;
+        (Format::Jpeg, size, orientation, color)
     } else if blob.starts_with(b"GIF87a") || blob.starts_with(b"GIF89a") {
-        (Format::Gif, gif_size(blob)?, 1)
+        (Format::Gif, gif_size(blob)?, 1, None)
     } else if blob.get(..4) == Some(b"RIFF") && blob.get(8..12) == Some(b"WEBP") {
-        (Format::WebP, webp_size(blob)?, 1)
+        (Format::WebP, webp_size(blob)?, 1, None)
     } else {
         return None;
     };
@@ -444,6 +488,7 @@ fn head(blob: &[u8]) -> Option<Head> {
         format,
         size,
         orientation,
+        jpeg_color,
     })
 }
 
@@ -458,11 +503,13 @@ fn png_size(blob: &[u8]) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-/// The size from the frame header of a JPEG, and its EXIF orientation. The
-/// walk goes over every segment up to the scan, as a decoder does. A
-/// second frame header is an error, and the last EXIF segment wins.
-fn jpeg_head(blob: &[u8]) -> Option<((u32, u32), u8)> {
+/// The size from the frame header of a JPEG, its EXIF orientation, and its
+/// color if it has 8 bits a sample in gray or in RGB. The walk goes over
+/// every segment up to the scan, as a decoder does. A second frame header
+/// is an error, and the last EXIF segment wins.
+fn jpeg_head(blob: &[u8]) -> Option<((u32, u32), u8, Option<JpegColor>)> {
     let mut size = None;
+    let mut color = None;
     let mut orientation = 1;
     let mut at = 2;
     loop {
@@ -493,6 +540,11 @@ fn jpeg_head(blob: &[u8]) -> Option<((u32, u32), u8)> {
                 let height = u16::from_be_bytes(array(segment, 1)?);
                 let width = u16::from_be_bytes(array(segment, 3)?);
                 size = Some((u32::from(width), u32::from(height)));
+                color = match (segment.first(), segment.get(5)) {
+                    (Some(8), Some(1)) => Some(JpegColor::Gray),
+                    (Some(8), Some(3)) => Some(JpegColor::Rgb),
+                    _ => None,
+                };
             }
             0xe1 => {
                 if let Some(tiff) = segment.strip_prefix(b"Exif\0\0") {
@@ -503,7 +555,7 @@ fn jpeg_head(blob: &[u8]) -> Option<((u32, u32), u8)> {
         }
         at += len;
     }
-    Some((size?, orientation))
+    Some((size?, orientation, color))
 }
 
 /// The orientation tag of the first IFD of the TIFF in `tiff`, or `None`
@@ -1115,6 +1167,34 @@ mod tests {
         let mut other_chunk = png_head(640, 480);
         other_chunk[12..16].copy_from_slice(b"IDAT");
         assert_eq!(image_size(&other_chunk), None);
+    }
+
+    #[test]
+    fn a_document_holds_a_png_and_an_upright_jpeg_as_they_are() {
+        assert_eq!(embed(&png_head(640, 480)), Ok(Embed::Png));
+        let gray = jpeg_head_of(&[sof(640, 480)]);
+        assert_eq!(
+            embed(&gray),
+            Ok(Embed::Jpeg {
+                color: JpegColor::Gray,
+                size: (640, 480)
+            })
+        );
+        let decode = Ok(Embed::Decode { mime: "image/jpeg" });
+        let turned = jpeg_head_of(&[exif(true, 6), sof(640, 480)]);
+        assert_eq!(embed(&turned), decode);
+        // A frame header of 4 components, such as CMYK.
+        let mut cmyk = sof(640, 480);
+        cmyk[9] = 4;
+        assert_eq!(embed(&jpeg_head_of(&[cmyk])), decode);
+        assert_eq!(
+            embed(&png_head(4096, 4096)),
+            Err(AssetError::TooManyPixels {
+                width: 4096,
+                height: 4096
+            })
+        );
+        assert_eq!(embed(b"not an image"), Err(AssetError::Unsupported));
     }
 
     #[test]

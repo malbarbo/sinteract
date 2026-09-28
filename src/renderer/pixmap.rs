@@ -14,7 +14,8 @@ use tiny_skia::{
 use crate::asset::MAX_IMAGE_PIXELS;
 use crate::outline::PathSink;
 use crate::renderer::{
-    AllocError, AssetError, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
+    AllocError, AssetError, MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop,
+    TEXT_MITER_LIMIT, frame_side, sealed::Canvas,
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, GradientGeom, LineCap, LineJoin, Paint, Path, Rgba, Sampling,
@@ -689,10 +690,8 @@ fn draw_missing(
     let Some(outline) = b.finish() else {
         return;
     };
-    let gray = sk_paint(SkShader::SolidColor(SkColor::from_rgba8(
-        200, 200, 200, 255,
-    )));
-    let red = sk_paint(SkShader::SolidColor(SkColor::from_rgba8(200, 0, 0, 255)));
+    let gray = sk_paint(SkShader::SolidColor(sk_color(MISSING_FILL)));
+    let red = sk_paint(SkShader::SolidColor(sk_color(MISSING_STROKE)));
     let stroke = Stroke {
         width,
         ..Stroke::default()

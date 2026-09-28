@@ -27,7 +27,7 @@ use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::renderer::Renderer;
 use sinteract::renderer::pdf::render_to_pdf;
 use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
-use sinteract::renderer::svg::render_to_svg;
+use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
     Bitmap, ClipPath, DEFAULT_MITER_LIMIT, Dash, FillRule, FontStyle, LineCap, LineJoin, Paint,
     Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, Text, TextSpec,
@@ -114,9 +114,7 @@ fn main() -> ExitCode {
             .and_then(|terminal| run(Box::new(terminal))),
         Some("print") => print(),
         Some("png") => png(),
-        Some("svg") => std::io::stdout()
-            .write_all(render_to_svg(&gallery(STILL)).as_bytes())
-            .map_err(|e| e.to_string()),
+        Some("svg") => svg(),
         Some("pdf") => std::io::stdout()
             .write_all(&render_to_pdf(&gallery(STILL)))
             .map_err(|e| e.to_string()),
@@ -201,6 +199,22 @@ fn png() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let png = pixmap.encode_png().map_err(|e| e.to_string())?;
     std::io::stdout().write_all(&png).map_err(|e| e.to_string())
+}
+
+fn svg() -> Result<(), String> {
+    let mut renderer = SvgRenderer::new();
+    for (id, blob) in images() {
+        renderer
+            .assets_mut()
+            .insert(id, &blob)
+            .map_err(|e| e.to_string())?;
+    }
+    let svg = renderer
+        .render(&gallery(STILL))
+        .map_err(|e| e.to_string())?;
+    std::io::stdout()
+        .write_all(svg.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// The id and the bytes of every image that the gallery draws.
