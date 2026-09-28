@@ -119,9 +119,6 @@ enum ValueError {
     NotFinite,
     /// A bitmap whose id names no image. The reader skips it.
     NoImage,
-    /// A clip or a layer past [`MAX_NESTING`](crate::scene::MAX_NESTING).
-    /// The reader skips it with all it holds.
-    TooDeep,
 }
 
 impl From<Error> for ValueError {
@@ -154,9 +151,7 @@ impl From<std::str::Utf8Error> for ValueError {
 fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
     match read {
         Ok(v) => Ok(Some(v)),
-        Err(
-            ValueError::Newer | ValueError::NotFinite | ValueError::NoImage | ValueError::TooDeep,
-        ) => Ok(None),
+        Err(ValueError::Newer | ValueError::NotFinite | ValueError::NoImage) => Ok(None),
         Err(ValueError::Malformed(e)) => Err(e),
     }
 }
@@ -1832,7 +1827,7 @@ mod tests {
                     elements,
                 }];
             }
-            Scene::decoded(10.0, 10.0, elements)
+            Scene::with_elements(10.0, 10.0, elements)
         }
         let seven = || vec![Element::Bitmap(bitmap(7))];
         let deepest = nested(crate::scene::MAX_NESTING, seven());

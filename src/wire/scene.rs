@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, Image, LineCap,
     LineJoin, MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind,
-    Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_layer, push_segment,
+    Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -293,13 +293,10 @@ fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
     write_coords(&mut b.init_coords(coord_count(c.segments())), c.segments());
 }
 
-/// A clip that is not finite is [`ValueError::NotFinite`], before its
-/// children are read.
 fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ValueError> {
     let mut clip = ClipPath::default();
     clip.fill_rule = fill_rule_from_wire(r.get_fill_rule()?);
     read_segments(clip.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
-    finite(clip.is_finite())?;
     Ok(clip)
 }
 
@@ -337,7 +334,6 @@ fn read_bitmap(
             Ok(WSampling::Smooth) | Err(_) => Sampling::Smooth,
         },
     };
-    finite(bitmap.is_finite())?;
     Ok(bitmap)
 }
 
@@ -381,12 +377,11 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
         },
         underline: r.get_underline(),
     };
-    finite(text.is_finite())?;
     Ok(text)
 }
 
-/// [`ValueError::NotFinite`] unless `is_finite`, the rule of
-/// [`Scene`] for an element, which the events follow too.
+/// [`ValueError::NotFinite`] unless `is_finite`, the rule of [`Scene`] for
+/// an element, which the events follow too.
 pub(super) fn finite(is_finite: bool) -> Result<(), ValueError> {
     if is_finite {
         Ok(())
@@ -502,8 +497,6 @@ fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ValueError> {
     let mut path = Path::default();
     path.style = read_path_style(r.get_style()?)?;
     read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
-    finite(path.is_finite())?;
-    path.style.normalize();
     Ok(path)
 }
 
@@ -564,50 +557,49 @@ pub(super) fn write_scene(
     );
 }
 
-/// Push the element in `node`, inside `depth` clips and layers, onto `out`.
-/// It skips an element of an arm from a newer schema, one that holds a
-/// value from a newer schema or a float that is not finite, a bitmap of an
-/// id that `images` has no image for, and a clip or a layer past
-/// [`MAX_NESTING`], as the scene does. A layer that is opaque pushes what it
-/// holds, and one that is hidden pushes nothing.
+/// Add the element in `node` to `scene` through its builder, which drops
+/// what the scene drops. It skips an element of an arm from a newer schema,
+/// one that holds a value from a newer schema, and a bitmap of an id that
+/// `images` has no image for. A clip or a layer past [`MAX_NESTING`] is
+/// skipped before its elements are read, since Cap'n Proto refuses a
+/// message that nests far deeper.
 fn read_element(
     node: element::Reader<'_>,
-    out: &mut Vec<Element>,
+    scene: &mut Scene,
     images: &dyn Fn(u32) -> Option<Image>,
-    depth: usize,
 ) -> Result<(), Error> {
     let Ok(which) = node.which() else {
         return Ok(());
     };
-    skip_unusable(read_known_element(which, out, images, depth))?;
+    skip_unusable(read_known_element(which, scene, images))?;
     Ok(())
 }
 
 fn read_known_element(
     which: element::WhichReader<'_>,
-    out: &mut Vec<Element>,
+    scene: &mut Scene,
     images: &dyn Fn(u32) -> Option<Image>,
-    depth: usize,
 ) -> Result<(), ValueError> {
     use element::Which;
-    let holder = matches!(which, Which::Clipped(_) | Which::Layer(_));
-    if holder && depth >= MAX_NESTING {
-        return Err(ValueError::TooDeep);
+    if matches!(which, Which::Clipped(_) | Which::Layer(_)) && scene.is_nested_to_max() {
+        return Ok(());
     }
     match which {
-        Which::Path(p) => out.push(Element::Path(read_path(p?)?)),
+        Which::Path(p) => scene.add_path(read_path(p?)?),
         Which::Clipped(c) => {
             let c = c?;
             let clip = read_clip_path(c.get_clip()?)?;
-            let elements = read_element_list(c.get_elements()?, images, depth + 1)?;
-            out.push(Element::Clipped { clip, elements });
+            let elements = c.get_elements()?;
+            scene.clip(clip, |inner| read_element_list(elements, inner, images))?;
         }
-        Which::Text(t) => out.push(Element::Text(read_text_node(t?)?)),
-        Which::Bitmap(n) => out.push(Element::Bitmap(read_bitmap(n?, images)?)),
+        Which::Text(t) => scene.add_text(read_text_node(t?)?),
+        Which::Bitmap(n) => scene.add_bitmap(read_bitmap(n?, images)?),
         Which::Layer(l) => {
             let l = l?;
-            let elements = read_element_list(l.get_elements()?, images, depth + 1)?;
-            push_layer(out, l.get_opacity(), elements);
+            let elements = l.get_elements()?;
+            scene.layer(l.get_opacity(), |inner| {
+                read_element_list(elements, inner, images)
+            })?;
         }
     }
     Ok(())
@@ -615,14 +607,13 @@ fn read_known_element(
 
 fn read_element_list(
     list: capnp::struct_list::Reader<'_, element::Owned>,
+    scene: &mut Scene,
     images: &dyn Fn(u32) -> Option<Image>,
-    depth: usize,
-) -> Result<Vec<Element>, Error> {
-    let mut out = Vec::with_capacity(list.len() as usize);
+) -> Result<(), Error> {
     for node in list {
-        read_element(node, &mut out, images, depth)?;
+        read_element(node, scene, images)?;
     }
-    Ok(out)
+    Ok(())
 }
 
 /// Add to `ids` the id of each bitmap of the scene in `r`, and in what a
@@ -666,10 +657,9 @@ pub(super) fn read_scene(
     r: wire_scene::Reader<'_>,
     images: &dyn Fn(u32) -> Option<Image>,
 ) -> Result<Scene, Error> {
-    let elements = if r.has_elements() {
-        read_element_list(r.get_elements()?, images, 0)?
-    } else {
-        Vec::new()
-    };
-    Ok(Scene::decoded(r.get_width(), r.get_height(), elements))
+    let mut scene = Scene::new(r.get_width(), r.get_height());
+    if r.has_elements() {
+        read_element_list(r.get_elements()?, &mut scene, images)?;
+    }
+    Ok(scene)
 }

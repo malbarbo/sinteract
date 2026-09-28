@@ -988,28 +988,10 @@ pub enum Element {
     },
 }
 
-impl Element {
-    /// Returns `true` if every float of the element, and of what a clip
-    /// holds, is finite, `false` otherwise.
-    fn is_finite(&self) -> bool {
-        match self {
-            Self::Path(p) => p.is_finite(),
-            Self::Clipped { clip, elements } => {
-                clip.is_finite() && elements.iter().all(Self::is_finite)
-            }
-            Self::Text(t) => t.is_finite(),
-            Self::Bitmap(b) => b.is_finite(),
-            Self::Layer { opacity, elements } => {
-                opacity.is_finite() && elements.iter().all(Self::is_finite)
-            }
-        }
-    }
-}
-
 /// Push onto `out` the `elements` of a layer of `opacity`. They go with no
 /// layer when the opacity is 1 or more, and not at all when it is 0 or
 /// less, or not finite.
-pub(crate) fn push_layer(out: &mut Vec<Element>, opacity: f32, mut elements: Vec<Element>) {
+fn push_layer(out: &mut Vec<Element>, opacity: f32, mut elements: Vec<Element>) {
     if !opacity.is_finite() || opacity <= 0.0 {
         return;
     }
@@ -1064,10 +1046,10 @@ impl Scene {
         }
     }
 
-    /// For the wire decoder, which skips an element that is not finite as it
-    /// reads it, so it does not walk the tree again.
-    pub(crate) fn decoded(width: f32, height: f32, elements: Vec<Element>) -> Self {
-        debug_assert!(elements.iter().all(Element::is_finite));
+    /// A scene of `elements`, which a test builds past the rules of the
+    /// builder, such as past [`MAX_NESTING`].
+    #[cfg(test)]
+    pub(crate) fn with_elements(width: f32, height: f32, elements: Vec<Element>) -> Self {
         Self {
             elements,
             ..Self::new(width, height)
@@ -1119,7 +1101,7 @@ impl Scene {
         let clip = clip.into();
         let mut clipped = self.inner();
         let result = inside(&mut clipped);
-        if clip.is_finite() && clipped.depth <= MAX_NESTING {
+        if clip.is_finite() && !self.is_nested_to_max() {
             self.elements.push(Element::Clipped {
                 clip,
                 elements: clipped.elements,
@@ -1136,11 +1118,17 @@ impl Scene {
     pub fn layer<T>(&mut self, opacity: f32, inside: impl FnOnce(&mut Scene) -> T) -> T {
         let mut layer = self.inner();
         let result = inside(&mut layer);
-        if layer.depth > MAX_NESTING {
+        if self.is_nested_to_max() {
             return result;
         }
         push_layer(&mut self.elements, opacity, layer.elements);
         result
+    }
+
+    /// Returns `true` if this scene sits inside [`MAX_NESTING`] clips and
+    /// layers, so a clip or a layer here draws nothing, `false` otherwise.
+    pub(crate) fn is_nested_to_max(&self) -> bool {
+        self.depth >= MAX_NESTING
     }
 
     /// An empty scene of this size, for the elements of a clip or a layer
