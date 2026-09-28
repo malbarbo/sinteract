@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, Image,
-    LayerOpacity, LineCap, LineJoin, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment,
-    SegmentKind, Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
+    LayerOpacity, LineCap, LineJoin, MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene,
+    Segment, SegmentKind, Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -564,20 +564,22 @@ pub(super) fn write_scene(
     );
 }
 
-/// Push the element in `node` onto `out`. It skips an element of an arm from
-/// a newer schema, one that holds a value from a newer schema or a float
-/// that is not finite, and a bitmap of an id that `images` has no image
-/// for. A layer that is opaque pushes what it holds, and one that is hidden
-/// pushes nothing.
+/// Push the element in `node`, inside `depth` clips and layers, onto `out`.
+/// It skips an element of an arm from a newer schema, one that holds a
+/// value from a newer schema or a float that is not finite, a bitmap of an
+/// id that `images` has no image for, and a clip or a layer past
+/// [`MAX_NESTING`], as the scene does. A layer that is opaque pushes what it
+/// holds, and one that is hidden pushes nothing.
 fn read_element(
     node: element::Reader<'_>,
     out: &mut Vec<Element>,
     images: &dyn Fn(u32) -> Option<Image>,
+    depth: usize,
 ) -> Result<(), Error> {
     let Ok(which) = node.which() else {
         return Ok(());
     };
-    match skip_unusable(read_known_element(which, images))? {
+    match skip_unusable(read_known_element(which, images, depth))? {
         // The opacity of a layer from the wire can take any value.
         Some(Element::Layer {
             opacity,
@@ -595,21 +597,26 @@ fn read_element(
 fn read_known_element(
     which: element::WhichReader<'_>,
     images: &dyn Fn(u32) -> Option<Image>,
+    depth: usize,
 ) -> Result<Element, ValueError> {
     use element::Which;
+    let holder = matches!(which, Which::Clipped(_) | Which::Layer(_));
+    if holder && depth >= MAX_NESTING {
+        return Err(ValueError::TooDeep);
+    }
     Ok(match which {
         Which::Path(p) => Element::Path(read_path(p?)?),
         Which::Clipped(c) => {
             let c = c?;
             let clip = read_clip_path(c.get_clip()?)?;
-            let elements = read_element_list(c.get_elements()?, images)?;
+            let elements = read_element_list(c.get_elements()?, images, depth + 1)?;
             Element::Clipped { clip, elements }
         }
         Which::Text(t) => Element::Text(read_text_node(t?)?),
         Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?, images)?),
         Which::Layer(l) => {
             let l = l?;
-            let elements = read_element_list(l.get_elements()?, images)?;
+            let elements = read_element_list(l.get_elements()?, images, depth + 1)?;
             Element::Layer {
                 opacity: l.get_opacity(),
                 elements,
@@ -621,23 +628,25 @@ fn read_known_element(
 fn read_element_list(
     list: capnp::struct_list::Reader<'_, element::Owned>,
     images: &dyn Fn(u32) -> Option<Image>,
+    depth: usize,
 ) -> Result<Vec<Element>, Error> {
     let mut out = Vec::with_capacity(list.len() as usize);
     for node in list {
-        read_element(node, &mut out, images)?;
+        read_element(node, &mut out, images, depth)?;
     }
     Ok(out)
 }
 
 /// Add to `ids` the id of each bitmap of the scene in `r`, and in what a
 /// clip or a layer holds, with no decode of the rest. An element of an arm
-/// from a newer schema holds no bitmap.
+/// from a newer schema holds no bitmap, and neither does a clip or a layer
+/// past [`MAX_NESTING`], which a reader skips.
 pub(super) fn read_bitmap_ids(
     r: wire_scene::Reader<'_>,
     ids: &mut BTreeSet<u32>,
 ) -> Result<(), Error> {
     if r.has_elements() {
-        add_bitmap_ids(r.get_elements()?, ids)?;
+        add_bitmap_ids(r.get_elements()?, ids, 0)?;
     }
     Ok(())
 }
@@ -645,14 +654,16 @@ pub(super) fn read_bitmap_ids(
 fn add_bitmap_ids(
     list: capnp::struct_list::Reader<'_, element::Owned>,
     ids: &mut BTreeSet<u32>,
+    depth: usize,
 ) -> Result<(), Error> {
     for node in list {
         match node.which() {
             Ok(element::Which::Bitmap(b)) => {
                 ids.insert(b?.get_id());
             }
-            Ok(element::Which::Clipped(c)) => add_bitmap_ids(c?.get_elements()?, ids)?,
-            Ok(element::Which::Layer(l)) => add_bitmap_ids(l?.get_elements()?, ids)?,
+            Ok(element::Which::Clipped(_) | element::Which::Layer(_)) if depth >= MAX_NESTING => {}
+            Ok(element::Which::Clipped(c)) => add_bitmap_ids(c?.get_elements()?, ids, depth + 1)?,
+            Ok(element::Which::Layer(l)) => add_bitmap_ids(l?.get_elements()?, ids, depth + 1)?,
             Ok(element::Which::Path(_) | element::Which::Text(_)) | Err(_) => {}
         }
     }
@@ -666,7 +677,7 @@ pub(super) fn read_scene(
     images: &dyn Fn(u32) -> Option<Image>,
 ) -> Result<Scene, Error> {
     let elements = if r.has_elements() {
-        read_element_list(r.get_elements()?, images)?
+        read_element_list(r.get_elements()?, images, 0)?
     } else {
         Vec::new()
     };

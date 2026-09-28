@@ -1037,12 +1037,22 @@ impl LayerOpacity {
 ///
 /// A float that is not finite has no drawing, so the scene drops an element
 /// that holds one, and a clip whose path holds one drops with all it holds.
+///
+/// A clip or a layer inside [`MAX_NESTING`] others drops with all it holds,
+/// so a scene has the same drawing on the wire as on a local display.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
     width: f32,
     height: f32,
     elements: Vec<Element>,
+    /// How many clips and layers hold the elements.
+    depth: usize,
 }
+
+/// The most clips and layers, one inside another, of a scene. Each one
+/// costs the wire three levels of nesting, and a reader of the wire stops
+/// at 64.
+pub const MAX_NESTING: usize = 16;
 
 impl Scene {
     /// A scene of `width` by `height`. A size that describes no frame, which
@@ -1053,6 +1063,7 @@ impl Scene {
             width: frame_size(width),
             height: frame_size(height),
             elements: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -1109,13 +1120,9 @@ impl Scene {
         inside: impl FnOnce(&mut Scene) -> T,
     ) -> T {
         let clip = clip.into();
-        let mut clipped = Scene {
-            width: self.width,
-            height: self.height,
-            elements: Vec::new(),
-        };
+        let mut clipped = self.inner();
         let result = inside(&mut clipped);
-        if clip.is_finite() {
+        if clip.is_finite() && clipped.depth <= MAX_NESTING {
             self.elements.push(Element::Clipped {
                 clip,
                 elements: clipped.elements,
@@ -1130,12 +1137,11 @@ impl Scene {
     /// the elements with no layer, and one of 0 or less, or not finite, drops
     /// them. Returns what `inside` returns.
     pub fn layer<T>(&mut self, opacity: f32, inside: impl FnOnce(&mut Scene) -> T) -> T {
-        let mut layer = Scene {
-            width: self.width,
-            height: self.height,
-            elements: Vec::new(),
-        };
+        let mut layer = self.inner();
         let result = inside(&mut layer);
+        if layer.depth > MAX_NESTING {
+            return result;
+        }
         match LayerOpacity::of(opacity) {
             LayerOpacity::Hidden => {}
             LayerOpacity::Opaque => self.elements.append(&mut layer.elements),
@@ -1145,6 +1151,15 @@ impl Scene {
             }),
         }
         result
+    }
+
+    /// An empty scene of this size, for the elements of a clip or a layer
+    /// here.
+    fn inner(&self) -> Scene {
+        Scene {
+            depth: self.depth + 1,
+            ..Scene::new(self.width, self.height)
+        }
     }
 
     pub fn add_text(&mut self, text: Text) {
@@ -1855,6 +1870,37 @@ mod tests {
             clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
         });
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
+    }
+
+    #[test]
+    fn a_clip_or_a_layer_past_max_nesting_drops_what_it_holds() {
+        fn nest(scene: &mut Scene, depth: usize, layer: bool) {
+            if depth == 0 {
+                scene.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+            } else if layer {
+                scene.layer(0.5, |s| nest(s, depth - 1, layer));
+            } else {
+                scene.clip(a_unit_rect(0.0), |s| nest(s, depth - 1, layer));
+            }
+        }
+        /// How many clips or layers hold the innermost element, if any.
+        fn depth(elements: &[Element]) -> Option<usize> {
+            match elements {
+                [Element::Clipped { elements, .. } | Element::Layer { elements, .. }] => {
+                    Some(depth(elements)? + 1)
+                }
+                [Element::Path(_)] => Some(0),
+                _ => None,
+            }
+        }
+        for layer in [false, true] {
+            let mut scene = Scene::new(10.0, 10.0);
+            nest(&mut scene, MAX_NESTING, layer);
+            assert_eq!(depth(&scene.elements), Some(MAX_NESTING));
+            let mut scene = Scene::new(10.0, 10.0);
+            nest(&mut scene, MAX_NESTING + 1, layer);
+            assert_eq!(depth(&scene.elements), None);
+        }
     }
 
     #[test]

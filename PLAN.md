@@ -53,7 +53,9 @@ conhece, e o valor de enum ou o byte de verbo que não conhece. Uma paint de
 braço novo desenha a cor `fallback`. Um schema evolui só acrescentando
 campos com default. Um leitor não percorre mais words do que a mensagem
 tem. Uma mensagem com dois ponteiros para o mesmo alvo pode passar disso,
-e então o leitor a recusa.
+e então o leitor a recusa. Um clip ou uma layer dentro de outros 16
+(`MAX_NESTING`) some com o que tem, na `Scene` e no leitor, então um
+frame desenha o mesmo no jogo local e no servidor.
 
 A engine não sabe de rede. O servidor tira o player da conexão de cada
 view, então uma view não joga em nome de outra.

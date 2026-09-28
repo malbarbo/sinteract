@@ -119,6 +119,9 @@ enum ValueError {
     NotFinite,
     /// A bitmap whose id names no image. The reader skips it.
     NoImage,
+    /// A clip or a layer past [`MAX_NESTING`](crate::scene::MAX_NESTING).
+    /// The reader skips it with all it holds.
+    TooDeep,
 }
 
 impl From<Error> for ValueError {
@@ -151,7 +154,9 @@ impl From<std::str::Utf8Error> for ValueError {
 fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
     match read {
         Ok(v) => Ok(Some(v)),
-        Err(ValueError::Newer | ValueError::NotFinite | ValueError::NoImage) => Ok(None),
+        Err(
+            ValueError::Newer | ValueError::NotFinite | ValueError::NoImage | ValueError::TooDeep,
+        ) => Ok(None),
         Err(ValueError::Malformed(e)) => Err(e),
     }
 }
@@ -1897,5 +1902,43 @@ mod tests {
             panic!("expected one Path, got {:?}", d.elements());
         };
         assert_eq!(p.style.miter_limit, 1.0);
+    }
+
+    #[test]
+    fn a_clip_past_max_nesting_reads_as_nothing_on_both_paths() {
+        /// A scene with `elements` inside `depth` clips, which a scene of
+        /// the API does not build past MAX_NESTING.
+        fn nested(depth: usize, mut elements: Vec<Element>) -> Scene {
+            for _ in 0..depth {
+                elements = vec![Element::Clipped {
+                    clip: RotatedRect {
+                        cx: 5.0,
+                        cy: 5.0,
+                        w: 10.0,
+                        h: 10.0,
+                        angle_deg: 0.0,
+                    }
+                    .into(),
+                    elements,
+                }];
+            }
+            Scene::decoded(10.0, 10.0, elements)
+        }
+        let seven = || vec![Element::Bitmap(bitmap(7))];
+        let deepest = nested(crate::scene::MAX_NESTING, seven());
+        let bytes = encode_frame(&deepest);
+        assert_eq!(to_view::bitmap_ids(&bytes).unwrap(), [7].into());
+        let Message::Frame { scene, .. } = decode(&bytes).unwrap() else {
+            panic!("expected Frame");
+        };
+        assert_scene_eq(&scene, &deepest);
+        for depth in [crate::scene::MAX_NESTING + 1, 40] {
+            let bytes = encode_frame(&nested(depth, seven()));
+            assert!(to_view::bitmap_ids(&bytes).unwrap().is_empty());
+            let Message::Frame { scene, .. } = decode(&bytes).unwrap() else {
+                panic!("expected Frame");
+            };
+            assert_scene_eq(&scene, &nested(crate::scene::MAX_NESTING, vec![]));
+        }
     }
 }
