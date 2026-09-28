@@ -1006,25 +1006,17 @@ impl Element {
     }
 }
 
-/// What a layer of some opacity does with the elements it holds.
-pub(crate) enum LayerOpacity {
-    /// They draw nothing, because the opacity is 0 or less, or not finite.
-    Hidden,
-    /// They draw as if no layer held them, because the opacity is 1 or more.
-    Opaque,
-    /// They draw in a layer of this opacity.
-    Translucent(f32),
-}
-
-impl LayerOpacity {
-    pub(crate) fn of(opacity: f32) -> Self {
-        if !opacity.is_finite() || opacity <= 0.0 {
-            Self::Hidden
-        } else if opacity >= 1.0 {
-            Self::Opaque
-        } else {
-            Self::Translucent(opacity)
-        }
+/// Push onto `out` the `elements` of a layer of `opacity`. They go with no
+/// layer when the opacity is 1 or more, and not at all when it is 0 or
+/// less, or not finite.
+pub(crate) fn push_layer(out: &mut Vec<Element>, opacity: f32, mut elements: Vec<Element>) {
+    if !opacity.is_finite() || opacity <= 0.0 {
+        return;
+    }
+    if opacity >= 1.0 {
+        out.append(&mut elements);
+    } else {
+        out.push(Element::Layer { opacity, elements });
     }
 }
 
@@ -1147,14 +1139,7 @@ impl Scene {
         if layer.depth > MAX_NESTING {
             return result;
         }
-        match LayerOpacity::of(opacity) {
-            LayerOpacity::Hidden => {}
-            LayerOpacity::Opaque => self.elements.append(&mut layer.elements),
-            LayerOpacity::Translucent(opacity) => self.elements.push(Element::Layer {
-                opacity,
-                elements: layer.elements,
-            }),
-        }
+        push_layer(&mut self.elements, opacity, layer.elements);
         result
     }
 

@@ -7,9 +7,9 @@
 use std::collections::BTreeSet;
 
 use crate::scene::{
-    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, Image,
-    LayerOpacity, LineCap, LineJoin, MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene,
-    Segment, SegmentKind, Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
+    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, Image, LineCap,
+    LineJoin, MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind,
+    Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_layer, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -579,50 +579,38 @@ fn read_element(
     let Ok(which) = node.which() else {
         return Ok(());
     };
-    match skip_unusable(read_known_element(which, images, depth))? {
-        // The opacity of a layer from the wire can take any value.
-        Some(Element::Layer {
-            opacity,
-            mut elements,
-        }) => match LayerOpacity::of(opacity) {
-            LayerOpacity::Hidden => {}
-            LayerOpacity::Opaque => out.append(&mut elements),
-            LayerOpacity::Translucent(opacity) => out.push(Element::Layer { opacity, elements }),
-        },
-        element => out.extend(element),
-    }
+    skip_unusable(read_known_element(which, out, images, depth))?;
     Ok(())
 }
 
 fn read_known_element(
     which: element::WhichReader<'_>,
+    out: &mut Vec<Element>,
     images: &dyn Fn(u32) -> Option<Image>,
     depth: usize,
-) -> Result<Element, ValueError> {
+) -> Result<(), ValueError> {
     use element::Which;
     let holder = matches!(which, Which::Clipped(_) | Which::Layer(_));
     if holder && depth >= MAX_NESTING {
         return Err(ValueError::TooDeep);
     }
-    Ok(match which {
-        Which::Path(p) => Element::Path(read_path(p?)?),
+    match which {
+        Which::Path(p) => out.push(Element::Path(read_path(p?)?)),
         Which::Clipped(c) => {
             let c = c?;
             let clip = read_clip_path(c.get_clip()?)?;
             let elements = read_element_list(c.get_elements()?, images, depth + 1)?;
-            Element::Clipped { clip, elements }
+            out.push(Element::Clipped { clip, elements });
         }
-        Which::Text(t) => Element::Text(read_text_node(t?)?),
-        Which::Bitmap(n) => Element::Bitmap(read_bitmap(n?, images)?),
+        Which::Text(t) => out.push(Element::Text(read_text_node(t?)?)),
+        Which::Bitmap(n) => out.push(Element::Bitmap(read_bitmap(n?, images)?)),
         Which::Layer(l) => {
             let l = l?;
             let elements = read_element_list(l.get_elements()?, images, depth + 1)?;
-            Element::Layer {
-                opacity: l.get_opacity(),
-                elements,
-            }
+            push_layer(out, l.get_opacity(), elements);
         }
-    })
+    }
+    Ok(())
 }
 
 fn read_element_list(
