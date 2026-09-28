@@ -7,7 +7,9 @@
 //! renderers, so the document needs no font and text measures the same in
 //! all of them. The SVG of Racket's `2htdp/image` does the same. Each glyph
 //! of a face at a size goes into `<defs>` once, and every occurrence is a
-//! `<use>`. The text is not selectable.
+//! `<use>`. A text with a gradient goes in as one path instead, because a
+//! gradient on a `<use>` starts again at each glyph. The text is not
+//! selectable.
 
 use std::collections::HashMap;
 use std::fmt::{self, Write};
@@ -167,61 +169,60 @@ impl Canvas for SvgRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        let do_fill = node.draws_fill();
-        let do_stroke = node.draws_stroke();
-        if !do_fill && !do_stroke {
-            return;
-        }
         let Some(layout) = TextLayout::new(&node.spec) else {
             return;
         };
-
-        let mut uses = std::mem::take(&mut self.uses);
-        uses.clear();
-        uses.extend(
-            layout
-                .placed_glyphs()
-                .filter_map(|(glyph, x)| Some((self.glyph_id(glyph)?, x))),
+        let inverse = invert(node.transform);
+        let fill = node
+            .draws_fill()
+            .then(|| self.text_paint(&node.fill, "fill", "fill-opacity", inverse))
+            .flatten();
+        let stroke = node
+            .draws_stroke()
+            .then(|| self.text_paint(&node.stroke, "stroke", "stroke-opacity", inverse))
+            .flatten()
+            .map(|mut attrs| {
+                _ = write!(
+                    attrs,
+                    " stroke-width=\"{}\" stroke-miterlimit=\"{TEXT_MITER_LIMIT}\"",
+                    node.stroke_width
+                );
+                attrs
+            });
+        if fill.is_none() && stroke.is_none() {
+            return;
+        }
+        let is_gradient = |paint: &Paint, drawn: bool| drawn && matches!(paint, Paint::Gradient(_));
+        let gradient =
+            is_gradient(&node.fill, fill.is_some()) || is_gradient(&node.stroke, stroke.is_some());
+        let (fill, stroke) = (fill.as_deref(), stroke.as_deref());
+        let path_attrs = format!(
+            "{}{}",
+            fill.unwrap_or(" fill=\"none\""),
+            stroke.unwrap_or_default()
         );
-        let y = layout.baseline_y();
 
         let [a, b, c, d, e, f] = node.transform;
-        let body = &mut self.body;
-        _ = writeln!(body, "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">");
-        // The fills of all the glyphs go down before any stroke, as in the
-        // other renderers, which paint the text as one path. A <use> that
-        // fills and strokes would cover the stroke of the glyph before it.
-        if do_fill {
-            body.push_str("<g");
-            write_color(node.fill, "fill", "fill-opacity", body);
-            body.push_str(">\n");
-            write_uses(&uses, &self.prefix, y, body);
-            body.push_str("</g>\n");
-        }
-        if do_stroke {
-            body.push_str("<g fill=\"none\"");
-            write_text_stroke(node, body);
-            body.push_str(">\n");
-            write_uses(&uses, &self.prefix, y, body);
-            body.push_str("</g>\n");
+        _ = writeln!(
+            self.body,
+            "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">"
+        );
+        if gradient {
+            // A gradient on a <use> starts again at the x of each glyph, so
+            // the glyphs go into one path.
+            self.body.push_str("<path d=\"");
+            layout.outline(&mut PathData::new(&mut self.body));
+            _ = writeln!(self.body, "\"{path_attrs}/>");
+        } else {
+            self.write_glyph_uses(&layout, fill, stroke);
         }
         if node.underline {
             // The underline paints on its own, as in the other renderers.
-            body.push_str("<path d=\"");
-            layout.outline_underline(&mut PathData::new(body));
-            body.push('"');
-            if do_fill {
-                write_color(node.fill, "fill", "fill-opacity", body);
-            } else {
-                body.push_str(" fill=\"none\"");
-            }
-            if do_stroke {
-                write_text_stroke(node, body);
-            }
-            body.push_str("/>\n");
+            self.body.push_str("<path d=\"");
+            layout.outline_underline(&mut PathData::new(&mut self.body));
+            _ = writeln!(self.body, "\"{path_attrs}/>");
         }
-        body.push_str("</g>\n");
-        self.uses = uses;
+        self.body.push_str("</g>\n");
     }
 
     fn end_frame(&mut self) {
@@ -282,15 +283,73 @@ impl SvgRenderer {
         match paint {
             Paint::Solid(c) => write_color(*c, attr, opacity_attr, &mut self.body),
             Paint::Gradient(g) => {
-                let id = self.push_gradient(g);
+                let id = self.push_gradient(g, None);
                 _ = write!(self.body, " {attr}=\"url(#{}p{id})\"", self.prefix);
             }
         }
     }
 
+    /// The attributes of one side of a text. A gradient takes `inverse`, the
+    /// inverse of the text transform, so it stays in canvas space. Returns
+    /// `None` for a gradient with no `inverse`, which squashes the text to a
+    /// line.
+    fn text_paint(
+        &mut self,
+        paint: &Paint,
+        attr: &str,
+        opacity_attr: &str,
+        inverse: Option<[f32; 6]>,
+    ) -> Option<String> {
+        let mut attrs = String::new();
+        match paint {
+            Paint::Solid(c) => write_color(*c, attr, opacity_attr, &mut attrs),
+            Paint::Gradient(g) => {
+                let id = self.push_gradient(g, Some(inverse?));
+                _ = write!(attrs, " {attr}=\"url(#{}p{id})\"", self.prefix);
+            }
+        }
+        Some(attrs)
+    }
+
+    /// Writes a `<use>` of each glyph of `layout`, all the fills first and
+    /// then all the strokes, as the other renderers paint the text as one
+    /// path. A <use> that fills and strokes would cover the stroke of the
+    /// glyph before it.
+    fn write_glyph_uses(
+        &mut self,
+        layout: &TextLayout<'_>,
+        fill: Option<&str>,
+        stroke: Option<&str>,
+    ) {
+        let mut uses = std::mem::take(&mut self.uses);
+        uses.clear();
+        uses.extend(
+            layout
+                .placed_glyphs()
+                .filter_map(|(glyph, x)| Some((self.glyph_id(glyph)?, x))),
+        );
+        let y = layout.baseline_y();
+        let body = &mut self.body;
+        // The fills of all the glyphs go down before any stroke, as in the
+        // other renderers, which paint the text as one path. A <use> that
+        // fills and strokes would cover the stroke of the glyph before it.
+        if let Some(fill) = fill {
+            _ = writeln!(body, "<g{fill}>");
+            write_uses(&uses, &self.prefix, y, body);
+            body.push_str("</g>\n");
+        }
+        if let Some(stroke) = stroke {
+            _ = writeln!(body, "<g fill=\"none\"{stroke}>");
+            write_uses(&uses, &self.prefix, y, body);
+            body.push_str("</g>\n");
+        }
+        self.uses = uses;
+    }
+
     /// Writes `g` into `defs` and returns the number of its `pn` id. The
-    /// coordinates are in user space, as in the other renderers.
-    fn push_gradient(&mut self, g: &Gradient) -> usize {
+    /// coordinates are in user space, as in the other renderers, moved by
+    /// `transform` when there is one.
+    fn push_gradient(&mut self, g: &Gradient, transform: Option<[f32; 6]>) -> usize {
         let id = self.gradients;
         self.gradients += 1;
         let prefix = &self.prefix;
@@ -310,6 +369,12 @@ impl SvgRenderer {
                      cx=\"{cx}\" cy=\"{cy}\" r=\"{radius}\""
                 );
             }
+        }
+        if let Some([a, b, c, d, e, f]) = transform {
+            _ = write!(
+                defs,
+                " gradientTransform=\"matrix({a} {b} {c} {d} {e} {f})\""
+            );
         }
         match g.spread() {
             SpreadMode::Pad => {}
@@ -381,13 +446,22 @@ fn write_list(values: &[f32], out: &mut String) {
     }
 }
 
-fn write_text_stroke(node: &Text, out: &mut String) {
-    write_color(node.stroke, "stroke", "stroke-opacity", out);
-    _ = write!(
-        out,
-        " stroke-width=\"{}\" stroke-miterlimit=\"{TEXT_MITER_LIMIT}\"",
-        node.stroke_width
-    );
+/// The inverse of the affine `m`, in the convention of [`Text::transform`],
+/// or `None` when `m` has none.
+fn invert(m: [f32; 6]) -> Option<[f32; 6]> {
+    let [a, b, c, d, e, f] = m;
+    let det = a * d - b * c;
+    if det == 0.0 || !det.is_finite() {
+        return None;
+    }
+    Some([
+        d / det,
+        -b / det,
+        -c / det,
+        a / det,
+        (c * f - d * e) / det,
+        (b * e - a * f) / det,
+    ])
 }
 
 fn write_uses(uses: &[(usize, f32)], prefix: &str, y: f32, out: &mut String) {
@@ -464,7 +538,7 @@ mod tests {
 
     fn text(s: &str) -> Text {
         Text {
-            fill: black(),
+            fill: Paint::Solid(black()),
             spec: TextSpec {
                 size: 16.0,
                 text: s.to_owned(),
@@ -651,7 +725,7 @@ mod tests {
     fn a_stroked_text_fills_every_glyph_before_any_stroke() {
         let mut scene = Scene::new(60.0, 20.0);
         scene.add_text(Text {
-            stroke: black(),
+            stroke: Paint::Solid(black()),
             stroke_width: 1.0,
             ..text("ab")
         });
@@ -663,6 +737,35 @@ mod tests {
         assert!(fills < strokes, "{svg}");
         assert_eq!(svg[fills..strokes].matches("<use ").count(), 2, "{svg}");
         assert_eq!(svg[strokes..].matches("<use ").count(), 2, "{svg}");
+    }
+
+    #[test]
+    fn a_gradient_text_is_one_path_with_the_inverse_of_its_transform() {
+        let mut scene = Scene::new(60.0, 20.0);
+        let stops = vec![
+            Stop {
+                offset: 0.0,
+                color: black(),
+            },
+            Stop {
+                offset: 1.0,
+                color: Rgba::default(),
+            },
+        ];
+        let node = Text {
+            fill: Paint::linear(0.0, 0.0, 60.0, 0.0, stops),
+            transform: [2.0, 0.0, 0.0, 2.0, 10.0, 4.0],
+            ..text("ab")
+        };
+        scene.add_text(node);
+        let svg = render_to_svg(&scene);
+        // A <use> would start the gradient again at each glyph.
+        assert!(!svg.contains("<use "), "{svg}");
+        assert!(svg.contains("fill=\"url(#p0)\""), "{svg}");
+        assert!(
+            svg.contains("gradientTransform=\"matrix(0.5 -0 -0 0.5 -5 -2)\""),
+            "{svg}"
+        );
     }
 
     #[test]

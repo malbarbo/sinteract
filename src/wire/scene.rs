@@ -335,8 +335,8 @@ pub(super) fn read_bitmap(r: bitmap::Reader<'_>) -> Result<Bitmap, ValueError> {
 }
 
 fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
-    write_rgba(b.reborrow().init_fill(), n.fill);
-    write_rgba(b.reborrow().init_stroke(), n.stroke);
+    write_paint(b.reborrow().init_fill(), &n.fill);
+    write_paint(b.reborrow().init_stroke(), &n.stroke);
     b.set_stroke_width(n.stroke_width);
     b.set_m0(n.transform[0]);
     b.set_m1(n.transform[1]);
@@ -354,8 +354,8 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
 
 pub(super) fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
     let text = Text {
-        fill: read_rgba(r.get_fill()?),
-        stroke: read_rgba(r.get_stroke()?),
+        fill: read_paint(r.get_fill()?)?,
+        stroke: read_paint(r.get_stroke()?)?,
         stroke_width: r.get_stroke_width(),
         transform: [
             r.get_m0(),

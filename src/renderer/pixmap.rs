@@ -522,23 +522,53 @@ fn render_text(
     let local = Transform::from_row(a, b, c, d, e, f);
     // The text transform applies first, then the scale.
     let transform = local.post_concat(base);
+    let paints = TextPaints {
+        fill: node
+            .draws_fill()
+            .then(|| text_paint(&node.fill, local))
+            .flatten(),
+        stroke: node
+            .draws_stroke()
+            .then(|| text_paint(&node.stroke, local))
+            .flatten(),
+        width: node.stroke_width,
+    };
 
-    paint_text_path(node, pixmap, mask, transform, builder, |out| {
+    paint_text_path(&paints, pixmap, mask, transform, builder, |out| {
         layout.outline(out)
     });
     // The underline paints on its own. In one path, a glyph that winds the
     // other way from the rectangle would cancel it where the two cross.
     if node.underline {
-        paint_text_path(node, pixmap, mask, transform, builder, |out| {
+        paint_text_path(&paints, pixmap, mask, transform, builder, |out| {
             layout.outline_underline(out)
         });
     }
 }
 
-/// Builds a path of `node` with `outline`, then fills and strokes it. The
+/// The paints of a text, `None` for a side that draws nothing.
+struct TextPaints {
+    fill: Option<SkPaint<'static>>,
+    stroke: Option<SkPaint<'static>>,
+    width: f32,
+}
+
+/// The paint of one side of a text. tiny-skia moves a shader with the path,
+/// so a gradient takes the inverse of `local` to stay in canvas space.
+/// Returns `None` for a gradient under a `local` with no inverse, which
+/// squashes the text to a line.
+fn text_paint(paint: &Paint, local: Transform) -> Option<SkPaint<'static>> {
+    let mut shader = paint_to_shader(paint);
+    if let Paint::Gradient(_) = paint {
+        shader.transform(local.invert()?);
+    }
+    Some(sk_paint(shader))
+}
+
+/// Builds a path of the text with `outline`, then fills and strokes it. The
 /// finished path clears back into `builder`.
 fn paint_text_path(
-    node: &Text,
+    paints: &TextPaints,
     pixmap: &mut Pixmap,
     mask: Option<&Mask>,
     transform: Transform,
@@ -550,21 +580,21 @@ fn paint_text_path(
     let Some(path) = b.finish() else {
         return;
     };
-    if node.draws_fill() && within_reach(&path, transform, 0.0) {
-        let paint = sk_paint(SkShader::SolidColor(sk_color(node.fill)));
+    if let Some(paint) = &paints.fill
+        && within_reach(&path, transform, 0.0)
+    {
         // A TrueType glyph fills with non-zero winding.
-        pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, mask);
+        pixmap.fill_path(&path, paint, SkFillRule::Winding, transform, mask);
     }
-    if node.draws_stroke() {
-        let paint = sk_paint(SkShader::SolidColor(sk_color(node.stroke)));
+    if let Some(paint) = &paints.stroke {
         let stroke = Stroke {
-            width: node.stroke_width,
+            width: paints.width,
             miter_limit: TEXT_MITER_LIMIT,
             dash: None,
             ..Stroke::default()
         };
         if stroke_within_reach(&path, &stroke, transform) {
-            pixmap.stroke_path(&path, &paint, &stroke, transform, mask);
+            pixmap.stroke_path(&path, paint, &stroke, transform, mask);
         }
     }
     *builder = path.clear();
@@ -732,6 +762,66 @@ mod tests {
     }
 
     #[test]
+    fn a_gradient_on_a_text_stays_in_canvas_space() {
+        // Red at x 0 to blue at x 100, on the fill of one text and on the
+        // stroke of another, both turned by 90 degrees and drawn at scale 2.
+        let ramp = || {
+            let stop = |offset, r, b| Stop {
+                offset,
+                color: Rgba { r, g: 0, b, a: 1.0 },
+            };
+            Paint::linear(
+                0.0,
+                0.0,
+                100.0,
+                0.0,
+                vec![stop(0.0, 255, 0), stop(1.0, 0, 255)],
+            )
+        };
+        let upright = |cx| {
+            let spec = TextSpec {
+                size: 30.0,
+                text: "HHHH".into(),
+                ..TextSpec::default()
+            };
+            spec.fit(RotatedRect {
+                cx,
+                cy: 50.0,
+                w: 80.0,
+                h: 20.0,
+                angle_deg: 90.0,
+            })
+            .expect("text draws")
+        };
+        let mut scene = Scene::new(100.0, 100.0);
+        scene.add_text(Text {
+            fill: ramp(),
+            ..upright(25.0)
+        });
+        scene.add_text(Text {
+            stroke: ramp(),
+            stroke_width: 4.0,
+            ..upright(75.0)
+        });
+        let pixmap = render_to_pixmap(&scene, 2.0).expect("pixmap");
+        // The text runs down, so every opaque pixel of a column has the
+        // color of the ramp at its x.
+        for x in (0..200).step_by(5) {
+            let expected = x as f32 / 200.0 * 255.0;
+            for y in 0..200 {
+                let (r, _, b, a) = pixel_rgba(&pixmap, x, y);
+                if a == 255 {
+                    assert!((f32::from(b) - expected).abs() < 4.0, "({x}, {y}): {r} {b}");
+                    assert!(
+                        (f32::from(r) - (255.0 - expected)).abs() < 4.0,
+                        "({x}, {y}): {r} {b}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn underline_stays_whole_across_a_glyph_that_winds_the_other_way() {
         // URW Gothic is a CFF face, whose contours wind the other way from
         // the TrueType faces that the crate embeds. A machine without it has
@@ -744,12 +834,12 @@ mod tests {
             return;
         }
         let node = Text {
-            fill: crate::scene::Rgba {
+            fill: Paint::Solid(crate::scene::Rgba {
                 r: 0,
                 g: 0,
                 b: 0,
                 a: 1.0,
-            },
+            }),
             transform: [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
             spec: TextSpec {
                 size: 96.0,
@@ -1179,12 +1269,12 @@ mod tests {
         // A glyph 20 units tall at a scale of 1e9 reaches past the canvas.
         let mut scene = Scene::new(100.0, 100.0);
         scene.add_text(Text {
-            fill: Rgba {
+            fill: Paint::Solid(Rgba {
                 r: 0,
                 g: 0,
                 b: 0,
                 a: 1.0,
-            },
+            }),
             transform: [1e9, 0.0, 0.0, 1e9, 0.0, 50.0],
             spec: TextSpec {
                 size: 20.0,
@@ -1272,12 +1362,12 @@ mod tests {
 
     fn text_node(cx: f32, cy: f32, bw: f32, bh: f32, size: f32, text: &str) -> Text {
         Text {
-            fill: Rgba {
+            fill: Paint::Solid(Rgba {
                 r: 0,
                 g: 0,
                 b: 0,
                 a: 1.0,
-            },
+            }),
             ..TextSpec {
                 size,
                 text: text.to_owned(),
@@ -1398,12 +1488,12 @@ mod tests {
         // one.
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_text(Text {
-            fill: Rgba {
+            fill: Paint::Solid(Rgba {
                 r: 0,
                 g: 0,
                 b: 0,
                 a: 1.0,
-            },
+            }),
             transform: [1.0, 0.0, 0.0, 1.0, 5.0, 5.0],
             spec: TextSpec {
                 size: 24.0,

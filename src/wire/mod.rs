@@ -324,12 +324,27 @@ mod tests {
                 })
                 .expect("text fits");
                 clip.add_text(Text {
-                    fill: Rgba {
+                    fill: Paint::Solid(Rgba {
                         r: 0,
                         g: 0,
                         b: 0,
                         a: 1.0,
-                    },
+                    }),
+                    stroke: Paint::radial(
+                        60.0,
+                        30.0,
+                        25.0,
+                        vec![Stop {
+                            offset: 0.5,
+                            color: Rgba {
+                                r: 200,
+                                g: 0,
+                                b: 0,
+                                a: 0.5,
+                            },
+                        }],
+                    ),
+                    stroke_width: 1.0,
                     underline: true,
                     ..text
                 });

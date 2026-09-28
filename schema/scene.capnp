@@ -175,7 +175,8 @@ enum Sampling {
 #   x' = m0 * x + m2 * y + m4
 #   y' = m1 * x + m3 * y + m5
 # The producer puts the fit, the rotation and the mirroring into it (see
-# sinteract::scene::TextSpec::fit).
+# sinteract::scene::TextSpec::fit). A gradient of the fill or the stroke is
+# in canvas space, as in a Path, so it does not turn with the text.
 #
 # `text` draws on one line. A tab advances by the width of eight spaces of
 # the face. Any other control character draws nothing, so a newline does not
@@ -184,8 +185,8 @@ enum Sampling {
 # The name keeps the Node suffix. A struct named Text hides the built-in
 # Text type from every field of this file.
 struct TextNode {
-    fill        @0  :Rgba;
-    stroke      @1  :Rgba;
+    fill        @0  :Paint;
+    stroke      @1  :Paint;
     strokeWidth @2  :Float32;
     m0          @3  :Float32;
     m1          @4  :Float32;

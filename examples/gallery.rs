@@ -682,7 +682,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
     });
     if let Some(node) = mirror {
         s.add_text(Text {
-            fill: opaque(40, 90, 200),
+            fill: Paint::Solid(opaque(40, 90, 200)),
             ..node
         });
     }
@@ -695,7 +695,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
     });
     if let Some(node) = flip {
         s.add_text(Text {
-            fill: opaque(40, 90, 200),
+            fill: Paint::Solid(opaque(40, 90, 200)),
             ..node
         });
     }
@@ -709,7 +709,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
     });
     if let Some(node) = wide {
         s.add_text(Text {
-            fill: opaque(40, 140, 60),
+            fill: Paint::Solid(opaque(40, 140, 60)),
             ..node
         });
     }
@@ -717,9 +717,12 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         weight: 700,
         ..spec("Outline", 30.0)
     };
-    if let Some(node) = text(outline, x + 140.0, y + 75.0, 0.0, opaque(250, 220, 60)) {
+    if let Some(node) = text(outline, x + 140.0, y + 75.0, 0.0, Rgba::default()) {
+        // A gradient on a text is in canvas space, as on a path.
+        let sunset = stops(&[(0.0, (250, 220, 60)), (1.0, (230, 60, 40))]);
         s.add_text(Text {
-            stroke: opaque(20, 20, 20),
+            fill: Paint::linear(x + 95.0, y, x + 185.0, y, sunset),
+            stroke: Paint::Solid(opaque(20, 20, 20)),
             stroke_width: 1.2,
             ..node
         });
@@ -733,7 +736,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         Rgba::default(),
     ) {
         s.add_text(Text {
-            stroke: opaque(20, 20, 20),
+            stroke: Paint::Solid(opaque(20, 20, 20)),
             stroke_width: 0.8,
             ..node
         });
@@ -849,7 +852,10 @@ fn text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, fill: Rgba) -> Option<
         h: m.height(),
         angle_deg,
     })?;
-    Some(Text { fill, ..node })
+    Some(Text {
+        fill: Paint::Solid(fill),
+        ..node
+    })
 }
 
 /// Two strokes that meet at the top in a join, inside the box at

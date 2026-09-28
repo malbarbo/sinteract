@@ -136,8 +136,12 @@ impl Canvas for PdfRenderer {
             return;
         };
 
-        let (fill, stroke) = (Paint::Solid(node.fill), Paint::Solid(node.stroke));
-        self.begin_paint(do_fill.then_some(&fill), do_stroke.then_some(&stroke));
+        // A pattern maps to the default space of the page, so the `cm` of the
+        // text below leaves a gradient in canvas space.
+        self.begin_paint(
+            do_fill.then_some(&node.fill),
+            do_stroke.then_some(&node.stroke),
+        );
         if do_stroke {
             // The default miter limit is TEXT_MITER_LIMIT.
             self.content.set_line_width(node.stroke_width);
@@ -658,7 +662,7 @@ mod tests {
 
     fn text(s: &str, size: f32) -> Text {
         Text {
-            fill: opaque(0, 0, 0),
+            fill: Paint::Solid(opaque(0, 0, 0)),
             spec: TextSpec {
                 size,
                 text: s.to_owned(),
@@ -706,7 +710,7 @@ mod tests {
         })
         .expect("text fits");
         scene.add_text(Text {
-            fill: opaque(0, 0, 0),
+            fill: Paint::Solid(opaque(0, 0, 0)),
             ..fitted
         });
         let s = pdf_text(&scene);

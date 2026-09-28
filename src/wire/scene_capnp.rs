@@ -4255,7 +4255,7 @@ pub mod text_node {
             self.reader.total_size()
         }
         #[inline]
-        pub fn get_fill(self) -> ::capnp::Result<crate::scene_capnp::rgba::Reader<'a>> {
+        pub fn get_fill(self) -> ::capnp::Result<crate::scene_capnp::paint::Reader<'a>> {
             ::capnp::traits::FromPointerReader::get_from_pointer(
                 &self.reader.get_pointer_field(0),
                 ::core::option::Option::None,
@@ -4266,7 +4266,7 @@ pub mod text_node {
             !self.reader.get_pointer_field(0).is_null()
         }
         #[inline]
-        pub fn get_stroke(self) -> ::capnp::Result<crate::scene_capnp::rgba::Reader<'a>> {
+        pub fn get_stroke(self) -> ::capnp::Result<crate::scene_capnp::paint::Reader<'a>> {
             ::capnp::traits::FromPointerReader::get_from_pointer(
                 &self.reader.get_pointer_field(1),
                 ::core::option::Option::None,
@@ -4433,7 +4433,7 @@ pub mod text_node {
             self.builder.as_reader().total_size()
         }
         #[inline]
-        pub fn get_fill(self) -> ::capnp::Result<crate::scene_capnp::rgba::Builder<'a>> {
+        pub fn get_fill(self) -> ::capnp::Result<crate::scene_capnp::paint::Builder<'a>> {
             ::capnp::traits::FromPointerBuilder::get_from_pointer(
                 self.builder.get_pointer_field(0),
                 ::core::option::Option::None,
@@ -4442,7 +4442,7 @@ pub mod text_node {
         #[inline]
         pub fn set_fill(
             &mut self,
-            value: crate::scene_capnp::rgba::Reader<'_>,
+            value: crate::scene_capnp::paint::Reader<'_>,
         ) -> ::capnp::Result<()> {
             ::capnp::traits::SetterInput::set_pointer_builder(
                 self.builder.reborrow().get_pointer_field(0),
@@ -4451,7 +4451,7 @@ pub mod text_node {
             )
         }
         #[inline]
-        pub fn init_fill(self) -> crate::scene_capnp::rgba::Builder<'a> {
+        pub fn init_fill(self) -> crate::scene_capnp::paint::Builder<'a> {
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
         }
         #[inline]
@@ -4459,7 +4459,7 @@ pub mod text_node {
             !self.builder.is_pointer_field_null(0)
         }
         #[inline]
-        pub fn get_stroke(self) -> ::capnp::Result<crate::scene_capnp::rgba::Builder<'a>> {
+        pub fn get_stroke(self) -> ::capnp::Result<crate::scene_capnp::paint::Builder<'a>> {
             ::capnp::traits::FromPointerBuilder::get_from_pointer(
                 self.builder.get_pointer_field(1),
                 ::core::option::Option::None,
@@ -4468,7 +4468,7 @@ pub mod text_node {
         #[inline]
         pub fn set_stroke(
             &mut self,
-            value: crate::scene_capnp::rgba::Reader<'_>,
+            value: crate::scene_capnp::paint::Reader<'_>,
         ) -> ::capnp::Result<()> {
             ::capnp::traits::SetterInput::set_pointer_builder(
                 self.builder.reborrow().get_pointer_field(1),
@@ -4477,7 +4477,7 @@ pub mod text_node {
             )
         }
         #[inline]
-        pub fn init_stroke(self) -> crate::scene_capnp::rgba::Builder<'a> {
+        pub fn init_stroke(self) -> crate::scene_capnp::paint::Builder<'a> {
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(1), 0)
         }
         #[inline]
@@ -4638,10 +4638,10 @@ pub mod text_node {
         }
     }
     impl Pipeline {
-        pub fn get_fill(&self) -> crate::scene_capnp::rgba::Pipeline {
+        pub fn get_fill(&self) -> crate::scene_capnp::paint::Pipeline {
             ::capnp::capability::FromTypelessPipeline::new(self._typeless.get_pointer_field(0))
         }
-        pub fn get_stroke(&self) -> crate::scene_capnp::rgba::Pipeline {
+        pub fn get_stroke(&self) -> crate::scene_capnp::paint::Pipeline {
             ::capnp::capability::FromTypelessPipeline::new(self._typeless.get_pointer_field(1))
         }
     }
@@ -4653,7 +4653,7 @@ pub mod text_node {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(4, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(144, 23, 0, 0, 87, 25, 0, 0),
+            ::capnp::word(252, 23, 0, 0, 197, 25, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -4772,7 +4772,7 @@ pub mod text_node {
             ::capnp::word(220, 1, 0, 0, 2, 0, 1, 0),
             ::capnp::word(102, 105, 108, 108, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(252, 10, 227, 218, 243, 32, 32, 207),
+            ::capnp::word(237, 108, 240, 218, 160, 47, 0, 129),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
@@ -4780,7 +4780,7 @@ pub mod text_node {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(115, 116, 114, 111, 107, 101, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(252, 10, 227, 218, 243, 32, 32, 207),
+            ::capnp::word(237, 108, 240, 218, 160, 47, 0, 129),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
@@ -4895,14 +4895,8 @@ pub mod text_node {
         ];
         pub(crate) fn get_field_types(index: u16) -> ::capnp::introspect::Type {
             match index {
-                0 => {
-                    <crate::scene_capnp::rgba::Owned as ::capnp::introspect::Introspect>::introspect(
-                    )
-                }
-                1 => {
-                    <crate::scene_capnp::rgba::Owned as ::capnp::introspect::Introspect>::introspect(
-                    )
-                }
+                0 => <crate::scene_capnp::paint::Owned as ::capnp::introspect::Introspect>::introspect(),
+                1 => <crate::scene_capnp::paint::Owned as ::capnp::introspect::Introspect>::introspect(),
                 2 => <f32 as ::capnp::introspect::Introspect>::introspect(),
                 3 => <f32 as ::capnp::introspect::Introspect>::introspect(),
                 4 => <f32 as ::capnp::introspect::Introspect>::introspect(),
@@ -4913,9 +4907,7 @@ pub mod text_node {
                 9 => <f32 as ::capnp::introspect::Introspect>::introspect(),
                 10 => <::capnp::text::Owned as ::capnp::introspect::Introspect>::introspect(),
                 11 => <u16 as ::capnp::introspect::Introspect>::introspect(),
-                12 => {
-                    <crate::scene_capnp::FontStyle as ::capnp::introspect::Introspect>::introspect()
-                }
+                12 => <crate::scene_capnp::FontStyle as ::capnp::introspect::Introspect>::introspect(),
                 13 => <bool as ::capnp::introspect::Introspect>::introspect(),
                 14 => <::capnp::text::Owned as ::capnp::introspect::Introspect>::introspect(),
                 _ => ::capnp::introspect::panic_invalid_field_index(index),
@@ -5264,7 +5256,7 @@ pub mod path {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(3, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(90, 27, 0, 0, 182, 27, 0, 0),
+            ::capnp::word(200, 27, 0, 0, 36, 28, 0, 0),
             ::capnp::word(21, 0, 0, 0, 138, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -5750,7 +5742,7 @@ pub mod element {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(158, 28, 0, 0, 51, 29, 0, 0),
+            ::capnp::word(12, 29, 0, 0, 161, 29, 0, 0),
             ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -6170,7 +6162,7 @@ pub mod clipped {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(2, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(53, 29, 0, 0, 130, 29, 0, 0),
+            ::capnp::word(163, 29, 0, 0, 240, 29, 0, 0),
             ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -6528,7 +6520,7 @@ pub mod scene {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(22, 30, 0, 0, 122, 30, 0, 0),
+            ::capnp::word(132, 30, 0, 0, 232, 30, 0, 0),
             ::capnp::word(21, 0, 0, 0, 146, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),

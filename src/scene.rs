@@ -440,11 +440,12 @@ impl From<RotatedRect> for ClipPath {
 /// ```
 ///
 /// [`TextSpec::fit`] puts the fit to a box, the rotation and the mirroring
-/// in the matrix.
+/// in the matrix. A gradient of `fill` or `stroke` is in canvas space, as
+/// the gradient of a [`Path`], so it does not turn with the text.
 #[derive(Clone, Debug)]
 pub struct Text {
-    pub fill: Rgba,
-    pub stroke: Rgba,
+    pub fill: Paint,
+    pub stroke: Paint,
     pub stroke_width: f32,
     pub transform: [f32; 6],
     pub spec: TextSpec,
@@ -454,32 +455,30 @@ pub struct Text {
 impl Text {
     /// Returns `true` if the fill marks the canvas, `false` otherwise.
     pub fn draws_fill(&self) -> bool {
-        self.fill.a > 0.0
+        self.fill.is_visible()
     }
 
     /// Returns `true` if the stroke marks the canvas, `false` otherwise. A
-    /// zero width draws nothing, whatever the color.
+    /// zero width draws nothing, whatever the paint.
     pub fn draws_stroke(&self) -> bool {
-        self.stroke.a > 0.0 && self.stroke_width > 0.0
+        self.stroke.is_visible() && self.stroke_width > 0.0
     }
 
     /// Returns `true` if every float of the text is finite, `false`
     /// otherwise.
     pub(crate) fn is_finite(&self) -> bool {
-        all_finite(&[
-            self.fill.a,
-            self.stroke.a,
-            self.stroke_width,
-            self.spec.size,
-        ]) && all_finite(&self.transform)
+        self.fill.is_finite()
+            && self.stroke.is_finite()
+            && all_finite(&[self.stroke_width, self.spec.size])
+            && all_finite(&self.transform)
     }
 }
 
 impl Default for Text {
     fn default() -> Self {
         Self {
-            fill: Rgba::default(),
-            stroke: Rgba::default(),
+            fill: Paint::default(),
+            stroke: Paint::default(),
             stroke_width: 0.0,
             transform: translate(0.0, 0.0),
             spec: TextSpec::default(),
@@ -1650,10 +1649,7 @@ mod tests {
             ..text.clone()
         });
         scene.add_text(Text {
-            fill: Rgba {
-                a: nan,
-                ..text.fill
-            },
+            fill: Paint::rgba(0, 0, 0, nan),
             ..text.clone()
         });
         scene.add_text(Text {
