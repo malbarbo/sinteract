@@ -410,11 +410,12 @@ impl ServerCore {
         if matches!(self.phase, Phase::Over { .. }) {
             return errors;
         }
-        self.from_engine.extend_from_slice(bytes);
-        let mut at = 0;
+        // Out of `self`, so the loop reads it while the messages go in.
+        let mut buffer = std::mem::take(&mut self.from_engine);
+        buffer.extend_from_slice(bytes);
+        let mut rest = buffer.as_slice();
         loop {
-            let bytes = self.from_engine.get(at..).expect("at is inside the bytes");
-            let (payload, rest) = match framing::split_frame(bytes, Side::Engine) {
+            let (payload, after) = match framing::split_frame(rest, Side::Engine) {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(e) => {
@@ -425,7 +426,7 @@ impl ServerCore {
             };
             let arm = to_view::arm(payload);
             let payload = Arc::<[u8]>::from(payload);
-            at = self.from_engine.len() - rest.len();
+            rest = after;
             if matches!(self.phase, Phase::Waiting) && !matches!(arm, Ok(Some(Arm::Hello(_)))) {
                 if let Err(e) = arm {
                     errors.push(EngineError::Payload(e));
@@ -468,7 +469,9 @@ impl ServerCore {
                 Err(e) => errors.push(EngineError::Payload(e)),
             }
         }
-        self.from_engine.drain(..at);
+        let taken = buffer.len() - rest.len();
+        buffer.drain(..taken);
+        self.from_engine = buffer;
         errors
     }
 

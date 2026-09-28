@@ -247,31 +247,30 @@ impl Session {
 
     /// Turn every whole message in `bytes` into events.
     fn take_messages(&mut self) {
-        let mut at = 0;
+        // Out of `self`, so the loop reads it while the events go in.
+        let mut bytes = std::mem::take(&mut self.bytes);
+        let mut rest = bytes.as_slice();
         loop {
             let started = match self.state {
                 State::BeforeStart => false,
                 State::Started => true,
-                State::Ended => break,
+                State::Ended => return,
             };
-            let bytes = self.bytes.get(at..).expect("at is inside the bytes");
-            let (payload, rest) = match framing::split_frame(bytes, Side::Server) {
+            let (payload, after) = match framing::split_frame(rest, Side::Server) {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(e) => return self.finish(Some(e)),
             };
-            let decoded = to_engine::decode(payload);
-            at = self.bytes.len() - rest.len();
-            match decoded {
+            rest = after;
+            match to_engine::decode(payload) {
                 Ok(Some(message)) => self.receive(started, message),
                 Ok(None) => {}
                 Err(e) => self.push(SessionEvent::Error(SessionError::Payload(e))),
             }
         }
-        // The end already dropped every byte.
-        if self.state != State::Ended {
-            self.bytes.drain(..at);
-        }
+        let taken = bytes.len() - rest.len();
+        bytes.drain(..taken);
+        self.bytes = bytes;
     }
 
     /// Turn `message` into an event, by whether the start came before it.
