@@ -547,19 +547,12 @@ fn write_list(values: &[f32], out: &mut String) {
 /// The inverse of the affine `m`, in the convention of [`Text::transform`],
 /// or `None` when `m` has none.
 fn invert(m: [f32; 6]) -> Option<[f32; 6]> {
-    let [a, b, c, d, e, f] = m;
-    let det = a * d - b * c;
-    if det == 0.0 || !det.is_finite() {
+    let affine = kurbo::Affine::new(m.map(f64::from));
+    if affine.determinant() == 0.0 {
         return None;
     }
-    Some([
-        d / det,
-        -b / det,
-        -c / det,
-        a / det,
-        (c * f - d * e) / det,
-        (b * e - a * f) / det,
-    ])
+    let inverse = affine.inverse().as_coeffs().map(|v| v as f32);
+    inverse.iter().all(|v| v.is_finite()).then_some(inverse)
 }
 
 fn write_uses(uses: &[(usize, f32)], prefix: &str, y: f32, out: &mut String) {
