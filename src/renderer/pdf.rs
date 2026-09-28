@@ -512,12 +512,12 @@ impl PdfRenderer {
         let gradient_refs: Vec<GradientRefs> = gradients
             .iter()
             .map(|g| {
-                let functions = (0..g.function_count()).map(|_| alloc()).collect();
+                let functions = g.functions(&mut alloc);
                 let shading = alloc();
                 let pattern = alloc();
                 let mask = if g.masked {
                     Some(MaskRefs {
-                        functions: (0..g.function_count()).map(|_| alloc()).collect(),
+                        functions: g.functions(&mut alloc),
                         shading: alloc(),
                         form: alloc(),
                         gstate: alloc(),
@@ -951,12 +951,16 @@ impl Shading {
         }
     }
 
-    /// One exponential function per interval of the stops, and a stitching
-    /// function over them when there is more than one interval.
-    fn function_count(&self) -> usize {
-        match self.stops.len() - 1 {
-            1 => 1,
-            intervals => intervals + 1,
+    /// The ids of the functions of the gradient, from `alloc`.
+    fn functions(&self, mut alloc: impl FnMut() -> Ref) -> Functions {
+        let intervals = self.stops.len() - 1;
+        let stitched = match intervals {
+            1 => Vec::new(),
+            _ => (0..intervals).map(|_| alloc()).collect(),
+        };
+        Functions {
+            stitched,
+            main: alloc(),
         }
     }
 
@@ -986,13 +990,17 @@ impl Shading {
     fn write_functions<const N: usize>(
         &self,
         pdf: &mut Pdf,
-        refs: &[Ref],
+        refs: &Functions,
         channel: impl Fn(Rgba) -> [f32; N],
     ) -> Ref {
         let stops = &self.stops;
         let range = || std::iter::repeat_n([0.0, 1.0], N).flatten();
 
-        for (&[from, to], &r) in stops.array_windows().zip(refs) {
+        let intervals = match refs.stitched.as_slice() {
+            [] => std::slice::from_ref(&refs.main),
+            stitched => stitched,
+        };
+        for (&[from, to], &r) in stops.array_windows().zip(intervals) {
             let mut f = pdf.exponential_function(r);
             f.domain([0.0, 1.0]);
             f.range(range());
@@ -1001,8 +1009,7 @@ impl Shading {
             f.n(1.0);
             f.finish();
         }
-        let (&main_fn_ref, subs) = refs.split_last().expect("a gradient has a function");
-        // With one interval, the only function is the exponential one.
+        let subs = &refs.stitched;
         if let [_, inner @ .., _] = stops.as_slice()
             && !subs.is_empty()
         {
@@ -1011,7 +1018,7 @@ impl Shading {
                 inner.len() + 1,
                 "a stitched gradient has one function per interval"
             );
-            let mut stitch = pdf.stitching_function(main_fn_ref);
+            let mut stitch = pdf.stitching_function(refs.main);
             stitch.domain([0.0, 1.0]);
             stitch.range(range());
             stitch.functions(subs.iter().copied());
@@ -1020,7 +1027,7 @@ impl Shading {
             stitch.encode(subs.iter().flat_map(|_| [0.0, 1.0]));
             stitch.finish();
         }
-        main_fn_ref
+        refs.main
     }
 
     /// Writes the shading of the gradient under `id`, with the function
@@ -1055,9 +1062,7 @@ impl Shading {
 
 /// The indirect objects of one gradient.
 struct GradientRefs {
-    /// The functions, as many as [`Shading::function_count`] says, with the
-    /// one the shading references last.
-    functions: Vec<Ref>,
+    functions: Functions,
     shading: Ref,
     pattern: Ref,
     mask: Option<MaskRefs>,
@@ -1065,14 +1070,23 @@ struct GradientRefs {
 
 /// The indirect objects of the soft mask of one gradient.
 struct MaskRefs {
-    /// The functions of the alphas, as in [`GradientRefs::functions`].
-    functions: Vec<Ref>,
+    /// The functions of the alphas.
+    functions: Functions,
     /// The shading of the alphas, in gray.
     shading: Ref,
     /// The transparency group that draws `shading`.
     form: Ref,
     /// The ExtGState that sets the soft mask.
     gstate: Ref,
+}
+
+/// The functions of one gradient. `main` is the one that the shading
+/// references, the exponential function of a single interval, or the
+/// stitching function over `stitched`, which has one per interval.
+struct Functions {
+    /// Empty for a single interval.
+    stitched: Vec<Ref>,
+    main: Ref,
 }
 
 fn rgb_components(c: Rgba) -> [f32; 3] {
