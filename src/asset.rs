@@ -493,8 +493,9 @@ fn exif_orientation(tiff: &[u8]) -> Option<u8> {
         let entry = ifd.checked_add(2 + 12 * i)?;
         if u16_at(entry)? == ORIENTATION {
             let (kind, count, value) = (u16_at(entry + 2)?, u32_at(entry + 4)?, u16_at(entry + 8)?);
-            return (kind == SHORT && count == 1 && (1..=8).contains(&value))
-                .then(|| u8::try_from(value).expect("the value is at most 8"));
+            return u8::try_from(value)
+                .ok()
+                .filter(|v| kind == SHORT && count == 1 && (1..=8).contains(v));
         }
     }
     None
