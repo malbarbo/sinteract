@@ -398,9 +398,9 @@ fn png_size(blob: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The size from the frame header of a JPEG, its EXIF orientation, and its
-/// color if it has 8 bits a sample in gray or in RGB. The walk goes over
-/// every segment up to the scan, as a decoder does. A second frame header
-/// is an error, and the last EXIF segment wins.
+/// color if it is a Huffman DCT frame of 8 bits a sample in gray or RGB.
+/// The walk goes over every segment up to the scan, as a decoder does. A
+/// second frame header is an error, and the last EXIF segment wins.
 fn jpeg_head(blob: &[u8]) -> Option<((u32, u32), u8, Option<JpegColor>)> {
     let mut size = None;
     let mut color = None;
@@ -434,9 +434,12 @@ fn jpeg_head(blob: &[u8]) -> Option<((u32, u32), u8, Option<JpegColor>)> {
                 let height = u16::from_be_bytes(array(segment, 1)?);
                 let width = u16::from_be_bytes(array(segment, 3)?);
                 size = Some((u32::from(width), u32::from(height)));
-                color = match (segment.first(), segment.get(5)) {
-                    (Some(8), Some(1)) => Some(JpegColor::Gray),
-                    (Some(8), Some(3)) => Some(JpegColor::Rgb),
+                // Only SOF0 to SOF2, the Huffman DCT frames, open in every
+                // PDF viewer and browser.
+                let dct = matches!(marker, 0xc0..=0xc2);
+                color = match (dct, segment.first(), segment.get(5)) {
+                    (true, Some(8), Some(1)) => Some(JpegColor::Gray),
+                    (true, Some(8), Some(3)) => Some(JpegColor::Rgb),
                     _ => None,
                 };
             }
@@ -877,6 +880,10 @@ mod tests {
         let mut cmyk = sof(640, 480);
         cmyk[9] = 4;
         assert_eq!(embed(&jpeg_head_of(&[cmyk])), decode);
+        // A lossless frame header, which few viewers read.
+        let mut lossless = sof(640, 480);
+        lossless[1] = 0xc3;
+        assert_eq!(embed(&jpeg_head_of(&[lossless])), decode);
         assert_eq!(
             embed(&png_head(4096, 4096)),
             Err(AssetError::TooManyPixels {
