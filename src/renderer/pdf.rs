@@ -20,6 +20,7 @@
 use std::collections::BTreeMap;
 
 use pdf_writer::types::{FunctionShadingType, LineCapStyle, LineJoinStyle};
+use pdf_writer::writers::Resources;
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::outline::PathSink;
@@ -47,6 +48,12 @@ pub struct PdfRenderer {
     /// The gradients of the frame. The index of a gradient is its `/Pn` name
     /// in the content stream and in the pattern dictionary.
     gradients: Vec<Shading>,
+    /// The content under each layer in effect, with the opacity that the
+    /// layer draws onto it with. `content` is the top layer.
+    layer_stack: Vec<(Content, f32)>,
+    /// The content of each layer of the frame, as a form XObject. The index
+    /// of a layer is its `/Fmn` name.
+    forms: Vec<Vec<u8>>,
     /// The document of the last render.
     bytes: Vec<u8>,
 }
@@ -60,6 +67,8 @@ impl PdfRenderer {
             content: Content::new(),
             gstates: BTreeMap::new(),
             gradients: Vec::new(),
+            layer_stack: Vec::new(),
+            forms: Vec::new(),
             bytes: Vec::new(),
         }
     }
@@ -84,6 +93,8 @@ impl Canvas for PdfRenderer {
         self.height = frame_side(height);
         self.gstates.clear();
         self.gradients.clear();
+        self.layer_stack.clear();
+        self.forms.clear();
         // The last document holds the last content stream, so its size is a
         // good guess at the size of this one.
         let mut content = Content::with_capacity(self.bytes.len());
@@ -199,8 +210,27 @@ impl Canvas for PdfRenderer {
         inside(&mut *guard.canvas)
     }
 
-    fn with_layer<T>(&mut self, _opacity: f32, inside: impl FnOnce(&mut Self) -> T) -> T {
-        inside(self)
+    /// The layer goes into a transparency group, a form XObject that the
+    /// content under it draws with `opacity`.
+    fn with_layer<T>(&mut self, opacity: f32, inside: impl FnOnce(&mut Self) -> T) -> T {
+        let under = std::mem::replace(&mut self.content, Content::new());
+        self.layer_stack.push((under, opacity));
+        let guard = RestoreOnDrop {
+            canvas: self,
+            restore: |c: &mut Self| {
+                let Some((under, opacity)) = c.layer_stack.pop() else {
+                    return;
+                };
+                let form = std::mem::replace(&mut c.content, under).finish();
+                let idx = c.forms.len();
+                c.forms.push(form.into_vec());
+                c.content.save_state();
+                c.apply_alpha(opacity, opacity);
+                c.content.x_object(Name(form_name(idx).as_bytes()));
+                c.content.restore_state();
+            },
+        };
+        inside(&mut *guard.canvas)
     }
 }
 
@@ -276,7 +306,15 @@ impl PdfRenderer {
     /// Returns the index of `g`, the `n` of its `/Pn` name.
     fn push_gradient(&mut self, g: &Gradient) -> usize {
         let idx = self.gradients.len();
-        self.gradients.push(Shading::new(g));
+        // A pattern maps to the default space of the page, or of the form of
+        // a layer. A form draws where the content opens, in pixels with y
+        // down, so a pattern in a form needs no transform.
+        let matrix = if self.layer_stack.is_empty() {
+            page_transform(self.height)
+        } else {
+            IDENTITY
+        };
+        self.gradients.push(Shading::new(g, matrix));
         idx
     }
 
@@ -287,6 +325,7 @@ impl PdfRenderer {
         let h = self.height;
         let gstates = &self.gstates;
         let gradients = &self.gradients;
+        let forms = &self.forms;
         // An empty content holds no buffer until the next render opens one.
         let buf = std::mem::replace(&mut self.content, Content::with_capacity(0)).finish();
 
@@ -315,6 +354,9 @@ impl PdfRenderer {
                 }
             })
             .collect();
+        // The page and the forms share one dictionary of resources.
+        let resources_id = alloc();
+        let form_refs: Vec<Ref> = forms.iter().map(|_| alloc()).collect();
 
         // The last document is a good guess at the size of this one.
         let mut pdf = Pdf::with_capacity(self.bytes.len());
@@ -329,7 +371,11 @@ impl PdfRenderer {
             page.parent(pages_id);
             page.media_box(Rect::new(0.0, 0.0, w * PX_TO_PT, h * PX_TO_PT));
             page.contents(content_id);
-            let mut resources = page.resources();
+            page.pair(Name(b"Resources"), resources_id);
+            page.finish();
+        }
+        {
+            let mut resources: Resources<'_> = pdf.indirect(resources_id).start();
             if !gstates.is_empty() {
                 let mut gs_dict = resources.ext_g_states();
                 for (k, &idx) in gstates.values().enumerate() {
@@ -344,8 +390,14 @@ impl PdfRenderer {
                 }
                 pat_dict.finish();
             }
+            if !form_refs.is_empty() {
+                let mut xobjects = resources.x_objects();
+                for (i, &r) in form_refs.iter().enumerate() {
+                    xobjects.pair(Name(form_name(i).as_bytes()), r);
+                }
+                xobjects.finish();
+            }
             resources.finish();
-            page.finish();
         }
 
         pdf.stream(content_id, buf.as_slice());
@@ -362,7 +414,17 @@ impl PdfRenderer {
         }
 
         for (gradient, refs) in gradients.iter().zip(gradient_refs.iter()) {
-            gradient.write(&mut pdf, refs, page_transform(h));
+            gradient.write(&mut pdf, refs);
+        }
+
+        for (form, &r) in forms.iter().zip(&form_refs) {
+            let mut x = pdf.form_xobject(r, form);
+            x.bbox(Rect::new(0.0, 0.0, w, h));
+            x.pair(Name(b"Resources"), resources_id);
+            // An isolated group starts transparent, as the layer of the
+            // pixmap does.
+            x.group().transparency().isolated(true);
+            x.finish();
         }
 
         self.bytes = pdf.finish();
@@ -405,6 +467,12 @@ fn gs_name(idx: u32) -> String {
 fn pattern_name(idx: usize) -> String {
     format!("P{idx}")
 }
+
+fn form_name(idx: usize) -> String {
+    format!("Fm{idx}")
+}
+
+const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
 fn pdf_line_cap(c: LineCap) -> LineCapStyle {
     match c {
@@ -508,6 +576,9 @@ struct Shading {
     geom: GradientGeom,
     /// Padded by [`Shading::new`].
     stops: Vec<Stop>,
+    /// Maps the gradient to the page, or to the form of the layer that holds
+    /// it.
+    matrix: [f32; 6],
 }
 
 impl Shading {
@@ -515,7 +586,7 @@ impl Shading {
     /// and the last at 1. The pad repeats the boundary color, as in CSS. A
     /// [`Gradient`] already raises and clamps its offsets. No stops give two
     /// transparent ones, a case the visibility check already excludes.
-    fn new(g: &Gradient) -> Self {
+    fn new(g: &Gradient, matrix: [f32; 6]) -> Self {
         let stops = match g.stops() {
             [first, .., last] => {
                 let mut stops = Vec::with_capacity(g.stops().len() + 2);
@@ -542,6 +613,7 @@ impl Shading {
         Self {
             geom: g.geom(),
             stops,
+            matrix,
         }
     }
 
@@ -555,8 +627,8 @@ impl Shading {
     }
 
     /// Writes the functions, the shading and the pattern of the gradient into
-    /// `pdf`, under the ids of `refs`. `matrix` maps the gradient to the page.
-    fn write(&self, pdf: &mut Pdf, refs: &GradientRefs, matrix: [f32; 6]) {
+    /// `pdf`, under the ids of `refs`.
+    fn write(&self, pdf: &mut Pdf, refs: &GradientRefs) {
         let stops = &self.stops;
 
         for (&[from, to], &r) in stops.array_windows().zip(&refs.functions) {
@@ -614,9 +686,8 @@ impl Shading {
 
         {
             let mut pat = pdf.shading_pattern(refs.pattern);
-            // A pattern draws in the space of the page, so the `cm` at the top
-            // of the content stream does not apply to it.
-            pat.matrix(matrix);
+            // The `cm` of a content stream does not apply to a pattern.
+            pat.matrix(self.matrix);
             pat.shading_ref(refs.shading);
             pat.finish();
         }
@@ -848,6 +919,31 @@ mod tests {
         let s = pdf_text(&scene);
         // The base transform of the content stream, for a page 40 pixels tall.
         assert!(s.contains("/Matrix [0.75 0 0 -0.75 0 30]"), "{s}");
+    }
+
+    #[test]
+    fn a_layer_is_a_transparency_group_that_draws_with_its_opacity() {
+        let mut scene = Scene::new(100.0, 40.0);
+        let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
+        scene.layer(0.5, |layer| {
+            let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops));
+            layer.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
+        });
+        let s = pdf_text(&scene);
+        assert!(s.contains("/Subtype /Form"), "{s}");
+        assert!(s.contains("/S /Transparency"), "{s}");
+        assert!(s.contains("/BBox [0 0 100 40]"), "{s}");
+        assert!(s.contains("q\n/Gs0 gs\n/Fm0 Do\nQ"), "{s}");
+        assert!(s.contains("/CA 0.5"), "{s}");
+        // A form draws in pixels, so its pattern takes no transform.
+        assert!(s.contains("/Matrix [1 0 0 1 0 0]"), "{s}");
+        // The page and the form share one dictionary of resources.
+        let resources: Vec<_> = s
+            .match_indices("/Resources ")
+            .map(|(i, _)| &s[i..i + 16])
+            .collect();
+        assert_eq!(resources.len(), 2, "{s}");
+        assert_eq!(resources[0], resources[1], "{s}");
     }
 
     #[test]
