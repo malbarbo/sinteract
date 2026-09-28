@@ -40,9 +40,9 @@ pub const MAX_LIVE_BYTES: u64 = 48 << 20;
 pub struct Cache<T> {
     live: BTreeMap<u32, Live<T>>,
     /// The load of the assets up to the last frame, under the limits.
-    load: Load,
+    load: Footprint,
     /// The load of the assets that came after the last frame.
-    new: Load,
+    new: Footprint,
     /// How many frames came.
     frames: u64,
 }
@@ -51,8 +51,8 @@ impl<T> Cache<T> {
     pub fn new() -> Self {
         Self {
             live: BTreeMap::new(),
-            load: Load::default(),
-            new: Load::default(),
+            load: Footprint::NONE,
+            new: Footprint::NONE,
             frames: 0,
         }
     }
@@ -97,7 +97,7 @@ impl<T> Cache<T> {
         }
         self.frames += 1;
         let mut load = self.load.plus(self.new);
-        self.new = Load::default();
+        self.new = Footprint::NONE;
         let mut may_go: Vec<(bool, u64, u32)> = self
             .live
             .iter()
@@ -124,7 +124,8 @@ impl<T> Default for Cache<T> {
     }
 }
 
-/// What an asset counts toward the limits of a room.
+/// What an asset, or the assets of a room together, count toward the
+/// limits of a room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Footprint {
     pixels: u64,
@@ -145,36 +146,17 @@ impl Footprint {
             bytes: blob.len() as u64,
         })
     }
-}
 
-/// Returns an error if `images` go over the limits of a room together,
-/// since the server would lose one of them each frame.
-pub(crate) fn fit_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Result<(), RoomFull> {
-    let mut load = Load::default();
-    for image in images {
-        load = load.with(Footprint {
-            pixels: u64::from(image.width()) * u64::from(image.height()),
-            bytes: image.file().len() as u64,
-        })?;
-    }
-    Ok(())
-}
+    /// No asset.
+    const NONE: Footprint = Footprint {
+        pixels: 0,
+        bytes: 0,
+    };
 
-/// The live assets of a room, as the limits count them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Load {
-    pixels: u64,
-    bytes: u64,
-}
-
-impl Load {
-    /// The load with `asset` on top, or an error if that goes over
+    /// The footprint with `asset` on top, or an error if that goes over
     /// [`MAX_LIVE_PIXELS`] or [`MAX_LIVE_BYTES`].
-    fn with(self, asset: Footprint) -> Result<Load, RoomFull> {
-        let load = self.plus(Load {
-            pixels: asset.pixels,
-            bytes: asset.bytes,
-        });
+    fn with(self, asset: Footprint) -> Result<Footprint, RoomFull> {
+        let load = self.plus(asset);
         if !load.fits() {
             return Err(RoomFull {
                 pixels: load.pixels,
@@ -184,26 +166,39 @@ impl Load {
         Ok(load)
     }
 
-    fn plus(self, other: Load) -> Load {
-        Load {
+    fn plus(self, other: Footprint) -> Footprint {
+        Footprint {
             pixels: self.pixels + other.pixels,
             bytes: self.bytes + other.bytes,
         }
     }
 
-    /// Returns `true` if the load is under [`MAX_LIVE_PIXELS`] and
+    /// Returns `true` if the footprint is under [`MAX_LIVE_PIXELS`] and
     /// [`MAX_LIVE_BYTES`], `false` otherwise.
     fn fits(self) -> bool {
         self.pixels <= MAX_LIVE_PIXELS && self.bytes <= MAX_LIVE_BYTES
     }
 
-    /// The load without `asset`, which the load holds.
-    fn without(self, asset: Footprint) -> Load {
-        Load {
+    /// The footprint without `asset`, which the footprint holds.
+    fn without(self, asset: Footprint) -> Footprint {
+        Footprint {
             pixels: self.pixels - asset.pixels,
             bytes: self.bytes - asset.bytes,
         }
     }
+}
+
+/// Returns an error if `images` go over the limits of a room together,
+/// since the server would lose one of them each frame.
+pub(crate) fn fit_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Result<(), RoomFull> {
+    let mut load = Footprint::NONE;
+    for image in images {
+        load = load.with(Footprint {
+            pixels: u64::from(image.width()) * u64::from(image.height()),
+            bytes: image.file().len() as u64,
+        })?;
+    }
+    Ok(())
 }
 
 /// Why an image cannot be an asset.
@@ -1157,7 +1152,7 @@ mod tests {
     #[test]
     fn a_load_refuses_an_asset_over_the_pixels_or_the_bytes_of_a_room() {
         let largest = Footprint::of(&png_head(2048, 2048)).unwrap();
-        let mut load = Load::default();
+        let mut load = Footprint::NONE;
         for _ in 0..8 {
             load = load.with(largest).unwrap();
         }
@@ -1174,7 +1169,7 @@ mod tests {
             pixels: 1,
             bytes: MAX_LIVE_BYTES,
         };
-        let load = Load::default().with(heavy).unwrap();
+        let load = Footprint::NONE.with(heavy).unwrap();
         assert_eq!(
             load.with(one),
             Err(RoomFull {
