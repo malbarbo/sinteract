@@ -15,21 +15,18 @@
 //! target/debug/examples/engine 200        # in a window, with no view
 //! ```
 
-// The view hands the engine fd 3 and fd 4, which only unix has. Without a
-// `main`, the empty crate needs `no_main`.
-#![cfg_attr(not(unix), no_main)]
-#![cfg(unix)]
+// The displays do not build on wasm32. Without a `main`, the empty crate
+// needs `no_main`.
+#![cfg_attr(target_arch = "wasm32", no_main)]
+#![cfg(not(target_arch = "wasm32"))]
 
-use std::fs::File;
-use std::io::BufWriter;
-use std::os::fd::FromRawFd;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use sinteract::display::{TerminalOptions, open_native};
-use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
+use sinteract::display::{Stage, StageEvent, TerminalOptions};
+use sinteract::event::{InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Bitmap, Image, Paint, PathStyle, RotatedRect, Scene};
-use sinteract::session::{Session, SessionEvent, Target};
+use sinteract::session::Target;
 use sinteract::wire::engine_to_server::PlayerRange;
 
 const WIDTH: f32 = 400.0;
@@ -40,102 +37,46 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let balls = args.first().and_then(|n| n.parse().ok()).unwrap_or(1);
     let big = args.get(1).is_some_and(|arg| arg == "big");
-    let game = Game::new(balls, big);
-    if std::env::var_os("SINTERACT_SESSION").is_none() {
-        return run_local(game);
-    }
-    run_session(game)
-}
-
-/// Run `game` for a view or a server, on fd 3 and fd 4.
-fn run_session(mut game: Game) -> ExitCode {
-    // SAFETY: SINTERACT_SESSION says that the parent opened fd 3 and fd 4
-    // for the session, and nothing else in this process uses them.
-    let (from_server, to_server) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
+    let mut game = Game::new(balls, big);
     // The example draws the same scene for every player, so it has no use
     // for the players.
-    let mut session = match Session::start(PLAYERS, from_server, BufWriter::new(to_server)) {
-        Ok((session, _players)) => session,
+    let options = TerminalOptions::default();
+    let mut stage = match Stage::open("engine", WIDTH, HEIGHT, PLAYERS, options) {
+        Ok((stage, _players)) => stage,
         Err(e) => {
             eprintln!("engine: {e}");
             return ExitCode::FAILURE;
         }
     };
-    // The end of fd 4, when the engine exits, ends the session for the
-    // server.
     loop {
-        let event = match session.wait() {
-            Ok(event) => event,
-            Err(e) => {
-                eprintln!("engine: {e}");
-                break;
-            }
-        };
-        match event {
-            SessionEvent::Tick => {
+        match stage.wait(None) {
+            Ok(StageEvent::Tick) => {
                 game.tick();
-                if let Err(e) = session.write_frame(Target::All, &game.scene()) {
+                if let Err(e) = stage.present(Target::All, game.scene()) {
                     eprintln!("engine: {e}");
                     break;
                 }
             }
-            SessionEvent::Input {
+            Ok(StageEvent::Input {
                 event: InputEvent::Key(k),
                 ..
-            } => match k.kind {
-                KeyKind::Press if k.key == "q" => break,
-                KeyKind::Press => game.key(&k.key),
-                KeyKind::Down | KeyKind::Up => {}
-            },
-            // A message the engine cannot read is a bug in the server, and
-            // the game goes on without it.
-            SessionEvent::Error(e) => eprintln!("engine: {e}"),
-            SessionEvent::End(broken) => {
-                if let Some(e) = broken {
-                    eprintln!("engine: {e}");
-                }
-                break;
-            }
-            SessionEvent::Input {
-                event: InputEvent::Mouse(_) | InputEvent::Resize { .. } | InputEvent::Pad(_),
-                ..
-            } => {}
-        }
-    }
-    ExitCode::SUCCESS
-}
-
-/// Run `game` in a window of this process, or in the terminal.
-fn run_local(mut game: Game) -> ExitCode {
-    let mut fr = match open_native("engine", WIDTH, HEIGHT, TerminalOptions::default()) {
-        Ok(fr) => fr,
-        Err(e) => {
-            eprintln!("engine: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    loop {
-        match fr.wait_event(None) {
-            Ok(Event::Tick) => {
-                game.tick();
-                if let Err(e) = fr.present(game.scene()) {
-                    eprintln!("engine: {e}");
-                    break;
-                }
-            }
-            Ok(Event::Input(InputEvent::Key(k))) if k.kind == KeyKind::Press => {
+            }) if k.kind == KeyKind::Press => {
                 if k.key == "q" {
                     break;
                 }
                 game.key(&k.key);
             }
-            Ok(Event::Input(_)) => {}
+            Ok(StageEvent::Input { .. }) => {}
+            // A message the engine cannot read is a bug in the server, and
+            // the game goes on without it.
+            Ok(StageEvent::Error(e)) => eprintln!("engine: {e}"),
             Err(Interrupt::Read(e)) => eprintln!("engine: {e}"),
             Err(Interrupt::Close) => break,
             Err(Interrupt::Wake | Interrupt::Timeout) => {}
         }
     }
-    fr.close();
+    // In a session, the end of fd 4 ends the room for the server.
+    stage.close();
     ExitCode::SUCCESS
 }
 

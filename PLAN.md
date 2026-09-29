@@ -190,8 +190,12 @@ engine não fala de um jogador que não está no jogo. A sessão fica com o
 servidor passa por ela. O `wait` devolve os eventos com o jogador, sempre com no
 máximo um `Tick` na fila, e o `write_frame` manda o frame, com cada imagem
 nova antes.
-Um host roda o jogo local num `Display` e o modo servidor numa `Session`, e
-um adaptador liga o jogo de um jogador só ao jogador 1.
+O `Stage` junta os dois modos num loop só. Com `SINTERACT_SESSION` no
+ambiente, o `Stage::open` abre a `Session` nos descritores 3 e 4, e senão
+abre a janela ou o terminal, em que o usuário é o jogador 1. O `wait`
+devolve cada entrada com o jogador, e o `present` manda o frame a um
+`Target`, então o spython e o sgleam escrevem o jogo uma vez para os dois
+modos.
 
 ## Dependências do servidor
 

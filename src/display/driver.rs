@@ -6,6 +6,7 @@ use std::io;
 use std::time::Instant;
 
 use super::inbox::Sender;
+use crate::asset::RoomFull;
 use crate::event::{Event, Interrupt};
 use crate::renderer::AllocError;
 use crate::scene::Scene;
@@ -75,10 +76,15 @@ pub enum PresentError {
     Closed,
     /// Rasterizing the scene failed.
     Alloc(AllocError),
-    /// A write to the terminal failed. Part of the frame may have arrived.
+    /// A write to the terminal or to the server failed. Part of the frame
+    /// may have arrived.
     Io(io::Error),
     /// The surface of the window refused the frame.
     Platform(String),
+    /// The images of the frame go over the limits of a room together. Only
+    /// a [`super::Stage`] in a session refuses such a frame, and nothing
+    /// went out.
+    Full(RoomFull),
 }
 
 impl fmt::Display for PresentError {
@@ -88,6 +94,7 @@ impl fmt::Display for PresentError {
             PresentError::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
             PresentError::Io(e) => write!(f, "cannot show the frame: {e}"),
             PresentError::Platform(e) => write!(f, "cannot show the frame: {e}"),
+            PresentError::Full(e) => e.fmt(f),
         }
     }
 }
@@ -97,6 +104,7 @@ impl std::error::Error for PresentError {
         match self {
             PresentError::Alloc(e) => Some(e),
             PresentError::Io(e) => Some(e),
+            PresentError::Full(e) => Some(e),
             PresentError::Closed | PresentError::Platform(_) => None,
         }
     }

@@ -55,11 +55,20 @@ pub struct Session<R, W> {
 }
 
 /// A player of the session. Only the session makes one, from the start, so
-/// a player that the engine holds is in the game.
+/// a player that the engine holds is in the game. On a display of this
+/// process, the `Stage` of the displays makes player 1, the one player
+/// there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Player(NonZeroU32);
 
 impl Player {
+    /// The one player of a game on a display of this process.
+    #[cfg_attr(
+        not(all(feature = "terminal", feature = "window", not(target_arch = "wasm32"))),
+        allow(dead_code)
+    )]
+    pub(crate) const LOCAL: Player = Player(NonZeroU32::MIN);
+
     /// The place of the player in the start, from 1.
     pub fn number(self) -> NonZeroU32 {
         self.0
