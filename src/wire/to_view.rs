@@ -155,7 +155,7 @@ pub fn write_tick_taken(w: &mut impl Write) -> io::Result<()> {
     write_framed(w, Side::Engine, &tick_taken_message())
 }
 
-/// Write the file of an image as the asset `id`.
+/// Write the blob of an image as the asset `id`.
 pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
     write_framed(w, Side::Engine, &asset_message(id, blob))
 }

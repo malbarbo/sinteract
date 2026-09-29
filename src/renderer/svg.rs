@@ -11,7 +11,7 @@
 //! gradient on a `<use>` starts again at each glyph. The text is not
 //! selectable.
 //!
-//! A bitmap is an `<image>` with the file of its image in a data URL, in
+//! A bitmap is an `<image>` with the blob of its image in a data URL, in
 //! `<defs>` once a frame and a `<use>` for each bitmap. A PNG and an
 //! upright JPEG go in as they are. With the feature `render`, any other
 //! image goes in as a PNG, so a GIF does not move and every viewer shows
@@ -116,30 +116,30 @@ impl Default for SvgRenderer {
     }
 }
 
-/// The file of `image` as a data URL, or `None` if it does not decode.
+/// The blob of `image` as a data URL, or `None` if it does not decode.
 fn data_url(image: &Image) -> Option<String> {
-    let file = image.file();
-    let (mime, file) = match embed(file).ok()? {
-        Embed::Png => ("image/png", Cow::Borrowed(file)),
-        Embed::Jpeg { .. } => ("image/jpeg", Cow::Borrowed(file)),
-        Embed::Decode { mime } => as_png(file, mime)?,
+    let blob = image.blob();
+    let (mime, blob) = match embed(blob).ok()? {
+        Embed::Png => ("image/png", Cow::Borrowed(blob)),
+        Embed::Jpeg { .. } => ("image/jpeg", Cow::Borrowed(blob)),
+        Embed::Decode { mime } => as_png(blob, mime)?,
     };
     let mut url = format!("data:{mime};base64,");
-    B64.encode_string(&file, &mut url);
+    B64.encode_string(&blob, &mut url);
     Some(url)
 }
 
-/// The image in `file` as a PNG, the way up that the pixmap draws it.
+/// The image in `blob` as a PNG, the way up that the pixmap draws it.
 #[cfg(feature = "render")]
-fn as_png<'a>(file: &'a [u8], _mime: &'static str) -> Option<(&'static str, Cow<'a, [u8]>)> {
-    let image = crate::asset::decode(file, crate::asset::MAX_IMAGE_PIXELS).ok()?;
+fn as_png<'a>(blob: &'a [u8], _mime: &'static str) -> Option<(&'static str, Cow<'a, [u8]>)> {
+    let image = crate::asset::decode(blob, crate::asset::MAX_IMAGE_PIXELS).ok()?;
     Some(("image/png", Cow::Owned(image.encode_png().ok()?)))
 }
 
 /// Without a decoder, the image goes in as it is, of the media type `mime`.
 #[cfg(not(feature = "render"))]
-fn as_png<'a>(file: &'a [u8], mime: &'static str) -> Option<(&'static str, Cow<'a, [u8]>)> {
-    Some((mime, Cow::Borrowed(file)))
+fn as_png<'a>(blob: &'a [u8], mime: &'static str) -> Option<(&'static str, Cow<'a, [u8]>)> {
+    Some((mime, Cow::Borrowed(blob)))
 }
 
 impl Canvas<Infallible> for SvgRenderer {

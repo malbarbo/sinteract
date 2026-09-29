@@ -231,7 +231,7 @@ impl Session {
                 self.next_id = id
                     .checked_add(1)
                     .expect("an engine sends fewer than 2^32 images");
-                to_view::write_asset(w, id, image.file())?;
+                to_view::write_asset(w, id, image.blob())?;
                 self.sent.insert(image.clone(), id);
             }
         }

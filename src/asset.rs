@@ -3,7 +3,7 @@
 //! under the limits.
 //!
 //! A limit counts the pixels, since each view decodes an asset to four
-//! bytes a pixel, and a small file can hold a large image. It also counts
+//! bytes a pixel, and a small blob can hold a large image. It also counts
 //! the bytes, which the server keeps and sends to each view.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -194,7 +194,7 @@ pub(crate) fn check_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Res
     for image in images {
         load = load.checked_plus(Footprint {
             pixels: image.pixels(),
-            bytes: image.file().len() as u64,
+            bytes: image.blob().len() as u64,
         })?;
     }
     Ok(())
@@ -247,26 +247,26 @@ impl fmt::Display for RoomFull {
 
 impl std::error::Error for RoomFull {}
 
-/// `file`, or a PNG of it shrunk to [`MAX_IMAGE_PIXELS`] with its ratio if
+/// `blob`, or a PNG of it shrunk to [`MAX_IMAGE_PIXELS`] with its ratio if
 /// it is larger, for [`Image::new`](crate::scene::Image::new). A front end
 /// calls it once, as it loads the image. An image shrinks, with the feature
 /// `render`, up to [`MAX_SHRINK_PIXELS`], and is an error past that or
-/// without the feature. It is an error too if `file` is not a PNG, a JPEG,
+/// without the feature. It is an error too if `blob` is not a PNG, a JPEG,
 /// a GIF or a WebP.
-pub fn fit_image(file: Vec<u8>) -> Result<Vec<u8>, ImageError> {
-    let size = head(&file).ok_or(ImageError::Unsupported)?.size;
+pub fn fit_image(blob: Vec<u8>) -> Result<Vec<u8>, ImageError> {
+    let size = head(&blob).ok_or(ImageError::Unsupported)?.size;
     if pixels(size) > MAX_IMAGE_PIXELS {
-        shrink(&file, size)
+        shrink(&blob, size)
     } else {
-        Ok(file)
+        Ok(blob)
     }
 }
 
-/// The size on the screen of the image in `file`, after the EXIF
+/// The size on the screen of the image in `blob`, after the EXIF
 /// orientation of a JPEG, or an error if it is not a PNG, a JPEG, a GIF or
 /// a WebP, or has more than [`MAX_IMAGE_PIXELS`].
-pub(crate) fn screen_size(file: &[u8]) -> Result<(u32, u32), ImageError> {
-    let head = head(file).ok_or(ImageError::Unsupported)?;
+pub(crate) fn screen_size(blob: &[u8]) -> Result<(u32, u32), ImageError> {
+    let head = head(blob).ok_or(ImageError::Unsupported)?;
     check_pixels(head.size, MAX_IMAGE_PIXELS)?;
     let (width, height) = head.size;
     Ok(if head.turned() {
@@ -276,7 +276,7 @@ pub(crate) fn screen_size(file: &[u8]) -> Result<(u32, u32), ImageError> {
     })
 }
 
-/// How a document that holds the files of its images, such as an SVG or a
+/// How a document that holds the encoded images, such as an SVG or a
 /// PDF, takes an image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Embed {

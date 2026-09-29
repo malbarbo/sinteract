@@ -614,37 +614,37 @@ fn all_finite(values: &[f32]) -> bool {
     values.iter().all(|v| v.is_finite())
 }
 
-/// The file of a PNG, a JPEG, a GIF or a WebP of at most
+/// An encoded PNG, JPEG, GIF or WebP of at most
 /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS), with its size on
-/// the screen. A clone shares the file. Two images are equal when their
-/// files are, so a renderer or a session finds an image again by its
+/// the screen. A clone shares the blob. Two images are equal when their
+/// blobs are, so a renderer or a session finds an image again by its
 /// content.
 #[derive(Clone)]
 pub struct Image(Arc<ImageData>);
 
 struct ImageData {
-    file: Box<[u8]>,
-    /// The hash of `file`, so a lookup does not read the file again.
+    blob: Box<[u8]>,
+    /// The hash of `blob`, so a lookup does not read the blob again.
     hash: u64,
     width: u32,
     height: u32,
 }
 
 impl Image {
-    /// Read the header of `file` and hash it. Returns an error if `file` is
+    /// Read the header of `blob` and hash it. Returns an error if `blob` is
     /// not a PNG, a JPEG, a GIF or a WebP, or has more than
     /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS).
     /// [`crate::asset::fit_image`] shrinks a larger one first. The size is
     /// the one after the EXIF orientation of a JPEG.
-    pub fn new(file: Vec<u8>) -> Result<Image, ImageError> {
-        let (width, height) = crate::asset::screen_size(&file)?;
+    pub fn new(blob: Vec<u8>) -> Result<Image, ImageError> {
+        let (width, height) = crate::asset::screen_size(&blob)?;
         let hash = {
             let mut hasher = std::hash::DefaultHasher::new();
-            file.hash(&mut hasher);
+            blob.hash(&mut hasher);
             hasher.finish()
         };
         Ok(Image(Arc::new(ImageData {
-            file: file.into_boxed_slice(),
+            blob: blob.into_boxed_slice(),
             hash,
             width,
             height,
@@ -664,15 +664,15 @@ impl Image {
         u64::from(self.0.width) * u64::from(self.0.height)
     }
 
-    pub(crate) fn file(&self) -> &[u8] {
-        &self.0.file
+    pub(crate) fn blob(&self) -> &[u8] {
+        &self.0.blob
     }
 }
 
 impl PartialEq for Image {
     fn eq(&self, other: &Image) -> bool {
         self.0.hash == other.0.hash
-            && (Arc::ptr_eq(&self.0, &other.0) || self.0.file == other.0.file)
+            && (Arc::ptr_eq(&self.0, &other.0) || self.0.blob == other.0.blob)
     }
 }
 
@@ -691,7 +691,7 @@ impl std::fmt::Debug for Image {
             "Image({}x{}, {} bytes, {:016x})",
             self.0.width,
             self.0.height,
-            self.0.file.len(),
+            self.0.blob.len(),
             self.0.hash
         )
     }
@@ -1738,9 +1738,9 @@ mod tests {
     #[test]
     fn two_images_of_the_same_file_are_equal() {
         use std::collections::HashSet;
-        let file = crate::asset::png_head(2, 3);
-        let a = Image::new(file.clone()).unwrap();
-        let b = Image::new(file).unwrap();
+        let blob = crate::asset::png_head(2, 3);
+        let a = Image::new(blob.clone()).unwrap();
+        let b = Image::new(blob).unwrap();
         let c = Image::new(crate::asset::png_head(3, 2)).unwrap();
         assert_eq!(a, b);
         assert_ne!(a, c);

@@ -558,12 +558,12 @@ mod tests {
             })
         };
         assert_eq!(drawn(&frame), Some(None));
-        assert_eq!(drawn(&encode_asset(3, image.file())), None);
+        assert_eq!(drawn(&encode_asset(3, image.blob())), None);
         assert_eq!(drawn(&frame), Some(Some(image.clone())));
         assert_eq!(drawn(&to_view::encode_forget(3)), None);
         assert_eq!(drawn(&frame), Some(None));
         // An asset that is not an image leaves its id with no image.
-        drawn(&encode_asset(3, image.file()));
+        drawn(&encode_asset(3, image.blob()));
         drawn(&encode_asset(3, b"GIF"));
         assert_eq!(drawn(&frame), Some(None));
     }

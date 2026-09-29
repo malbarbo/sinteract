@@ -101,7 +101,7 @@ pub(crate) fn encode_frame_to(player: Option<NonZeroU32>, scene: &Scene) -> Vec<
     super::finish(to_view::frame_message(player, scene, &Image::width))
 }
 
-/// Encode the file of an image as the asset `id`, with no envelope.
+/// Encode the blob of an image as the asset `id`, with no envelope.
 pub(crate) fn encode_asset(id: u32, blob: &[u8]) -> Vec<u8> {
     super::finish(to_view::asset_message(id, blob))
 }

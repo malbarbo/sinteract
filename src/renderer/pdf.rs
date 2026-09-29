@@ -18,7 +18,7 @@
 //! from the raster and the svg.
 //!
 //! A bitmap is an image XObject, written once for each image and sampling
-//! of the frame. An upright JPEG goes in as its file, and any other image
+//! of the frame. An upright JPEG goes in as its blob, and any other image
 //! goes in decoded, with its alpha in a soft mask.
 //!
 //! A shading has no alpha. A gradient whose stops differ in alpha draws its
@@ -117,8 +117,8 @@ struct XImage {
 
 #[derive(Clone, Debug)]
 enum Samples {
-    /// The file of a JPEG, which a PDF decodes.
-    Jpeg { file: Vec<u8>, color: JpegColor },
+    /// The blob of a JPEG, which a PDF decodes.
+    Jpeg { blob: Vec<u8>, color: JpegColor },
     /// The colors in RGB and the alphas, each compressed, and no alphas when
     /// every pixel is opaque.
     Deflated {
@@ -130,17 +130,17 @@ enum Samples {
 impl XImage {
     /// `image` ready for a PDF, or `None` if it does not decode.
     fn of(image: &Image) -> Option<Self> {
-        let file = image.file();
-        Some(match embed(file).ok()? {
+        let blob = image.blob();
+        Some(match embed(blob).ok()? {
             Embed::Jpeg { color, size } => XImage {
                 size,
                 samples: Samples::Jpeg {
-                    file: file.to_vec(),
+                    blob: blob.to_vec(),
                     color,
                 },
             },
             Embed::Png | Embed::Decode { .. } => {
-                XImage::deflated(&crate::asset::decode(file, MAX_IMAGE_PIXELS).ok()?)
+                XImage::deflated(&crate::asset::decode(blob, MAX_IMAGE_PIXELS).ok()?)
             }
         })
     }
@@ -718,7 +718,7 @@ fn write_image(pdf: &mut Pdf, image: &XImage, sampling: Sampling, id: Ref, mask:
     // A viewer may sample the image as it likes when this is true.
     let interpolate = sampling == Sampling::Smooth;
     let (samples, filter) = match &image.samples {
-        Samples::Jpeg { file, .. } => (file, Filter::DctDecode),
+        Samples::Jpeg { blob, .. } => (blob, Filter::DctDecode),
         Samples::Deflated { rgb, .. } => (rgb, Filter::FlateDecode),
     };
     let mut x = pdf.image_xobject(id, samples);

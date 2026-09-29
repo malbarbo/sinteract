@@ -183,7 +183,7 @@ impl Decoded {
             let spilled = self.spill.take_if(|(spilled, _)| spilled == image);
             let pixmap = match spilled {
                 Some((_, pixmap)) => pixmap,
-                None => crate::asset::decode(image.file(), MAX_IMAGE_PIXELS).ok(),
+                None => crate::asset::decode(image.blob(), MAX_IMAGE_PIXELS).ok(),
             };
             if self.pixels - room + need > MAX_LIVE_PIXELS {
                 let (_, pixmap) = self.spill.insert((image.clone(), pixmap));
