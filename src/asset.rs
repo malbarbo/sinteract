@@ -28,7 +28,7 @@ pub const MAX_LIVE_PIXELS: u64 = 8 * MAX_IMAGE_PIXELS;
 pub const MAX_LIVE_BYTES: u64 = 48 << 20;
 
 /// The live assets of a room, under the limits at each frame.
-/// [`Cache::asset`] keeps a new asset, and [`Cache::frame`] says which
+/// [`Cache::insert`] keeps a new asset, and [`Cache::use_frame`] says which
 /// assets a frame draws and drops the ones that the frames used longest
 /// ago, down to the limits. An asset that the frame draws goes last, so an
 /// engine that fits the images of each frame in the limits never loses one
@@ -71,7 +71,7 @@ impl<T> Cache<T> {
     /// frame. Returns an error if the asset does not fit beside the others
     /// that came after the last frame, since no frame can draw them all. An
     /// error changes nothing.
-    pub fn asset(&mut self, id: u32, footprint: Footprint, value: T) -> Result<(), RoomFull> {
+    pub fn insert(&mut self, id: u32, footprint: Footprint, value: T) -> Result<(), RoomFull> {
         assert!(!self.contains(id), "the asset {id} is live");
         self.new = self.new.with(footprint)?;
         self.live.insert(
@@ -89,7 +89,7 @@ impl<T> Cache<T> {
     /// the assets that it drops to fit the limits, the ones that the
     /// frames used longest ago first. An id that is not live changes
     /// nothing.
-    pub fn frame(&mut self, ids: &BTreeSet<u32>) -> Vec<u32> {
+    pub fn use_frame(&mut self, ids: &BTreeSet<u32>) -> Vec<u32> {
         for id in ids {
             if let Some(live) = self.live.get_mut(id) {
                 live.used = self.frames;
@@ -792,25 +792,25 @@ mod tests {
     fn full() -> Cache<()> {
         let mut cache = Cache::new();
         for id in 0..8 {
-            assert_eq!(cache.asset(id, largest(), ()), Ok(()));
+            assert_eq!(cache.insert(id, largest(), ()), Ok(()));
         }
-        assert_eq!(cache.frame(&ids(&[])), []);
+        assert_eq!(cache.use_frame(&ids(&[])), []);
         cache
     }
 
     #[test]
     fn a_frame_drops_the_assets_that_the_frames_used_longest_ago() {
         let mut cache = full();
-        cache.frame(&ids(&[0, 3]));
-        cache.frame(&ids(&[5]));
-        cache.frame(&ids(&[]));
-        assert_eq!(cache.asset(8, largest(), ()), Ok(()));
-        assert_eq!(cache.asset(9, largest(), ()), Ok(()));
-        assert_eq!(cache.frame(&ids(&[8, 9])), [1, 2]);
+        cache.use_frame(&ids(&[0, 3]));
+        cache.use_frame(&ids(&[5]));
+        cache.use_frame(&ids(&[]));
+        assert_eq!(cache.insert(8, largest(), ()), Ok(()));
+        assert_eq!(cache.insert(9, largest(), ()), Ok(()));
+        assert_eq!(cache.use_frame(&ids(&[8, 9])), [1, 2]);
         for id in 10..14 {
-            assert_eq!(cache.asset(id, largest(), ()), Ok(()));
+            assert_eq!(cache.insert(id, largest(), ()), Ok(()));
         }
-        assert_eq!(cache.frame(&ids(&[])), [4, 6, 7, 0]);
+        assert_eq!(cache.use_frame(&ids(&[])), [4, 6, 7, 0]);
         assert!(!cache.contains(0));
         assert!(cache.contains(3));
     }
@@ -818,17 +818,17 @@ mod tests {
     #[test]
     fn a_frame_keeps_an_old_asset_that_it_draws_beside_a_new_one() {
         let mut cache = full();
-        cache.frame(&ids(&[1, 2, 3, 4, 5, 6, 7]));
-        assert_eq!(cache.asset(8, largest(), ()), Ok(()));
-        assert_eq!(cache.frame(&ids(&[0, 8])), [1]);
+        cache.use_frame(&ids(&[1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(cache.insert(8, largest(), ()), Ok(()));
+        assert_eq!(cache.use_frame(&ids(&[0, 8])), [1]);
         assert!(cache.contains(0) && cache.contains(8));
     }
 
     #[test]
     fn a_frame_that_draws_over_the_limits_drops_its_own_assets() {
         let mut cache = full();
-        assert_eq!(cache.asset(8, largest(), ()), Ok(()));
-        assert_eq!(cache.frame(&ids(&[0, 1, 2, 3, 4, 5, 6, 7, 8])), [0]);
+        assert_eq!(cache.insert(8, largest(), ()), Ok(()));
+        assert_eq!(cache.use_frame(&ids(&[0, 1, 2, 3, 4, 5, 6, 7, 8])), [0]);
     }
 
     #[test]
@@ -842,12 +842,12 @@ mod tests {
             pixels: 1,
             bytes: MAX_LIVE_BYTES,
         };
-        assert_eq!(cache.asset(8, heavy, ()), Ok(()));
-        assert!(matches!(cache.asset(9, small, ()), Err(RoomFull { .. })));
+        assert_eq!(cache.insert(8, heavy, ()), Ok(()));
+        assert!(matches!(cache.insert(9, small, ()), Err(RoomFull { .. })));
         assert!(!cache.contains(9));
-        assert_eq!(cache.frame(&ids(&[8])), [0, 1, 2, 3, 4, 5, 6, 7]);
-        assert_eq!(cache.asset(9, small, ()), Ok(()));
-        assert_eq!(cache.frame(&ids(&[9])), [8]);
+        assert_eq!(cache.use_frame(&ids(&[8])), [0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(cache.insert(9, small, ()), Ok(()));
+        assert_eq!(cache.use_frame(&ids(&[9])), [8]);
     }
 
     #[test]

@@ -564,7 +564,7 @@ impl ServerCore {
         if self.cache.contains(id) {
             return Err(EngineError::LiveId(id));
         }
-        if self.cache.asset(id, footprint, payload).is_err() {
+        if self.cache.insert(id, footprint, payload).is_err() {
             self.lose(id);
         }
         Ok(())
@@ -593,7 +593,7 @@ impl ServerCore {
             .iter()
             .filter_map(|id| Some((*id, self.cache.get(*id)?.clone())))
             .collect();
-        let gone = self.cache.frame(ids);
+        let gone = self.cache.use_frame(ids);
         let frame = Frame {
             payload,
             assets: Arc::new(assets),
