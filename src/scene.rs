@@ -84,9 +84,10 @@ pub enum SpreadMode {
     Repeat = 2,
 }
 
-/// The axis of a gradient, in path coordinates.
+/// The geometry of a gradient in path coordinates, the line of a linear
+/// one or the center and the radius of a radial one.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum GradientGeom {
+pub enum GradientGeometry {
     /// Along the line from (x0, y0) to (x1, y1).
     Linear { x0: f32, y0: f32, x1: f32, y1: f32 },
     /// Outward from (cx, cy) to `radius`.
@@ -105,14 +106,14 @@ pub enum GradientGeom {
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gradient {
-    geom: GradientGeom,
+    geometry: GradientGeometry,
     stops: Stops,
     spread: SpreadMode,
 }
 
 impl Gradient {
-    pub fn geom(&self) -> GradientGeom {
-        self.geom
+    pub fn geometry(&self) -> GradientGeometry {
+        self.geometry
     }
 
     pub fn stops(&self) -> &Stops {
@@ -129,18 +130,18 @@ impl Gradient {
 /// where the svg and the pdf paint the ramp. The scaling moves the color
 /// under a path by less than a step of an f32. A coordinate that is not
 /// finite passes through, and the scene drops the element.
-fn measurable(geom: GradientGeom) -> GradientGeom {
-    let GradientGeom::Linear { x0, y0, x1, y1 } = geom else {
-        return geom;
+fn measurable(geometry: GradientGeometry) -> GradientGeometry {
+    let GradientGeometry::Linear { x0, y0, x1, y1 } = geometry else {
+        return geometry;
     };
     let length = (x1 as f64 - x0 as f64).hypot(y1 as f64 - y0 as f64);
     if !(length > f32::MAX as f64 && length.is_finite()) {
-        return geom;
+        return geometry;
     }
     // Half of the longest an f32 measures, so the length still has room after
     // the four products round.
     let k = (0.5 * f32::MAX as f64 / length) as f32;
-    GradientGeom::Linear {
+    GradientGeometry::Linear {
         x0: x0 * k,
         y0: y0 * k,
         x1: x1 * k,
@@ -172,7 +173,7 @@ impl Paint {
     /// [`SpreadMode::Pad`] outside it.
     pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Self {
         Self::gradient(
-            GradientGeom::Linear { x0, y0, x1, y1 },
+            GradientGeometry::Linear { x0, y0, x1, y1 },
             stops,
             SpreadMode::Pad,
         )
@@ -182,7 +183,7 @@ impl Paint {
     /// outside it.
     pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Self {
         Self::gradient(
-            GradientGeom::Radial { cx, cy, radius },
+            GradientGeometry::Radial { cx, cy, radius },
             stops,
             SpreadMode::Pad,
         )
@@ -204,12 +205,16 @@ impl Paint {
     /// something else. No stops give a transparent color. It shortens an
     /// axis too long to measure. The wire decoder calls it, because it reads
     /// the three parts apart.
-    pub(crate) fn gradient(geom: GradientGeom, stops: Vec<Stop>, spread: SpreadMode) -> Self {
+    pub(crate) fn gradient(
+        geometry: GradientGeometry,
+        stops: Vec<Stop>,
+        spread: SpreadMode,
+    ) -> Self {
         let Some(stops) = Stops::new(stops) else {
             return Self::default();
         };
         let g = Gradient {
-            geom: measurable(geom),
+            geometry: measurable(geometry),
             stops,
             spread,
         };
@@ -217,9 +222,9 @@ impl Paint {
         // from one of no extent at all, so the scene decides here and the
         // three backends agree.
         const NO_EXTENT: f32 = 1.0 / (1 << 15) as f32;
-        let no_extent = match g.geom {
-            GradientGeom::Linear { x0, y0, x1, y1 } => (x1 - x0).hypot(y1 - y0) <= NO_EXTENT,
-            GradientGeom::Radial { radius, .. } => radius <= NO_EXTENT,
+        let no_extent = match g.geometry {
+            GradientGeometry::Linear { x0, y0, x1, y1 } => (x1 - x0).hypot(y1 - y0) <= NO_EXTENT,
+            GradientGeometry::Radial { radius, .. } => radius <= NO_EXTENT,
         };
         if no_extent {
             Self::Solid(g.stops.last().color)
@@ -252,11 +257,11 @@ impl Paint {
         match self {
             Self::Solid(c) => c.a.is_finite(),
             Self::Gradient(g) => {
-                let geom = match g.geom {
-                    GradientGeom::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
-                    GradientGeom::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
+                let geometry = match g.geometry {
+                    GradientGeometry::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
+                    GradientGeometry::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
                 };
-                geom && g.stops.iter().all(|s| all_finite(&[s.offset, s.color.a]))
+                geometry && g.stops.iter().all(|s| all_finite(&[s.offset, s.color.a]))
             }
         }
     }
@@ -1949,38 +1954,38 @@ mod tests {
         };
         let stops = vec![stop(0.0, 10), stop(1.0, 200)];
         let last = Paint::Solid(stop(1.0, 200).color);
-        for geom in [
-            GradientGeom::Radial {
+        for geometry in [
+            GradientGeometry::Radial {
                 cx: 5.0,
                 cy: 5.0,
                 radius: 0.0,
             },
-            GradientGeom::Radial {
+            GradientGeometry::Radial {
                 cx: 5.0,
                 cy: 5.0,
                 radius: -3.0,
             },
-            GradientGeom::Linear {
+            GradientGeometry::Linear {
                 x0: 5.0,
                 y0: 5.0,
                 x1: 5.0,
                 y1: 5.0,
             },
             // Below the threshold of a rasterizer, so it has no extent too.
-            GradientGeom::Radial {
+            GradientGeometry::Radial {
                 cx: 5.0,
                 cy: 5.0,
                 radius: 1e-6,
             },
-            GradientGeom::Linear {
+            GradientGeometry::Linear {
                 x0: 5.0,
                 y0: 5.0,
                 x1: 5.000001,
                 y1: 5.0,
             },
         ] {
-            let paint = Paint::gradient(geom, stops.clone(), SpreadMode::Repeat);
-            assert_eq!(paint, last, "{geom:?}");
+            let paint = Paint::gradient(geometry, stops.clone(), SpreadMode::Repeat);
+            assert_eq!(paint, last, "{geometry:?}");
         }
         assert!(matches!(
             Paint::radial(5.0, 5.0, 1.0, stops),
@@ -1999,8 +2004,8 @@ mod tests {
     fn a_gradient_axis_too_long_to_measure_shrinks_about_the_origin() {
         let stops = vec![Stop::default(), Stop::default()];
         let axis = |p: Paint| match p {
-            Paint::Gradient(g) => match g.geom() {
-                GradientGeom::Linear { x0, y0, x1, y1 } => (x0, y0, x1, y1),
+            Paint::Gradient(g) => match g.geometry() {
+                GradientGeometry::Linear { x0, y0, x1, y1 } => (x0, y0, x1, y1),
                 radial => panic!("expected a line, got {radial:?}"),
             },
             solid => panic!("expected a gradient, got {solid:?}"),

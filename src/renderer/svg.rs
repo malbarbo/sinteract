@@ -32,7 +32,7 @@ use crate::renderer::{
     missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeom, Image, LineCap,
+    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeometry, Image, LineCap,
     LineJoin, Paint, Path, Rgba, Sampling, SpreadMode, Text,
 };
 use crate::text::{Glyph, TextLayout};
@@ -441,15 +441,15 @@ impl SvgRenderer {
         self.gradients += 1;
         let prefix = &self.prefix;
         let defs = &mut self.defs;
-        match g.geom() {
-            GradientGeom::Linear { x0, y0, x1, y1 } => {
+        match g.geometry() {
+            GradientGeometry::Linear { x0, y0, x1, y1 } => {
                 _ = write!(
                     defs,
                     "<linearGradient id=\"{prefix}p{id}\" gradientUnits=\"userSpaceOnUse\" \
                      x1=\"{x0}\" y1=\"{y0}\" x2=\"{x1}\" y2=\"{y1}\""
                 );
             }
-            GradientGeom::Radial { cx, cy, radius } => {
+            GradientGeometry::Radial { cx, cy, radius } => {
                 _ = write!(
                     defs,
                     "<radialGradient id=\"{prefix}p{id}\" gradientUnits=\"userSpaceOnUse\" \
@@ -474,9 +474,9 @@ impl SvgRenderer {
             write_color(stop.color, "stop-color", "stop-opacity", defs);
             defs.push_str("/>");
         }
-        match g.geom() {
-            GradientGeom::Linear { .. } => defs.push_str("</linearGradient>\n"),
-            GradientGeom::Radial { .. } => defs.push_str("</radialGradient>\n"),
+        match g.geometry() {
+            GradientGeometry::Linear { .. } => defs.push_str("</linearGradient>\n"),
+            GradientGeometry::Radial { .. } => defs.push_str("</radialGradient>\n"),
         }
         id
     }

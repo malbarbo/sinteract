@@ -40,7 +40,7 @@ use crate::renderer::{
     sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, Gradient, GradientGeom, Image, LineCap, LineJoin, Paint, Path,
+    Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin, Paint, Path,
     Rgba, Sampling, Stop, Text,
 };
 use crate::text::TextLayout;
@@ -897,7 +897,7 @@ fn quad_to_cubic(p0: (f32, f32), cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32,
 
 /// A gradient of the frame, with the stops that its functions take.
 struct Shading {
-    geom: GradientGeom,
+    geometry: GradientGeometry,
     /// Padded by [`Shading::new`].
     stops: Vec<Stop>,
     /// Maps the gradient to the page, or to the form of the layer that holds
@@ -928,7 +928,7 @@ impl Shading {
             });
         }
         Self {
-            geom: g.geom(),
+            geometry: g.geometry(),
             stops,
             matrix,
             masked: varying_alpha(g),
@@ -1025,12 +1025,12 @@ impl Shading {
     ) {
         let mut sh = pdf.function_shading(id);
         color_space(sh.color_space());
-        match self.geom {
-            GradientGeom::Linear { x0, y0, x1, y1 } => {
+        match self.geometry {
+            GradientGeometry::Linear { x0, y0, x1, y1 } => {
                 sh.shading_type(FunctionShadingType::Axial);
                 sh.coords([x0, y0, x1, y1]);
             }
-            GradientGeom::Radial { cx, cy, radius } => {
+            GradientGeometry::Radial { cx, cy, radius } => {
                 sh.shading_type(FunctionShadingType::Radial);
                 // One center and a zero inner radius, as in SVG.
                 sh.coords([cx, cy, 0.0, cx, cy, radius]);

@@ -18,7 +18,7 @@ use crate::renderer::{
     frame_side, missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, GradientGeom, Image, LineCap, LineJoin, Paint, Path, Rgba,
+    Bitmap, ClipPath, FillRule, GradientGeometry, Image, LineCap, LineJoin, Paint, Path, Rgba,
     Sampling, SpreadMode, Stops, Text,
 };
 use crate::text::TextLayout;
@@ -599,15 +599,15 @@ fn paint_to_shader(p: &Paint, fade: f32) -> SkShader<'static> {
     };
     let stops = sk_stops(g.stops(), fade);
     let spread = sk_spread(g.spread());
-    match g.geom() {
-        GradientGeom::Linear { x0, y0, x1, y1 } => tiny_skia::LinearGradient::new(
+    match g.geometry() {
+        GradientGeometry::Linear { x0, y0, x1, y1 } => tiny_skia::LinearGradient::new(
             SkPoint::from_xy(x0, y0),
             SkPoint::from_xy(x1, y1),
             stops,
             spread,
             Transform::identity(),
         ),
-        GradientGeom::Radial { cx, cy, radius } => {
+        GradientGeometry::Radial { cx, cy, radius } => {
             let center = SkPoint::from_xy(cx, cy);
             tiny_skia::RadialGradient::new(
                 center,

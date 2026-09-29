@@ -7,9 +7,9 @@
 use std::collections::BTreeSet;
 
 use crate::scene::{
-    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeom, Image, LineCap, LineJoin,
-    MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind, Segments,
-    SpreadMode, Stop, Stops, Text, TextSpec, end_segments, push_segment,
+    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
+    LineJoin, MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind,
+    Segments, SpreadMode, Stop, Stops, Text, TextSpec, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -181,8 +181,8 @@ fn read_stops(
 fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
     match p {
         Paint::Solid(c) => write_rgba(b.init_solid(), *c),
-        Paint::Gradient(g) => match g.geom() {
-            GradientGeom::Linear { x0, y0, x1, y1 } => {
+        Paint::Gradient(g) => match g.geometry() {
+            GradientGeometry::Linear { x0, y0, x1, y1 } => {
                 let mut b = b.init_linear();
                 b.set_x0(x0);
                 b.set_y0(y0);
@@ -191,7 +191,7 @@ fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
                 b.set_spread(spread_to_wire(g.spread()));
                 write_stops(b.init_stops(g.stops().len() as u32), g.stops());
             }
-            GradientGeom::Radial { cx, cy, radius } => {
+            GradientGeometry::Radial { cx, cy, radius } => {
                 let mut b = b.init_radial();
                 b.set_cx(cx);
                 b.set_cy(cy);
@@ -216,29 +216,29 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
     };
     // A null stops pointer reads as an empty list, so an absent ramp needs
     // no guard.
-    let (geom, stops, spread) = match which {
+    let (geometry, stops, spread) = match which {
         Which::Solid(c) => return Ok(Paint::Solid(read_rgba(c?))),
         Which::Linear(g) => {
             let g = g?;
-            let geom = GradientGeom::Linear {
+            let geometry = GradientGeometry::Linear {
                 x0: g.get_x0(),
                 y0: g.get_y0(),
                 x1: g.get_x1(),
                 y1: g.get_y1(),
             };
-            (geom, read_stops(g.get_stops()?)?, g.get_spread()?)
+            (geometry, read_stops(g.get_stops()?)?, g.get_spread()?)
         }
         Which::Radial(g) => {
             let g = g?;
-            let geom = GradientGeom::Radial {
+            let geometry = GradientGeometry::Radial {
                 cx: g.get_cx(),
                 cy: g.get_cy(),
                 radius: g.get_radius(),
             };
-            (geom, read_stops(g.get_stops()?)?, g.get_spread()?)
+            (geometry, read_stops(g.get_stops()?)?, g.get_spread()?)
         }
     };
-    Ok(Paint::gradient(geom, stops, spread_from_wire(spread)))
+    Ok(Paint::gradient(geometry, stops, spread_from_wire(spread)))
 }
 
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
