@@ -9,7 +9,7 @@
 //! for a view, when the view no longer needs an asset.
 //!
 //! [`crate::session::Session::write_frame`] writes the assets and the
-//! frame, and a view reads them back with a [`Reader`].
+//! frame, and a view reads them back with a [`FrameReader`].
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Write};
@@ -26,13 +26,15 @@ use super::framing::{Side, write_framed};
 use super::protocol::decode_root;
 use super::scene::{read_bitmap_ids, read_scene, write_scene};
 
-/// The images of the assets that a view keeps, which the frames draw.
+/// The reader of the frames of the engine for a view, which returns the
+/// scene of each frame. It keeps the images of the assets that the frames
+/// draw, so a view reads its whole connection with one.
 #[derive(Debug, Default)]
-pub struct Reader {
+pub struct FrameReader {
     images: HashMap<u32, Image>,
 }
 
-impl Reader {
+impl FrameReader {
     pub fn new() -> Self {
         Self::default()
     }

@@ -88,8 +88,8 @@ Regras da sessão com servidor:
   `Session::write_frame` manda um asset logo antes do primeiro frame que
   o desenha e dá o `id` pelo conteúdo da imagem, então um programa que
   monta a mesma imagem a cada frame a manda uma vez só. Na view, o
-  `engine_message::Reader` guarda as imagens dos assets e devolve cada frame
-  como uma `Scene` com as imagens;
+  `engine_message::FrameReader` guarda as imagens dos assets e devolve
+  cada frame como uma `Scene` com as imagens;
 - uma imagem é um PNG, um JPEG, um GIF ou um WebP, e o formato vem dos
   primeiros bytes. O servidor não decodifica nada. Ele lê o tamanho no
   cabeçalho, que é o tamanho que o decodificador aloca, e o limite de
@@ -224,7 +224,8 @@ Feito no sinteract:
 - a `Session`, com o `tick` do servidor e a fila que junta
   movimentos por jogador;
 - a imagem na cena, os assets com `lost` e `forget`, a
-  `Session::write_frame`, o `engine_message::Reader` e o `Cache` de uma sala;
+  `Session::write_frame`, o `engine_message::FrameReader` e o `Cache` de
+  uma sala;
 - o `ServerCore`, com as regras de uma sala e sem I/O, sobre
   `framing::split_message`, `view_message::decode` e `engine_message::arm`;
 - a feature `render`, que um servidor desliga.

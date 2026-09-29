@@ -29,7 +29,7 @@ use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
 use sinteract::server::{Conn, Next, ServerCore};
-use sinteract::wire::engine_message::Reader;
+use sinteract::wire::engine_message::FrameReader;
 
 /// How many reads of the engine the reader thread holds before it waits
 /// for the loop, so an engine that draws faster than the view does not
@@ -80,7 +80,7 @@ fn main() -> ExitCode {
     let wake = fr.sender();
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
-    let mut reader = Reader::new();
+    let mut reader = FrameReader::new();
     let mut stats = Stats::default();
     loop {
         match fr.wait_event(None) {
@@ -247,7 +247,7 @@ fn show(
     fr: &mut dyn Display,
     core: &mut ServerCore,
     conn: Conn,
-    reader: &mut Reader,
+    reader: &mut FrameReader,
     stats: &mut Stats,
 ) -> Result<(), Option<PresentError>> {
     loop {

@@ -549,7 +549,7 @@ mod tests {
         let mut scene = Scene::new(4.0, 4.0);
         scene.add_bitmap(bitmap(3));
         let frame = encode_frame(&scene);
-        let mut reader = engine_message::Reader::new();
+        let mut reader = engine_message::FrameReader::new();
         let mut drawn = |payload: &[u8]| {
             let scene = reader.read(payload).unwrap()?;
             Some(match scene.elements() {
