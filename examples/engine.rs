@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use sinteract::display::{Stage, StageEvent, TerminalOptions};
 use sinteract::event::{InputEvent, Interrupt, KeyKind, key};
-use sinteract::scene::{Bitmap, Image, Paint, PathStyle, RotatedRect, Scene};
+use sinteract::scene::{Bitmap, Image, Paint, Path, PathStyle, RotatedRect, Scene};
 use sinteract::session::PlayerRange;
 use sinteract::session::Target;
 
@@ -186,16 +186,20 @@ impl Game {
             closed: true,
             ..PathStyle::default()
         };
-        scene
-            .path(fill(20, 20, 40), 0.0, 0.0)
-            .line_to(WIDTH, 0.0)
-            .line_to(WIDTH, HEIGHT)
-            .line_to(0.0, HEIGHT);
+        scene.add_path(
+            Path::builder(fill(20, 20, 40), 0.0, 0.0)
+                .line_to(WIDTH, 0.0)
+                .line_to(WIDTH, HEIGHT)
+                .line_to(0.0, HEIGHT)
+                .build(),
+        );
         for b in &self.balls {
-            scene
-                .path(fill(240, 180, 40), b.x - RADIUS, b.y)
-                .arc_to(RADIUS, RADIUS, 0.0, false, true, b.x + RADIUS, b.y)
-                .arc_to(RADIUS, RADIUS, 0.0, false, true, b.x - RADIUS, b.y);
+            scene.add_path(
+                Path::builder(fill(240, 180, 40), b.x - RADIUS, b.y)
+                    .arc_to(RADIUS, RADIUS, 0.0, false, true, b.x + RADIUS, b.y)
+                    .arc_to(RADIUS, RADIUS, 0.0, false, true, b.x - RADIUS, b.y)
+                    .build(),
+            );
         }
         let rect = RotatedRect {
             cx: self.paddle + PADDLE_WIDTH / 2.0,

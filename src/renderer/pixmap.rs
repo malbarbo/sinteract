@@ -851,7 +851,7 @@ impl PathSink for PathBuilder {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, PathStyle, Rgba, RotatedRect, Scene, Stop, Text, TextSpec};
+    use crate::scene::{Dash, Path, PathStyle, Rgba, RotatedRect, Scene, Stop, Text, TextSpec};
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -1313,7 +1313,7 @@ mod tests {
                 dash: Dash::new(array, 0.0).map(Box::new),
                 ..PathStyle::default()
             };
-            scene.path(style, 0.0, 5.0).line_to(40.0, 5.0);
+            scene.add_path(Path::builder(style, 0.0, 5.0).line_to(40.0, 5.0).build());
             render_to_pixmap(&scene, 1.0).expect("pixmap")
         };
         let odd = line(vec![5.0]);
@@ -1334,10 +1334,12 @@ mod tests {
                 inner.add_path(rect(solid(0, 0, 255), 0.0, 0.0, 100.0, 100.0));
             });
         } else {
-            scene
-                .path(solid(0, 0, 255), 10.0, 10.0)
-                .line_to(50.0, -apex)
-                .line_to(90.0, 90.0);
+            scene.add_path(
+                Path::builder(solid(0, 0, 255), 10.0, 10.0)
+                    .line_to(50.0, -apex)
+                    .line_to(90.0, 90.0)
+                    .build(),
+            );
         }
         render_to_pixmap(&scene, 1.0).expect("pixmap")
     }
@@ -1363,7 +1365,7 @@ mod tests {
                 stroke_width: width,
                 ..PathStyle::default()
             };
-            scene.path(style, 10.0, 50.0).line_to(90.0, 50.0);
+            scene.add_path(Path::builder(style, 10.0, 50.0).line_to(90.0, 50.0).build());
             render_to_pixmap(&scene, 1.0).expect("pixmap")
         };
         assert_eq!(pixel_rgba(&line(1e8), 50, 20).3, 255);
@@ -1469,11 +1471,12 @@ mod tests {
     #[test]
     fn rasterize_filled_circle_center_is_red() {
         let mut scene = Scene::new(40.0, 40.0);
-        {
-            let mut p = scene.path(solid(255, 0, 0), 40.0, 20.0);
-            p.arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0);
-            p.arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0);
-        }
+        scene.add_path(
+            Path::builder(solid(255, 0, 0), 40.0, 20.0)
+                .arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0)
+                .arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0)
+                .build(),
+        );
         let pm = rasterize(&scene);
         let (r, g, b, _) = pixel_rgba(&pm, 20, 20);
         assert_eq!((r, g, b), (255, 0, 0));
@@ -1489,11 +1492,12 @@ mod tests {
             a: 1.0,
         });
         let mut dot = Scene::new(4.0, 4.0);
-        {
-            let mut p = dot.path(solid(255, 0, 0), 4.0, 2.0);
-            p.arc_to(2.0, 2.0, 0.0, false, true, 0.0, 2.0);
-            p.arc_to(2.0, 2.0, 0.0, false, true, 4.0, 2.0);
-        }
+        dot.add_path(
+            Path::builder(solid(255, 0, 0), 4.0, 2.0)
+                .arc_to(2.0, 2.0, 0.0, false, true, 0.0, 2.0)
+                .arc_to(2.0, 2.0, 0.0, false, true, 4.0, 2.0)
+                .build(),
+        );
         let pm = renderer.render(&dot).unwrap();
         assert_eq!(pixel_rgba(pm, 2, 2), (255, 0, 0, 255));
         // The next frame of the same size starts from the background too.
@@ -1730,8 +1734,8 @@ mod tests {
         // A [10, 10] dash on a stroke that starts at x=5. x=10 falls in an on
         // segment and x=20 in an off segment.
         let mut scene = Scene::new(100.0, 20.0);
-        {
-            let mut p = scene.path(
+        scene.add_path(
+            Path::builder(
                 PathStyle {
                     stroke: Paint::rgba(255, 0, 0, 1.0),
                     stroke_width: 3.0,
@@ -1740,9 +1744,10 @@ mod tests {
                 },
                 5.0,
                 10.0,
-            );
-            p.line_to(95.0, 10.0);
-        }
+            )
+            .line_to(95.0, 10.0)
+            .build(),
+        );
         let pm = rasterize(&scene);
         let on = pixel_rgba(&pm, 10, 10).3;
         let off = pixel_rgba(&pm, 20, 10).3;

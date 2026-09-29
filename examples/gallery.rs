@@ -253,27 +253,43 @@ fn fill_and_stroke(s: &mut Scene, x: f32, y: f32, _: f32) {
         50.0,
     );
     // An open path fills as if it were closed.
-    s.path(fill(rgb(240, 160, 40)), x + 20.0, y + 125.0)
-        .line_to(x + 60.0, y + 95.0)
-        .line_to(x + 100.0, y + 125.0);
+    s.add_path(
+        Path::builder(fill(rgb(240, 160, 40)), x + 20.0, y + 125.0)
+            .line_to(x + 60.0, y + 95.0)
+            .line_to(x + 100.0, y + 125.0)
+            .build(),
+    );
 }
 
 fn segments(s: &mut Scene, x: f32, y: f32, _: f32) {
     let pen = stroke(rgb(40, 40, 40), 3.0);
-    s.path(pen.clone(), x + 10.0, y + 20.0)
-        .line_to(x + 90.0, y + 20.0);
-    s.path(pen.clone(), x + 10.0, y + 60.0)
-        .quad_to(x + 50.0, y + 20.0, x + 90.0, y + 60.0);
-    s.path(pen.clone(), x + 110.0, y + 20.0).cubic_to(
-        x + 130.0,
-        y + 80.0,
-        x + 170.0,
-        y - 20.0,
-        x + 190.0,
-        y + 40.0,
+    s.add_path(
+        Path::builder(pen.clone(), x + 10.0, y + 20.0)
+            .line_to(x + 90.0, y + 20.0)
+            .build(),
     );
-    s.path(pen, x + 30.0, y + 110.0)
-        .arc_to(40.0, 25.0, 0.0, true, true, x + 110.0, y + 110.0);
+    s.add_path(
+        Path::builder(pen.clone(), x + 10.0, y + 60.0)
+            .quad_to(x + 50.0, y + 20.0, x + 90.0, y + 60.0)
+            .build(),
+    );
+    s.add_path(
+        Path::builder(pen.clone(), x + 110.0, y + 20.0)
+            .cubic_to(
+                x + 130.0,
+                y + 80.0,
+                x + 170.0,
+                y - 20.0,
+                x + 190.0,
+                y + 40.0,
+            )
+            .build(),
+    );
+    s.add_path(
+        Path::builder(pen, x + 30.0, y + 110.0)
+            .arc_to(40.0, 25.0, 0.0, true, true, x + 110.0, y + 110.0)
+            .build(),
+    );
     // A closed shape of every segment kind.
     let shape = PathStyle {
         closed: true,
@@ -281,18 +297,21 @@ fn segments(s: &mut Scene, x: f32, y: f32, _: f32) {
         stroke_width: 2.0,
         ..fill(rgb(230, 200, 240))
     };
-    s.path(shape, x + 130.0, y + 95.0)
-        .line_to(x + 150.0, y + 50.0)
-        .quad_to(x + 170.0, y + 40.0, x + 185.0, y + 60.0)
-        .cubic_to(
-            x + 195.0,
-            y + 80.0,
-            x + 170.0,
-            y + 85.0,
-            x + 180.0,
-            y + 95.0,
-        )
-        .arc_to(25.0, 25.0, 0.0, false, true, x + 130.0, y + 95.0);
+    s.add_path(
+        Path::builder(shape, x + 130.0, y + 95.0)
+            .line_to(x + 150.0, y + 50.0)
+            .quad_to(x + 170.0, y + 40.0, x + 185.0, y + 60.0)
+            .cubic_to(
+                x + 195.0,
+                y + 80.0,
+                x + 170.0,
+                y + 85.0,
+                x + 180.0,
+                y + 95.0,
+            )
+            .arc_to(25.0, 25.0, 0.0, false, true, x + 130.0, y + 95.0)
+            .build(),
+    );
 }
 
 fn caps(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -306,12 +325,23 @@ fn caps(s: &mut Scene, x: f32, y: f32, _: f32) {
             line_cap: cap,
             ..stroke(rgb(30, 110, 180), 16.0)
         };
-        s.path(style, x + 40.0, row).line_to(x + 160.0, row);
-        s.path(guide.clone(), x + 40.0, row).line_to(x + 160.0, row);
+        s.add_path(
+            Path::builder(style, x + 40.0, row)
+                .line_to(x + 160.0, row)
+                .build(),
+        );
+        s.add_path(
+            Path::builder(guide.clone(), x + 40.0, row)
+                .line_to(x + 160.0, row)
+                .build(),
+        );
     }
     for left in [40.0, 160.0] {
-        s.path(guide.clone(), x + left, y + 5.0)
-            .line_to(x + left, y + 115.0);
+        s.add_path(
+            Path::builder(guide.clone(), x + left, y + 5.0)
+                .line_to(x + left, y + 115.0)
+                .build(),
+        );
     }
 }
 
@@ -360,21 +390,24 @@ fn fill_rules(s: &mut Scene, x: f32, y: f32, _: f32) {
             (cx + 32.0 * angle.cos(), cy + 32.0 * angle.sin())
         };
         let (x0, y0) = point(0);
-        let mut star = s.path(style.clone(), x0, y0);
+        let mut star = Path::builder(style.clone(), x0, y0);
         for k in 1..5 {
             let (px, py) = point(k);
-            star.line_to(px, py);
+            star = star.line_to(px, py);
         }
-        drop(star);
+        s.add_path(star.build());
         // Two sub-paths in the same direction make a ring. `closed` closes
         // both of them.
         let (cy, r) = (y + 100.0, 26.0);
-        s.path(style, cx - r, cy)
-            .arc_to(r, r, 0.0, false, true, cx + r, cy)
-            .arc_to(r, r, 0.0, false, true, cx - r, cy)
-            .move_to(cx - r / 2.0, cy)
-            .arc_to(r / 2.0, r / 2.0, 0.0, false, true, cx + r / 2.0, cy)
-            .arc_to(r / 2.0, r / 2.0, 0.0, false, true, cx - r / 2.0, cy);
+        s.add_path(
+            Path::builder(style, cx - r, cy)
+                .arc_to(r, r, 0.0, false, true, cx + r, cy)
+                .arc_to(r, r, 0.0, false, true, cx - r, cy)
+                .move_to(cx - r / 2.0, cy)
+                .arc_to(r / 2.0, r / 2.0, 0.0, false, true, cx + r / 2.0, cy)
+                .arc_to(r / 2.0, r / 2.0, 0.0, false, true, cx - r / 2.0, cy)
+                .build(),
+        );
     }
 }
 
@@ -405,8 +438,11 @@ fn dashes(s: &mut Scene, x: f32, y: f32, t: f32) {
             3.0,
         )
     };
-    s.path(odd, x + 15.0, y + 120.0)
-        .line_to(x + 185.0, y + 120.0);
+    s.add_path(
+        Path::builder(odd, x + 15.0, y + 120.0)
+            .line_to(x + 185.0, y + 120.0)
+            .build(),
+    );
 }
 
 fn linear_spread(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -490,11 +526,14 @@ fn gradient_stroke(s: &mut Scene, x: f32, y: f32, _: f32) {
         line_join: LineJoin::Round,
         ..stroke(rainbow, 12.0)
     };
-    s.path(pen, x + 20.0, y + 100.0)
-        .line_to(x + 60.0, y + 25.0)
-        .line_to(x + 100.0, y + 100.0)
-        .line_to(x + 140.0, y + 25.0)
-        .line_to(x + 180.0, y + 100.0);
+    s.add_path(
+        Path::builder(pen, x + 20.0, y + 100.0)
+            .line_to(x + 60.0, y + 25.0)
+            .line_to(x + 100.0, y + 100.0)
+            .line_to(x + 140.0, y + 25.0)
+            .line_to(x + 180.0, y + 100.0)
+            .build(),
+    );
 }
 
 fn rotated_clip(s: &mut Scene, x: f32, y: f32, t: f32) {
@@ -853,9 +892,12 @@ fn text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, fill: Rgba) -> Option<
 /// Two strokes that meet at the top in a join, inside the box at
 /// `(left, top)`.
 fn chevron(s: &mut Scene, style: PathStyle, left: f32, top: f32, w: f32, h: f32) {
-    s.path(style, left, top + h)
-        .line_to(left + w / 2.0, top)
-        .line_to(left + w, top + h);
+    s.add_path(
+        Path::builder(style, left, top + h)
+            .line_to(left + w / 2.0, top)
+            .line_to(left + w, top + h)
+            .build(),
+    );
 }
 
 fn rect(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
@@ -874,16 +916,19 @@ fn rect(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
 }
 
 fn circle(s: &mut Scene, style: PathStyle, cx: f32, cy: f32, r: f32) {
-    s.path(
-        PathStyle {
-            closed: true,
-            ..style
-        },
-        cx - r,
-        cy,
-    )
-    .arc_to(r, r, 0.0, false, true, cx + r, cy)
-    .arc_to(r, r, 0.0, false, true, cx - r, cy);
+    s.add_path(
+        Path::builder(
+            PathStyle {
+                closed: true,
+                ..style
+            },
+            cx - r,
+            cy,
+        )
+        .arc_to(r, r, 0.0, false, true, cx + r, cy)
+        .arc_to(r, r, 0.0, false, true, cx - r, cy)
+        .build(),
+    );
 }
 
 fn fill(paint: Paint) -> PathStyle {

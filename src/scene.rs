@@ -994,8 +994,8 @@ pub(crate) fn end_segments(segs: &mut Vec<Segment>) {
     }
 }
 
-/// A style and the [`Segment`]s it applies to. [`Path::builder`] and
-/// [`Scene::path`] build one, and [`Path::segments`] reads it back.
+/// A style and the [`Segment`]s it applies to. [`Path::builder`] builds
+/// one, and [`Path::segments`] reads it back.
 #[derive(Clone, Debug, Default)]
 pub struct Path {
     pub style: PathStyle,
@@ -1060,13 +1060,12 @@ fn push_layer(out: &mut Vec<Element>, opacity: f32, mut elements: Vec<Element>) 
 }
 
 /// The draw list a front end builds and a
-/// [`Renderer`](crate::renderer::Renderer) replays. [`Self::path`] returns a
-/// [`PathScope`] that commits its path on drop, and [`Self::clip`] and
-/// [`Self::layer`] wrap the elements that their closure draws into an
-/// [`Element::Clipped`] or an [`Element::Layer`], so a clip or a layer cannot
-/// be left open. A move that no segment follows draws nothing, so the
-/// builders drop it. A `PathScope` with no segment past its moves commits
-/// nothing, and [`PathBuilder::build`] returns a path with no segments.
+/// [`Renderer`](crate::renderer::Renderer) replays. [`Self::add_path`] takes
+/// a path from [`Path::builder`], and [`Self::clip`] and [`Self::layer`]
+/// wrap the elements that their closure draws into an [`Element::Clipped`]
+/// or an [`Element::Layer`], so a clip or a layer cannot be left open. A
+/// move that no segment follows draws nothing, so the builders drop it, and
+/// a path of only moves has no segments.
 ///
 /// An arc is stored as cubics, so a renderer sees only move, line, quad and
 /// cubic.
@@ -1126,23 +1125,13 @@ impl Scene {
         &self.elements
     }
 
-    /// Append a [`Path`] built elsewhere. [`Self::path`] builds one in place.
+    /// Append a [`Path`] from [`Path::builder`].
     pub fn add_path(&mut self, mut path: Path) {
         // The finiteness first, so a limit that is not finite still drops
         // the path instead of becoming 1.
         if path.is_finite() {
             path.style.normalize();
             self.elements.push(Element::Path(path));
-        }
-    }
-
-    /// Begin a path at `(x, y)`. The [`PathScope`] commits it to
-    /// [`Self::elements`] on drop, or discards it if no segment follows its
-    /// moves.
-    pub fn path(&mut self, style: PathStyle, x: f32, y: f32) -> PathScope<'_> {
-        PathScope {
-            scene: self,
-            builder: PathBuilder::new(style, x, y),
         }
     }
 
@@ -1217,74 +1206,6 @@ fn frame_size(size: f32) -> f32 {
         size
     } else {
         0.0
-    }
-}
-
-/// The path under construction by [`Scene::path`]. The geometry methods take
-/// `&mut self`, so a loop can build a path, and drop commits it to the
-/// scene, or discards it if no segment follows its moves.
-#[must_use = "PathScope commits the path on drop; bind it so geometry methods can run"]
-pub struct PathScope<'a> {
-    scene: &'a mut Scene,
-    builder: PathBuilder,
-}
-
-impl PathScope<'_> {
-    pub fn move_to(&mut self, x: f32, y: f32) -> &mut Self {
-        self.builder.geom.move_to(x, y);
-        self
-    }
-
-    pub fn line_to(&mut self, x: f32, y: f32) -> &mut Self {
-        self.builder.geom.line_to(x, y);
-        self
-    }
-
-    pub fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) -> &mut Self {
-        self.builder.geom.quad_to(cx, cy, x, y);
-        self
-    }
-
-    pub fn cubic_to(
-        &mut self,
-        c1x: f32,
-        c1y: f32,
-        c2x: f32,
-        c2y: f32,
-        x: f32,
-        y: f32,
-    ) -> &mut Self {
-        self.builder.geom.cubic_to(c1x, c1y, c2x, c2y, x, y);
-        self
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn arc_to(
-        &mut self,
-        rx: f32,
-        ry: f32,
-        rotation_deg: f32,
-        large_arc: bool,
-        sweep: bool,
-        x: f32,
-        y: f32,
-    ) -> &mut Self {
-        self.builder
-            .geom
-            .arc_to(rx, ry, rotation_deg, large_arc, sweep, x, y);
-        self
-    }
-}
-
-impl Drop for PathScope<'_> {
-    fn drop(&mut self) {
-        let segs = self.builder.geom.finish();
-        if !segs.is_empty() {
-            self.scene.add_path(Path {
-                style: std::mem::take(&mut self.builder.style),
-                segs,
-            });
-        }
     }
 }
 
@@ -1524,9 +1445,11 @@ mod tests {
     #[test]
     fn scene_path_builder_commits_the_expanded_arc() {
         let mut scene = Scene::new(10.0, 10.0);
-        scene
-            .path(PathStyle::default(), 0.0, 0.0)
-            .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0);
+        scene.add_path(
+            Path::builder(PathStyle::default(), 0.0, 0.0)
+                .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0)
+                .build(),
+        );
         let Element::Path(p) = &scene.elements[0] else {
             panic!("expected a path");
         };
@@ -1572,13 +1495,6 @@ mod tests {
             .move_to(2.0, 2.0)
             .build();
         assert_eq!(clip.segments().len(), 0);
-    }
-
-    #[test]
-    fn a_path_scope_with_only_moves_commits_nothing() {
-        let mut scene = Scene::new(10.0, 10.0);
-        scene.path(PathStyle::default(), 1.0, 1.0).move_to(2.0, 2.0);
-        assert!(scene.elements.is_empty());
     }
 
     #[test]
@@ -1841,11 +1757,17 @@ mod tests {
         ];
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(a_line(PathStyle::default(), nan, 5.0));
-        scene
-            .path(PathStyle::default(), 0.0, 0.0)
-            .cubic_to(1.0, 2.0, 3.0, 4.0, 5.0, -inf);
+        scene.add_path(
+            Path::builder(PathStyle::default(), 0.0, 0.0)
+                .cubic_to(1.0, 2.0, 3.0, 4.0, 5.0, -inf)
+                .build(),
+        );
         for style in styles {
-            scene.path(style.clone(), 0.0, 0.0).line_to(5.0, 5.0);
+            scene.add_path(
+                Path::builder(style.clone(), 0.0, 0.0)
+                    .line_to(5.0, 5.0)
+                    .build(),
+            );
             scene.add_path(a_line(style, 5.0, 5.0));
         }
         let text = TextSpec {
@@ -1888,10 +1810,12 @@ mod tests {
             (5.0, inf, 5.0),
             (5.0, 0.0, nan),
         ] {
-            scene
-                .path(PathStyle::default(), 0.0, 0.0)
-                .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
-                .line_to(0.0, 9.0);
+            scene.add_path(
+                Path::builder(PathStyle::default(), 0.0, 0.0)
+                    .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
+                    .line_to(0.0, 9.0)
+                    .build(),
+            );
             scene.add_path(
                 Path::builder(PathStyle::default(), 0.0, 0.0)
                     .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)

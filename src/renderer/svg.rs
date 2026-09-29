@@ -611,7 +611,7 @@ impl PathSink for PathData<'_> {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, PathStyle, Scene, Stop, TextSpec};
+    use crate::scene::{Dash, Path, PathStyle, Scene, Stop, TextSpec};
 
     fn red_fill(a: f32) -> PathStyle {
         PathStyle {
@@ -715,9 +715,11 @@ mod tests {
     #[test]
     fn a_quadratic_stays_a_quadratic() {
         let mut scene = Scene::new(10.0, 10.0);
-        scene
-            .path(red_fill(1.0), 0.0, 0.0)
-            .quad_to(5.0, 10.0, 10.0, 0.0);
+        scene.add_path(
+            Path::builder(red_fill(1.0), 0.0, 0.0)
+                .quad_to(5.0, 10.0, 10.0, 0.0)
+                .build(),
+        );
         let svg = render_to_svg(&scene);
         assert!(svg.contains("d=\"M0 0 Q5 10 10 0\""), "{svg}");
     }

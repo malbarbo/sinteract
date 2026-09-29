@@ -198,8 +198,8 @@ mod tests {
 
     fn sample_scene() -> Scene {
         let mut scene = Scene::new(120.0, 80.0);
-        {
-            let mut p = scene.path(
+        scene.add_path(
+            Path::builder(
                 PathStyle {
                     fill: Paint::rgba(10, 20, 30, 0.5),
                     stroke: Paint::rgba(200, 0, 0, 1.0),
@@ -212,11 +212,12 @@ mod tests {
                 },
                 0.0,
                 0.0,
-            );
-            p.line_to(10.0, 0.0);
-            p.quad_to(15.0, 5.0, 20.0, 10.0);
-            p.cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0);
-        }
+            )
+            .line_to(10.0, 0.0)
+            .quad_to(15.0, 5.0, 20.0, 10.0)
+            .cubic_to(25.0, 5.0, 30.0, 15.0, 35.0, 20.0)
+            .build(),
+        );
         scene.clip(
             RotatedRect {
                 cx: 50.0,
@@ -875,16 +876,17 @@ mod tests {
     /// walks it for every element walks more words than the message holds.
     fn scene_of_paths() -> Scene {
         let mut scene = Scene::new(100.0, 100.0);
-        {
-            let mut p = scene.path(PathStyle::default(), 0.0, 0.0);
-            for i in 1..100 {
-                p.line_to(i as f32, (i % 7) as f32);
-            }
+        let mut p = Path::builder(PathStyle::default(), 0.0, 0.0);
+        for i in 1..100 {
+            p = p.line_to(i as f32, (i % 7) as f32);
         }
+        scene.add_path(p.build());
         for i in 1..32 {
-            scene
-                .path(PathStyle::default(), 0.0, 0.0)
-                .line_to(i as f32, 1.0);
+            scene.add_path(
+                Path::builder(PathStyle::default(), 0.0, 0.0)
+                    .line_to(i as f32, 1.0)
+                    .build(),
+            );
         }
         scene
     }
@@ -1125,8 +1127,11 @@ mod tests {
         // newer schema. Only the last path, at (9, 9), is left.
         let mut scene = Scene::new(10.0, 10.0);
         for _ in 0..3 {
-            let mut p = scene.path(PathStyle::default(), 0.0, 0.0);
-            p.line_to(1.0, 1.0);
+            scene.add_path(
+                Path::builder(PathStyle::default(), 0.0, 0.0)
+                    .line_to(1.0, 1.0)
+                    .build(),
+            );
         }
         let rect = RotatedRect {
             cx: 5.0,
@@ -1366,8 +1371,8 @@ mod tests {
     #[test]
     fn dash_and_miter_round_trip() {
         let mut scene = Scene::new(100.0, 50.0);
-        {
-            let mut p = scene.path(
+        scene.add_path(
+            Path::builder(
                 PathStyle {
                     stroke: Paint::rgba(0, 0, 0, 1.0),
                     stroke_width: 2.0,
@@ -1377,9 +1382,10 @@ mod tests {
                 },
                 0.0,
                 0.0,
-            );
-            p.line_to(50.0, 50.0);
-        }
+            )
+            .line_to(50.0, 50.0)
+            .build(),
+        );
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Message::Frame { scene: d, .. } => {
@@ -1434,18 +1440,19 @@ mod tests {
                 },
             ],
         );
-        {
-            let mut p = scene.path(
+        scene.add_path(
+            Path::builder(
                 PathStyle {
                     fill: gradient.clone(),
                     ..PathStyle::default()
                 },
                 0.0,
                 0.0,
-            );
-            p.line_to(50.0, 0.0);
-            p.line_to(50.0, 50.0);
-        }
+            )
+            .line_to(50.0, 0.0)
+            .line_to(50.0, 50.0)
+            .build(),
+        );
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Message::Frame { scene: d, .. } => {
@@ -1486,17 +1493,18 @@ mod tests {
                 },
             ],
         );
-        {
-            let mut p = scene.path(
+        scene.add_path(
+            Path::builder(
                 PathStyle {
                     fill: gradient.clone(),
                     ..PathStyle::default()
                 },
                 0.0,
                 0.0,
-            );
-            p.line_to(50.0, 50.0);
-        }
+            )
+            .line_to(50.0, 50.0)
+            .build(),
+        );
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Message::Frame { scene: d, .. } => {
@@ -1539,17 +1547,18 @@ mod tests {
             ],
         )
         .with_spread(SpreadMode::Reflect);
-        {
-            let mut p = scene.path(
+        scene.add_path(
+            Path::builder(
                 PathStyle {
                     fill: linear.clone(),
                     ..PathStyle::default()
                 },
                 0.0,
                 0.0,
-            );
-            p.line_to(50.0, 50.0);
-        }
+            )
+            .line_to(50.0, 50.0)
+            .build(),
+        );
         let radial = Paint::radial(
             25.0,
             25.0,
@@ -1571,17 +1580,18 @@ mod tests {
             ],
         )
         .with_spread(SpreadMode::Repeat);
-        {
-            let mut p = scene.path(
+        scene.add_path(
+            Path::builder(
                 PathStyle {
                     fill: radial.clone(),
                     ..PathStyle::default()
                 },
                 0.0,
                 0.0,
-            );
-            p.line_to(50.0, 50.0);
-        }
+            )
+            .line_to(50.0, 50.0)
+            .build(),
+        );
         let bytes = encode_frame(&scene);
         match decode(&bytes).unwrap() {
             Message::Frame { scene: d, .. } => {
@@ -1610,8 +1620,11 @@ mod tests {
                 .line_to(0.0, 40.0)
                 .build(),
             |clip| {
-                let mut p = clip.path(PathStyle::default(), 0.0, 0.0);
-                p.line_to(10.0, 10.0);
+                clip.add_path(
+                    Path::builder(PathStyle::default(), 0.0, 0.0)
+                        .line_to(10.0, 10.0)
+                        .build(),
+                )
             },
         );
         let bytes = encode_frame(&scene);
@@ -1684,9 +1697,11 @@ mod tests {
                 angle_deg: 0.0,
             },
             |outer| {
-                let mut p = outer.path(PathStyle::default(), 0.0, 0.0);
-                p.line_to(100.0, 100.0);
-                drop(p);
+                outer.add_path(
+                    Path::builder(PathStyle::default(), 0.0, 0.0)
+                        .line_to(100.0, 100.0)
+                        .build(),
+                );
                 outer.clip(
                     RotatedRect {
                         cx: 50.0,
@@ -1696,8 +1711,11 @@ mod tests {
                         angle_deg: 0.0,
                     },
                     |inner| {
-                        let mut p = inner.path(PathStyle::default(), 10.0, 10.0);
-                        p.line_to(20.0, 20.0);
+                        inner.add_path(
+                            Path::builder(PathStyle::default(), 10.0, 10.0)
+                                .line_to(20.0, 20.0)
+                                .build(),
+                        )
                     },
                 );
             },

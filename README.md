@@ -10,18 +10,20 @@ vector, with text as glyph outlines.
 
 ```rust,no_run
 use sinteract::display::Printer;
-use sinteract::scene::{Paint, PathStyle, Scene};
+use sinteract::scene::{Paint, Path, PathStyle, Scene};
 
 let blue = PathStyle {
     fill: Paint::rgba(0, 0, 255, 1.0),
     ..PathStyle::default()
 };
 let mut scene = Scene::new(40.0, 30.0);
-scene
-    .path(blue, 0.0, 0.0)
-    .line_to(40.0, 0.0)
-    .line_to(40.0, 30.0)
-    .line_to(0.0, 30.0);
+scene.add_path(
+    Path::builder(blue, 0.0, 0.0)
+        .line_to(40.0, 0.0)
+        .line_to(40.0, 30.0)
+        .line_to(0.0, 30.0)
+        .build(),
+);
 
 if let Ok(mut printer) = Printer::new() {
     let _ = printer.print(&scene);
@@ -29,10 +31,10 @@ if let Ok(mut printer) = Printer::new() {
 let pdf: Vec<u8> = sinteract::renderer::pdf::render_to_pdf(&scene);
 ```
 
-`Scene::path` begins a path at a point and returns a scope that commits it
-when it is dropped, and `Scene::clip` returns a scope that collects what is
-drawn inside it into one clipped element. An arc becomes cubics inside the
-scope, so a renderer only sees moves, lines, quadratics and cubics.
+`Path::builder` begins a path at a point, and `Scene::add_path` appends
+the path that `build` returns. `Scene::clip` collects what its closure
+draws into one clipped element. The builder turns an arc into cubics, so
+a renderer only sees moves, lines, quadratics and cubics.
 
 A `Printer` prints images where the cursor sits. It fails to open when the
 terminal shows no graphics, so a REPL falls back to the text of the value.
