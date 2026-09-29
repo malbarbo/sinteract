@@ -59,7 +59,7 @@ pub const HEADER_BYTES: usize = 8;
 
 /// Cap on both sides, so a corrupted length cannot make the reader allocate
 /// gigabytes. A 1080p RGBA pixmap is about 8 MiB.
-const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Write `message` from `side`, with its envelope, and flush, so the peer
 /// sees it at once. The message goes straight to `w`, which should be
@@ -72,10 +72,10 @@ pub fn write_framed<A: Allocator>(
     message: &Builder<A>,
 ) -> io::Result<()> {
     let len = serialize::compute_serialized_size_in_words(message) * size_of::<Word>();
-    if len > MAX_FRAME_BYTES {
+    if len > MAX_MESSAGE_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("message of {len} bytes exceeds cap {MAX_FRAME_BYTES}"),
+            format!("message of {len} bytes exceeds cap {MAX_MESSAGE_BYTES}"),
         ));
     }
     w.write_all(&header(side, len as u32))?;
@@ -112,9 +112,9 @@ pub fn parse_header(header: [u8; HEADER_BYTES], side: Side) -> io::Result<usize>
     let [m0, m1, m2, m3, l0, l1, l2, l3] = header;
     check_magic([m0, m1, m2, m3], side)?;
     let len = u32::from_le_bytes([l0, l1, l2, l3]) as usize;
-    if len > MAX_FRAME_BYTES || !len.is_multiple_of(size_of::<Word>()) {
+    if len > MAX_MESSAGE_BYTES || !len.is_multiple_of(size_of::<Word>()) {
         return Err(invalid(format!(
-            "frame length {len} is not a whole number of words up to {MAX_FRAME_BYTES}"
+            "message length {len} is not a whole number of words up to {MAX_MESSAGE_BYTES}"
         )));
     }
     Ok(len)
@@ -125,7 +125,7 @@ pub fn parse_header(header: [u8; HEADER_BYTES], side: Side) -> io::Result<usize>
 /// bytes after it, or `None` while `bytes` holds no whole message. The
 /// checks on the header are the ones of [`parse_header`], and a header
 /// that fails them is an error before its payload arrives.
-pub fn split_frame(bytes: &[u8], side: Side) -> io::Result<Option<(&[u8], &[u8])>> {
+pub fn split_message(bytes: &[u8], side: Side) -> io::Result<Option<(&[u8], &[u8])>> {
     let Some((header, rest)) = bytes.split_first_chunk::<HEADER_BYTES>() else {
         return Ok(None);
     };
@@ -276,14 +276,14 @@ mod tests {
     }
 
     #[test]
-    fn split_frame_waits_for_a_whole_message() {
+    fn split_message_waits_for_a_whole_message() {
         let mut bytes = header(Side::Engine, 8).to_vec();
         bytes.extend_from_slice(&[1; 8]);
         bytes.extend_from_slice(&[2; 3]);
         for end in 0..HEADER_BYTES + 8 {
-            assert_eq!(split_frame(&bytes[..end], Side::Engine).unwrap(), None);
+            assert_eq!(split_message(&bytes[..end], Side::Engine).unwrap(), None);
         }
-        let (payload, rest) = split_frame(&bytes, Side::Engine)
+        let (payload, rest) = split_message(&bytes, Side::Engine)
             .unwrap()
             .expect("a message");
         assert_eq!(payload, [1; 8]);
@@ -291,14 +291,14 @@ mod tests {
     }
 
     #[test]
-    fn split_frame_rejects_a_header_of_another_side() {
-        let err = split_frame(&header(Side::Engine, 0), Side::Server).expect_err("an error");
+    fn split_message_rejects_a_header_of_another_side() {
+        let err = split_message(&header(Side::Engine, 0), Side::Server).expect_err("an error");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]
     fn a_length_above_the_cap_is_an_error() {
-        let len = (MAX_FRAME_BYTES + size_of::<Word>()) as u32;
+        let len = (MAX_MESSAGE_BYTES + size_of::<Word>()) as u32;
         let err = read_error(&header_with(Side::Server.magic(), len));
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }

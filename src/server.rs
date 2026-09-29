@@ -415,7 +415,7 @@ impl ServerCore {
         buffer.extend_from_slice(bytes);
         let mut rest = buffer.as_slice();
         loop {
-            let (payload, after) = match framing::split_frame(rest, Side::Engine) {
+            let (payload, after) = match framing::split_message(rest, Side::Engine) {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(e) => {
@@ -892,7 +892,7 @@ mod tests {
             let mut back = Vec::new();
             let mut events = Vec::new();
             let mut rest = &buf[..];
-            while let Some((payload, after)) = framing::split_frame(rest, Side::Server).unwrap() {
+            while let Some((payload, after)) = framing::split_message(rest, Side::Server).unwrap() {
                 let message = rest.get(..rest.len() - after.len()).unwrap();
                 if let Ok(Some(to_engine::Message::Lost(id))) = to_engine::decode(payload) {
                     events.push(format!("lost {id}"));

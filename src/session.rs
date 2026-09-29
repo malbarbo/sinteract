@@ -256,7 +256,7 @@ impl Session {
                 State::Started => true,
                 State::Ended => return,
             };
-            let (payload, after) = match framing::split_frame(rest, Side::Server) {
+            let (payload, after) = match framing::split_message(rest, Side::Server) {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(e) => return self.finish(Some(e)),
