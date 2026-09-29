@@ -35,7 +35,10 @@ paces the window on macOS, and
 Only `sixel.rs` builds on wasm32, so the `cfg` sits on each submodule in
 `display/mod.rs` and not on the whole directory.
 
-`PLAN.md` is the plan for the server and client modes.
+`PLAN.md` is the plan for the server and client modes. `SERVER.md` is the
+contract with the server of Sarcade, and a change to the public API of
+`session`, `server`, `view` or `display::Stage` updates it in the same
+commit.
 
 ## Build and test
 
@@ -201,7 +204,8 @@ parent, and the mask returns to the pool when the scope ends. A mask
 from the pool is cleared before use, because fill_path adds coverage.
 ```
 
-## The README and PLAN.md
+## The README, PLAN.md and SERVER.md
 
 Prose, not lists of features. Show a thing where it is used, once. No bold
-label followed by a dash. PLAN.md is in Portuguese and stays so.
+label followed by a dash. PLAN.md and SERVER.md are in Portuguese and stay
+so.

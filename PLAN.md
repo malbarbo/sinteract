@@ -147,8 +147,8 @@ Regras da sessão com servidor:
   o próximo depois disso, então uma engine mais lenta que o timer não
   acumula `tick` no pipe.
 
-O documento `sgleam/RUNTIME_PROTOCOL.md` descreve o servidor do Sarcade
-sobre esse protocolo, com um exemplo em Tokio.
+O `SERVER.md` descreve o servidor do Sarcade sobre esse protocolo, com um
+exemplo em Tokio.
 
 ## Loop e ritmo
 
