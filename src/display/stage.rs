@@ -224,12 +224,12 @@ impl Remote {
             Ok(SessionEvent::Tick) => Ok(StageEvent::Tick),
             Ok(SessionEvent::Input { player, event }) => Ok(StageEvent::Input { player, event }),
             Ok(SessionEvent::Error(e)) => Ok(StageEvent::Error(e)),
-            Ok(SessionEvent::End(None)) => {
+            Ok(SessionEvent::End) => {
                 self.ended = true;
                 Err(Interrupt::Close)
             }
             // A read of a file that fails does not come back.
-            Ok(SessionEvent::End(Some(e))) | Err(e) => {
+            Err(e) => {
                 self.ended = true;
                 Err(Interrupt::Read(e))
             }

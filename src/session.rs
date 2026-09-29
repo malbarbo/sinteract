@@ -47,8 +47,8 @@ pub struct Session<R, W> {
     scratch: Vec<u8>,
     /// The number of players, from the start.
     players: u32,
-    /// The session ended, and reads nothing more.
-    ended: bool,
+    /// Whether the session still reads the server.
+    reading: Reading,
     events: VecDeque<SessionEvent>,
     /// The id of each image that went out and that the server did not lose.
     sent: HashMap<Image, u32>,
@@ -132,10 +132,8 @@ pub enum SessionEvent {
     /// The session dropped a message that broke a rule, and goes on.
     Error(SessionError),
     /// The stream ended, which is how the server ends the session. It is
-    /// the last event. The error is `Some` when the stream broke, with a
-    /// header that is not one of the server or with the end inside a
-    /// message, since the session cannot find the next message.
-    End(Option<io::Error>),
+    /// the last event.
+    End,
 }
 
 /// Why the session dropped a message.
@@ -176,12 +174,11 @@ impl std::error::Error for SessionError {
 /// Why [`Session::start`] did not start a session.
 #[derive(Debug)]
 pub enum StartError {
-    /// A read or a write failed.
+    /// A read or a write failed, or the stream broke, with a header that
+    /// is not one of the server or with the end inside a message.
     Io(io::Error),
-    /// The stream ended before the start. The error is `Some` when the
-    /// stream broke, with a header that is not one of the server or with
-    /// the end inside a message.
-    End(Option<io::Error>),
+    /// The stream ended before the start.
+    End,
     /// The first message does not decode.
     Payload(wire::Error),
     /// The first message is not a start.
@@ -192,8 +189,7 @@ impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StartError::Io(e) => write!(f, "cannot start the session: {e}"),
-            StartError::End(None) => write!(f, "the server ended before the start"),
-            StartError::End(Some(e)) => write!(f, "the stream broke before the start: {e}"),
+            StartError::End => write!(f, "the server ended before the start"),
             StartError::Payload(e) => write!(f, "the first message does not decode: {e}"),
             StartError::NoStart => write!(f, "the first message is not a start"),
         }
@@ -203,9 +199,9 @@ impl std::fmt::Display for StartError {
 impl std::error::Error for StartError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            StartError::Io(e) | StartError::End(Some(e)) => Some(e),
+            StartError::Io(e) => Some(e),
             StartError::Payload(e) => Some(e),
-            StartError::End(None) | StartError::NoStart => None,
+            StartError::End | StartError::NoStart => None,
         }
     }
 }
@@ -276,7 +272,7 @@ impl<R: Read, W: Write> Session<R, W> {
             bytes: Vec::new(),
             scratch: Vec::new(),
             players: 0,
-            ended: false,
+            reading: Reading::Open,
             events: VecDeque::new(),
             sent: HashMap::new(),
             next_id: 0,
@@ -294,11 +290,14 @@ impl<R: Read, W: Write> Session<R, W> {
     }
 
     /// The next event, with bytes from `r` when none waits. It blocks for
-    /// as long as `r` blocks. The end of `r` ends the session, and the part
-    /// of a message that is left breaks the stream. After the end, it
-    /// returns `End(None)` without a read. An error of `r` other than
-    /// [`io::ErrorKind::Interrupted`] comes back as is, and the session
-    /// keeps the bytes that it read before. A tick writes a tickTaken to `w`
+    /// as long as `r` blocks. The end of `r` ends the session, and after
+    /// the end it returns `End` without a read. A stream that breaks, with
+    /// a header that is not one of the server or with the end inside a
+    /// message, ends the session too, and its error comes back once, after
+    /// the events before the break and before `End`, as
+    /// [`io::ErrorKind::InvalidData`] or [`io::ErrorKind::UnexpectedEof`].
+    /// An error of `r` other than [`io::ErrorKind::Interrupted`] comes back
+    /// as is, and the session keeps the bytes that it read before. A tick writes a tickTaken to `w`
     /// and flushes `w` first, since the server sends no other tick until it
     /// reads the tickTaken, and a tick may draw no frame that would flush
     /// it. An error of `w` comes back in place of the tick and ends the
@@ -315,14 +314,16 @@ impl<R: Read, W: Write> Session<R, W> {
                 }
                 return Ok(event);
             }
-            if self.ended {
-                return Ok(SessionEvent::End(None));
+            if !self.is_reading() {
+                return match std::mem::replace(&mut self.reading, Reading::Ended) {
+                    Reading::Broken(e) => Err(e),
+                    Reading::Open | Reading::Ended => Ok(SessionEvent::End),
+                };
             }
             if self.read_more()? {
                 self.take_messages();
             } else {
-                let broken = self.end_of_stream();
-                self.finish(broken);
+                self.finish(self.end_of_stream());
             }
         }
     }
@@ -380,10 +381,10 @@ impl<R: Read, W: Write> Session<R, W> {
                 }
                 Ok(None) => {
                     if !self.read_more()? {
-                        return Err(StartError::End(self.end_of_stream()));
+                        return Err(self.end_of_stream().map_or(StartError::End, StartError::Io));
                     }
                 }
-                Err(e) => return Err(StartError::End(Some(e))),
+                Err(e) => return Err(StartError::Io(e)),
             }
         }
     }
@@ -420,7 +421,7 @@ impl<R: Read, W: Write> Session<R, W> {
         let mut bytes = std::mem::take(&mut self.bytes);
         let mut rest = bytes.as_slice();
         loop {
-            if self.ended {
+            if !self.is_reading() {
                 return;
             }
             let (payload, after) = match framing::split_message(rest, Side::Server) {
@@ -477,7 +478,7 @@ impl<R: Read, W: Write> Session<R, W> {
                     return;
                 }
             }
-            SessionEvent::Error(_) | SessionEvent::End(_) => {}
+            SessionEvent::Error(_) | SessionEvent::End => {}
         }
         self.events.push_back(event);
     }
@@ -492,7 +493,7 @@ impl<R: Read, W: Write> Session<R, W> {
                     return new.supersedes(event).then_some(old);
                 }
                 SessionEvent::Input { .. } => {}
-                SessionEvent::Tick | SessionEvent::Error(_) | SessionEvent::End(_) => return None,
+                SessionEvent::Tick | SessionEvent::Error(_) | SessionEvent::End => return None,
             }
         }
         None
@@ -504,20 +505,35 @@ impl<R: Read, W: Write> Session<R, W> {
     fn check_write(&mut self, written: io::Result<()>) -> io::Result<()> {
         if written.is_err() {
             self.w = None;
-            self.ended = true;
+            self.reading = Reading::Ended;
             self.bytes = Vec::new();
             self.events.clear();
         }
         written
     }
 
-    /// End the session, with the error of a broken stream. Nothing comes
-    /// after the `End`.
-    fn finish(&mut self, broken: Option<io::Error>) {
-        self.ended = true;
-        self.bytes = Vec::new();
-        self.events.push_back(SessionEvent::End(broken));
+    /// Returns `true` if the session still reads the server, `false` after
+    /// the end of the stream or a break.
+    fn is_reading(&self) -> bool {
+        matches!(self.reading, Reading::Open)
     }
+
+    /// End the session, with the error of a broken stream. The events that
+    /// wait still come out, and then the error and the `End`.
+    fn finish(&mut self, broken: Option<io::Error>) {
+        self.reading = broken.map_or(Reading::Ended, Reading::Broken);
+        self.bytes = Vec::new();
+    }
+}
+
+/// Whether a session still reads the server.
+#[derive(Debug)]
+enum Reading {
+    Open,
+    /// The stream broke, and [`Session::wait`] has not returned the error
+    /// yet.
+    Broken(io::Error),
+    Ended,
 }
 
 /// The stream to the server, or [`io::ErrorKind::BrokenPipe`] after a
@@ -664,30 +680,32 @@ mod tests {
         }
     }
 
-    /// Every event that waits, up to the end, in a short form.
+    /// Every event that waits, up to the end, in a short form. The error
+    /// of a broken stream is `broken` with its kind.
     fn names<R: Read, W: Write>(session: &mut Session<R, W>) -> Vec<String> {
-        let mut ended = false;
-        std::iter::from_fn(|| {
-            if ended {
-                return None;
-            }
-            let event = next(session)?;
-            ended = matches!(event, SessionEvent::End(_));
-            Some(event)
-        })
-        .map(|e| match e {
-            SessionEvent::Tick => "tick".into(),
-            SessionEvent::Input { player, event } => match (player.number(), event) {
-                (player, InputEvent::Key(k)) => format!("{player} key {}", k.key),
-                (player, InputEvent::Mouse(m)) => format!("{player} move {}", m.x),
-                (player, InputEvent::Resize { width, .. }) => format!("{player} resize {width}"),
-                (player, event @ InputEvent::Pad(_)) => format!("{player} {event:?}"),
-            },
-            SessionEvent::Error(e) => format!("error {e}"),
-            SessionEvent::End(None) => "end".into(),
-            SessionEvent::End(Some(e)) => format!("end {:?}", e.kind()),
-        })
-        .collect()
+        let mut names = Vec::new();
+        loop {
+            let name = match session.wait() {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => format!("broken {:?}", e.kind()),
+                Ok(SessionEvent::End) => {
+                    names.push("end".into());
+                    break;
+                }
+                Ok(SessionEvent::Tick) => "tick".into(),
+                Ok(SessionEvent::Input { player, event }) => match (player.number(), event) {
+                    (player, InputEvent::Key(k)) => format!("{player} key {}", k.key),
+                    (player, InputEvent::Mouse(m)) => format!("{player} move {}", m.x),
+                    (player, InputEvent::Resize { width, .. }) => {
+                        format!("{player} resize {width}")
+                    }
+                    (player, event @ InputEvent::Pad(_)) => format!("{player} {event:?}"),
+                },
+                Ok(SessionEvent::Error(e)) => format!("error {e}"),
+            };
+            names.push(name);
+        }
+        names
     }
 
     #[test]
@@ -784,14 +802,14 @@ mod tests {
     #[test]
     fn a_start_that_does_not_come_whole_stops_the_start() {
         let start = start();
-        assert!(matches!(no_start(&[]), StartError::End(None)));
+        assert!(matches!(no_start(&[]), StartError::End));
         assert!(matches!(
             no_start(&start[..start.len() - 1]),
-            StartError::End(Some(e)) if e.kind() == io::ErrorKind::UnexpectedEof
+            StartError::Io(e) if e.kind() == io::ErrorKind::UnexpectedEof
         ));
         assert!(matches!(
             no_start(b"SIE1\0\0\0\0"),
-            StartError::End(Some(e)) if e.kind() == io::ErrorKind::InvalidData
+            StartError::Io(e) if e.kind() == io::ErrorKind::InvalidData
         ));
         assert!(matches!(
             no_start(&framed(&testing::encode_input(0, &key("a")))),
@@ -968,9 +986,17 @@ mod tests {
         let mut stream = b"SIE1\0\0\0\0".to_vec();
         stream.extend_from_slice(&tick());
         let (mut session, server, _) = started(&stream);
-        assert_eq!(names(&mut session), ["end InvalidData"]);
+        assert_eq!(names(&mut session), ["broken InvalidData", "end"]);
         server.push(&tick());
         assert_eq!(names(&mut session), ["end"]);
+    }
+
+    #[test]
+    fn the_events_before_a_break_come_before_its_error() {
+        let mut stream = tick();
+        stream.extend_from_slice(b"SIE1\0\0\0\0");
+        let (mut session, _, _) = started(&stream);
+        assert_eq!(names(&mut session), ["tick", "broken InvalidData", "end"]);
     }
 
     #[test]
@@ -978,7 +1004,7 @@ mod tests {
         let stream = tick();
         let (mut session, server, _) = started(&stream[..stream.len() - 1]);
         server.close();
-        assert_eq!(names(&mut session), ["end UnexpectedEof"]);
+        assert_eq!(names(&mut session), ["broken UnexpectedEof", "end"]);
     }
 
     #[test]
@@ -1040,8 +1066,8 @@ mod tests {
         let e = session.wait().expect_err("the error of the reader");
         assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
         assert!(matches!(session.wait(), Ok(SessionEvent::Tick)));
-        assert!(matches!(session.wait(), Ok(SessionEvent::End(None))));
-        assert!(matches!(session.wait(), Ok(SessionEvent::End(None))));
+        assert!(matches!(session.wait(), Ok(SessionEvent::End)));
+        assert!(matches!(session.wait(), Ok(SessionEvent::End)));
     }
 
     #[test]
@@ -1067,7 +1093,7 @@ mod tests {
         engine.break_writes();
         let e = session.wait().expect_err("the error of the writer");
         assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
-        assert!(matches!(session.wait(), Ok(SessionEvent::End(None))));
+        assert!(matches!(session.wait(), Ok(SessionEvent::End)));
     }
 
     /// A writer that keeps its bytes and fails the next write once `fail`
@@ -1118,6 +1144,6 @@ mod tests {
             hello,
             "nothing after the failed write"
         );
-        assert!(matches!(session.wait(), Ok(SessionEvent::End(None))));
+        assert!(matches!(session.wait(), Ok(SessionEvent::End)));
     }
 }

@@ -912,8 +912,7 @@ mod tests {
                     }
                 }
                 SessionEvent::Error(e) => format!("error {e}"),
-                SessionEvent::End(None) => "end".into(),
-                SessionEvent::End(Some(e)) => format!("broken {e}"),
+                SessionEvent::End => "end".into(),
             })
             .collect()
         }
