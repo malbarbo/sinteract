@@ -167,15 +167,16 @@ engine.
 - O `start` tira os caracteres de controle do apelido e o corta em 64
   bytes. O apelido vem do login ou do lobby, nunca da engine. O
   `ServerCore::players()` dá cada jogador com o apelido que a engine
-  recebeu.
+  recebeu. O jogador é um `session::Player`, o mesmo tipo da engine, e só
+  o `start` cria um. O `number()` dá o número dele, para um log.
 - Depois do `start`, o servidor dá a cada jogador um token, como 16 bytes
   aleatórios no link do jogador, e a página guarda o token no
   `sessionStorage`. O servidor confere o token e chama
   `connect(player)`, na primeira vez e depois de uma queda.
 - O `connect` devolve um `Conn` novo. A conexão anterior do mesmo lugar
   recebe `Gone` e não muda mais nada, mesmo que para o servidor ela ainda
-  pareça viva. O `connect` devolve `None` para um jogador que não existe e
-  no fim da sala.
+  pareça viva. O `connect` devolve `None` no fim da sala e para um
+  jogador de outra sala.
 - O `leave(conn)` diz que o WebSocket fechou. O lugar fica, e a engine
   continua vendo o jogador. Um segundo `leave`, ou o `leave` de uma
   conexão antiga, não faz nada.
@@ -325,7 +326,6 @@ num enum, porque o `LobbyCore::start` consome o lobby e devolve o
 ```rust
 use std::collections::HashMap;
 use std::io;
-use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -341,6 +341,7 @@ use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
 use sinteract::server::{EngineError, LobbyCore, MAX_VIEW_BYTES, Next, ServerCore};
+use sinteract::session::Player;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
 use tokio::process::{Child, Command};
@@ -376,7 +377,7 @@ struct Room {
     /// Os apelidos de quem espera o início, na ordem de chegada.
     lobby: Mutex<Vec<String>>,
     /// O jogador de cada token, depois do início.
-    tokens: Mutex<HashMap<String, NonZeroU32>>,
+    tokens: Mutex<HashMap<String, Player>>,
 }
 
 impl Room {
@@ -576,7 +577,7 @@ async fn upgrade(
 }
 
 /// Uma view: manda o que o core tem para ela e passa a entrada ao core.
-async fn play(socket: WebSocket, room: Arc<Room>, player: NonZeroU32) {
+async fn play(socket: WebSocket, room: Arc<Room>, player: Player) {
     let mut wake = room.views.subscribe(); // antes do primeiro next_for
     let Some(conn) = room.with(|core| core.connect(player)).flatten() else {
         return; // a sala acabou
@@ -607,7 +608,7 @@ async fn play(socket: WebSocket, room: Arc<Room>, player: NonZeroU32) {
         while let Some(Ok(message)) = stream.next().await {
             let Ws::Binary(payload) = message else { continue };
             if let Some(Err(e)) = room.with(|core| core.from_view(conn, &payload)) {
-                eprintln!("jogador {player}: {e}");
+                eprintln!("jogador {}: {e}", player.number());
             }
         }
     };

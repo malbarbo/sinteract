@@ -38,7 +38,7 @@ use crate::event::{
     InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
     PadButton, PadEvent,
 };
-use crate::session::PlayerRange;
+use crate::session::{Player, PlayerRange};
 use crate::wire;
 use crate::wire::engine_to_server::{self, Arm};
 use crate::wire::framing::{self, Side};
@@ -74,20 +74,20 @@ pub struct ServerCore {
 
 type Assets = BTreeMap<u32, Arc<[u8]>>;
 
-type Seats = BTreeMap<NonZeroU32, Seat>;
+type Seats = BTreeMap<Player, Seat>;
 
 /// The connection of a view to the seat of a player. A connect gives the
 /// seat a new generation, so the old connection of the seat, which may
 /// still look alive to the host, gets nothing and changes nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Conn {
-    player: NonZeroU32,
+    player: Player,
     generation: u64,
 }
 
 impl Conn {
     /// The player of the seat.
-    pub fn player(self) -> NonZeroU32 {
+    pub fn player(self) -> Player {
         self.player
     }
 }
@@ -315,7 +315,9 @@ impl LobbyCore {
         let seats: Seats = (1..)
             .map_while(NonZeroU32::new)
             .zip(nicknames)
-            .map(|(player, nickname)| (player, Seat::new(clean_nickname(nickname.as_ref()))))
+            .map(|(player, nickname)| {
+                (Player(player), Seat::new(clean_nickname(nickname.as_ref())))
+            })
             .collect();
         let nicknames: Vec<&str> = seats.values().map(|s| s.nickname.as_str()).collect();
         let mut buf = Vec::new();
@@ -338,7 +340,7 @@ impl LobbyCore {
 impl ServerCore {
     /// Each player of the room, with the nickname that the engine got, in
     /// the order of the start.
-    pub fn players(&self) -> impl Iterator<Item = (NonZeroU32, &str)> {
+    pub fn players(&self) -> impl Iterator<Item = (Player, &str)> {
         self.seats
             .iter()
             .map(|(player, seat)| (*player, seat.nickname.as_str()))
@@ -361,12 +363,12 @@ impl ServerCore {
     }
 
     /// A connection of a view to the seat of `player`, or `None` if the
-    /// room has no such seat or is over. The host checks
-    /// the token of the player first. The old connection of the seat gets
+    /// room is over or `player` is of another room. The host checks the
+    /// token of the player first. The old connection of the seat gets
     /// [`Next::Gone`], and the new one starts with no asset and gets the
     /// newest frame. The engine gets an `Up` for each key and button that
     /// the old view held, since the old view may never have left.
-    pub fn connect(&mut self, player: NonZeroU32) -> Option<Conn> {
+    pub fn connect(&mut self, player: Player) -> Option<Conn> {
         if self.is_over() {
             return None;
         }
@@ -439,7 +441,8 @@ impl ServerCore {
         if !view.held.track(event) {
             return;
         }
-        server_to_engine::write_input(&mut output.buf, conn.player, event).expect(UNDER_THE_CAP);
+        server_to_engine::write_input(&mut output.buf, conn.player.number(), event)
+            .expect(UNDER_THE_CAP);
     }
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
@@ -580,12 +583,13 @@ impl ServerCore {
     /// Send the engine an `Up` for each key and button in `held`, what a
     /// view of `player` held when it went, since a view that drops never
     /// sends them.
-    fn release(&mut self, player: NonZeroU32, mut held: Held) {
+    fn release(&mut self, player: Player, mut held: Held) {
         let Some(output) = self.output() else {
             return;
         };
         for event in held.release() {
-            server_to_engine::write_input(&mut output.buf, player, &event).expect(UNDER_THE_CAP);
+            server_to_engine::write_input(&mut output.buf, player.number(), &event)
+                .expect(UNDER_THE_CAP);
         }
     }
 }
@@ -623,7 +627,7 @@ impl Engine {
         payload: Arc<[u8]>,
     ) -> Result<(), EngineError> {
         if let Some(player) = player
-            && !seats.contains_key(&player)
+            && !seats.contains_key(&Player(player))
         {
             return Err(EngineError::NoSeat(player));
         }
@@ -638,7 +642,7 @@ impl Engine {
         };
         for (_, seat) in seats
             .iter_mut()
-            .filter(|(p, _)| player.is_none_or(|player| **p == player))
+            .filter(|(p, _)| player.is_none_or(|player| p.number() == player))
         {
             seat.frame = Some(frame.clone());
             if let Some(view) = &mut seat.view {
@@ -854,7 +858,7 @@ mod tests {
         fn playing(nicknames: &[&str]) -> (Self, Vec<Conn>) {
             let mut room = Room::new(started(nicknames));
             let conns = (1..=nicknames.len() as u32)
-                .map(|p| room.core.connect(NonZeroU32::new(p).unwrap()).unwrap())
+                .map(|p| room.core.connect(player(p)).unwrap())
                 .collect();
             room.events();
             (room, conns)
@@ -1061,8 +1065,8 @@ mod tests {
         out
     }
 
-    fn player(n: u32) -> NonZeroU32 {
-        NonZeroU32::new(n).unwrap()
+    fn player(n: u32) -> Player {
+        Player(NonZeroU32::new(n).unwrap())
     }
 
     #[test]
@@ -1084,7 +1088,7 @@ mod tests {
     #[test]
     fn the_players_come_with_the_nicknames_that_the_engine_got() {
         let core = started(&["Ana", "Be\nto"]);
-        let players: Vec<_> = core.players().map(|(p, n)| (p.get(), n)).collect();
+        let players: Vec<_> = core.players().map(|(p, n)| (p.number().get(), n)).collect();
         assert_eq!(players, [(1, "Ana"), (2, "Beto")]);
     }
 
@@ -1424,7 +1428,7 @@ mod tests {
         stream.extend_from_slice(&frame(1, 2.0));
         assert!(matches!(
             core.from_engine(&stream)[..],
-            [EngineError::NoSeat(p)] if p == player(2)
+            [EngineError::NoSeat(p)] if p.get() == 2
         ));
         assert_eq!(sent(&mut core, ana), ["frame 2", "idle"]);
     }
