@@ -66,12 +66,9 @@ pub struct Lobby {
 #[derive(Debug)]
 pub struct ServerCore {
     seats: Seats,
-    phase: Phase,
-    /// The bytes of the engine that do not make a whole message yet.
-    engine_in: Vec<u8>,
-    /// The live assets, under the limits of the room, with the message of
-    /// each, as a view gets it.
-    cache: Cache<Arc<[u8]>>,
+    /// The engine, until its stream ends. The seats stay, so a view still
+    /// gets the last frames.
+    engine: Option<Engine>,
 }
 
 type Assets = BTreeMap<u32, Arc<[u8]>>;
@@ -291,16 +288,19 @@ impl Lobby {
             .map(|(player, nickname)| (player, Seat::new(clean_nickname(nickname.as_ref()))))
             .collect();
         let nicknames: Vec<&str> = seats.values().map(|s| s.nickname.as_str()).collect();
-        let mut engine_out = Vec::new();
-        server_to_engine::write_start(&mut engine_out, &nicknames).expect(UNDER_THE_CAP);
+        let mut buf = Vec::new();
+        server_to_engine::write_start(&mut buf, &nicknames).expect(UNDER_THE_CAP);
+        let engine = Engine {
+            input: self.engine_in,
+            cache: Cache::new(),
+            output: Some(Output {
+                buf,
+                tick_pending: false,
+            }),
+        };
         Ok(ServerCore {
             seats,
-            phase: Phase::Playing {
-                engine_out,
-                tick_pending: false,
-            },
-            engine_in: self.engine_in,
-            cache: Cache::new(),
+            engine: Some(engine),
         })
     }
 }
@@ -329,7 +329,7 @@ impl ServerCore {
     /// newest frame. The engine gets an `Up` for each key and button that
     /// the old view held, since the old view may never have left.
     pub fn connect(&mut self, player: NonZeroU32) -> Option<Conn> {
-        if matches!(self.phase, Phase::Over) {
+        if self.is_over() {
             return None;
         }
         let seat = self.seats.get_mut(&player)?;
@@ -351,14 +351,11 @@ impl ServerCore {
     /// dropped while the engine has not taken the last one, so the ticks
     /// of an engine slower than the timer do not pile up.
     pub fn tick(&mut self) {
-        if let Phase::Playing {
-            engine_out,
-            tick_pending: tick_pending @ false,
-            ..
-        } = &mut self.phase
+        if let Some(output) = self.output()
+            && !output.tick_pending
         {
-            server_to_engine::write_tick(engine_out).expect(UNDER_THE_CAP);
-            *tick_pending = true;
+            server_to_engine::write_tick(&mut output.buf).expect(UNDER_THE_CAP);
+            output.tick_pending = true;
         }
     }
 
@@ -367,15 +364,15 @@ impl ServerCore {
     /// closes the pipe of the engine, and the end of the pipe tells the
     /// engine to end. The engine may still send its last frames.
     pub fn close(&mut self) {
-        if matches!(self.phase, Phase::Playing { .. }) {
-            self.phase = Phase::Closing;
+        if let Some(engine) = &mut self.engine {
+            engine.output = None;
         }
     }
 
     /// Returns `true` if the engine ended, `false` otherwise. The timer of
     /// the tick and the task that reads the engine stop here.
     pub fn is_over(&self) -> bool {
-        matches!(self.phase, Phase::Over)
+        self.engine.is_none()
     }
 
     /// Take a message that the view of `conn` sent over its WebSocket, and
@@ -395,7 +392,7 @@ impl ServerCore {
     /// core drops the input of an old connection, and a `Down` of a new key
     /// when the view holds 32 keys, since it could not release the key.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
-        let Phase::Playing { engine_out, .. } = &mut self.phase else {
+        let Some(output) = self.engine.as_mut().and_then(|e| e.output.as_mut()) else {
             return;
         };
         let Some((view, _)) = view_of(&mut self.seats, conn) else {
@@ -404,7 +401,7 @@ impl ServerCore {
         if !view.held.track(event) {
             return;
         }
-        server_to_engine::write_input(engine_out, conn.player, event).expect(UNDER_THE_CAP);
+        server_to_engine::write_input(&mut output.buf, conn.player, event).expect(UNDER_THE_CAP);
     }
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
@@ -417,11 +414,11 @@ impl ServerCore {
     /// what went wrong, in the order of the stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
         let mut errors = Vec::new();
-        if matches!(self.phase, Phase::Over) {
+        let Some(engine) = &mut self.engine else {
             return errors;
-        }
-        // Out of `self`, so the loop reads it while the messages go in.
-        let mut buffer = std::mem::take(&mut self.engine_in);
+        };
+        // Out of `engine`, so the loop reads it while the messages go in.
+        let mut buffer = std::mem::take(&mut engine.input);
         buffer.extend_from_slice(bytes);
         let mut rest = buffer.as_slice();
         loop {
@@ -430,7 +427,7 @@ impl ServerCore {
                 Ok(None) => break,
                 Err(e) => {
                     errors.push(EngineError::Broken(e));
-                    self.end();
+                    self.engine = None;
                     return errors;
                 }
             };
@@ -442,13 +439,13 @@ impl ServerCore {
                     footprint,
                     to_view,
                 })) => {
-                    if let Err(e) = self.keep_asset(id, footprint, to_view) {
+                    if let Err(e) = engine.keep_asset(id, footprint, to_view) {
                         errors.push(e);
                     }
                 }
                 Ok(Some(Arm::TickTaken)) => {
-                    if let Phase::Playing { tick_pending, .. } = &mut self.phase {
-                        *tick_pending = false;
+                    if let Some(output) = &mut engine.output {
+                        output.tick_pending = false;
                     }
                 }
                 Ok(Some(Arm::Frame {
@@ -456,7 +453,7 @@ impl ServerCore {
                     ids,
                     to_view,
                 })) => {
-                    if let Err(e) = self.keep_frame(player, &ids, to_view) {
+                    if let Err(e) = engine.keep_frame(&mut self.seats, player, &ids, to_view) {
                         errors.push(e);
                     }
                 }
@@ -466,20 +463,15 @@ impl ServerCore {
         }
         let taken = buffer.len() - rest.len();
         buffer.drain(..taken);
-        self.engine_in = buffer;
+        engine.input = buffer;
         errors
     }
 
     /// Say that the stream of the engine ended, which ends the room. The
     /// part of a message that is left breaks the stream.
     pub fn engine_ended(&mut self) -> Option<EngineError> {
-        if matches!(self.phase, Phase::Over) {
-            return None;
-        }
-        let broken = (!self.engine_in.is_empty())
-            .then(|| EngineError::Broken(io::ErrorKind::UnexpectedEof.into()));
-        self.end();
-        broken
+        let engine = self.engine.take()?;
+        (!engine.input.is_empty()).then(|| EngineError::Broken(io::ErrorKind::UnexpectedEof.into()))
     }
 
     /// The next message for the view of `conn`. The view gets the newest
@@ -521,9 +513,10 @@ impl ServerCore {
             view.shown_assets = next.assets.keys().copied().collect();
             return Next::Send(next.payload);
         }
-        match self.phase {
-            Phase::Playing { .. } | Phase::Closing => Next::Idle,
-            Phase::Over => Next::Gone,
+        if self.engine.is_some() {
+            Next::Idle
+        } else {
+            Next::Gone
         }
     }
 
@@ -533,15 +526,33 @@ impl ServerCore {
     /// after [`Self::close`] or at the end of the room, so the task that
     /// writes to the engine closes its pipe, and `true` otherwise.
     pub fn take_engine_output(&mut self, buf: &mut Vec<u8>) -> bool {
-        match &mut self.phase {
-            Phase::Playing { engine_out, .. } => {
-                buf.append(engine_out);
-                true
-            }
-            Phase::Closing | Phase::Over => false,
-        }
+        let Some(output) = self.output() else {
+            return false;
+        };
+        buf.append(&mut output.buf);
+        true
     }
 
+    /// The messages for the engine, or `None` after the close and at the
+    /// end of the room.
+    fn output(&mut self) -> Option<&mut Output> {
+        self.engine.as_mut()?.output.as_mut()
+    }
+
+    /// Send the engine an `Up` for each key and button in `held`, what a
+    /// view of `player` held when it went, since a view that drops never
+    /// sends them.
+    fn release(&mut self, player: NonZeroU32, mut held: Held) {
+        let Some(output) = self.output() else {
+            return;
+        };
+        for event in held.release() {
+            server_to_engine::write_input(&mut output.buf, player, &event).expect(UNDER_THE_CAP);
+        }
+    }
+}
+
+impl Engine {
     /// Keep the asset `id`, with `payload`, its message for a view, or
     /// refuse it if the id is live or the image is too large. An asset that
     /// does not fit beside the others that came after the last frame is
@@ -568,12 +579,13 @@ impl ServerCore {
     /// longest ago to fit the limits.
     fn keep_frame(
         &mut self,
+        seats: &mut Seats,
         player: Option<NonZeroU32>,
         ids: &BTreeSet<u32>,
         payload: Arc<[u8]>,
     ) -> Result<(), EngineError> {
         if let Some(player) = player
-            && !self.seats.contains_key(&player)
+            && !seats.contains_key(&player)
         {
             return Err(EngineError::NoSeat(player));
         }
@@ -586,8 +598,7 @@ impl ServerCore {
             payload,
             assets: Arc::new(assets),
         };
-        for (_, seat) in self
-            .seats
+        for (_, seat) in seats
             .iter_mut()
             .filter(|(p, _)| player.is_none_or(|player| **p == player))
         {
@@ -604,28 +615,9 @@ impl ServerCore {
 
     /// Tell the engine that the asset `id` is gone.
     fn lose(&mut self, id: u32) {
-        if let Phase::Playing { engine_out, .. } = &mut self.phase {
-            server_to_engine::write_lost(engine_out, id).expect(UNDER_THE_CAP);
+        if let Some(output) = &mut self.output {
+            server_to_engine::write_lost(&mut output.buf, id).expect(UNDER_THE_CAP);
         }
-    }
-
-    /// Send the engine an `Up` for each key and button in `held`, what a
-    /// view of `player` held when it went, since a view that drops never
-    /// sends them.
-    fn release(&mut self, player: NonZeroU32, mut held: Held) {
-        let Phase::Playing { engine_out, .. } = &mut self.phase else {
-            return;
-        };
-        for event in held.release() {
-            server_to_engine::write_input(engine_out, player, &event).expect(UNDER_THE_CAP);
-        }
-    }
-
-    /// End the room. The engine no longer reads, so the core drops the
-    /// messages for it.
-    fn end(&mut self) {
-        self.phase = Phase::Over;
-        self.engine_in = Vec::new();
     }
 }
 
@@ -747,18 +739,25 @@ impl Held {
     }
 }
 
-/// Whether the room plays, told the engine to end, or the engine ended.
-/// The seats stay after the play, so a view still gets the last frames.
+/// The engine of a room, while its stream lasts.
 #[derive(Debug)]
-enum Phase {
-    Playing {
-        /// The messages for the engine that the host has not taken yet.
-        engine_out: Vec<u8>,
-        /// The engine did not take the last tick yet.
-        tick_pending: bool,
-    },
-    Closing,
-    Over,
+struct Engine {
+    /// The bytes of the engine that do not make a whole message yet.
+    input: Vec<u8>,
+    /// The live assets, under the limits of the room, with the message of
+    /// each, as a view gets it.
+    cache: Cache<Arc<[u8]>>,
+    /// The messages for the engine, until the close.
+    output: Option<Output>,
+}
+
+/// The messages for the engine.
+#[derive(Debug)]
+struct Output {
+    /// The messages that the host has not taken yet.
+    buf: Vec<u8>,
+    /// The engine did not take the last tick yet.
+    tick_pending: bool,
 }
 
 /// The view of `conn` and the newest frame of its seat, if `conn` is the
