@@ -11,7 +11,6 @@
 //! long as the process, such as the main thread.
 
 use std::cell::RefCell;
-use std::mem;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -136,13 +135,13 @@ impl Window {
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
             self.clock.set_millihertz(rate.unwrap_or(Self::TICK_RATE));
         }
-        let shown = s.app.frame_shown.take();
+        let shown = s.app.frame_callback.as_mut().and_then(|f| f.shown.take());
         #[cfg(target_os = "macos")]
         let shown = shown.or_else(|| s.display_link.take());
         if let Some(at) = shown {
             self.clock.align(at);
         }
-        if s.unshown && !s.app.frame_pending {
+        if s.unshown && !s.app.frame_pending() {
             // A failure here fails the next present the same way.
             let _ = s.show();
         }
@@ -223,7 +222,7 @@ impl Session {
     fn show(&mut self) -> Result<(), PresentError> {
         // A second frame would block in `buffer_mut` until the compositor
         // releases a buffer.
-        if self.app.frame_pending {
+        if self.app.frame_pending() {
             self.unshown = true;
             return Ok(());
         }
@@ -259,10 +258,10 @@ impl Session {
         self.app.placement = placement;
         self.window.pre_present_notify();
         buffer.present().map_err(surface_error)?;
-        if self.app.frame_callbacks {
+        if let Some(callback) = &mut self.app.frame_callback {
             // The RedrawRequested of the callback clears it.
             self.window.request_redraw();
-            self.app.frame_pending = true;
+            callback.pending = true;
         }
         Ok(())
     }
@@ -530,13 +529,18 @@ struct App {
     /// The window may be on another monitor, whose refresh rate is still
     /// to read.
     read_refresh_rate: bool,
-    /// Wayland paces the frames by its frame callback.
-    frame_callbacks: bool,
-    /// The frame callback of the last frame did not arrive yet.
-    frame_pending: bool,
-    /// When the last frame callback arrived, just after the screen showed
-    /// the frame, for Window::pump to align the tick clock.
-    frame_shown: Option<Instant>,
+    /// Wayland paces the frames by its frame callback. Other platforms
+    /// have none.
+    frame_callback: Option<FrameCallback>,
+}
+
+#[derive(Default)]
+struct FrameCallback {
+    /// The callback of the last frame did not arrive yet.
+    pending: bool,
+    /// When the last callback arrived, just after the screen showed the
+    /// frame, for Window::pump to align the tick clock.
+    shown: Option<Instant>,
 }
 
 impl App {
@@ -563,10 +567,14 @@ impl App {
             reported_size,
             held: HeldKeys::default(),
             read_refresh_rate: true,
-            frame_callbacks,
-            frame_pending: false,
-            frame_shown: None,
+            frame_callback: frame_callbacks.then(FrameCallback::default),
         }
+    }
+
+    /// Returns `true` if the frame callback of the last frame did not arrive
+    /// yet, `false` otherwise.
+    fn frame_pending(&self) -> bool {
+        self.frame_callback.as_ref().is_some_and(|f| f.pending)
     }
 
     /// Send a Resize when the logical size changed since the last one.
@@ -649,13 +657,15 @@ impl ApplicationHandler for App {
             // there would draw again and ask for the next callback forever.
             // winit gives no time of the callback, so the stamp is the time
             // of the call, late after a frame that drew past the vblank.
-            WindowEvent::RedrawRequested => {
-                if mem::take(&mut self.frame_pending) {
-                    self.frame_shown = Some(Instant::now());
-                } else {
+            WindowEvent::RedrawRequested => match &mut self.frame_callback {
+                Some(callback) if callback.pending => {
+                    callback.pending = false;
+                    callback.shown = Some(Instant::now());
+                }
+                _ => {
                     let _ = self.tx.request_redraw();
                 }
-            }
+            },
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
             }
