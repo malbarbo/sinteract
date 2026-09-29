@@ -58,9 +58,7 @@ struct Session {
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
     renderer: PixmapRenderer,
     /// The scene of the last present, drawn again when the platform asks.
-    last: Option<Scene>,
-    /// `last` waits for the frame callback of Wayland.
-    unshown: bool,
+    last: Option<Last>,
     #[cfg(target_os = "macos")]
     display_link: super::display_link::DisplayLink,
 }
@@ -108,7 +106,6 @@ impl Window {
                 surface,
                 renderer: PixmapRenderer::default(),
                 last: None,
-                unshown: false,
                 #[cfg(target_os = "macos")]
                 display_link,
             }),
@@ -141,7 +138,7 @@ impl Window {
         if let Some(at) = shown {
             self.clock.align(at);
         }
-        if s.unshown && !s.app.frame_pending() {
+        if s.last.as_ref().is_some_and(|l| l.unshown) && !s.app.frame_pending() {
             // A failure here fails the next present the same way.
             let _ = s.show();
         }
@@ -154,7 +151,10 @@ impl super::Display for Window {
             return Err(PresentError::Closed);
         };
         self.inbox.take_redraw();
-        session.last = Some(scene);
+        session.last = Some(Last {
+            scene,
+            unshown: false,
+        });
         session.show()
     }
 
@@ -220,18 +220,18 @@ impl Session {
     /// frame before arrives. A hidden window gets no callback, so it draws
     /// nothing, and the ticks keep their rate.
     fn show(&mut self) -> Result<(), PresentError> {
-        // A second frame would block in `buffer_mut` until the compositor
-        // releases a buffer.
-        if self.app.frame_pending() {
-            self.unshown = true;
-            return Ok(());
-        }
-        self.unshown = false;
-        let Some(scene) = self.last.take() else {
+        let Some(mut last) = self.last.take() else {
             return Ok(());
         };
-        let drawn = self.draw(&scene);
-        self.last = Some(scene);
+        // A second frame would block in `buffer_mut` until the compositor
+        // releases a buffer.
+        last.unshown = self.app.frame_pending();
+        let drawn = if last.unshown {
+            Ok(())
+        } else {
+            self.draw(&last.scene)
+        };
+        self.last = Some(last);
         drawn
     }
 
@@ -265,6 +265,12 @@ impl Session {
         }
         Ok(())
     }
+}
+
+struct Last {
+    scene: Scene,
+    /// `scene` waits for the frame callback of Wayland.
+    unshown: bool,
 }
 
 fn new_surface(
