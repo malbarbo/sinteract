@@ -83,7 +83,7 @@ struct Start {
 }
 
 # The input of a player.
-struct PlayerEvent {
+struct PlayerInput {
     # The player, from 1.
     player @0 :UInt32;
     event  @1 :Input.InputEvent;
@@ -97,7 +97,7 @@ struct Tick {}
 struct ServerToEngine {
     union {
         # The input of a player.
-        event @0 :PlayerEvent;
+        input @0 :PlayerInput;
         # The first message of the session.
         start @1 :Start;
         # Time for the engine to draw the next frames.

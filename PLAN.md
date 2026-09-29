@@ -35,7 +35,7 @@ dela, e nenhum lado recebe um braço que só outro lado manda.
 | direção             | raiz             | mágica | braços                                 |
 |---------------------|------------------|--------|----------------------------------------|
 | engine → servidor   | `EngineToServer` | `SIE1` | `asset`, `frame`, `hello`, `tickTaken` |
-| servidor → engine   | `ServerToEngine` | `SIS1` | `event`, `start`, `tick`, `lost`       |
+| servidor → engine   | `ServerToEngine` | `SIS1` | `input`, `start`, `tick`, `lost`       |
 | view → servidor     | `ViewToServer`   |        | `event`                                |
 | servidor → view     | `ServerToView`   |        | `asset`, `frame`, `forget`             |
 
@@ -44,7 +44,7 @@ tamanho em `u32` LE. Num WebSocket vai só o payload, e a versão vai no
 subprotocolo `sinteract.v1`. A view só fala por WebSocket, então não tem
 mágica. O player é o número do jogador na partida, a
 partir de 1, e vai no primeiro campo do payload das mensagens que falam de
-um jogador: o `event` do servidor e o `frame` da engine, em que o 0 quer
+um jogador: o `input` do servidor e o `frame` da engine, em que o 0 quer
 dizer todos. O `start`, o `tick` e o `asset` são
 da sessão inteira e não têm player, e a `ViewToServer` e a `ServerToView`
 também não, porque o servidor sabe o player pela conexão.
@@ -80,7 +80,7 @@ Regras da sessão com servidor:
   `start` com os apelidos dos jogadores, que são os mesmos até o fim. Só
   então as views conectam e mandam eventos;
 - o número de um jogador é o lugar dele no `start`, a partir de 1, e um
-  `event` de player 0 é erro;
+  `input` de player 0 é erro;
 - nenhuma mensagem encerra a partida. O fim do transporte encerra, o fim
   do pipe ou o close do WebSocket, que também cobre quem quebra. Para
   encerrar a partida, o servidor fecha o fd 3 da engine. Um jogador cujo

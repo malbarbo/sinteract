@@ -85,7 +85,7 @@ fn decode_message(msg: server_to_engine::Reader<'_>) -> Result<Option<Message>, 
         return Ok(None);
     };
     match which {
-        server_to_engine::Event(e) => {
+        server_to_engine::Input(e) => {
             let e = e?;
             let Some(event) = read_input_event(e.get_event()?)? else {
                 return Ok(None);
@@ -115,11 +115,11 @@ fn nonzero_player(player: u32) -> Result<NonZeroU32, Error> {
 
 pub(super) fn input_message(player: u32, ev: &InputEvent) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let mut event = builder
+    let mut input = builder
         .init_root::<server_to_engine::Builder>()
-        .init_event();
-    event.set_player(player);
-    write_input_event(event.init_event(), ev);
+        .init_input();
+    input.set_player(player);
+    write_input_event(input.init_event(), ev);
     builder
 }
 

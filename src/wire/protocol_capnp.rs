@@ -2359,7 +2359,7 @@ pub mod start {
     }
 }
 
-pub mod player_event {
+pub mod player_input {
     #[derive(Copy, Clone)]
     pub struct Owned(());
     impl ::capnp::introspect::Introspect for Owned {
@@ -2615,7 +2615,7 @@ pub mod player_event {
     mod _private {
         pub(crate) static ENCODED_NODE: [::capnp::Word; 49] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
-            ::capnp::word(187, 191, 80, 242, 173, 196, 169, 150),
+            ::capnp::word(149, 10, 167, 102, 167, 191, 89, 193),
             ::capnp::word(15, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
@@ -2629,8 +2629,8 @@ pub mod player_event {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(112, 114, 111, 116, 111, 99, 111, 108),
             ::capnp::word(46, 99, 97, 112, 110, 112, 58, 80),
-            ::capnp::word(108, 97, 121, 101, 114, 69, 118, 101),
-            ::capnp::word(110, 116, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(108, 97, 121, 101, 114, 73, 110, 112),
+            ::capnp::word(117, 116, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(8, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2689,7 +2689,7 @@ pub mod player_event {
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[0, 1];
         pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[];
         pub(crate) static MEMBERS_BY_NAME: &[u16] = &[1, 0];
-        pub(crate) const TYPE_ID: u64 = 0x96a9_c4ad_f250_bfbb;
+        pub(crate) const TYPE_ID: u64 = 0xc159_bfa7_66a7_0a95;
     }
 }
 
@@ -2939,7 +2939,7 @@ pub mod tick {
 }
 
 pub mod server_to_engine {
-    pub use self::Which::{Event, Lost, Start, Tick};
+    pub use self::Which::{Input, Lost, Start, Tick};
 
     #[derive(Copy, Clone)]
     pub struct Owned(());
@@ -3040,7 +3040,7 @@ pub mod server_to_engine {
             self.reader.total_size()
         }
         #[inline]
-        pub fn has_event(&self) -> bool {
+        pub fn has_input(&self) -> bool {
             if self.reader.get_data_field::<u16>(0) != 0 {
                 return false;
             }
@@ -3063,7 +3063,7 @@ pub mod server_to_engine {
         #[inline]
         pub fn which(self) -> ::core::result::Result<WhichReader<'a>, ::capnp::NotInSchema> {
             match self.reader.get_data_field::<u16>(0) {
-                0 => ::core::result::Result::Ok(Event(
+                0 => ::core::result::Result::Ok(Input(
                     ::capnp::traits::FromPointerReader::get_from_pointer(
                         &self.reader.get_pointer_field(0),
                         ::core::option::Option::None,
@@ -3174,9 +3174,9 @@ pub mod server_to_engine {
             self.builder.as_reader().total_size()
         }
         #[inline]
-        pub fn set_event(
+        pub fn set_input(
             &mut self,
-            value: crate::protocol_capnp::player_event::Reader<'_>,
+            value: crate::protocol_capnp::player_input::Reader<'_>,
         ) -> ::capnp::Result<()> {
             self.builder.set_data_field::<u16>(0, 0);
             ::capnp::traits::SetterInput::set_pointer_builder(
@@ -3186,12 +3186,12 @@ pub mod server_to_engine {
             )
         }
         #[inline]
-        pub fn init_event(self) -> crate::protocol_capnp::player_event::Builder<'a> {
+        pub fn init_input(self) -> crate::protocol_capnp::player_input::Builder<'a> {
             self.builder.set_data_field::<u16>(0, 0);
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
         }
         #[inline]
-        pub fn has_event(&self) -> bool {
+        pub fn has_input(&self) -> bool {
             if self.builder.get_data_field::<u16>(0) != 0 {
                 return false;
             }
@@ -3253,7 +3253,7 @@ pub mod server_to_engine {
         #[inline]
         pub fn which(self) -> ::core::result::Result<WhichBuilder<'a>, ::capnp::NotInSchema> {
             match self.builder.get_data_field::<u16>(0) {
-                0 => ::core::result::Result::Ok(Event(
+                0 => ::core::result::Result::Ok(Input(
                     ::capnp::traits::FromPointerBuilder::get_from_pointer(
                         self.builder.get_pointer_field(0),
                         ::core::option::Option::None,
@@ -3337,9 +3337,9 @@ pub mod server_to_engine {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(104, 0, 0, 0, 3, 0, 1, 0),
             ::capnp::word(116, 0, 0, 0, 2, 0, 1, 0),
-            ::capnp::word(101, 118, 101, 110, 116, 0, 0, 0),
+            ::capnp::word(105, 110, 112, 117, 116, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(187, 191, 80, 242, 173, 196, 169, 150),
+            ::capnp::word(149, 10, 167, 102, 167, 191, 89, 193),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
@@ -3372,7 +3372,7 @@ pub mod server_to_engine {
         ];
         pub(crate) fn get_field_types(index: u16) -> ::capnp::introspect::Type {
             match index {
-                0 => <crate::protocol_capnp::player_event::Owned as ::capnp::introspect::Introspect>::introspect(),
+                0 => <crate::protocol_capnp::player_input::Owned as ::capnp::introspect::Introspect>::introspect(),
                 1 => <crate::protocol_capnp::start::Owned as ::capnp::introspect::Introspect>::introspect(),
                 2 => <crate::protocol_capnp::tick::Owned as ::capnp::introspect::Introspect>::introspect(),
                 3 => <u32 as ::capnp::introspect::Introspect>::introspect(),
@@ -3400,18 +3400,18 @@ pub mod server_to_engine {
         pub(crate) const TYPE_ID: u64 = 0xc090_1718_4577_27f5;
     }
     pub enum Which<A0, A1, A2> {
-        Event(A0),
+        Input(A0),
         Start(A1),
         Tick(A2),
         Lost(u32),
     }
     pub type WhichReader<'a> = Which<
-        ::capnp::Result<crate::protocol_capnp::player_event::Reader<'a>>,
+        ::capnp::Result<crate::protocol_capnp::player_input::Reader<'a>>,
         ::capnp::Result<crate::protocol_capnp::start::Reader<'a>>,
         ::capnp::Result<crate::protocol_capnp::tick::Reader<'a>>,
     >;
     pub type WhichBuilder<'a> = Which<
-        ::capnp::Result<crate::protocol_capnp::player_event::Builder<'a>>,
+        ::capnp::Result<crate::protocol_capnp::player_input::Builder<'a>>,
         ::capnp::Result<crate::protocol_capnp::start::Builder<'a>>,
         ::capnp::Result<crate::protocol_capnp::tick::Builder<'a>>,
     >;

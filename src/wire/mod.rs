@@ -1097,7 +1097,7 @@ mod tests {
                 },
             );
             let bytes = with_unknown_server_value(&event, |m| {
-                let Ok(protocol_capnp::server_to_engine::Event(e)) = m.which() else {
+                let Ok(protocol_capnp::server_to_engine::Input(e)) = m.which() else {
                     panic!("not an event");
                 };
                 tag_of(e.unwrap().get_event().unwrap())
@@ -1189,7 +1189,7 @@ mod tests {
         });
         // The kind is the u16 at byte 0 of the data of a KeyEvent.
         let bytes = with_unknown_server_value(&encode_event(&key), |m| {
-            let Ok(protocol_capnp::server_to_engine::Event(e)) = m.which() else {
+            let Ok(protocol_capnp::server_to_engine::Input(e)) = m.which() else {
                 panic!("not an event");
             };
             let Ok(input_event::Which::Key(k)) = e.unwrap().get_event().unwrap().which() else {
@@ -1213,7 +1213,7 @@ mod tests {
         // MouseEvent, and the button of a down is the u16 at byte 12.
         for offset in [10, 12] {
             let bytes = with_unknown_server_value(&encode_event(&down), |m| {
-                let Ok(protocol_capnp::server_to_engine::Event(e)) = m.which() else {
+                let Ok(protocol_capnp::server_to_engine::Input(e)) = m.which() else {
                     panic!("not an event");
                 };
                 let Ok(input_event::Which::Mouse(m)) = e.unwrap().get_event().unwrap().which()
@@ -1233,7 +1233,7 @@ mod tests {
         // PadEvent, and the tag of the union is the u16 at byte 2.
         for offset in [0, 2] {
             let bytes = with_unknown_server_value(&encode_event(&down), |m| {
-                let Ok(protocol_capnp::server_to_engine::Event(e)) = m.which() else {
+                let Ok(protocol_capnp::server_to_engine::Input(e)) = m.which() else {
                     panic!("not an event");
                 };
                 let Ok(input_event::Which::Pad(p)) = e.unwrap().get_event().unwrap().which() else {
