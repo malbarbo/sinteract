@@ -524,7 +524,7 @@ impl ServerCore {
                 return Next::Send(payload);
             }
             view.shown = target.assets.keys().copied().collect();
-            return Next::Send(target.frame);
+            return Next::Send(target.payload);
         }
         match self.phase {
             Phase::Waiting
@@ -594,15 +594,15 @@ impl ServerCore {
             .filter_map(|id| Some((*id, self.cache.get(*id)?.clone())))
             .collect();
         let gone = self.cache.frame(ids);
-        let shot = Shot {
-            frame: payload,
+        let frame = Frame {
+            payload,
             assets: Arc::new(assets),
         };
         for (_, seat) in seats
             .iter_mut()
             .filter(|(p, _)| player.is_none_or(|player| **p == player))
         {
-            seat.frame = Some(shot.clone());
+            seat.frame = Some(frame.clone());
             if let Some(view) = &mut seat.view {
                 view.frame_sent = false;
             }
@@ -662,7 +662,7 @@ struct Seat {
     /// to run out of them.
     generation: u64,
     /// The newest frame for the player, kept for the next connect.
-    frame: Option<Shot>,
+    frame: Option<Frame>,
     /// The view that takes the seat, until it leaves.
     view: Option<View>,
 }
@@ -676,7 +676,7 @@ struct View {
     /// `target`.
     frame_sent: bool,
     /// The next frame of the view, until the view has its assets and it.
-    target: Option<Shot>,
+    target: Option<Frame>,
     /// The ids of the assets that the view has.
     has: BTreeSet<u32>,
     /// The ids of the assets of the frame on the screen of the view.
@@ -687,8 +687,8 @@ struct View {
 /// frame keeps them for a view that has not got them, after the cache drops
 /// them.
 #[derive(Clone, Debug)]
-struct Shot {
-    frame: Arc<[u8]>,
+struct Frame {
+    payload: Arc<[u8]>,
     assets: Arc<Assets>,
 }
 
@@ -828,7 +828,7 @@ impl Phase {
 
 /// The view of `conn` and the newest frame of its seat, if `conn` is the
 /// connection that takes the seat and has not left.
-fn view_of(seats: &mut Seats, conn: Conn) -> Option<(&mut View, Option<&Shot>)> {
+fn view_of(seats: &mut Seats, conn: Conn) -> Option<(&mut View, Option<&Frame>)> {
     let seat = seats
         .get_mut(&conn.player)
         .filter(|seat| seat.generation == conn.generation)?;
