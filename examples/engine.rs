@@ -29,7 +29,7 @@ use std::time::Instant;
 use sinteract::display::{TerminalOptions, open_native};
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Bitmap, Image, Paint, PathStyle, RotatedRect, Scene};
-use sinteract::session::{Session, SessionEvent};
+use sinteract::session::{Session, SessionEvent, Target};
 use sinteract::wire::engine_to_server::PlayerRange;
 
 const WIDTH: f32 = 400.0;
@@ -74,7 +74,7 @@ fn run_session(mut game: Game) -> ExitCode {
         match event {
             SessionEvent::Tick => {
                 game.tick();
-                if let Err(e) = session.write_frame(None, &game.scene()) {
+                if let Err(e) = session.write_frame(Target::All, &game.scene()) {
                     eprintln!("engine: {e}");
                     break;
                 }

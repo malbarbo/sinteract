@@ -66,6 +66,13 @@ impl Player {
     }
 }
 
+/// Who a frame goes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    All,
+    Player(Player),
+}
+
 /// What [`Session::wait`] delivers.
 #[derive(Debug)]
 pub enum SessionEvent {
@@ -273,15 +280,10 @@ impl<R: Read, W: Write> Session<R, W> {
         }
     }
 
-    /// Write `scene` to `w` as a frame for `player`, or for every player
-    /// when `player` is `None`. The asset of each image that it draws goes
+    /// Write `scene` to `w` as a frame for `to`. The asset of each image that it draws goes
     /// out before, unless it went out before and the server did not lose
     /// it.
-    pub fn write_frame(
-        &mut self,
-        player: Option<NonZeroU32>,
-        scene: &Scene,
-    ) -> Result<(), FrameError> {
+    pub fn write_frame(&mut self, to: Target, scene: &Scene) -> Result<(), FrameError> {
         let images = images_of(scene);
         check_room(images.iter().copied()).map_err(FrameError::Full)?;
         for image in images {
@@ -296,6 +298,10 @@ impl<R: Read, W: Write> Session<R, W> {
         }
         let sent = &self.sent;
         let id = |image: &Image| *sent.get(image).expect("every image of the scene went out");
+        let player = match to {
+            Target::All => None,
+            Target::Player(player) => Some(player.number()),
+        };
         engine_to_server::write_frame(&mut self.w, player, scene, &id)?;
         Ok(())
     }
@@ -775,16 +781,33 @@ mod tests {
 
     /// The messages that `session` writes for `scene`, in a short form.
     fn written(session: &mut TestSession, engine: &Pipe, scene: &Scene) -> Vec<String> {
-        session.write_frame(None, scene).unwrap();
+        session.write_frame(Target::All, scene).unwrap();
         let out = engine.drain();
         let mut r = &out[..];
         std::iter::from_fn(|| testing::read(&mut r).unwrap())
             .map(|m| match m {
                 testing::Message::Asset { id, .. } => format!("asset {id}"),
-                testing::Message::Frame { .. } => "frame".into(),
+                testing::Message::Frame { player: None, .. } => "frame".into(),
                 other => format!("{other:?}"),
             })
             .collect()
+    }
+
+    #[test]
+    fn a_frame_for_a_player_goes_out_with_the_player() {
+        let (server, engine) = (Pipe::default(), Pipe::default());
+        server.push(&start());
+        let (mut session, players) = Session::start(players(), server, engine.clone()).unwrap();
+        engine.drain();
+        let (beto, _) = players[1];
+        session
+            .write_frame(Target::Player(beto), &drawing(&[]))
+            .unwrap();
+        let out = engine.drain();
+        assert!(matches!(
+            testing::read(&mut &out[..]).unwrap(),
+            Some(testing::Message::Frame { player: Some(p), .. }) if p.get() == 2
+        ));
     }
 
     #[test]
@@ -825,7 +848,7 @@ mod tests {
             .collect();
         let (mut session, _, engine) = started(&[]);
         assert!(matches!(
-            session.write_frame(None, &drawing(&images)),
+            session.write_frame(Target::All, &drawing(&images)),
             Err(FrameError::Full(RoomFull { .. }))
         ));
         assert!(engine.drain().is_empty());
