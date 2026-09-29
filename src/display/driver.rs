@@ -21,10 +21,10 @@ use crate::scene::Scene;
 /// # fn next_scene() -> Scene { Scene::new(400.0, 300.0) }
 /// # fn on_key(_: KeyEvent) {}
 /// # fn on_mouse(_: MouseEvent) {}
-/// # fn run(fr: &mut dyn Display) -> Result<(), Box<dyn std::error::Error>> {
+/// # fn run(display: &mut dyn Display) -> Result<(), Box<dyn std::error::Error>> {
 /// loop {
-///     match fr.wait_event(None) {
-///         Ok(Event::Tick) => fr.present(next_scene())?,
+///     match display.wait_event(None) {
+///         Ok(Event::Tick) => display.present(next_scene())?,
 ///         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
 ///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
 ///         Ok(Event::Input(InputEvent::Resize { .. } | InputEvent::Pad(_))) => {}
@@ -33,7 +33,7 @@ use crate::scene::Scene;
 ///         Err(Interrupt::Close) => break,
 ///     }
 /// }
-/// fr.close();
+/// display.close();
 /// # Ok(())
 /// # }
 /// ```
@@ -123,8 +123,8 @@ impl From<io::Error> for PresentError {
 /// ```no_run
 /// # use sinteract::display::{Display, TerminalOptions, open_native};
 /// let options = TerminalOptions::default();
-/// let mut fr = open_native("My game", 400.0, 300.0, options)?;
-/// fr.close();
+/// let mut display = open_native("My game", 400.0, 300.0, options)?;
+/// display.close();
 /// # Ok::<(), sinteract::display::OpenError>(())
 /// ```
 #[cfg(all(feature = "terminal", feature = "window"))]

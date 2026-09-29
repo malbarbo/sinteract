@@ -68,8 +68,9 @@ fn main() -> ExitCode {
     // The size of the scene is only known at the first frame, and the
     // engine sends no frame before a tick, which needs the display open.
     // So the window opens at a guess and letterboxes.
-    let mut fr = match open_native("sinteract view", 400.0, 300.0, TerminalOptions::default()) {
-        Ok(fr) => fr,
+    let mut display = match open_native("sinteract view", 400.0, 300.0, TerminalOptions::default())
+    {
+        Ok(display) => display,
         Err(e) => {
             eprintln!("view: {e}");
             let _ = child.kill();
@@ -77,13 +78,13 @@ fn main() -> ExitCode {
         }
     };
     let (to_loop, from_reader) = mpsc::sync_channel(BACKLOG);
-    let wake = fr.sender();
+    let wake = display.sender();
     thread::spawn(move || read_engine(from_engine, to_loop, wake));
 
     let mut reader = FrameReader::new();
     let mut stats = Stats::default();
     loop {
-        match fr.wait_event(None) {
+        match display.wait_event(None) {
             Ok(Event::Tick) => {
                 stats.tick();
                 core.tick();
@@ -93,7 +94,7 @@ fn main() -> ExitCode {
             // reader thread wakes the loop after each read.
             Err(Interrupt::Wake) => {
                 take_engine(&mut core, &from_reader);
-                if let Err(e) = show(fr.as_mut(), &mut core, conn, &mut reader, &mut stats) {
+                if let Err(e) = show(display.as_mut(), &mut core, conn, &mut reader, &mut stats) {
                     if let Some(e) = e {
                         eprintln!("view: {e}");
                     }
@@ -115,8 +116,8 @@ fn main() -> ExitCode {
     // its send fails and it lets go of the pipe, so an engine that still
     // writes gets an error instead of blocking, and `child.wait` returns.
     drop(from_reader);
-    fr.close();
-    drop(fr);
+    display.close();
+    drop(display);
     let _ = child.wait();
     stats.report();
     ExitCode::SUCCESS
@@ -244,7 +245,7 @@ fn take_engine(core: &mut ServerCore, from_reader: &Receiver<Vec<u8>>) {
 /// is done, with the error of the display if it failed, or with `None`
 /// when the engine ended.
 fn show(
-    fr: &mut dyn Display,
+    display: &mut dyn Display,
     core: &mut ServerCore,
     conn: Conn,
     reader: &mut FrameReader,
@@ -259,7 +260,7 @@ fn show(
         match reader.read(&payload) {
             Ok(Some(scene)) => {
                 let start = Instant::now();
-                fr.present(scene)?;
+                display.present(scene)?;
                 stats.shown(start.elapsed());
             }
             Ok(None) => {}
