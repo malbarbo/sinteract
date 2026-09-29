@@ -655,9 +655,7 @@ enum KittyMedium {
 impl KittyMedium {
     fn for_stdout() -> Self {
         #[cfg(unix)]
-        if super::term_query::graphics_caps().kitty
-            == Some(super::term_query::KittyTransfer::SharedMemory)
-        {
+        if super::term_query::caps().kitty == Some(super::term_query::KittyTransfer::SharedMemory) {
             return KittyMedium::SharedMemory { next: 0 };
         }
         KittyMedium::Png
@@ -706,13 +704,13 @@ pub fn text_blocks_supported() -> bool {
 /// the environment variables are wrong over ssh and under a multiplexer.
 /// The probe runs at most once per process.
 pub fn kitty_supported() -> bool {
-    super::term_query::graphics_caps().kitty.is_some()
+    super::term_query::caps().kitty.is_some()
 }
 
 /// Returns `true` if the terminal supports DEC Sixel, `false` otherwise. The
 /// answer comes from the same probe as [`kitty_supported`].
 pub fn sixel_supported() -> bool {
-    super::term_query::graphics_caps().sixel
+    super::term_query::caps().sixel
 }
 
 /// The discriminants are the values of [`TTY`] while a [`Terminal`] shows
@@ -912,7 +910,7 @@ impl KeyInput {
             return Ok(KeyInput::Off);
         }
         #[cfg(unix)]
-        let (kitty, keys_on) = if super::term_query::graphics_caps().kitty_keyboard {
+        let (kitty, keys_on) = if super::term_query::caps().kitty_keyboard {
             let push = format!("\x1b[>{}u{FOCUS_ON}", super::vt_input::FLAGS);
             (true, push)
         } else {
@@ -1088,7 +1086,7 @@ impl Drop for CloseOnExit<'_> {
 /// [`super::term_query`]. A terminal under a multiplexer or without a tty
 /// does not answer, and gets 8 by 16.
 fn cell_pixels() -> (u32, u32) {
-    super::term_query::graphics_caps()
+    super::term_query::caps()
         .cell_px
         .unwrap_or((CELL_W_DEFAULT, CELL_H_DEFAULT))
 }

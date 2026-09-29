@@ -47,7 +47,7 @@ const KITTY_OK: &[u8] = b"Gi=31;OK";
 const KITTY_SHM_OK: &[u8] = b"Gi=32;OK";
 
 #[derive(Default, Copy, Clone)]
-pub struct GraphicsCaps {
+pub struct Caps {
     /// The terminal speaks the graphics protocol of Kitty, and takes an
     /// image as the [`KittyTransfer`] says.
     pub kitty: Option<KittyTransfer>,
@@ -73,7 +73,7 @@ pub enum KittyTransfer {
     SharedMemory,
 }
 
-static CACHED: OnceLock<GraphicsCaps> = OnceLock::new();
+static CACHED: OnceLock<Caps> = OnceLock::new();
 
 /// The bytes that the user types in the terminal, which crossterm does not
 /// read. The caller opens it only when stdin is a terminal, and
@@ -90,23 +90,23 @@ pub(super) use windows_impl::{TtyInput, discard_input, set_vt_input};
 pub(super) use unix_impl::signal_on_ctrl_c;
 
 /// Probe the terminal on the first call and return the cached result after.
-pub fn graphics_caps() -> GraphicsCaps {
+pub fn caps() -> Caps {
     *CACHED.get_or_init(probe)
 }
 
 #[cfg(unix)]
-fn probe() -> GraphicsCaps {
+fn probe() -> Caps {
     unix_impl::probe()
 }
 
 #[cfg(windows)]
-fn probe() -> GraphicsCaps {
+fn probe() -> Caps {
     windows_impl::probe()
 }
 
 #[cfg(not(any(unix, windows)))]
-fn probe() -> GraphicsCaps {
-    GraphicsCaps::default()
+fn probe() -> Caps {
+    Caps::default()
 }
 
 // -----------------------------------------------------------------------------
@@ -140,8 +140,8 @@ impl Replies {
         self.found.cpr || self.len > 4096
     }
 
-    fn caps(&self) -> GraphicsCaps {
-        GraphicsCaps {
+    fn caps(&self) -> Caps {
+        Caps {
             kitty: self.found.kitty.then(|| self.kitty_transfer()),
             sixel: self.found.sixel,
             cell_px: self.found.cell_px,
@@ -162,7 +162,7 @@ impl Replies {
 /// Read the replies until the terminal is done or [`QUERY_TIMEOUT`] passes.
 /// `read` waits at most the given time for input and reads it into the
 /// buffer. It returns `None` when nothing came in time or the read failed.
-fn read_replies(mut read: impl FnMut(Duration, &mut [u8]) -> Option<usize>) -> GraphicsCaps {
+fn read_replies(mut read: impl FnMut(Duration, &mut [u8]) -> Option<usize>) -> Caps {
     let mut replies = Replies::default();
     let deadline = Instant::now() + QUERY_TIMEOUT;
     let mut chunk = [0u8; 256];
@@ -263,15 +263,15 @@ mod unix_impl {
 
     use crate::display::shm;
 
-    pub fn probe() -> GraphicsCaps {
+    pub fn probe() -> Caps {
         let stdin = std::io::stdin();
         let mut stdout = std::io::stdout().lock();
         if !stdin.is_terminal() || !stdout.is_terminal() {
-            return GraphicsCaps::default();
+            return Caps::default();
         }
         let fd = stdin.as_raw_fd();
         let Some(_raw) = TermiosGuard::raw(fd) else {
-            return GraphicsCaps::default();
+            return Caps::default();
         };
         let shm_name = CString::new(format!("/sinteract-{:x}-probe", std::process::id()))
             .expect("the name has no NUL");
@@ -298,7 +298,7 @@ mod unix_impl {
                 let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
                 usize::try_from(n).ok()
             }),
-            Err(_) => GraphicsCaps::default(),
+            Err(_) => Caps::default(),
         };
         // A terminal that read the object removed it. One that did not,
         // such as a terminal over ssh, left it.
@@ -544,21 +544,21 @@ mod windows_impl {
         }
     }
 
-    pub fn probe() -> GraphicsCaps {
+    pub fn probe() -> Caps {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-            return GraphicsCaps::default();
+            return Caps::default();
         }
         let conin = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
         let conout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
 
         let (_in_guard, in_mode) = match ModeGuard::new(conin) {
             Some(g) => g,
-            None => return GraphicsCaps::default(),
+            None => return Caps::default(),
         };
         let (_out_guard, out_mode) = match ModeGuard::new(conout) {
             Some(g) => g,
-            None => return GraphicsCaps::default(),
+            None => return Caps::default(),
         };
 
         // The replies arrive as raw bytes only with VT input on and line,
@@ -567,11 +567,11 @@ mod windows_impl {
         let new_in = (in_mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
             | ENABLE_VIRTUAL_TERMINAL_INPUT;
         if unsafe { SetConsoleMode(conin, new_in) } == 0 {
-            return GraphicsCaps::default();
+            return Caps::default();
         }
         let new_out = out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
         if unsafe { SetConsoleMode(conout, new_out) } == 0 {
-            return GraphicsCaps::default();
+            return Caps::default();
         }
 
         let bytes = QUERY.as_bytes();
@@ -586,7 +586,7 @@ mod windows_impl {
             )
         };
         if ok == 0 {
-            return GraphicsCaps::default();
+            return Caps::default();
         }
 
         read_replies(|wait, buf| {
