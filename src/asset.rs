@@ -103,19 +103,17 @@ impl<T> Cache<T> {
             self.load = load;
             return dropped;
         }
-        let mut may_go: Vec<(bool, u64, u32)> = self
-            .live
-            .iter()
-            .map(|(&id, live)| (ids.contains(&id), live.used, id))
-            .collect();
-        may_go.sort_unstable();
-        for (_, _, id) in may_go {
+        let mut may_go: Vec<_> = self.live.iter().collect();
+        may_go.sort_unstable_by_key(|&(id, live)| (ids.contains(id), live.used, *id));
+        for (&id, live) in may_go {
             if load.fits() {
                 break;
             }
-            let live = self.live.remove(&id).expect("may_go holds live ids");
             load = load.without(live.footprint);
             dropped.push(id);
+        }
+        for id in &dropped {
+            self.live.remove(id);
         }
         self.load = load;
         dropped
