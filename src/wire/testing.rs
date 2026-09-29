@@ -1,11 +1,11 @@
 //! What the tests of the wire, the session and the server read and write. A
-//! reader of a stream, a decoder of each message of the engine, and the
+//! pipe that does not block, a reader of a stream, a decoder of each message of the engine, and the
 //! encoders of the messages that a test sends with no envelope or with a
 //! value out of range. The helpers at the end change the bytes of a message
 //! as a newer peer, or one that writes a float that is not finite, would.
 
-use std::collections::BTreeSet;
-use std::io::Read;
+use std::collections::{BTreeSet, VecDeque};
+use std::io::{self, Read};
 use std::num::NonZeroU32;
 
 use capnp::Word;
@@ -21,6 +21,35 @@ use super::framing::{Side, read_framed};
 use super::protocol::decode_root;
 use super::scene::read_scene;
 use super::server_to_engine;
+
+/// The bytes that a test writes for a reader, as a pipe that does not block
+/// would hand them out. A read of an empty pipe fails with
+/// [`io::ErrorKind::WouldBlock`] until the test closes the pipe, and then
+/// returns 0.
+#[derive(Debug, Default)]
+pub(crate) struct Pipe {
+    bytes: VecDeque<u8>,
+    closed: bool,
+}
+
+impl Pipe {
+    pub(crate) fn push(&mut self, bytes: &[u8]) {
+        self.bytes.extend(bytes);
+    }
+
+    pub(crate) fn close(&mut self) {
+        self.closed = true;
+    }
+}
+
+impl Read for Pipe {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.bytes.is_empty() && !self.closed {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        self.bytes.read(buf)
+    }
+}
 
 /// One message of the engine, one variant per arm of `EngineToServer`. A
 /// bitmap of the id `n` draws [`crate::asset::png_image`] of `n` by 1, as
