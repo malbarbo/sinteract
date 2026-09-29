@@ -53,7 +53,7 @@ use crate::wire::to_view::{self, Arm, PlayerRange};
 pub struct ServerCore {
     phase: Phase,
     /// The bytes of the engine that do not make a whole message yet.
-    from_engine: Vec<u8>,
+    engine_in: Vec<u8>,
     /// The live assets, under the limits of the room, with the message of
     /// each, as a view gets it.
     cache: Cache<Arc<[u8]>>,
@@ -227,7 +227,7 @@ impl ServerCore {
     pub fn new() -> Self {
         ServerCore {
             phase: Phase::Waiting,
-            from_engine: Vec::new(),
+            engine_in: Vec::new(),
             cache: Cache::new(),
         }
     }
@@ -267,14 +267,14 @@ impl ServerCore {
             .map(|(player, nickname)| (player, Seat::new(clean_nickname(nickname.as_ref()))))
             .collect();
         let nicknames: Vec<&str> = seats.values().map(|s| s.nickname.as_str()).collect();
-        let mut to_engine = Vec::new();
-        to_engine::write_start(&mut to_engine, &nicknames).expect(UNDER_THE_CAP);
+        let mut engine_out = Vec::new();
+        to_engine::write_start(&mut engine_out, &nicknames).expect(UNDER_THE_CAP);
         for id in lost.drain(..) {
-            to_engine::write_lost(&mut to_engine, id).expect(UNDER_THE_CAP);
+            to_engine::write_lost(&mut engine_out, id).expect(UNDER_THE_CAP);
         }
         self.phase = Phase::Playing {
             seats,
-            to_engine,
+            engine_out,
             tick_pending: false,
         };
         Ok(())
@@ -330,12 +330,12 @@ impl ServerCore {
     /// of an engine slower than the timer do not pile up.
     pub fn tick(&mut self) {
         if let Phase::Playing {
-            to_engine,
+            engine_out,
             tick_pending: tick_pending @ false,
             ..
         } = &mut self.phase
         {
-            to_engine::write_tick(to_engine).expect(UNDER_THE_CAP);
+            to_engine::write_tick(engine_out).expect(UNDER_THE_CAP);
             *tick_pending = true;
         }
     }
@@ -383,7 +383,7 @@ impl ServerCore {
     /// core drops the input of an old connection, and a `Down` of a new key
     /// when the view holds 32 keys, since it could not release the key.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
-        let Some((seats, to_engine)) = self.phase.playing() else {
+        let Some((seats, engine_out)) = self.phase.playing() else {
             return;
         };
         let Some((view, _)) = view_of(seats, conn) else {
@@ -392,7 +392,7 @@ impl ServerCore {
         if !view.held.track(event) {
             return;
         }
-        to_engine::write_input(to_engine, conn.player, event).expect(UNDER_THE_CAP);
+        to_engine::write_input(engine_out, conn.player, event).expect(UNDER_THE_CAP);
     }
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
@@ -411,7 +411,7 @@ impl ServerCore {
             return errors;
         }
         // Out of `self`, so the loop reads it while the messages go in.
-        let mut buffer = std::mem::take(&mut self.from_engine);
+        let mut buffer = std::mem::take(&mut self.engine_in);
         buffer.extend_from_slice(bytes);
         let mut rest = buffer.as_slice();
         loop {
@@ -471,7 +471,7 @@ impl ServerCore {
         }
         let taken = buffer.len() - rest.len();
         buffer.drain(..taken);
-        self.from_engine = buffer;
+        self.engine_in = buffer;
         errors
     }
 
@@ -481,7 +481,7 @@ impl ServerCore {
         if matches!(self.phase, Phase::Over { .. }) {
             return None;
         }
-        let broken = (!self.from_engine.is_empty())
+        let broken = (!self.engine_in.is_empty())
             .then(|| EngineError::Broken(io::ErrorKind::UnexpectedEof.into()));
         self.end();
         broken
@@ -542,8 +542,8 @@ impl ServerCore {
     /// writes to the engine closes its pipe, and `true` otherwise.
     pub fn take_engine_output(&mut self, buf: &mut Vec<u8>) -> bool {
         match &mut self.phase {
-            Phase::Playing { to_engine, .. } => {
-                buf.append(to_engine);
+            Phase::Playing { engine_out, .. } => {
+                buf.append(engine_out);
                 true
             }
             Phase::Waiting | Phase::Ready { .. } => true,
@@ -617,8 +617,8 @@ impl ServerCore {
     /// lost waits for the start, which comes first.
     fn lose(&mut self, id: u32) {
         match &mut self.phase {
-            Phase::Playing { to_engine, .. } => {
-                to_engine::write_lost(to_engine, id).expect(UNDER_THE_CAP);
+            Phase::Playing { engine_out, .. } => {
+                to_engine::write_lost(engine_out, id).expect(UNDER_THE_CAP);
             }
             Phase::Ready { lost, .. } => lost.push(id),
             // No asset comes before the hello.
@@ -630,11 +630,11 @@ impl ServerCore {
     /// view of `player` held when it went, since a view that drops never
     /// sends them.
     fn release(&mut self, player: NonZeroU32, mut held: Held) {
-        let Phase::Playing { to_engine, .. } = &mut self.phase else {
+        let Phase::Playing { engine_out, .. } = &mut self.phase else {
             return;
         };
         for event in held.release() {
-            to_engine::write_input(to_engine, player, &event).expect(UNDER_THE_CAP);
+            to_engine::write_input(engine_out, player, &event).expect(UNDER_THE_CAP);
         }
     }
 
@@ -643,7 +643,7 @@ impl ServerCore {
     fn end(&mut self) {
         let seats = self.phase.seats().map(std::mem::take).unwrap_or_default();
         self.phase = Phase::Over { seats };
-        self.from_engine = Vec::new();
+        self.engine_in = Vec::new();
     }
 }
 
@@ -786,7 +786,7 @@ enum Phase {
     Playing {
         seats: Seats,
         /// The messages for the engine that the host has not taken yet.
-        to_engine: Vec<u8>,
+        engine_out: Vec<u8>,
         /// The engine did not take the last tick yet.
         tick_pending: bool,
     },
@@ -817,8 +817,8 @@ impl Phase {
     fn playing(&mut self) -> Option<(&mut Seats, &mut Vec<u8>)> {
         match self {
             Phase::Playing {
-                seats, to_engine, ..
-            } => Some((seats, to_engine)),
+                seats, engine_out, ..
+            } => Some((seats, engine_out)),
             Phase::Waiting | Phase::Ready { .. } | Phase::Closing { .. } | Phase::Over { .. } => {
                 None
             }
