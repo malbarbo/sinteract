@@ -24,6 +24,7 @@ use crate::asset::{Footprint, ImageError};
 use crate::protocol_capnp::{engine_to_server, hello};
 use crate::scene::{Image, Scene};
 use crate::scene_capnp::scene as wire_scene;
+use crate::session::PlayerRange;
 
 use super::Error;
 use super::framing::{Side, write_framed};
@@ -55,45 +56,6 @@ pub enum Arm {
     TickTaken,
 }
 
-/// The most players of a room. The start that names them stays far under
-/// the cap of the framing, since a nickname has 64 bytes at most.
-pub const MAX_PLAYERS: u32 = 1024;
-
-/// The fewest and the most players that a game takes, from 1 to
-/// [`MAX_PLAYERS`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PlayerRange {
-    min: NonZeroU32,
-    max: NonZeroU32,
-}
-
-impl PlayerRange {
-    /// The range from `min` to `max`, or `None` if `min` is 0 or above
-    /// `max`, or `max` is above [`MAX_PLAYERS`].
-    pub const fn new(min: u32, max: u32) -> Option<PlayerRange> {
-        match (NonZeroU32::new(min), NonZeroU32::new(max)) {
-            (Some(min), Some(max)) if min.get() <= max.get() && max.get() <= MAX_PLAYERS => {
-                Some(PlayerRange { min, max })
-            }
-            _ => None,
-        }
-    }
-
-    pub fn min(self) -> NonZeroU32 {
-        self.min
-    }
-
-    pub fn max(self) -> NonZeroU32 {
-        self.max
-    }
-
-    /// Returns `true` if the game takes `players` players, `false`
-    /// otherwise.
-    pub fn contains(self, players: usize) -> bool {
-        (self.min.get() as usize..=self.max.get() as usize).contains(&players)
-    }
-}
-
 /// Write a scene as a frame for `player`, or for every player when
 /// `player` is `None`, with the id that `ids` gives the image of each
 /// bitmap. The asset of each id goes out before, with [`write_asset`].
@@ -112,7 +74,7 @@ pub(crate) fn write_hello(w: &mut impl Write, players: PlayerRange) -> io::Resul
     write_framed(
         w,
         Side::Engine,
-        &hello_message(players.min.get(), players.max.get()),
+        &hello_message(players.min().get(), players.max().get()),
     )
 }
 

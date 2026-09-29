@@ -9,8 +9,8 @@ use std::time::Instant;
 use super::{Display, OpenError, PresentError, TerminalOptions, open_native};
 use crate::event::{Event, InputEvent, Interrupt};
 use crate::scene::Scene;
+use crate::session::PlayerRange;
 use crate::session::{FrameError, Player, Session, SessionError, SessionEvent, StartError, Target};
-use crate::wire::engine_to_server::PlayerRange;
 
 /// The game of an engine, in a session with a server when the server runs
 /// the engine, and on a window or the terminal otherwise, where the user is
@@ -21,7 +21,7 @@ use crate::wire::engine_to_server::PlayerRange;
 /// # use sinteract::event::Interrupt;
 /// # use sinteract::scene::Scene;
 /// # use sinteract::session::Target;
-/// # use sinteract::wire::engine_to_server::PlayerRange;
+/// # use sinteract::session::PlayerRange;
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let players = PlayerRange::new(1, 1).expect("1 to 1 is a range");
 /// let options = TerminalOptions::default();

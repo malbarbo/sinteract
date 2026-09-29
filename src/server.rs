@@ -38,8 +38,9 @@ use crate::event::{
     InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
     PadButton, PadEvent,
 };
+use crate::session::PlayerRange;
 use crate::wire;
-use crate::wire::engine_to_server::{self, Arm, PlayerRange};
+use crate::wire::engine_to_server::{self, Arm};
 use crate::wire::framing::{self, Side};
 use crate::wire::server_to_engine;
 use crate::wire::server_to_view;
@@ -96,7 +97,7 @@ impl Conn {
 pub enum Next {
     /// A message of the `ServerToView` root, with no envelope, as a
     /// WebSocket carries it, which a
-    /// [`FrameReader`](crate::wire::server_to_view::FrameReader) reads.
+    /// [`FrameReader`](crate::view::FrameReader) reads.
     Send(Arc<[u8]>),
     /// Nothing for now.
     Idle,

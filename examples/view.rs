@@ -28,7 +28,7 @@ use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
 use sinteract::server::{Conn, LobbyCore, Next, ServerCore};
-use sinteract::wire::server_to_view::FrameReader;
+use sinteract::view::FrameReader;
 
 /// How many reads of the engine the reader thread holds before it waits
 /// for the loop, so an engine that draws faster than the view does not

@@ -979,10 +979,10 @@ mod tests {
         let zero = render_to_svg(&Scene::new(0.0, 0.0));
         assert_eq!(render_to_svg(&Scene::new(f32::INFINITY, f32::NAN)), zero);
         let (width, height) = (777.0, 778.0);
-        let bytes = crate::wire::scene::encode(&Scene::new(width, height), &|_| 0);
+        let bytes = crate::wire::testing::encode_scene(&Scene::new(width, height), &|_| 0);
         let bytes = crate::wire::testing::with_float(&bytes, width, f32::INFINITY);
         let bytes = crate::wire::testing::with_float(&bytes, height, f32::NAN);
-        let scene = crate::wire::scene::decode(&bytes, &|_| None).expect("decode");
+        let scene = crate::wire::testing::decode_scene(&bytes, &|_| None).expect("decode");
         assert_eq!(render_to_svg(&scene), zero);
     }
 }

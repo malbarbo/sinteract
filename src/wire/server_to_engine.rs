@@ -14,9 +14,9 @@ use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::event::InputEvent;
 use crate::protocol_capnp::server_to_engine;
+use crate::session::MAX_PLAYERS;
 
 use super::Error;
-use super::engine_to_server::MAX_PLAYERS;
 use super::event::{read_input_event, write_input_event};
 use super::framing::{Side, write_framed};
 use super::protocol::decode_root;

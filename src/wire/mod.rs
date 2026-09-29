@@ -1,39 +1,34 @@
-//! The wire format, in three layers.
+//! The wire format, in three layers, and [`Error`], the error of a payload
+//! that does not decode.
 //!
-//! [`scene`] and [`event`] convert the values of [`crate::scene`] and
+//! `scene` and `event` convert the values of [`crate::scene`] and
 //! [`crate::event`] to and from the Cap'n Proto structs. Neither knows that
-//! a session exists. [`engine_to_server`], [`server_to_engine`],
-//! [`view_to_server`] and [`server_to_view`] wrap the payloads in the root
-//! of their direction, `EngineToServer`, `ServerToEngine`, `ViewToServer`
-//! or `ServerToView`, and unwrap them again. They own everything about the
-//! session.
+//! a session exists. `engine_to_server`, `server_to_engine`,
+//! `view_to_server` and `server_to_view` wrap the payloads in the root of
+//! their direction, `EngineToServer`, `ServerToEngine`, `ViewToServer` or
+//! `ServerToView`, and unwrap them again. They own everything about the
+//! session. `framing` is below all of them. It wraps an encoded message in
+//! the envelope that a byte stream needs to tell one message from the next.
 //!
-//! The engine runs the program and writes with [`engine_to_server`]. A view
-//! draws the frames, sends the input and encodes with [`view_to_server`].
-//! The server owns the session, passes the input of the views on with
-//! [`server_to_engine`], and passes the assets and the frames of the engine
-//! on with [`server_to_view`]. Each side reads with the module of the
-//! direction that comes to it, and the engine reads with
-//! [`Session`](crate::session::Session). The generated bindings stay
-//! private, and the bytes are the standard `serialize::write_message`
-//! format, so every Cap'n Proto binding reads them.
-//!
-//! [`framing`] is below all of them. It wraps an encoded message in the
-//! envelope that a byte stream needs to tell one message from the next.
+//! Each role reads and writes through its own module, the engine through
+//! [`crate::session`], the server through [`crate::server`] and a view
+//! through [`crate::view`], which keep the rules of the protocol. The bytes
+//! are the standard `serialize::write_message` format, so every Cap'n Proto
+//! binding reads them.
 //!
 //! The schema files in `schema/` are the source of truth, one per layer,
 //! and the header of `scene.capnp` says how to regenerate the bindings.
 
-pub mod engine_to_server;
-pub mod event;
-pub mod framing;
+pub(crate) mod engine_to_server;
+mod event;
+pub(crate) mod framing;
 mod protocol;
-pub mod scene;
-pub mod server_to_engine;
-pub mod server_to_view;
+mod scene;
+pub(crate) mod server_to_engine;
+pub(crate) mod server_to_view;
 #[cfg(test)]
 pub(crate) mod testing;
-pub mod view_to_server;
+pub(crate) mod view_to_server;
 
 use std::sync::Arc;
 
@@ -87,7 +82,7 @@ pub enum Error {
     /// An event has player 0, which is not a player of the session.
     NoPlayer,
     /// A hello has a minimum of 0 players, a maximum below its minimum, or
-    /// a maximum above [`engine_to_server::MAX_PLAYERS`].
+    /// a maximum above [`crate::session::MAX_PLAYERS`].
     PlayerRange { min: u32, max: u32 },
 }
 
@@ -105,7 +100,7 @@ impl std::fmt::Display for Error {
             Error::PlayerRange { min, max } => write!(
                 f,
                 "a hello takes from {min} to {max} players, not from 1 to {}",
-                engine_to_server::MAX_PLAYERS
+                crate::session::MAX_PLAYERS
             ),
         }
     }
@@ -182,9 +177,9 @@ fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
 #[cfg(test)]
 mod tests {
     use super::testing::{
-        Message, ViewMessage, encode_asset, encode_frame, frame_holding, tag_of, with_float,
-        with_unknown_engine_value, with_unknown_scene_value, with_unknown_server_value,
-        with_unknown_view_value,
+        Message, ViewMessage, decode_scene, encode_asset, encode_frame, encode_scene,
+        frame_holding, tag_of, with_float, with_unknown_engine_value, with_unknown_scene_value,
+        with_unknown_server_value, with_unknown_view_value,
     };
     use super::*;
     use crate::event::{
@@ -372,9 +367,9 @@ mod tests {
     #[test]
     fn a_scene_round_trips_without_the_envelope() {
         let scene = sample_scene();
-        let bytes = scene::encode(&scene, &Image::width);
+        let bytes = encode_scene(&scene, &Image::width);
         let images = |id| Some(crate::asset::png_image(id, 1));
-        assert_scene_eq(&scene::decode(&bytes, &images).expect("decode"), &scene);
+        assert_scene_eq(&decode_scene(&bytes, &images).expect("decode"), &scene);
         assert!(
             bytes.len() < encode_frame(&scene).len(),
             "a bare scene should be smaller than the same scene in an EngineToServer"
@@ -411,7 +406,7 @@ mod tests {
     #[test]
     fn a_frame_whose_scene_is_in_many_segments_round_trips() {
         let scene = sample_scene();
-        let bytes = frame_holding(&in_small_segments(&scene::encode(&scene, &Image::width)));
+        let bytes = frame_holding(&in_small_segments(&encode_scene(&scene, &Image::width)));
         match decode(&bytes).expect("decode") {
             Message::Frame { scene: d, .. } => assert_scene_eq(&scene, &d),
             other => panic!("expected Frame, got {other:?}"),
@@ -531,7 +526,7 @@ mod tests {
     #[test]
     fn the_arm_of_a_message_of_the_engine_comes_without_a_decode() {
         let scene = Scene::new(4.0, 3.0);
-        let to_view = server_to_view::encode_frame(&scene::encode(&scene, &Image::width));
+        let to_view = server_to_view::encode_frame(&encode_scene(&scene, &Image::width));
         assert_eq!(
             engine_to_server::arm(&encode_frame(&scene)).unwrap(),
             Some(engine_to_server::Arm::Frame {
@@ -570,7 +565,7 @@ mod tests {
         let unknown = with_unknown_engine_value(&asset, |m| tag_of(m));
         assert_eq!(engine_to_server::arm(&unknown).unwrap(), None);
         assert!(engine_to_server::arm(&[0; 8]).is_err());
-        let players = engine_to_server::PlayerRange::new(2, 4).unwrap();
+        let players = crate::session::PlayerRange::new(2, 4).unwrap();
         assert_eq!(
             engine_to_server::arm(&testing::encode_hello(2, 4)).unwrap(),
             Some(engine_to_server::Arm::Hello(players))
@@ -582,7 +577,7 @@ mod tests {
         let image = crate::asset::png_image(3, 1);
         let mut scene = Scene::new(4.0, 4.0);
         scene.add_bitmap(bitmap(3));
-        let frame = server_to_view::encode_frame(&scene::encode(&scene, &Image::width));
+        let frame = server_to_view::encode_frame(&encode_scene(&scene, &Image::width));
         let asset = |blob: &[u8]| server_to_view::encode_asset(3, blob);
         let mut reader = server_to_view::FrameReader::new();
         let mut drawn = |payload: &[u8]| {
@@ -629,7 +624,7 @@ mod tests {
             Some(ViewMessage::Asset { id: 42, blob: b }) if b == blob
         ));
         let scene = sample_scene();
-        let frame = server_to_view::encode_frame(&scene::encode(&scene, &Image::width));
+        let frame = server_to_view::encode_frame(&encode_scene(&scene, &Image::width));
         match testing::decode_view(&frame).unwrap() {
             Some(ViewMessage::Frame(d)) => assert_scene_eq(&scene, &d),
             other => panic!("expected a frame, got {other:?}"),
@@ -674,7 +669,7 @@ mod tests {
     /// a range.
     #[test]
     fn a_hello_round_trips() {
-        let players = engine_to_server::PlayerRange::new(1, 3).unwrap();
+        let players = crate::session::PlayerRange::new(1, 3).unwrap();
         let mut stream = Vec::new();
         engine_to_server::write_hello(&mut stream, players).unwrap();
         match testing::read(&mut &stream[..]).unwrap() {
@@ -685,7 +680,7 @@ mod tests {
 
     #[test]
     fn a_hello_that_is_not_a_range_is_an_error() {
-        for (min, max) in [(0, 2), (3, 2), (1, engine_to_server::MAX_PLAYERS + 1)] {
+        for (min, max) in [(0, 2), (3, 2), (1, crate::session::MAX_PLAYERS + 1)] {
             assert!(matches!(
                 engine_to_server::arm(&testing::encode_hello(min, max)),
                 Err(Error::PlayerRange { .. })
@@ -695,12 +690,12 @@ mod tests {
 
     #[test]
     fn a_player_range_holds_its_ends() {
-        assert!(engine_to_server::PlayerRange::new(0, 1).is_none());
-        assert!(engine_to_server::PlayerRange::new(2, 1).is_none());
-        let most = engine_to_server::MAX_PLAYERS;
-        assert!(engine_to_server::PlayerRange::new(1, most).is_some());
-        assert!(engine_to_server::PlayerRange::new(1, most + 1).is_none());
-        let players = engine_to_server::PlayerRange::new(2, 4).unwrap();
+        assert!(crate::session::PlayerRange::new(0, 1).is_none());
+        assert!(crate::session::PlayerRange::new(2, 1).is_none());
+        let most = crate::session::MAX_PLAYERS;
+        assert!(crate::session::PlayerRange::new(1, most).is_some());
+        assert!(crate::session::PlayerRange::new(1, most + 1).is_none());
+        let players = crate::session::PlayerRange::new(2, 4).unwrap();
         assert_eq!((players.min().get(), players.max().get()), (2, 4));
         assert!(!players.contains(1));
         assert!(players.contains(2));
@@ -758,7 +753,7 @@ mod tests {
 
     #[test]
     fn a_start_of_more_than_max_players_is_not_written() {
-        let nicknames = vec![""; engine_to_server::MAX_PLAYERS as usize + 1];
+        let nicknames = vec![""; crate::session::MAX_PLAYERS as usize + 1];
         let mut stream = Vec::new();
         let err = server_to_engine::write_start(&mut stream, &nicknames).expect_err("an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -817,7 +812,7 @@ mod tests {
     #[test]
     fn a_frame_whose_elements_share_a_path_is_an_error() {
         let bytes = frame_holding(&with_shared_path::<crate::scene_capnp::scene::Owned>(
-            &scene::encode(&scene_of_paths(), &Image::width),
+            &encode_scene(&scene_of_paths(), &Image::width),
             |s| path_slots(s.get_elements().unwrap()),
         ));
         assert!(matches!(testing::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
@@ -826,10 +821,10 @@ mod tests {
     #[test]
     fn a_scene_whose_elements_share_a_path_is_an_error() {
         let bytes = with_shared_path::<crate::scene_capnp::scene::Owned>(
-            &scene::encode(&scene_of_paths(), &Image::width),
+            &encode_scene(&scene_of_paths(), &Image::width),
             |s| path_slots(s.get_elements().unwrap()),
         );
-        assert!(matches!(scene::decode(&bytes, &|_| None), Err(e) if is_read_limit_exceeded(&e)));
+        assert!(matches!(decode_scene(&bytes, &|_| None), Err(e) if is_read_limit_exceeded(&e)));
     }
 
     /// `bytes` with the pointer in every slot after the first moved to the

@@ -99,7 +99,7 @@ Regras da sessão com servidor:
   `Session::write_frame` manda um asset logo antes do primeiro frame que
   o desenha e dá o `id` pelo conteúdo da imagem, então um programa que
   monta a mesma imagem a cada frame a manda uma vez só. Na view, o
-  `server_to_view::FrameReader` guarda as imagens dos assets e devolve
+  `view::FrameReader` guarda as imagens dos assets e devolve
   cada frame como uma `Scene` com as imagens;
 - uma imagem é um PNG, um JPEG, um GIF ou um WebP, e o formato vem dos
   primeiros bytes. O servidor não decodifica nada. Ele lê o tamanho no
@@ -199,7 +199,7 @@ modos.
 
 ## Dependências do servidor
 
-O servidor usa só `wire`, `scene` e `event`, e o renderer `svg` se ele
+O servidor usa só `server`, `scene` e `event`, e o renderer `svg` se ele
 converte o frame em SVG. A feature `render`, default, traz o que ele não
 usa: `tiny-skia`, `png` e `image`, do renderer `pixmap`, `pdf-writer`, do
 `pdf`, e `icy_sixel`, do encoder Sixel, que vem do git e traz `quantette`,
@@ -243,10 +243,10 @@ Feito no sinteract:
 - a `Session`, com o `tick` do servidor e a fila que junta
   movimentos por jogador;
 - a imagem na cena, os assets com `lost` e `forget`, a
-  `Session::write_frame`, o `server_to_view::FrameReader` e o `Cache` de
-  uma sala;
-- o `ServerCore`, com as regras de uma sala e sem I/O, sobre
-  `framing::split_message`, `view_to_server::decode` e `engine_to_server::arm`;
+  `Session::write_frame`, o `view::FrameReader` e o `Cache` de uma sala;
+- o `ServerCore`, com as regras de uma sala e sem I/O;
+- um módulo por papel, `session` para a engine, `server` para o servidor
+  e `view` para a view, com o `wire` fechado atrás deles;
 - a feature `render`, que um servidor desliga.
 
 Falta:

@@ -21,35 +21,13 @@ use crate::scene_capnp::{
     text_node,
 };
 
-use super::{Error, ValueError, skip_unusable, to_bytes};
+use super::{Error, ValueError, skip_unusable};
 
-/// Encode a scene as a message whose root is the `Scene` struct of
-/// `schema/scene.capnp`, with no session envelope around it. An engine that
-/// paints its own frames, such as the wasm worker that writes into shared
-/// memory, reads these bytes with the scene schema alone. A bitmap goes out
-/// with the id that `ids` gives its image, and the images go some other
-/// way.
-pub fn encode(scene: &Scene, ids: &dyn Fn(&Image) -> u32) -> Vec<u8> {
-    to_bytes(scene_message(scene, ids))
-}
-
-/// A message whose root is `scene`, as [`encode`] writes it.
+/// A message whose root is `scene`.
 pub(super) fn scene_message(scene: &Scene, ids: &dyn Fn(&Image) -> u32) -> Builder<HeapAllocator> {
     let mut builder = Builder::new_default();
     write_scene(builder.init_root::<wire_scene::Builder>(), scene, ids);
     builder
-}
-
-/// Decode a message that [`encode`] produced. A bitmap takes the image that
-/// `images` gives its id, and a bitmap of an id with no image is skipped. A
-/// frame that arrived inside a session goes through
-/// [`super::server_to_view::FrameReader`] instead.
-pub fn decode(bytes: &[u8], images: &dyn Fn(u32) -> Option<Image>) -> Result<Scene, Error> {
-    let reader = super::limit_traversal(capnp::serialize::read_message(
-        std::io::Cursor::new(bytes),
-        capnp::message::ReaderOptions::new(),
-    )?);
-    read_scene(reader.get_root()?, images)
 }
 
 fn line_cap_to_wire(c: LineCap) -> WLineCap {

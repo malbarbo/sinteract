@@ -18,7 +18,10 @@ stream needs.
 server into the events of the engine, with the rules of the protocol. It
 does no I/O of its own, so it builds on wasm32. `server.rs` is the server
 side. It holds the rules of a room, from the players and the timer of the
-host to the messages for the engine, also with no I/O. `asset.rs` holds
+host to the messages for the engine, also with no I/O. `view.rs` is the
+view side, with the reader of the frames and the encoder of the input.
+Only these three reach `wire`, which stays private except its `Error`.
+`asset.rs` holds
 the limits of an image, `fit_image`, which shrinks an image to them, and
 `Cache`, which keeps the assets of a room under the limits, for the
 server.

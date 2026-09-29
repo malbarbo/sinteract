@@ -4,8 +4,7 @@
 //! replays it. `renderer::pixmap` rasterizes a scene to a tiny-skia
 //! `Pixmap`, and `renderer::pdf` and [`renderer::svg`] write it as PDF
 //! and SVG with the text as glyph outlines. [`text`] holds the embedded
-//! Liberation families and measures and outlines glyphs, and [`wire`]
-//! converts a scene and an event to and from Cap'n Proto. These build on
+//! Liberation families and measures and outlines glyphs. These build on
 //! wasm32 too, except the system font lookup of `text`, which the
 //! `native-fonts` feature carries.
 //!
@@ -15,7 +14,9 @@
 //! events of the engine, with the rules of the protocol. It does no I/O of
 //! its own, so it builds on wasm32 too. [`server`] holds the rules of a
 //! room for the server, from the players to the messages for the engine,
-//! also with no I/O.
+//! also with no I/O. [`view`] reads the frames that a server sends to a
+//! view and encodes its input. The three convert to and from Cap'n Proto
+//! with the codec of `wire`, whose [`wire::Error`] they report.
 //!
 //! The feature `render` carries the pixmap and PDF renderers and the Sixel
 //! encoder, and the displays turn it on. A server that only encodes and
@@ -42,6 +43,7 @@ pub mod scene;
 pub mod server;
 pub mod session;
 pub mod text;
+pub mod view;
 pub mod wire;
 
 // The generated bindings, one module per schema file. The generated code

@@ -21,7 +21,7 @@
 //! A message goes from the builder to the writer, and from the reader into
 //! the words that the decoder reads in place, with no copy in between.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 
 use capnp::Word;
 use capnp::message::{Allocator, Builder};
@@ -84,31 +84,10 @@ pub fn write_framed<A: Allocator>(
     w.flush()
 }
 
-/// Read one message that `side` wrote, into the words that
-/// [`read_message_from_flat_slice`](serialize::read_message_from_flat_slice)
-/// reads in place. Returns `None` when the stream ends before the envelope.
-/// The stream ending anywhere else is [`io::ErrorKind::UnexpectedEof`].
-/// A magic that is not the one of `side`, and a length that is not a whole
-/// number of words or exceeds the cap, are [`io::ErrorKind::InvalidData`].
-pub fn read_framed(r: &mut impl Read, side: Side) -> io::Result<Option<Vec<Word>>> {
-    let mut header = [0u8; HEADER_BYTES];
-    if !read_start(r, &mut header)? {
-        return Ok(None);
-    }
-    let len = parse_header(header, side)?;
-    let mut words = Word::allocate_zeroed_vec(len / size_of::<Word>());
-    r.read_exact(Word::words_to_bytes_mut(&mut words))?;
-    Ok(Some(words))
-}
-
-/// The length of the payload in `header`, for a reader that reads the
-/// stream itself, such as an async one. The checks are the ones of
-/// [`read_framed`]. A magic that is not the one of `side`, and a length
-/// that is not a whole number of words or exceeds the cap, are
-/// [`io::ErrorKind::InvalidData`]. The caller tells a stream that ends
-/// before the header from one that ends inside it, since an async
-/// `read_exact` reports both as [`io::ErrorKind::UnexpectedEof`].
-pub fn parse_header(header: [u8; HEADER_BYTES], side: Side) -> io::Result<usize> {
+/// The length of the payload in `header`. A magic that is not the one of
+/// `side`, and a length that is not a whole number of words or exceeds the
+/// cap, are [`io::ErrorKind::InvalidData`].
+pub(super) fn parse_header(header: [u8; HEADER_BYTES], side: Side) -> io::Result<usize> {
     let [m0, m1, m2, m3, l0, l1, l2, l3] = header;
     check_magic([m0, m1, m2, m3], side)?;
     let len = u32::from_le_bytes([l0, l1, l2, l3]) as usize;
@@ -141,24 +120,6 @@ pub(crate) fn header(side: Side, len: u32) -> [u8; HEADER_BYTES] {
     header
 }
 
-/// Fill `buf`, or return `false` if the stream ends before its first byte.
-fn read_start(r: &mut impl Read, buf: &mut [u8]) -> io::Result<bool> {
-    loop {
-        match r.read(buf) {
-            Ok(0) => return Ok(false),
-            Ok(n) => {
-                let rest = buf
-                    .get_mut(n..)
-                    .ok_or_else(|| io::Error::other("a read returned more than its buffer"))?;
-                r.read_exact(rest)?;
-                return Ok(true);
-            }
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-}
-
 /// Say what is wrong with a magic that is not the one of `side`.
 fn check_magic(magic: [u8; 4], side: Side) -> io::Result<()> {
     let expected = side.magic();
@@ -184,6 +145,7 @@ fn invalid(message: String) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::testing::read_framed;
 
     fn header_with(magic: [u8; 4], len: u32) -> Vec<u8> {
         let mut out = header(Side::Server, len);

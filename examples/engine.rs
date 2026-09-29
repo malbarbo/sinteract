@@ -26,8 +26,8 @@ use std::time::Instant;
 use sinteract::display::{Stage, StageEvent, TerminalOptions};
 use sinteract::event::{InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Bitmap, Image, Paint, PathStyle, RotatedRect, Scene};
+use sinteract::session::PlayerRange;
 use sinteract::session::Target;
-use sinteract::wire::engine_to_server::PlayerRange;
 
 const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 300.0;

@@ -16,12 +16,13 @@ use crate::event::InputEvent;
 use crate::protocol_capnp;
 use crate::scene::{Image, Scene};
 use crate::scene_capnp::scene;
+use crate::session::PlayerRange;
 
 use super::Error;
-use super::engine_to_server::{self, PlayerRange};
-use super::framing::{Side, read_framed};
+use super::engine_to_server;
+use super::framing::{HEADER_BYTES, Side, parse_header};
 use super::protocol::decode_root;
-use super::scene::read_scene;
+use super::scene::{read_scene, scene_message};
 use super::server_to_engine;
 
 /// A pipe that does not block, which a session reads or writes. A clone
@@ -243,6 +244,62 @@ pub(crate) fn read_next<T>(
             return Ok(Some(message));
         }
     }
+}
+
+/// Read one message that `side` wrote, into the words that
+/// [`read_message_from_flat_slice`](capnp::serialize::read_message_from_flat_slice)
+/// reads in place. Returns `None` when the stream ends before the envelope.
+/// The stream ending anywhere else is [`io::ErrorKind::UnexpectedEof`].
+/// A magic that is not the one of `side`, and a length that is not a whole
+/// number of words or exceeds the cap, are [`io::ErrorKind::InvalidData`].
+pub(crate) fn read_framed(r: &mut impl Read, side: Side) -> io::Result<Option<Vec<Word>>> {
+    let mut header = [0u8; HEADER_BYTES];
+    if !read_start(r, &mut header)? {
+        return Ok(None);
+    }
+    let len = parse_header(header, side)?;
+    let mut words = Word::allocate_zeroed_vec(len / size_of::<Word>());
+    r.read_exact(Word::words_to_bytes_mut(&mut words))?;
+    Ok(Some(words))
+}
+
+/// Fill `buf`, or return `false` if the stream ends before its first byte.
+fn read_start(r: &mut impl Read, buf: &mut [u8]) -> io::Result<bool> {
+    loop {
+        match r.read(buf) {
+            Ok(0) => return Ok(false),
+            Ok(n) => {
+                let rest = buf
+                    .get_mut(n..)
+                    .ok_or_else(|| io::Error::other("a read returned more than its buffer"))?;
+                r.read_exact(rest)?;
+                return Ok(true);
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Encode a scene as a message whose root is the `Scene` struct of
+/// `schema/scene.capnp`, with no session envelope around it. A bitmap goes
+/// out with the id that `ids` gives its image.
+pub(crate) fn encode_scene(scene: &Scene, ids: &dyn Fn(&Image) -> u32) -> Vec<u8> {
+    super::to_bytes(scene_message(scene, ids))
+}
+
+/// Decode a message that [`encode_scene`] produced. A bitmap takes the
+/// image that `images` gives its id, and a bitmap of an id with no image
+/// is skipped.
+pub(crate) fn decode_scene(
+    bytes: &[u8],
+    images: &dyn Fn(u32) -> Option<Image>,
+) -> Result<Scene, Error> {
+    let reader = super::limit_traversal(capnp::serialize::read_message(
+        io::Cursor::new(bytes),
+        capnp::message::ReaderOptions::new(),
+    )?);
+    read_scene(reader.get_root()?, images)
 }
 
 /// [`with_unknown_value`] for the bytes of an `EngineToServer`.
