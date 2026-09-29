@@ -912,7 +912,7 @@ impl KeyInput {
         }
         #[cfg(unix)]
         let (kitty, keys_on) = if super::term_query::caps().kitty_keyboard {
-            let push = format!("\x1b[>{}u{FOCUS_ON}", super::vt_input::FLAGS);
+            let push = format!("\x1b[>{}u{FOCUS_ON}", super::vt_input::KITTY_KEYBOARD_FLAGS);
             (true, push)
         } else {
             (false, String::new())

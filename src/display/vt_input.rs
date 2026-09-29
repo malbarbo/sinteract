@@ -1,7 +1,7 @@
 //! The input that a terminal sends, read through the state machine of
 //! vtparse.
 //!
-//! Under the keyboard protocol of Kitty, with the flags of [`FLAGS`], every
+//! Under the keyboard protocol of Kitty, with [`KITTY_KEYBOARD_FLAGS`], every
 //! key arrives as an escape that names the key without the modifiers, the
 //! key with Shift, and the text that the key types. A Down records the name
 //! of its key, and the Up of that key sends the same name, as the window
@@ -27,7 +27,7 @@ use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, Mouse
 /// of a key (16). The push is `CSI > 31 u`.
 /// Windows Terminal takes win32-input-mode instead.
 #[cfg(unix)]
-pub(super) const FLAGS: u8 = 0b1_1111;
+pub(super) const KITTY_KEYBOARD_FLAGS: u8 = 0b1_1111;
 
 /// What the parser takes out of the bytes.
 #[derive(Debug, PartialEq)]
