@@ -4,7 +4,7 @@
 // capnp binary version: 1.1.0
 // capnpc crate version: 0.25.3
 
-pub mod asset_msg {
+pub mod asset {
     #[derive(Copy, Clone)]
     pub struct Owned(());
     impl ::capnp::introspect::Introspect for Owned {
@@ -249,13 +249,13 @@ pub mod asset_msg {
     mod _private {
         pub(crate) static ENCODED_NODE: [::capnp::Word; 48] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
-            ::capnp::word(20, 217, 89, 20, 18, 0, 99, 204),
+            ::capnp::word(105, 71, 61, 82, 119, 169, 243, 136),
             ::capnp::word(15, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(238, 3, 0, 0, 41, 4, 0, 0),
-            ::capnp::word(21, 0, 0, 0, 194, 0, 0, 0),
+            ::capnp::word(238, 3, 0, 0, 38, 4, 0, 0),
+            ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(25, 0, 0, 0, 119, 0, 0, 0),
@@ -263,7 +263,7 @@ pub mod asset_msg {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(112, 114, 111, 116, 111, 99, 111, 108),
             ::capnp::word(46, 99, 97, 112, 110, 112, 58, 65),
-            ::capnp::word(115, 115, 101, 116, 77, 115, 103, 0),
+            ::capnp::word(115, 115, 101, 116, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(8, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -322,7 +322,7 @@ pub mod asset_msg {
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[0, 1];
         pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[];
         pub(crate) static MEMBERS_BY_NAME: &[u16] = &[1, 0];
-        pub(crate) const TYPE_ID: u64 = 0xcc63_0012_1459_d914;
+        pub(crate) const TYPE_ID: u64 = 0x88f3_a977_523d_4769;
     }
 }
 
@@ -576,7 +576,7 @@ pub mod frame {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(90, 4, 0, 0, 111, 5, 0, 0),
+            ::capnp::word(87, 4, 0, 0, 108, 5, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -880,7 +880,7 @@ pub mod hello {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(190, 5, 0, 0, 4, 6, 0, 0),
+            ::capnp::word(187, 5, 0, 0, 1, 6, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1192,7 +1192,7 @@ pub mod engine_to_server {
         #[inline]
         pub fn set_asset(
             &mut self,
-            value: crate::protocol_capnp::asset_msg::Reader<'_>,
+            value: crate::protocol_capnp::asset::Reader<'_>,
         ) -> ::capnp::Result<()> {
             self.builder.set_data_field::<u16>(0, 0);
             ::capnp::traits::SetterInput::set_pointer_builder(
@@ -1202,7 +1202,7 @@ pub mod engine_to_server {
             )
         }
         #[inline]
-        pub fn init_asset(self) -> crate::protocol_capnp::asset_msg::Builder<'a> {
+        pub fn init_asset(self) -> crate::protocol_capnp::asset::Builder<'a> {
             self.builder.set_data_field::<u16>(0, 0);
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
         }
@@ -1311,7 +1311,7 @@ pub mod engine_to_server {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(164, 6, 0, 0, 216, 8, 0, 0),
+            ::capnp::word(161, 6, 0, 0, 210, 8, 0, 0),
             ::capnp::word(21, 0, 0, 0, 242, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1354,7 +1354,7 @@ pub mod engine_to_server {
             ::capnp::word(120, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(97, 115, 115, 101, 116, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(20, 217, 89, 20, 18, 0, 99, 204),
+            ::capnp::word(105, 71, 61, 82, 119, 169, 243, 136),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
@@ -1388,7 +1388,7 @@ pub mod engine_to_server {
         ];
         pub(crate) fn get_field_types(index: u16) -> ::capnp::introspect::Type {
             match index {
-                0 => <crate::protocol_capnp::asset_msg::Owned as ::capnp::introspect::Introspect>::introspect(),
+                0 => <crate::protocol_capnp::asset::Owned as ::capnp::introspect::Introspect>::introspect(),
                 1 => <crate::protocol_capnp::frame::Owned as ::capnp::introspect::Introspect>::introspect(),
                 2 => <crate::protocol_capnp::hello::Owned as ::capnp::introspect::Introspect>::introspect(),
                 3 => <() as ::capnp::introspect::Introspect>::introspect(),
@@ -1422,12 +1422,12 @@ pub mod engine_to_server {
         TickTaken(()),
     }
     pub type WhichReader<'a> = Which<
-        ::capnp::Result<crate::protocol_capnp::asset_msg::Reader<'a>>,
+        ::capnp::Result<crate::protocol_capnp::asset::Reader<'a>>,
         ::capnp::Result<crate::protocol_capnp::frame::Reader<'a>>,
         ::capnp::Result<crate::protocol_capnp::hello::Reader<'a>>,
     >;
     pub type WhichBuilder<'a> = Which<
-        ::capnp::Result<crate::protocol_capnp::asset_msg::Builder<'a>>,
+        ::capnp::Result<crate::protocol_capnp::asset::Builder<'a>>,
         ::capnp::Result<crate::protocol_capnp::frame::Builder<'a>>,
         ::capnp::Result<crate::protocol_capnp::hello::Builder<'a>>,
     >;
@@ -1682,7 +1682,7 @@ pub mod view_to_server {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(5, 10, 0, 0, 60, 10, 0, 0),
+            ::capnp::word(255, 9, 0, 0, 54, 10, 0, 0),
             ::capnp::word(21, 0, 0, 0, 226, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1985,7 +1985,7 @@ pub mod member {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(211, 10, 0, 0, 251, 10, 0, 0),
+            ::capnp::word(205, 10, 0, 0, 245, 10, 0, 0),
             ::capnp::word(21, 0, 0, 0, 178, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2299,7 +2299,7 @@ pub mod start {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(59, 11, 0, 0, 105, 11, 0, 0),
+            ::capnp::word(53, 11, 0, 0, 99, 11, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2620,7 +2620,7 @@ pub mod player_input {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(132, 11, 0, 0, 236, 11, 0, 0),
+            ::capnp::word(126, 11, 0, 0, 230, 11, 0, 0),
             ::capnp::word(21, 0, 0, 0, 218, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2901,7 +2901,7 @@ pub mod tick {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(106, 12, 0, 0, 120, 12, 0, 0),
+            ::capnp::word(100, 12, 0, 0, 114, 12, 0, 0),
             ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -3296,7 +3296,7 @@ pub mod server_to_engine {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(190, 12, 0, 0, 145, 14, 0, 0),
+            ::capnp::word(184, 12, 0, 0, 139, 14, 0, 0),
             ::capnp::word(21, 0, 0, 0, 242, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -3642,7 +3642,7 @@ pub mod server_to_view {
         #[inline]
         pub fn set_asset(
             &mut self,
-            value: crate::protocol_capnp::asset_msg::Reader<'_>,
+            value: crate::protocol_capnp::asset::Reader<'_>,
         ) -> ::capnp::Result<()> {
             self.builder.set_data_field::<u16>(0, 0);
             ::capnp::traits::SetterInput::set_pointer_builder(
@@ -3652,7 +3652,7 @@ pub mod server_to_view {
             )
         }
         #[inline]
-        pub fn init_asset(self) -> crate::protocol_capnp::asset_msg::Builder<'a> {
+        pub fn init_asset(self) -> crate::protocol_capnp::asset::Builder<'a> {
             self.builder.set_data_field::<u16>(0, 0);
             ::capnp::traits::FromPointerBuilder::init_pointer(self.builder.get_pointer_field(0), 0)
         }
@@ -3725,7 +3725,7 @@ pub mod server_to_view {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 3, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(35, 15, 0, 0, 168, 16, 0, 0),
+            ::capnp::word(29, 15, 0, 0, 159, 16, 0, 0),
             ::capnp::word(21, 0, 0, 0, 226, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -3761,7 +3761,7 @@ pub mod server_to_view {
             ::capnp::word(84, 0, 0, 0, 2, 0, 1, 0),
             ::capnp::word(97, 115, 115, 101, 116, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(20, 217, 89, 20, 18, 0, 99, 204),
+            ::capnp::word(105, 71, 61, 82, 119, 169, 243, 136),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(16, 0, 0, 0, 0, 0, 0, 0),
@@ -3786,7 +3786,7 @@ pub mod server_to_view {
         ];
         pub(crate) fn get_field_types(index: u16) -> ::capnp::introspect::Type {
             match index {
-                0 => <crate::protocol_capnp::asset_msg::Owned as ::capnp::introspect::Introspect>::introspect(),
+                0 => <crate::protocol_capnp::asset::Owned as ::capnp::introspect::Introspect>::introspect(),
                 1 => <::capnp::data::Owned as ::capnp::introspect::Introspect>::introspect(),
                 2 => <u32 as ::capnp::introspect::Introspect>::introspect(),
                 _ => ::capnp::introspect::panic_invalid_field_index(index),
@@ -3818,11 +3818,11 @@ pub mod server_to_view {
         Forget(u32),
     }
     pub type WhichReader<'a> = Which<
-        ::capnp::Result<crate::protocol_capnp::asset_msg::Reader<'a>>,
+        ::capnp::Result<crate::protocol_capnp::asset::Reader<'a>>,
         ::capnp::Result<::capnp::data::Reader<'a>>,
     >;
     pub type WhichBuilder<'a> = Which<
-        ::capnp::Result<crate::protocol_capnp::asset_msg::Builder<'a>>,
+        ::capnp::Result<crate::protocol_capnp::asset::Builder<'a>>,
         ::capnp::Result<::capnp::data::Builder<'a>>,
     >;
 }

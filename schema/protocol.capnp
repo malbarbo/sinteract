@@ -22,7 +22,7 @@ using Input = import "event.capnp";
 # crashes.
 
 # The format of the image comes from the first bytes of the blob.
-struct AssetMsg {
+struct Asset {
     id   @0 :UInt32;
     blob @1 :Data;
 }
@@ -48,7 +48,7 @@ struct Hello {
 struct EngineToServer {
     union {
         # One per bitmap, before the frames that draw it.
-        asset @0 :AssetMsg;
+        asset @0 :Asset;
         # One per repaint.
         frame @1 :Frame;
         # The first message of the engine, and only once. It goes to the
@@ -114,7 +114,7 @@ struct ServerToEngine {
 struct ServerToView {
     union {
         # Before the first frame of the view that draws it.
-        asset  @0 :AssetMsg;
+        asset  @0 :Asset;
         # A whole message whose root is the Scene of scene.capnp, as the
         # frame of the engine holds it.
         frame  @1 :Data;
