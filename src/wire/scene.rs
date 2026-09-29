@@ -396,7 +396,7 @@ pub(super) fn check_finite(is_finite: bool) -> Result<(), ValueError> {
 
 /// Number of floats that `segs` take on the wire.
 fn coord_count(segs: Segments<'_>) -> u32 {
-    segs.map(|s| s.kind().coords() as u32).sum()
+    segs.map(|s| s.kind().coord_count() as u32).sum()
 }
 
 /// A `SegmentKind` discriminant is the wire byte, so a verb is a cast. The
@@ -445,7 +445,7 @@ fn read_segments(
     let mut i = 0;
     for &b in verbs {
         let kind = SegmentKind::from_u8(b).ok_or(ValueError::Newer)?;
-        if i + kind.coords() as u32 > coords.len() {
+        if i + kind.coord_count() as u32 > coords.len() {
             return Err(mismatch());
         }
         let c = |k: u32| coords.get(i + k);
@@ -468,7 +468,7 @@ fn read_segments(
             },
         };
         push_segment(out, seg);
-        i += kind.coords() as u32;
+        i += kind.coord_count() as u32;
     }
     // Coords that no verb claims are a mismatch too.
     if i != coords.len() {

@@ -761,7 +761,7 @@ impl SegmentKind {
     }
 
     /// How many floats the verb takes from the coord stream.
-    pub(crate) fn coords(self) -> usize {
+    pub(crate) fn coord_count(self) -> usize {
         match self {
             Self::Move | Self::Line => 2,
             Self::Quad => 4,
