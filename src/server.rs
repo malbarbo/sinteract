@@ -857,23 +857,31 @@ mod tests {
     use super::*;
     use crate::scene::{Bitmap, Image, RotatedRect, Scene};
     use crate::session::{Session, SessionEvent};
-    use crate::wire::testing;
+    use crate::wire::testing::{self, Pipe};
 
     /// A core with a session that reads what the core writes, which also
     /// checks that the core writes nothing that a session rejects.
     struct Room {
         core: ServerCore,
-        engine: Session,
-        /// The bytes of the core, as the pipe of the engine holds them.
-        pipe: testing::Pipe,
+        engine: Session<Pipe, Pipe>,
+        /// The pipe from the core to the engine.
+        to_engine: Pipe,
+        /// The pipe from the engine to the core.
+        from_engine: Pipe,
     }
 
     impl Room {
         fn new() -> Self {
+            let (to_engine, from_engine) = (Pipe::default(), Pipe::default());
+            let players = PlayerRange::new(1, 9).unwrap();
+            let engine = Session::new(players, to_engine.clone(), from_engine.clone()).unwrap();
+            // The tests send the hello that they need.
+            from_engine.drain();
             Room {
                 core: ServerCore::new(),
-                engine: Session::new(PlayerRange::new(1, 9).unwrap(), &mut io::sink()).unwrap(),
-                pipe: testing::Pipe::default(),
+                engine,
+                to_engine,
+                from_engine,
             }
         }
 
@@ -896,7 +904,6 @@ mod tests {
         fn events(&mut self) -> Vec<String> {
             let mut buf = Vec::new();
             self.core.take_engine_output(&mut buf);
-            let mut back = Vec::new();
             let mut events = Vec::new();
             let mut rest = &buf[..];
             while let Some((payload, after)) = framing::split_message(rest, Side::Server).unwrap() {
@@ -906,19 +913,19 @@ mod tests {
                 {
                     events.push(format!("lost {id}"));
                 }
-                self.pipe.push(message);
-                events.extend(self.session_events(&mut back));
+                self.to_engine.push(message);
+                events.extend(self.session_events());
                 rest = after;
             }
             assert!(rest.is_empty());
-            assert!(self.core.from_engine(&back).is_empty());
+            assert!(self.core.from_engine(&self.from_engine.drain()).is_empty());
             events
         }
 
         /// The events that wait in the session of the engine, in a short
-        /// form. A tickTaken goes to `back`.
-        fn session_events(&mut self, back: &mut Vec<u8>) -> Vec<String> {
-            std::iter::from_fn(|| match self.engine.wait(&mut self.pipe, back) {
+        /// form. A tickTaken goes to the pipe from the engine.
+        fn session_events(&mut self) -> Vec<String> {
+            std::iter::from_fn(|| match self.engine.wait() {
                 Ok(event) => Some(event),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => None,
                 Err(e) => panic!("{e}"),

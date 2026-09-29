@@ -51,9 +51,8 @@ fn main() -> ExitCode {
 fn run_session(mut game: Game) -> ExitCode {
     // SAFETY: SINTERACT_SESSION says that the parent opened fd 3 and fd 4
     // for the session, and nothing else in this process uses them.
-    let (mut from_server, to_server) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
-    let mut to_server = BufWriter::new(to_server);
-    let mut session = match Session::new(PLAYERS, &mut to_server) {
+    let (from_server, to_server) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
+    let mut session = match Session::new(PLAYERS, from_server, BufWriter::new(to_server)) {
         Ok(session) => session,
         Err(e) => {
             eprintln!("engine: {e}");
@@ -63,7 +62,7 @@ fn run_session(mut game: Game) -> ExitCode {
     // The end of fd 4, when the engine exits, ends the session for the
     // server.
     loop {
-        let event = match session.wait(&mut from_server, &mut to_server) {
+        let event = match session.wait() {
             Ok(event) => event,
             Err(e) => {
                 eprintln!("engine: {e}");
@@ -73,7 +72,7 @@ fn run_session(mut game: Game) -> ExitCode {
         match event {
             SessionEvent::Tick => {
                 game.tick();
-                if let Err(e) = session.write_frame(&mut to_server, None, &game.scene()) {
+                if let Err(e) = session.write_frame(None, &game.scene()) {
                     eprintln!("engine: {e}");
                     break;
                 }

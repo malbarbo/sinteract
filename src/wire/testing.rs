@@ -4,9 +4,11 @@
 //! value out of range. The helpers at the end change the bytes of a message
 //! as a newer peer, or one that writes a float that is not finite, would.
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
+use std::rc::Rc;
 
 use capnp::Word;
 
@@ -22,32 +24,63 @@ use super::protocol::decode_root;
 use super::scene::read_scene;
 use super::server_to_engine;
 
-/// The bytes that a test writes for a reader, as a pipe that does not block
-/// would hand them out. A read of an empty pipe fails with
-/// [`io::ErrorKind::WouldBlock`] until the test closes the pipe, and then
-/// returns 0.
+/// A pipe that does not block, which a session reads or writes. A clone
+/// shares the bytes, so a test keeps one end and the session holds the
+/// other. A read of an empty pipe fails with [`io::ErrorKind::WouldBlock`]
+/// until the test closes the pipe, and then returns 0.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Pipe(Rc<RefCell<PipeState>>);
+
 #[derive(Debug, Default)]
-pub(crate) struct Pipe {
+struct PipeState {
     bytes: VecDeque<u8>,
     closed: bool,
+    /// Every write fails.
+    broken: bool,
 }
 
 impl Pipe {
-    pub(crate) fn push(&mut self, bytes: &[u8]) {
-        self.bytes.extend(bytes);
+    pub(crate) fn push(&self, bytes: &[u8]) {
+        self.0.borrow_mut().bytes.extend(bytes);
     }
 
-    pub(crate) fn close(&mut self) {
-        self.closed = true;
+    pub(crate) fn close(&self) {
+        self.0.borrow_mut().closed = true;
+    }
+
+    /// Make every write from now on fail.
+    pub(crate) fn break_writes(&self) {
+        self.0.borrow_mut().broken = true;
+    }
+
+    /// The bytes that wait in the pipe, which leave it.
+    pub(crate) fn drain(&self) -> Vec<u8> {
+        self.0.borrow_mut().bytes.drain(..).collect()
     }
 }
 
 impl Read for Pipe {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.bytes.is_empty() && !self.closed {
+        let mut state = self.0.borrow_mut();
+        if state.bytes.is_empty() && !state.closed {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        self.bytes.read(buf)
+        state.bytes.read(buf)
+    }
+}
+
+impl Write for Pipe {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut state = self.0.borrow_mut();
+        if state.broken {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
+        state.bytes.extend(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
