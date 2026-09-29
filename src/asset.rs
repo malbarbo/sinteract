@@ -262,18 +262,38 @@ pub fn fit_image(blob: Vec<u8>) -> Result<Vec<u8>, ImageError> {
     }
 }
 
+/// What the header of an image says to a front end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageHead {
+    /// The width on the screen, after the EXIF orientation of a JPEG.
+    pub width: u32,
+    /// The height on the screen, after the EXIF orientation of a JPEG.
+    pub height: u32,
+    /// The media type, such as `image/png`.
+    pub mime: &'static str,
+}
+
+/// The header of the image in `blob`, or an error if it is not a PNG, a
+/// JPEG, a GIF or a WebP. The size is the one of `blob`, before
+/// [`fit_image`] shrinks it, so a front end shows a shrunk image at the
+/// size of the original.
+pub fn image_head(blob: &[u8]) -> Result<ImageHead, ImageError> {
+    let head = head(blob).ok_or(ImageError::Unsupported)?;
+    let (width, height) = head.screen_size();
+    Ok(ImageHead {
+        width,
+        height,
+        mime: head.format.mime(),
+    })
+}
+
 /// The size on the screen of the image in `blob`, after the EXIF
 /// orientation of a JPEG, or an error if it is not a PNG, a JPEG, a GIF or
 /// a WebP, or has more than [`MAX_IMAGE_PIXELS`].
 pub(crate) fn screen_size(blob: &[u8]) -> Result<(u32, u32), ImageError> {
     let head = head(blob).ok_or(ImageError::Unsupported)?;
     check_pixels(head.size, MAX_IMAGE_PIXELS)?;
-    let (width, height) = head.size;
-    Ok(if head.turned() {
-        (height, width)
-    } else {
-        (width, height)
-    })
+    Ok(head.screen_size())
 }
 
 /// How a document that holds the encoded images, such as an SVG or a
@@ -304,9 +324,9 @@ pub(crate) fn embed(blob: &[u8]) -> Result<Embed, ImageError> {
             color,
             size: head.size,
         },
-        Format::Jpeg { .. } => Embed::Decode { mime: "image/jpeg" },
-        Format::Gif => Embed::Decode { mime: "image/gif" },
-        Format::WebP => Embed::Decode { mime: "image/webp" },
+        Format::Jpeg { .. } | Format::Gif | Format::WebP => Embed::Decode {
+            mime: head.format.mime(),
+        },
     })
 }
 
@@ -325,6 +345,17 @@ enum Format {
     WebP,
 }
 
+impl Format {
+    fn mime(self) -> &'static str {
+        match self {
+            Format::Png => "image/png",
+            Format::Jpeg { .. } => "image/jpeg",
+            Format::Gif => "image/gif",
+            Format::WebP => "image/webp",
+        }
+    }
+}
+
 /// What the header of an image says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Head {
@@ -341,6 +372,17 @@ pub(crate) enum JpegColor {
 }
 
 impl Head {
+    /// The width and the height, swapped when the orientation turns the
+    /// image.
+    fn screen_size(self) -> (u32, u32) {
+        let (width, height) = self.size;
+        if self.turned() {
+            (height, width)
+        } else {
+            (width, height)
+        }
+    }
+
     /// Returns `true` if the orientation swaps the width and the height,
     /// `false` otherwise.
     fn turned(self) -> bool {
@@ -962,6 +1004,25 @@ mod tests {
         let image = Image::new(jpeg.clone()).unwrap();
         assert_eq!((image.width(), image.height()), (480, 640));
         assert_eq!(Footprint::of(&jpeg).map(|f| f.pixels), Ok(640 * 480));
+    }
+
+    #[test]
+    fn the_head_of_an_image_has_the_size_of_the_original_on_the_screen() {
+        let turned = jpeg_head_of(&[exif(true, 6), sof(640, 480)]);
+        assert_eq!(
+            image_head(&turned),
+            Ok(ImageHead {
+                width: 480,
+                height: 640,
+                mime: "image/jpeg"
+            })
+        );
+        let large = image_head(&png_head(4096, 4096)).unwrap();
+        assert_eq!(
+            (large.width, large.height, large.mime),
+            (4096, 4096, "image/png")
+        );
+        assert_eq!(image_head(b"GIF"), Err(ImageError::Unsupported));
     }
 
     #[test]
