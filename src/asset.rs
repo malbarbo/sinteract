@@ -73,7 +73,7 @@ impl<T> Cache<T> {
     /// error changes nothing.
     pub fn insert(&mut self, id: u32, footprint: Footprint, value: T) -> Result<(), RoomFull> {
         assert!(!self.contains(id), "the asset {id} is live");
-        self.new = self.new.with(footprint)?;
+        self.new = self.new.checked_plus(footprint)?;
         self.live.insert(
             id,
             Live {
@@ -154,7 +154,7 @@ impl Footprint {
 
     /// The footprint with `asset` on top, or an error if that goes over
     /// [`MAX_LIVE_PIXELS`] or [`MAX_LIVE_BYTES`].
-    fn with(self, asset: Footprint) -> Result<Footprint, RoomFull> {
+    fn checked_plus(self, asset: Footprint) -> Result<Footprint, RoomFull> {
         let load = self.plus(asset);
         if !load.fits() {
             return Err(RoomFull {
@@ -192,7 +192,7 @@ impl Footprint {
 pub(crate) fn check_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Result<(), RoomFull> {
     let mut load = Footprint::NONE;
     for image in images {
-        load = load.with(Footprint {
+        load = load.checked_plus(Footprint {
             pixels: image.pixels(),
             bytes: image.file().len() as u64,
         })?;
@@ -1162,24 +1162,27 @@ mod tests {
         let largest = Footprint::of(&png_head(2048, 2048)).unwrap();
         let mut load = Footprint::NONE;
         for _ in 0..8 {
-            load = load.with(largest).unwrap();
+            load = load.checked_plus(largest).unwrap();
         }
         let one = Footprint {
             pixels: 1,
             bytes: 1,
         };
-        assert!(matches!(load.with(one), Err(RoomFull { .. })));
+        assert!(matches!(load.checked_plus(one), Err(RoomFull { .. })));
         assert_eq!(
-            load.without(largest).with(one).unwrap().without(one),
+            load.without(largest)
+                .checked_plus(one)
+                .unwrap()
+                .without(one),
             load.without(largest)
         );
         let heavy = Footprint {
             pixels: 1,
             bytes: MAX_LIVE_BYTES,
         };
-        let load = Footprint::NONE.with(heavy).unwrap();
+        let load = Footprint::NONE.checked_plus(heavy).unwrap();
         assert_eq!(
-            load.with(one),
+            load.checked_plus(one),
             Err(RoomFull {
                 pixels: 2,
                 bytes: MAX_LIVE_BYTES + 1
