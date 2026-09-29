@@ -182,7 +182,10 @@ mesma face.
 `Display` é um trait selado, implementado por `Terminal` e `Window`, e
 `open_native` escolhe a janela ou o terminal. A `Session` é o lado da
 engine numa sessão com servidor. O `Session::start` manda o hello e espera
-o start, então a sessão só existe depois dele. Ela fica com o `Read` e o
+o start, então a sessão só existe depois dele. Ele entrega cada jogador
+como um `Player`, com o apelido, e só a sessão cria um `Player`, então a
+engine não fala de um jogador que não está no jogo. A sessão fica com o
+`Read` e o
 `Write` da sessão, como os descritores 3 e 4, e tudo que a engine manda ao
 servidor passa por ela. O `wait` devolve os eventos com o jogador, sempre com no
 máximo um `Tick` na fila, e o `write_frame` manda o frame, com cada imagem

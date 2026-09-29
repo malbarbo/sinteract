@@ -852,15 +852,15 @@ mod tests {
         /// Start the session of the engine, and the start in a short form.
         fn start(&mut self) -> String {
             let players = PlayerRange::new(1, 9).unwrap();
-            let (engine, nicknames) =
+            let (engine, players) =
                 Session::start(players, self.to_engine.clone(), self.from_engine.clone())
                     .expect("the first message of the core is a start");
             // The tests send the hello that they need.
             self.from_engine.drain();
             self.engine = Some(engine);
-            let members: Vec<_> = (1..)
-                .zip(nicknames)
-                .map(|(player, nickname)| format!("{player} {nickname}"))
+            let members: Vec<_> = players
+                .iter()
+                .map(|(player, nickname)| format!("{} {nickname}", player.number()))
                 .collect();
             format!("start {}", members.join(", "))
         }
@@ -876,26 +876,29 @@ mod tests {
             })
             .map(|e| match e {
                 SessionEvent::Tick => "tick".into(),
-                SessionEvent::Input { player, event } => match event {
-                    InputEvent::Key(k) if k.kind == KeyKind::Up => {
-                        format!("{player} up {}", k.key)
+                SessionEvent::Input { player, event } => {
+                    let player = player.number();
+                    match event {
+                        InputEvent::Key(k) if k.kind == KeyKind::Up => {
+                            format!("{player} up {}", k.key)
+                        }
+                        InputEvent::Key(k) => format!("{player} key {}", k.key),
+                        InputEvent::Mouse(MouseEvent {
+                            action: MouseAction::Up(b),
+                            x,
+                            y,
+                            buttons,
+                            ..
+                        }) => format!("{player} mouse up {b:?} {x},{y} {buttons:?}"),
+                        InputEvent::Pad(PadEvent::Up(b)) => format!("{player} pad up {b:?}"),
+                        InputEvent::Resize { width, height } => {
+                            format!("{player} resize {width}x{height}")
+                        }
+                        InputEvent::Mouse(_) | InputEvent::Pad(_) => {
+                            format!("{player} {event:?}")
+                        }
                     }
-                    InputEvent::Key(k) => format!("{player} key {}", k.key),
-                    InputEvent::Mouse(MouseEvent {
-                        action: MouseAction::Up(b),
-                        x,
-                        y,
-                        buttons,
-                        ..
-                    }) => format!("{player} mouse up {b:?} {x},{y} {buttons:?}"),
-                    InputEvent::Pad(PadEvent::Up(b)) => format!("{player} pad up {b:?}"),
-                    InputEvent::Resize { width, height } => {
-                        format!("{player} resize {width}x{height}")
-                    }
-                    InputEvent::Mouse(_) | InputEvent::Pad(_) => {
-                        format!("{player} {event:?}")
-                    }
-                },
+                }
                 SessionEvent::Error(e) => format!("error {e}"),
                 SessionEvent::End(None) => "end".into(),
                 SessionEvent::End(Some(e)) => format!("broken {e}"),

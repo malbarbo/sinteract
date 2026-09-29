@@ -53,9 +53,9 @@ fn run_session(mut game: Game) -> ExitCode {
     // for the session, and nothing else in this process uses them.
     let (from_server, to_server) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
     // The example draws the same scene for every player, so it has no use
-    // for their nicknames.
+    // for the players.
     let mut session = match Session::start(PLAYERS, from_server, BufWriter::new(to_server)) {
-        Ok((session, _nicknames)) => session,
+        Ok((session, _players)) => session,
         Err(e) => {
             eprintln!("engine: {e}");
             return ExitCode::FAILURE;

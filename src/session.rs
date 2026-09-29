@@ -44,6 +44,8 @@ pub struct Session<R, W> {
     /// The buffer of [`Session::wait`] for a read, zeroed once, since a
     /// read into `bytes` would zero its room at every read.
     scratch: Vec<u8>,
+    /// The number of players, from the start.
+    players: u32,
     /// The session ended, and reads nothing more.
     ended: bool,
     events: VecDeque<SessionEvent>,
@@ -52,16 +54,25 @@ pub struct Session<R, W> {
     next_id: u32,
 }
 
+/// A player of the session. Only the session makes one, from the start, so
+/// a player that the engine holds is in the game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Player(NonZeroU32);
+
+impl Player {
+    /// The place of the player in the start, from 1.
+    pub fn number(self) -> NonZeroU32 {
+        self.0
+    }
+}
+
 /// What [`Session::wait`] delivers.
 #[derive(Debug)]
 pub enum SessionEvent {
     /// Time to draw the next frames, for every player.
     Tick,
     /// The input of `player`.
-    Input {
-        player: NonZeroU32,
-        event: InputEvent,
-    },
+    Input { player: Player, event: InputEvent },
     /// The session dropped a message that broke a rule, and goes on.
     Error(SessionError),
     /// The stream ended, which is how the server ends the session. It is
@@ -78,6 +89,8 @@ pub enum SessionError {
     Payload(wire::Error),
     /// A start came after the first one.
     SecondStart,
+    /// An input came for a player that is not in the start.
+    NoPlayer(NonZeroU32),
 }
 
 impl std::fmt::Display for SessionError {
@@ -85,6 +98,12 @@ impl std::fmt::Display for SessionError {
         match self {
             SessionError::Payload(e) => write!(f, "message does not decode: {e}"),
             SessionError::SecondStart => write!(f, "a start came after the first one"),
+            SessionError::NoPlayer(player) => {
+                write!(
+                    f,
+                    "an input came for player {player}, who is not in the start"
+                )
+            }
         }
     }
 }
@@ -93,7 +112,7 @@ impl std::error::Error for SessionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             SessionError::Payload(e) => Some(e),
-            SessionError::SecondStart => None,
+            SessionError::SecondStart | SessionError::NoPlayer(_) => None,
         }
     }
 }
@@ -180,15 +199,19 @@ const READ_BYTES: usize = 64 * 1024;
 
 impl<R: Read, W: Write> Session<R, W> {
     /// The session of a game of `players`, which reads the server from `r`
-    /// and writes to it on `w`, with the nicknames of the players, the
-    /// first of player 1. It writes the hello to `w`, flushes `w`, since
+    /// and writes to it on `w`, with each player of the start and its
+    /// nickname. It writes the hello to `w`, flushes `w`, since
     /// the server sends nothing until it reads the hello, and blocks until
     /// the start. The hello is the first message of the engine, and the
     /// only one. The players are the same until the end. A message before
     /// the start breaks the rules of the server, and the session does not
     /// start. An error of `r` ends the wait as well, since the hello went
     /// out and cannot go out again.
-    pub fn start(players: PlayerRange, r: R, mut w: W) -> Result<(Self, Vec<String>), StartError> {
+    pub fn start(
+        players: PlayerRange,
+        r: R,
+        mut w: W,
+    ) -> Result<(Self, Vec<(Player, String)>), StartError> {
         engine_to_server::write_hello(&mut w, players)?;
         w.flush()?;
         let mut session = Session {
@@ -196,15 +219,22 @@ impl<R: Read, W: Write> Session<R, W> {
             w,
             bytes: Vec::new(),
             scratch: Vec::new(),
+            players: 0,
             ended: false,
             events: VecDeque::new(),
             sent: HashMap::new(),
             next_id: 0,
         };
         let nicknames = session.read_start()?;
+        session.players = u32::try_from(nicknames.len()).expect("a start has at most 1024 players");
+        let players = (1..)
+            .map_while(NonZeroU32::new)
+            .map(Player)
+            .zip(nicknames)
+            .collect();
         // The bytes after the start in the same read.
         session.take_messages();
-        Ok((session, nicknames))
+        Ok((session, players))
     }
 
     /// The next event, with bytes from `r` when none waits. It blocks for
@@ -361,7 +391,13 @@ impl<R: Read, W: Write> Session<R, W> {
                 self.sent.retain(|_, sent| *sent != id);
                 return;
             }
-            Message::Input { player, event } => SessionEvent::Input { player, event },
+            Message::Input { player, event } if player.get() <= self.players => {
+                SessionEvent::Input {
+                    player: Player(player),
+                    event,
+                }
+            }
+            Message::Input { player, .. } => SessionEvent::Error(SessionError::NoPlayer(player)),
         };
         self.push(event);
     }
@@ -389,7 +425,7 @@ impl<R: Read, W: Write> Session<R, W> {
     /// The waiting input of `player` that `new` replaces, looking from the
     /// back past the input of the other players. The events of one player
     /// keep their order, and nothing moves across a tick.
-    fn superseded(&mut self, player: NonZeroU32, new: &InputEvent) -> Option<&mut SessionEvent> {
+    fn superseded(&mut self, player: Player, new: &InputEvent) -> Option<&mut SessionEvent> {
         for old in self.events.iter_mut().rev() {
             match old {
                 SessionEvent::Input { player: p, event } if *p == player => {
@@ -514,11 +550,19 @@ mod tests {
         let (server, engine) = (Pipe::default(), Pipe::default());
         server.push(&start());
         server.push(bytes);
-        let (session, nicknames) =
+        let (session, players) =
             Session::start(players(), server.clone(), engine.clone()).expect("the session starts");
-        assert_eq!(nicknames, ["Ana", "Beto"]);
+        assert_eq!(members(&players), ["1 Ana", "2 Beto"]);
         engine.drain();
         (session, server, engine)
+    }
+
+    /// Each of `players`, in a short form.
+    fn members(players: &[(Player, String)]) -> Vec<String> {
+        players
+            .iter()
+            .map(|(player, nickname)| format!("{} {nickname}", player.number()))
+            .collect()
     }
 
     /// Why a session does not start when the server sends `stream` and
@@ -546,11 +590,11 @@ mod tests {
         })
         .map(|e| match e {
             SessionEvent::Tick => "tick".into(),
-            SessionEvent::Input { player, event } => match event {
-                InputEvent::Key(k) => format!("{player} key {}", k.key),
-                InputEvent::Mouse(m) => format!("{player} move {}", m.x),
-                InputEvent::Resize { width, .. } => format!("{player} resize {width}"),
-                InputEvent::Pad(_) => format!("{player} {event:?}"),
+            SessionEvent::Input { player, event } => match (player.number(), event) {
+                (player, InputEvent::Key(k)) => format!("{player} key {}", k.key),
+                (player, InputEvent::Mouse(m)) => format!("{player} move {}", m.x),
+                (player, InputEvent::Resize { width, .. }) => format!("{player} resize {width}"),
+                (player, event @ InputEvent::Pad(_)) => format!("{player} {event:?}"),
             },
             SessionEvent::Error(e) => format!("error {e}"),
             SessionEvent::End(None) => "end".into(),
@@ -583,8 +627,8 @@ mod tests {
             fail_at: usize::MAX,
             interrupt: false,
         };
-        let (mut session, nicknames) = Session::start(players(), r, io::sink()).unwrap();
-        assert_eq!(nicknames, ["Ana", "Beto"]);
+        let (mut session, players) = Session::start(players(), r, io::sink()).unwrap();
+        assert_eq!(members(&players), ["1 Ana", "2 Beto"]);
         assert_eq!(names(&mut session), ["tick", "2 key a", "end"]);
     }
 
@@ -676,8 +720,23 @@ mod tests {
         stream.extend_from_slice(&start());
         let server = Pipe::default();
         server.push(&stream);
-        let (_, nicknames) = Session::start(players(), server, io::sink()).unwrap();
-        assert_eq!(nicknames, ["Ana", "Beto"]);
+        let (_, players) = Session::start(players(), server, io::sink()).unwrap();
+        assert_eq!(members(&players), ["1 Ana", "2 Beto"]);
+    }
+
+    #[test]
+    fn an_input_for_a_player_who_is_not_in_the_start_is_an_error() {
+        let mut stream = Vec::new();
+        input(&mut stream, 3, &key("a"));
+        input(&mut stream, 2, &key("b"));
+        let (mut session, _, _) = started(&stream);
+        assert_eq!(
+            names(&mut session),
+            [
+                "error an input came for player 3, who is not in the start",
+                "2 key b"
+            ]
+        );
     }
 
     #[test]
