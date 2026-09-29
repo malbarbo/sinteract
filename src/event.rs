@@ -68,7 +68,7 @@ pub enum InputEvent {
 impl InputEvent {
     /// Returns `true` if `self` makes `old` worthless, `false` otherwise.
     /// Only the latest move of the mouse and the latest resize count.
-    pub fn supersedes(&self, old: &InputEvent) -> bool {
+    pub(crate) fn supersedes(&self, old: &InputEvent) -> bool {
         let is_move = |e: &InputEvent| {
             matches!(
                 e,

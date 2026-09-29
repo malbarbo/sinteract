@@ -660,7 +660,7 @@ impl KittyMedium {
 
 /// Returns `true` if the terminal reports 24-bit color, `false` otherwise.
 /// The half-blocks fallback needs it.
-pub fn half_blocks_supported() -> bool {
+pub(crate) fn half_blocks_supported() -> bool {
     use std::io::IsTerminal;
     if !std::io::stdout().is_terminal() {
         return false;
@@ -699,13 +699,13 @@ pub fn half_blocks_supported() -> bool {
 /// `false` otherwise. The answer comes from a query to the terminal, because
 /// the environment variables are wrong over ssh and under a multiplexer.
 /// The probe runs at most once per process.
-pub fn kitty_supported() -> bool {
+pub(crate) fn kitty_supported() -> bool {
     super::term_query::caps().kitty.is_some()
 }
 
 /// Returns `true` if the terminal supports DEC Sixel, `false` otherwise. The
 /// answer comes from the same probe as [`kitty_supported`].
-pub fn sixel_supported() -> bool {
+pub(crate) fn sixel_supported() -> bool {
     super::term_query::caps().sixel
 }
 

@@ -131,7 +131,7 @@ impl<T> Default for Cache<T> {
 /// What an asset, or the assets of a room together, count toward the
 /// limits of a room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Footprint {
+pub(crate) struct Footprint {
     pixels: u64,
     bytes: u64,
 }

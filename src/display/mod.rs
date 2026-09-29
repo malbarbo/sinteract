@@ -8,7 +8,7 @@
 //! `term_query` probes what the terminal supports, `shm` hands a Kitty image
 //! to a terminal on the same machine, `term_input` reads the
 //! keys, with or without the keyboard protocol of Kitty or the
-//! win32-input-mode of Windows Terminal, [`sixel`] encodes a pixmap for the
+//! win32-input-mode of Windows Terminal, `sixel` encodes a pixmap for the
 //! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
 //! in a winit window. [`Stage`] runs a game on one of them, or in a
 //! [`crate::session::Session`] with a server, with the same loop.
@@ -26,8 +26,8 @@
     allow(rustdoc::broken_intra_doc_links)
 )]
 
-#[cfg(feature = "render")]
-pub mod sixel;
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+mod sixel;
 
 #[cfg(all(feature = "window", target_os = "macos"))]
 mod display_link;

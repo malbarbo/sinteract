@@ -31,9 +31,9 @@ sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind
 `wait_event`, `tick_clock.rs` the clock that paces the tick,
 `terminal.rs` and `window.rs` are the two displays, `display_link.rs`
 paces the window on macOS, and
-`sixel.rs` and `term_query.rs` support them.
-Only `sixel.rs` builds on wasm32, so the `cfg` sits on each submodule in
-`display/mod.rs` and not on the whole directory.
+`sixel.rs` and `term_query.rs` support them. Each submodule needs its own
+features, so the `cfg` sits on each one in `display/mod.rs` and not on the
+whole directory.
 
 `PLAN.md` is the plan for the server and client modes. `SERVER.md` is the
 contract with the server of Sarcade, and a change to the public API of

@@ -24,7 +24,7 @@ use crate::scene::{
 use crate::text::TextLayout;
 
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
-/// own pixels. See [`fit_scale`].
+/// own pixels.
 pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Result<Pixmap, AllocError> {
     let mut renderer = PixmapRenderer::new(scale, scene.width(), scene.height())?;
     renderer.render(scene)?;
@@ -33,7 +33,14 @@ pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Result<Pixma
 
 /// The uniform scale that fits a `width × height` frame inside `target`
 /// pixels. It can exceed 1.0. The caller caps it.
-pub fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
+#[cfg_attr(
+    not(all(
+        any(feature = "terminal", feature = "window"),
+        not(target_arch = "wasm32")
+    )),
+    allow(dead_code)
+)]
+pub(crate) fn fit_scale(width: f32, height: f32, target: (u32, u32)) -> f32 {
     let (tw, th) = target;
     if tw == 0 || th == 0 {
         return 1.0;
@@ -106,7 +113,11 @@ impl PixmapRenderer {
 
     /// Hand out the pixmap of the last render, and render the next frames
     /// into `pixmap`. A render resizes `pixmap` when its size is wrong.
-    pub fn replace_pixmap(&mut self, pixmap: Pixmap) -> Pixmap {
+    #[cfg_attr(
+        not(all(feature = "terminal", not(target_arch = "wasm32"))),
+        allow(dead_code)
+    )]
+    pub(crate) fn replace_pixmap(&mut self, pixmap: Pixmap) -> Pixmap {
         // A pooled mask has the size of the pixmap that goes out, and the
         // next render sees only the size of `pixmap`.
         let size = |p: &Pixmap| (p.width(), p.height());
@@ -536,7 +547,7 @@ pub const MAX_FRAME_PIXELS: u64 = 1 << 26;
 
 /// The most layers in effect at once. Each one holds a pixmap of the size of
 /// the frame.
-pub const MAX_LAYER_DEPTH: usize = 4;
+pub(crate) const MAX_LAYER_DEPTH: usize = 4;
 
 /// A transparent pixmap of `width` by `height`, or an error for one of more
 /// than [`MAX_FRAME_PIXELS`].
