@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
-use sinteract::server::{Conn, Lobby, Next, ServerCore};
+use sinteract::server::{Conn, LobbyCore, Next, ServerCore};
 use sinteract::wire::server_to_view::FrameReader;
 
 /// How many reads of the engine the reader thread holds before it waits
@@ -124,7 +124,7 @@ fn start(
     from_engine: &mut impl Read,
     to_engine: &mut impl Write,
 ) -> Result<(ServerCore, Conn), String> {
-    let mut lobby = Lobby::new();
+    let mut lobby = LobbyCore::new();
     let mut buf = vec![0; READ_BYTES];
     while lobby.players().is_none() {
         let n = match from_engine.read(&mut buf) {

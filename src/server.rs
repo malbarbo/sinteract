@@ -8,14 +8,14 @@
 //! engine to [`ServerCore::from_engine`], and asks
 //! [`ServerCore::next_for`] what to send to each view.
 //!
-//! A room starts as a [`Lobby`], which takes the hello of the engine. The
-//! engine says in its hello how many players the game takes,
-//! [`Lobby::players`] hands that to the lobby of the host, and the host
-//! passes the players to [`Lobby::start`], which gives the core. The
-//! engine sends nothing else before the start, so the host needs the core
-//! and its tasks only from the start on. Then the host gives each of
-//! [`ServerCore::players`] a token of its own, such as 16 random bytes
-//! in the link of the player, which the page keeps in its
+//! A room starts as a [`LobbyCore`], which takes the hello of the engine.
+//! The engine says in its hello how many players the game takes,
+//! [`LobbyCore::players`] hands that to the lobby of the host, and the host
+//! passes the players to [`LobbyCore::start`], which gives the
+//! [`ServerCore`]. The engine sends nothing else before the start, so the
+//! host needs the core and its tasks only from the start on. Then the host
+//! gives each of [`ServerCore::players`] a token of its own, such as 16
+//! random bytes in the link of the player, which the page keeps in its
 //! `sessionStorage`. A connection that brings the token takes the seat
 //! with [`ServerCore::connect`], the first time and after a drop alike.
 //!
@@ -48,7 +48,7 @@ use crate::wire::view_to_server;
 /// A room before the start. It waits for the hello of the engine, then for
 /// the players from the host.
 #[derive(Debug, Default)]
-pub struct Lobby {
+pub struct LobbyCore {
     /// The bytes of the engine that do not make a whole message yet.
     engine_in: Vec<u8>,
     /// The players that the game takes, from the hello.
@@ -132,7 +132,7 @@ pub enum EngineError {
     NoSeat(NonZeroU32),
 }
 
-/// Why [`Lobby::start`] did not start the room.
+/// Why [`LobbyCore::start`] did not start the room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartError {
     /// The engine has not said its hello yet.
@@ -233,7 +233,7 @@ const MAX_HELD_KEYS: usize = 32;
 /// players, their nicknames and the messages of the views have a cap.
 const UNDER_THE_CAP: &str = "a message for the engine is under the cap of the framing";
 
-impl Lobby {
+impl LobbyCore {
     pub fn new() -> Self {
         Self::default()
     }
@@ -247,9 +247,9 @@ impl Lobby {
     /// Take the next bytes of the engine. They may end anywhere, inside a
     /// message too. The engine says its hello and then waits for the
     /// start, so a first message that is not a hello, any message after
-    /// the hello, and a broken stream end the room. The lobby skips a
+    /// the hello, and a broken stream end the room. It skips a
     /// message from a newer schema.
-    pub fn from_engine(mut self, bytes: &[u8]) -> Result<Lobby, EngineError> {
+    pub fn from_engine(mut self, bytes: &[u8]) -> Result<LobbyCore, EngineError> {
         self.engine_in.extend_from_slice(bytes);
         let mut rest = self.engine_in.as_slice();
         while let Some((payload, after)) =
@@ -273,8 +273,11 @@ impl Lobby {
     /// 1 in their order, and give the engine the start. A nickname loses
     /// its control characters, so it cannot move the cursor of a terminal
     /// that prints it, and is cut to 64 bytes. The error gives the lobby
-    /// back, for another try.
-    pub fn start<S: AsRef<str>>(self, nicknames: &[S]) -> Result<ServerCore, (Lobby, StartError)> {
+    /// core back, for another try.
+    pub fn start<S: AsRef<str>>(
+        self,
+        nicknames: &[S],
+    ) -> Result<ServerCore, (LobbyCore, StartError)> {
         let Some(range) = self.range else {
             return Err((self, StartError::NoHello));
         };
@@ -1014,16 +1017,16 @@ mod tests {
 
     /// A core of `nicknames`, after a hello of 1 to 9 players.
     fn started(nicknames: &[&str]) -> ServerCore {
-        Lobby::new()
+        LobbyCore::new()
             .from_engine(&hello(1, 9))
             .unwrap()
             .start(nicknames)
             .unwrap()
     }
 
-    /// The error of the lobby at `stream`.
+    /// The error of the lobby core at `stream`.
     fn lobby_error(stream: &[u8]) -> EngineError {
-        Lobby::new().from_engine(stream).unwrap_err()
+        LobbyCore::new().from_engine(stream).unwrap_err()
     }
 
     fn hello(min: u32, max: u32) -> Vec<u8> {
@@ -1038,7 +1041,7 @@ mod tests {
 
     #[test]
     fn the_start_takes_the_players_after_the_hello() {
-        let lobby = Lobby::new();
+        let lobby = LobbyCore::new();
         assert_eq!(lobby.players(), None);
         let (lobby, e) = lobby.start(&["Ana"]).unwrap_err();
         assert_eq!(e, StartError::NoHello);
@@ -1097,7 +1100,7 @@ mod tests {
         let mut stream = unknown.clone();
         stream.extend_from_slice(&hello(1, 1));
         stream.extend_from_slice(&unknown);
-        let lobby = Lobby::new().from_engine(&stream).unwrap();
+        let lobby = LobbyCore::new().from_engine(&stream).unwrap();
         assert_eq!(lobby.players(), PlayerRange::new(1, 1));
     }
 
@@ -1107,7 +1110,7 @@ mod tests {
         let next = frame(0, 1.0);
         let (head, tail) = next.split_at(10);
         stream.extend_from_slice(head);
-        let lobby = Lobby::new().from_engine(&stream).unwrap();
+        let lobby = LobbyCore::new().from_engine(&stream).unwrap();
         let mut core = lobby.start(&["Ana"]).unwrap();
         let ana = core.connect(player(1)).unwrap();
         assert!(core.from_engine(tail).is_empty());
@@ -1416,7 +1419,7 @@ mod tests {
 
     #[test]
     fn the_messages_come_out_whole_from_bytes_fed_one_at_a_time() {
-        let lobby = hello(1, 1).iter().fold(Lobby::new(), |lobby, byte| {
+        let lobby = hello(1, 1).iter().fold(LobbyCore::new(), |lobby, byte| {
             lobby.from_engine(std::slice::from_ref(byte)).unwrap()
         });
         let mut core = lobby.start(&["Ana"]).unwrap();
