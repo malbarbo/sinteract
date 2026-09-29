@@ -52,14 +52,14 @@ pub(super) struct Mouse {
 
 /// The bytes of the terminal in, the input out. The parser keeps an escape
 /// that a read cut in two.
-pub(super) struct VtInput {
+pub(super) struct Decoder {
     parser: VTParser,
     keys: Keys,
     /// The last byte of the last read was an Escape.
     escape_last: bool,
 }
 
-impl VtInput {
+impl Decoder {
     /// The input of a terminal under the keyboard protocol of Kitty when
     /// `kitty` holds, and of a terminal without it otherwise.
     pub(super) fn new(kitty: bool) -> Self {
@@ -694,7 +694,7 @@ mod tests {
 
     /// The kind and the name of each key in `bytes`, fed in one read.
     fn keys(bytes: &[u8]) -> Vec<(KeyKind, String)> {
-        let mut parser = VtInput::new(true);
+        let mut parser = Decoder::new(true);
         let mut out = Vec::new();
         parser.feed(bytes, &mut out);
         names(out)
@@ -712,7 +712,7 @@ mod tests {
     /// The modifiers and the name of each key that a terminal without the
     /// protocol sends in `bytes`, all of them a Press.
     fn legacy_keys(bytes: &[u8]) -> Vec<(Modifiers, String)> {
-        let mut parser = VtInput::new(false);
+        let mut parser = Decoder::new(false);
         let mut out = Vec::new();
         parser.feed(bytes, &mut out);
         parser.flush(&mut out);
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn an_escape_cut_in_two_reads_parses_whole() {
-        let mut parser = VtInput::new(true);
+        let mut parser = Decoder::new(true);
         let mut out = Vec::new();
         parser.feed(b"\x1b[97;1", &mut out);
         assert!(out.is_empty());
@@ -820,7 +820,7 @@ mod tests {
 
     #[test]
     fn a_lone_escape_goes_out_at_the_flush() {
-        let mut parser = VtInput::new(true);
+        let mut parser = Decoder::new(true);
         let mut out = Vec::new();
         parser.feed(b"\x1b", &mut out);
         assert!(out.is_empty());
@@ -835,7 +835,7 @@ mod tests {
 
     #[test]
     fn ctrl_c_interrupts() {
-        let mut parser = VtInput::new(true);
+        let mut parser = Decoder::new(true);
         let mut out = Vec::new();
         parser.feed(b"\x1b[99;5u", &mut out);
         assert_eq!(out, [Input::Interrupt]);
@@ -858,7 +858,7 @@ mod tests {
 
     #[test]
     fn an_sgr_report_is_a_mouse_event() {
-        let mut parser = VtInput::new(true);
+        let mut parser = Decoder::new(true);
         let mut out = Vec::new();
         parser.feed(b"\x1b[<0;3;2M\x1b[<0;3;2m", &mut out);
         let actions: Vec<MouseAction> = mice(&out).iter().map(|m| m.action).collect();
@@ -874,7 +874,7 @@ mod tests {
 
     #[test]
     fn a_drag_holds_its_button_until_the_up() {
-        let mut parser = VtInput::new(true);
+        let mut parser = Decoder::new(true);
         let mut out = Vec::new();
         parser.feed(
             b"\x1b[<4;1;1M\x1b[<36;1;1M\x1b[<0;1;1m\x1b[<64;1;1M",
@@ -971,7 +971,7 @@ mod tests {
 
     #[test]
     fn without_the_protocol_ctrl_c_interrupts() {
-        let mut parser = VtInput::new(false);
+        let mut parser = Decoder::new(false);
         let mut out = Vec::new();
         parser.feed(b"\x03", &mut out);
         assert_eq!(out, [Input::Interrupt]);
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn ctrl_c_interrupts_after_alt_with_a_key_that_opens_a_string() {
-        let mut parser = VtInput::new(false);
+        let mut parser = Decoder::new(false);
         let mut out = Vec::new();
         parser.feed(b"\x1b", &mut out);
         parser.feed(b"]\x03", &mut out);
@@ -1015,7 +1015,7 @@ mod tests {
 
     #[test]
     fn an_rxvt_report_is_a_mouse_event() {
-        let mut parser = VtInput::new(false);
+        let mut parser = Decoder::new(false);
         let mut out = Vec::new();
         parser.feed(b"\x1b[32;3;2M\x1b[35;3;2M", &mut out);
         let actions: Vec<MouseAction> = mice(&out).iter().map(|m| m.action).collect();
@@ -1031,7 +1031,7 @@ mod tests {
     /// The kind, the modifiers and the name of each key of win32-input-mode
     /// in `bytes`.
     fn win32_keys(bytes: &[u8]) -> Vec<(KeyKind, Modifiers, String)> {
-        let mut parser = VtInput::new(false);
+        let mut parser = Decoder::new(false);
         let mut out = Vec::new();
         parser.feed(bytes, &mut out);
         out.into_iter()
@@ -1128,7 +1128,7 @@ mod tests {
 
     #[test]
     fn win32_ctrl_c_interrupts() {
-        let mut parser = VtInput::new(false);
+        let mut parser = Decoder::new(false);
         let mut out = Vec::new();
         parser.feed(b"\x1b[67;46;3;1;8;1_", &mut out);
         assert_eq!(out, [Input::Interrupt]);

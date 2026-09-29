@@ -893,7 +893,7 @@ const INPUT_OFF: &str =
 /// Who reads the keys of the terminal.
 #[derive(Clone, Copy)]
 enum KeyInput {
-    /// [`super::vt_input`] reads the bytes of stdin, and `kitty` says that
+    /// [`super::term_input`] reads the bytes of stdin, and `kitty` says that
     /// the terminal is under the keyboard protocol of Kitty.
     Bytes { kitty: bool },
     /// Nobody, because stdin is not a terminal. Ctrl-C raises SIGINT.
@@ -912,7 +912,10 @@ impl KeyInput {
         }
         #[cfg(unix)]
         let (kitty, keys_on) = if super::term_query::caps().kitty_keyboard {
-            let push = format!("\x1b[>{}u{FOCUS_ON}", super::vt_input::KITTY_KEYBOARD_FLAGS);
+            let push = format!(
+                "\x1b[>{}u{FOCUS_ON}",
+                super::term_input::KITTY_KEYBOARD_FLAGS
+            );
             (true, push)
         } else {
             (false, String::new())
@@ -975,7 +978,7 @@ fn read_bytes(
     kitty: bool,
     mut on_interrupt: Option<Box<dyn FnMut() + Send>>,
 ) {
-    use super::vt_input::{Input, VtInput};
+    use super::term_input::{Decoder, Input};
 
     let _close = CloseOnExit(tx);
     let mut tty = match super::term_query::TtyInput::open() {
@@ -985,7 +988,7 @@ fn read_bytes(
             return;
         }
     };
-    let mut keys = VtInput::new(kitty);
+    let mut keys = Decoder::new(kitty);
     let mut size = SizeWatch::default();
     let mut bytes = Vec::new();
     let mut inputs = Vec::new();

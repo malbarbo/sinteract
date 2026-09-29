@@ -6,7 +6,7 @@
 //!
 //! [`terminal`] shows a pixmap through Kitty, Sixel or half-blocks,
 //! `term_query` probes what the terminal supports, `shm` hands a Kitty image
-//! to a terminal on the same machine, `vt_input` reads the
+//! to a terminal on the same machine, `term_input` reads the
 //! keys, with or without the keyboard protocol of Kitty or the
 //! win32-input-mode of Windows Terminal, [`sixel`] encodes a pixmap for the
 //! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
@@ -45,6 +45,8 @@ mod inbox;
 #[cfg(all(feature = "terminal", unix))]
 mod shm;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+mod term_input;
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 mod term_query;
 #[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
 pub mod terminal;
@@ -53,8 +55,6 @@ pub mod terminal;
     not(target_arch = "wasm32")
 ))]
 mod tick_clock;
-#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
-mod vt_input;
 #[cfg(all(feature = "window", not(target_arch = "wasm32")))]
 pub mod window;
 
