@@ -125,7 +125,7 @@ pub enum StartError {
     /// The engine has not said its hello yet.
     NoHello,
     /// The game does not take that many players.
-    Players { players: usize, takes: PlayerRange },
+    Players { players: usize, range: PlayerRange },
     /// The room started, closed or ended before.
     PastStart,
 }
@@ -134,11 +134,11 @@ impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StartError::NoHello => f.write_str("the engine has not said its hello"),
-            StartError::Players { players, takes } => write!(
+            StartError::Players { players, range } => write!(
                 f,
                 "the game takes from {} to {} players, not {players}",
-                takes.min(),
-                takes.max()
+                range.min(),
+                range.max()
             ),
             StartError::PastStart => f.write_str("the room is past its start"),
         }
@@ -236,7 +236,7 @@ impl ServerCore {
     /// `None` before the hello and after the start.
     pub fn players(&self) -> Option<PlayerRange> {
         match self.phase {
-            Phase::Ready { takes, .. } => Some(takes),
+            Phase::Ready { range, .. } => Some(range),
             Phase::Waiting | Phase::Playing { .. } | Phase::Closing { .. } | Phase::Over { .. } => {
                 None
             }
@@ -248,17 +248,17 @@ impl ServerCore {
     /// its control characters, so it cannot move the cursor of a terminal
     /// that prints it, and is cut to 64 bytes.
     pub fn start<S: AsRef<str>>(&mut self, nicknames: &[S]) -> Result<(), StartError> {
-        let Phase::Ready { takes, lost } = &mut self.phase else {
+        let Phase::Ready { range, lost } = &mut self.phase else {
             return Err(if matches!(self.phase, Phase::Waiting) {
                 StartError::NoHello
             } else {
                 StartError::PastStart
             });
         };
-        if !takes.contains(nicknames.len()) {
+        if !range.contains(nicknames.len()) {
             return Err(StartError::Players {
                 players: nicknames.len(),
-                takes: *takes,
+                range: *range,
             });
         }
         let seats: Seats = (1..)
@@ -436,10 +436,10 @@ impl ServerCore {
                 return errors;
             }
             match arm {
-                Ok(Some(Arm::Hello(takes))) => match self.phase {
+                Ok(Some(Arm::Hello(range))) => match self.phase {
                     Phase::Waiting => {
                         self.phase = Phase::Ready {
-                            takes,
+                            range,
                             lost: Vec::new(),
                         }
                     }
@@ -778,7 +778,7 @@ enum Phase {
     Waiting,
     Ready {
         /// The players that the game takes.
-        takes: PlayerRange,
+        range: PlayerRange,
         /// The ids of the assets that the cache dropped, for the lost that
         /// follows the start.
         lost: Vec<u32>,
@@ -1068,13 +1068,13 @@ mod tests {
         assert_eq!(room.core.players(), None);
         assert_eq!(room.core.start(&["Ana"]), Err(StartError::NoHello));
         assert!(room.core.from_engine(&hello(2, 4)).is_empty());
-        let takes = PlayerRange::new(2, 4).unwrap();
-        assert_eq!(room.core.players(), Some(takes));
+        let range = PlayerRange::new(2, 4).unwrap();
+        assert_eq!(room.core.players(), Some(range));
         room.core.tick();
         assert!(room.events().is_empty());
         assert_eq!(
             room.core.start(&["Ana"]),
-            Err(StartError::Players { players: 1, takes })
+            Err(StartError::Players { players: 1, range })
         );
         assert_eq!(room.core.start(&["Ana", "Beto"]), Ok(()));
         assert_eq!(
