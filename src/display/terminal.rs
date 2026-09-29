@@ -81,7 +81,7 @@ pub struct Terminal {
     renderer: PixmapRenderer,
     backend: Backend,
     /// `None` after [`super::Display::close`].
-    live: Option<Live>,
+    active: Option<Active>,
     /// The scene of the last present, drawn again after a resize.
     last: Option<Scene>,
     /// How the reader maps a cell to the scene on screen.
@@ -91,7 +91,7 @@ pub struct Terminal {
 }
 
 /// What a session holds until it closes.
-struct Live {
+struct Active {
     reader: Reader,
     writer: FrameWriter<Screen>,
     claim: Claim,
@@ -161,7 +161,7 @@ impl Terminal {
             clock: TickClock::from_millihertz(Self::TICK_RATE),
             renderer,
             backend,
-            live: Some(Live {
+            active: Some(Active {
                 reader,
                 writer,
                 claim,
@@ -176,7 +176,7 @@ impl Terminal {
     /// screen first when `after_resize` holds. Returns the result of the
     /// write of the frame before.
     fn draw(&mut self, scene: &Scene, after_resize: bool) -> Result<(), PresentError> {
-        let Some(live) = self.live.as_mut() else {
+        let Some(active) = self.active.as_mut() else {
             return Err(PresentError::Closed);
         };
         let scale = scale_for_backend(self.backend, scene.width(), scene.height());
@@ -184,7 +184,7 @@ impl Terminal {
         self.renderer.render(scene)?;
         *self.cells.lock().unwrap_or_else(PoisonError::into_inner) =
             CellMap::new(self.backend, cell_pixels(), scale);
-        live.writer.write(&mut self.renderer, after_resize)?;
+        active.writer.write(&mut self.renderer, after_resize)?;
         Ok(())
     }
 
@@ -202,7 +202,7 @@ impl Terminal {
 
 impl super::Display for Terminal {
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        if self.live.is_none() {
+        if self.active.is_none() {
             return Err(PresentError::Closed);
         }
         // A resize that waits for its redraw still clears the screen.
@@ -229,17 +229,17 @@ impl super::Display for Terminal {
     /// Stop the reader thread, wait for the frame that the writer holds,
     /// and leave the alt screen and raw mode.
     fn close(&mut self) {
-        let Some(live) = self.live.take() else {
+        let Some(active) = self.active.take() else {
             return;
         };
         self.inbox.close();
-        live.reader.stop();
+        active.reader.stop();
         // A writer that panicked hands back nothing, and the panic hook
         // already put the tty back.
-        let Some(screen) = live.writer.finish() else {
+        let Some(screen) = active.writer.finish() else {
             return;
         };
-        if !live.claim.restored() {
+        if !active.claim.restored() {
             leave(self.backend, screen.frame_size.is_some());
             // The session is over, and close has no way to report that
             // the frame did not print.

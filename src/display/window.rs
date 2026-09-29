@@ -47,10 +47,10 @@ pub struct Window {
     inbox: Inbox,
     clock: TickClock,
     /// `None` after [`super::Display::close`].
-    session: Option<Session>,
+    active: Option<Active>,
 }
 
-struct Session {
+struct Active {
     lent: Lent,
     app: App,
     window: Rc<WinitWindow>,
@@ -99,7 +99,7 @@ impl Window {
         Ok(Self {
             inbox,
             clock: TickClock::from_millihertz(Self::TICK_RATE),
-            session: Some(Session {
+            active: Some(Active {
                 lent,
                 app,
                 window,
@@ -117,7 +117,7 @@ impl Window {
     /// ticks to a frame callback of Wayland or a frame of the display link
     /// of macOS, and draw a scene that waited for the callback.
     fn pump(&mut self, timeout: Duration) {
-        let Some(s) = self.session.as_mut() else {
+        let Some(s) = self.active.as_mut() else {
             return;
         };
         if !s.lent.pump(&mut s.app, timeout) {
@@ -147,15 +147,15 @@ impl Window {
 
 impl super::Display for Window {
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        let Some(session) = self.session.as_mut() else {
+        let Some(active) = self.active.as_mut() else {
             return Err(PresentError::Closed);
         };
         self.inbox.take_redraw();
-        session.last = Some(Last {
+        active.last = Some(Last {
             scene,
             unshown: false,
         });
-        session.show()
+        active.show()
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
@@ -171,7 +171,7 @@ impl super::Display for Window {
                 Next::Ready(ready) => return ready,
                 Next::Redraw => {
                     // A failure here fails the next present the same way.
-                    if let Some(s) = self.session.as_mut() {
+                    if let Some(s) = self.active.as_mut() {
                         let _ = s.show();
                     }
                 }
@@ -186,7 +186,7 @@ impl super::Display for Window {
 
     /// Destroy the window and give the event loop back.
     fn close(&mut self) {
-        let Some(Session {
+        let Some(Active {
             mut lent,
             mut app,
             window,
@@ -194,7 +194,7 @@ impl super::Display for Window {
             #[cfg(target_os = "macos")]
             display_link,
             ..
-        }) = self.session.take()
+        }) = self.active.take()
         else {
             return;
         };
@@ -215,7 +215,7 @@ impl Drop for Window {
     }
 }
 
-impl Session {
+impl Active {
     /// Draw `last` now, or when the frame callback of Wayland for the
     /// frame before arrives. A hidden window gets no callback, so it draws
     /// nothing, and the ticks keep their rate.
