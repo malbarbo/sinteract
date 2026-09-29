@@ -66,7 +66,7 @@ pub struct PixmapRenderer {
     /// The builder of the next path. A finished path clears back into it, so
     /// the next path reuses its capacity.
     builder: PathBuilder,
-    images: Decoded,
+    images: ImageCache,
     /// The color of the pixmap before a frame draws on it.
     background: SkColor,
 }
@@ -86,7 +86,7 @@ impl PixmapRenderer {
             layer_pool: Vec::new(),
             fades: Vec::new(),
             builder: PathBuilder::new(),
-            images: Decoded::default(),
+            images: ImageCache::default(),
             background: SkColor::TRANSPARENT,
         })
     }
@@ -144,8 +144,8 @@ impl Default for PixmapRenderer {
 /// does not decode keeps `None`, so it draws the marker of a missing image
 /// without a second decode.
 #[derive(Default)]
-struct Decoded {
-    images: HashMap<Image, Use>,
+struct ImageCache {
+    images: HashMap<Image, CachedImage>,
     /// The pixels of `images`, as their headers give them.
     pixels: u64,
     /// How many times a bitmap drew.
@@ -157,13 +157,13 @@ struct Decoded {
     spill: Option<(Image, Option<Pixmap>)>,
 }
 
-struct Use {
+struct CachedImage {
     pixmap: Option<Pixmap>,
     /// The value of `draws` when a bitmap last drew the image.
     last: u64,
 }
 
-impl Decoded {
+impl ImageCache {
     fn next_frame(&mut self) {
         self.frame_start = self.draws;
     }
@@ -198,7 +198,8 @@ impl Decoded {
                 self.pixels -= old.pixels();
             }
             self.pixels += need;
-            self.images.insert(image.clone(), Use { pixmap, last: 0 });
+            self.images
+                .insert(image.clone(), CachedImage { pixmap, last: 0 });
         }
         let used = self.images.get_mut(image).expect("the image is in");
         used.last = self.draws;
@@ -1053,54 +1054,54 @@ mod tests {
     fn the_decoded_images_past_the_limit_drop_the_one_drawn_longest_ago() {
         // Eight of the largest images fill the limit.
         let image = |k: u32| crate::asset::png_image(2048, 2048 - k);
-        let mut decoded = Decoded::default();
+        let mut cache = ImageCache::default();
         for k in 0..8 {
-            decoded.get(&image(k));
+            cache.get(&image(k));
         }
-        decoded.next_frame();
-        decoded.get(&image(0));
-        decoded.get(&image(8));
-        assert!(decoded.images.contains_key(&image(0)));
-        assert!(!decoded.images.contains_key(&image(1)));
-        assert_eq!(decoded.images.len(), 8);
-        let pixels: u64 = decoded.images.keys().map(Image::pixels).sum();
-        assert_eq!(decoded.pixels, pixels);
+        cache.next_frame();
+        cache.get(&image(0));
+        cache.get(&image(8));
+        assert!(cache.images.contains_key(&image(0)));
+        assert!(!cache.images.contains_key(&image(1)));
+        assert_eq!(cache.images.len(), 8);
+        let pixels: u64 = cache.images.keys().map(Image::pixels).sum();
+        assert_eq!(cache.pixels, pixels);
     }
 
     #[test]
     fn a_frame_past_the_limit_keeps_the_images_that_fit() {
         let image = |k: u32| crate::asset::png_image(2048, 2048 - k);
-        let mut decoded = Decoded::default();
+        let mut cache = ImageCache::default();
         for _ in 0..2 {
-            decoded.next_frame();
+            cache.next_frame();
             for k in 0..10 {
-                decoded.get(&image(k));
+                cache.get(&image(k));
             }
         }
         for k in 0..8 {
-            assert!(decoded.images.contains_key(&image(k)), "{k}");
+            assert!(cache.images.contains_key(&image(k)), "{k}");
         }
-        assert_eq!(decoded.images.len(), 8);
+        assert_eq!(cache.images.len(), 8);
     }
 
     #[test]
     fn an_image_past_the_limit_drawn_in_a_row_decodes_once() {
         let image = |k: u32| crate::asset::png_image(2048, 2048 - k);
-        let mut decoded = Decoded::default();
-        decoded.next_frame();
+        let mut cache = ImageCache::default();
+        cache.next_frame();
         for k in 0..9 {
-            decoded.get(&image(k));
+            cache.get(&image(k));
         }
-        assert!(decoded.spill.as_ref().is_some_and(|(i, _)| *i == image(8)));
+        assert!(cache.spill.as_ref().is_some_and(|(i, _)| *i == image(8)));
         // A head alone does not decode, so a second decode would give `None`.
-        decoded.spill = Some((image(8), Pixmap::new(1, 1)));
-        assert!(decoded.get(&image(8)).is_some());
-        assert!(decoded.get(&image(9)).is_none());
+        cache.spill = Some((image(8), Pixmap::new(1, 1)));
+        assert!(cache.get(&image(8)).is_some());
+        assert!(cache.get(&image(9)).is_none());
         // In the next frame the spilled image fits, with the same pixels.
-        decoded.spill = Some((image(8), Pixmap::new(1, 1)));
-        decoded.next_frame();
-        assert!(decoded.get(&image(8)).is_some());
-        assert!(decoded.images.contains_key(&image(8)));
+        cache.spill = Some((image(8), Pixmap::new(1, 1)));
+        cache.next_frame();
+        assert!(cache.get(&image(8)).is_some());
+        assert!(cache.images.contains_key(&image(8)));
     }
 
     /// The whole canvas of [`draw_on_canvas`].
