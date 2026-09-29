@@ -253,9 +253,9 @@ impl Active {
         self.renderer.set_scale(scale);
         let pixmap = self.renderer.render(scene)?;
         let mut buffer = self.surface.buffer_mut().map_err(surface_error)?;
-        let placement = Placement::centered(scale, pixmap, target_px);
-        blit_pixmap(pixmap, &mut buffer, (w, h), placement.offset);
-        self.app.placement = placement;
+        let viewport = Viewport::centered(scale, pixmap, target_px);
+        blit_pixmap(pixmap, &mut buffer, (w, h), viewport.offset);
+        self.app.viewport = viewport;
         self.window.pre_present_notify();
         buffer.present().map_err(surface_error)?;
         if let Some(callback) = &mut self.app.frame_callback {
@@ -522,7 +522,7 @@ struct App {
     id: WindowId,
     modifiers: ModifiersState,
     /// Where the last frame sits in the window, to map the pointer.
-    placement: Placement,
+    viewport: Viewport,
     /// The last position of the pointer, in the pixels of the window.
     cursor: PhysicalPosition<f64>,
     buttons: MouseButtons,
@@ -562,7 +562,7 @@ impl App {
             id: window.id(),
             modifiers: ModifiersState::empty(),
             // Until the first frame, the pointer maps to logical pixels.
-            placement: Placement {
+            viewport: Viewport {
                 scale: scale_factor as f32,
                 offset: (0, 0),
             },
@@ -622,7 +622,7 @@ impl App {
     }
 
     fn report_mouse(&self, action: MouseAction) {
-        let (x, y) = self.placement.to_scene(self.cursor);
+        let (x, y) = self.viewport.to_scene(self.cursor);
         let _ = self.tx.send_mouse(MouseEvent {
             action,
             x,
@@ -840,16 +840,17 @@ fn winit_key_to_string(key: &Key) -> Option<String> {
     })
 }
 
-/// Where a frame sits in the window.
+/// Where a frame sits in the window and at what scale, which maps a point
+/// of the window to the scene.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Placement {
+struct Viewport {
     /// Device pixels per unit of the scene.
     scale: f32,
     /// The top-left corner of the frame, in device pixels.
     offset: (u32, u32),
 }
 
-impl Placement {
+impl Viewport {
     /// A frame of `pixmap` at `scale`, centered in `(bw, bh)`. The fit keeps
     /// the aspect ratio, so one axis may leave a band.
     fn centered(scale: f32, pixmap: &Pixmap, (bw, bh): (u32, u32)) -> Self {
@@ -979,12 +980,12 @@ mod tests {
         let half = tiny_skia::ColorU8::from_rgba(0, 255, 0, 128).premultiply();
         pixmap.pixels_mut().copy_from_slice(&[opaque, half]);
         let mut buffer = [0xFFFF_FFFF; 4 * 3];
-        let placement = Placement::centered(1.0, &pixmap, (4, 3));
+        let viewport = Viewport::centered(1.0, &pixmap, (4, 3));
         blit_pixmap(
             &pixmap,
             &mut buffer,
             (NonZeroU32::new(4).unwrap(), NonZeroU32::new(3).unwrap()),
-            placement.offset,
+            viewport.offset,
         );
         #[rustfmt::skip]
         let expected = [
@@ -999,9 +1000,9 @@ mod tests {
     fn a_point_of_the_window_maps_to_the_scene() {
         // A 100 by 50 scene at scale 4, centered in a 400 by 400 window.
         let pixmap = Pixmap::new(400, 200).unwrap();
-        let placement = Placement::centered(4.0, &pixmap, (400, 400));
-        assert_eq!(placement.offset, (0, 100));
-        let at = |x, y| placement.to_scene(PhysicalPosition::new(x, y));
+        let viewport = Viewport::centered(4.0, &pixmap, (400, 400));
+        assert_eq!(viewport.offset, (0, 100));
+        let at = |x, y| viewport.to_scene(PhysicalPosition::new(x, y));
         assert_eq!(at(200.0, 150.0), (50.0, 12.5));
         // The band above the frame.
         assert_eq!(at(0.0, 50.0), (0.0, -12.5));
