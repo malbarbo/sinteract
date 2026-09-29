@@ -502,7 +502,7 @@ impl Canvas {
             Backend::Sixel => renderer.set_background(SIXEL_BACKGROUND),
             // Kitty shows transparency, and a half-block cell reads a
             // premultiplied pixel as the pixel over black.
-            Backend::Kitty | Backend::TextBlocks => {}
+            Backend::Kitty | Backend::HalfBlocks => {}
         }
         Self {
             renderer,
@@ -536,7 +536,7 @@ enum Painter {
     Sixel(sixel::Encoder),
     /// The cells on screen, which a frame compares with its own and
     /// replaces. A print writes every cell and leaves them alone.
-    TextBlocks(BlockScreen),
+    HalfBlocks(HalfBlockScreen),
 }
 
 impl Painter {
@@ -545,7 +545,7 @@ impl Painter {
         match backend {
             Backend::Kitty => Painter::Kitty(KittyMedium::Png),
             Backend::Sixel => Painter::Sixel(sixel::Encoder::new()),
-            Backend::TextBlocks => Painter::TextBlocks(BlockScreen::default()),
+            Backend::HalfBlocks => Painter::HalfBlocks(HalfBlockScreen::default()),
         }
     }
 
@@ -555,7 +555,7 @@ impl Painter {
     fn for_stdout(backend: Backend) -> Self {
         match backend {
             Backend::Kitty => Painter::Kitty(KittyMedium::for_stdout()),
-            Backend::Sixel | Backend::TextBlocks => Painter::new(backend),
+            Backend::Sixel | Backend::HalfBlocks => Painter::new(backend),
         }
     }
 
@@ -563,7 +563,7 @@ impl Painter {
         match self {
             Painter::Kitty(_) => Backend::Kitty,
             Painter::Sixel(_) => Backend::Sixel,
-            Painter::TextBlocks(_) => Backend::TextBlocks,
+            Painter::HalfBlocks(_) => Backend::HalfBlocks,
         }
     }
 
@@ -596,11 +596,11 @@ impl Painter {
                 out.write_all(bytes)?;
                 placement.end(out)
             }
-            Painter::TextBlocks(screen) => match placement {
-                Placement::Frame => update_text_blocks(out, pixmap, bytes, screen),
+            Painter::HalfBlocks(screen) => match placement {
+                Placement::Frame => update_half_blocks(out, pixmap, bytes, screen),
                 // Each row of the cells ends in a newline, so the cursor
                 // already sits on the line below the image.
-                Placement::Still => render_text_blocks(out, pixmap, bytes),
+                Placement::Still => render_half_blocks(out, pixmap, bytes),
             },
         }
     }
@@ -613,7 +613,7 @@ impl Painter {
             // refresh.
             Painter::Kitty(_) => Ok(()),
             Painter::Sixel(_) => queue!(out, terminal::Clear(terminal::ClearType::All)),
-            Painter::TextBlocks(screen) => {
+            Painter::HalfBlocks(screen) => {
                 queue!(out, terminal::Clear(terminal::ClearType::All))?;
                 screen.forget();
                 Ok(())
@@ -664,7 +664,7 @@ impl KittyMedium {
 
 /// Returns `true` if the terminal reports 24-bit color, `false` otherwise.
 /// The half-blocks fallback needs it.
-pub fn text_blocks_supported() -> bool {
+pub fn half_blocks_supported() -> bool {
     use std::io::IsTerminal;
     if !std::io::stdout().is_terminal() {
         return false;
@@ -720,7 +720,7 @@ pub fn sixel_supported() -> bool {
 enum Backend {
     Kitty = 2,
     Sixel = 3,
-    TextBlocks = 4,
+    HalfBlocks = 4,
 }
 
 fn pick_backend() -> Option<Backend> {
@@ -728,8 +728,8 @@ fn pick_backend() -> Option<Backend> {
         Some(Backend::Kitty)
     } else if sixel_supported() {
         Some(Backend::Sixel)
-    } else if text_blocks_supported() {
-        Some(Backend::TextBlocks)
+    } else if half_blocks_supported() {
+        Some(Backend::HalfBlocks)
     } else {
         None
     }
@@ -790,10 +790,10 @@ fn restore_held() -> Option<Backend> {
         })
         .ok()?;
     Some(
-        [Backend::Kitty, Backend::Sixel, Backend::TextBlocks]
+        [Backend::Kitty, Backend::Sixel, Backend::HalfBlocks]
             .into_iter()
             .find(|&b| b as u8 == tag)
-            .unwrap_or(Backend::TextBlocks),
+            .unwrap_or(Backend::HalfBlocks),
     )
 }
 
@@ -1109,7 +1109,7 @@ fn target_pixels_for_backend(backend: Backend, cell: (u32, u32)) -> Option<(u32,
 fn pixmap_per_cell(backend: Backend, cell: (u32, u32)) -> (u32, u32) {
     match backend {
         Backend::Kitty | Backend::Sixel => cell,
-        Backend::TextBlocks => (1, 2),
+        Backend::HalfBlocks => (1, 2),
     }
 }
 
@@ -1208,7 +1208,7 @@ fn capped_scale(width: f32, height: f32, target: Option<(u32, u32)>, cap: f32) -
 /// write, because `out` is a `LineWriter` that would otherwise make a
 /// syscall per cell row. `buf` holds the frame, and a caller that draws
 /// again passes the same one.
-fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>) -> io::Result<()> {
+fn render_half_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>) -> io::Result<()> {
     buf.clear();
     // A cell whose colors repeat takes the three bytes of `▀`, which is the
     // common case in a drawing, and a cell row covers two pixel rows. A
@@ -1231,7 +1231,7 @@ fn render_text_blocks<W: Write>(out: &mut W, pixmap: &Pixmap, buf: &mut Vec<u8>)
 
 /// The half-block cells of the frame on screen.
 #[derive(Default)]
-struct BlockScreen {
+struct HalfBlockScreen {
     /// The cells that the terminal shows, row by row. Empty before the
     /// first frame and after the screen clears.
     shown: Vec<Cell>,
@@ -1239,7 +1239,7 @@ struct BlockScreen {
     cols: usize,
 }
 
-impl BlockScreen {
+impl HalfBlockScreen {
     /// Forget what the terminal shows, so the next frame writes every cell.
     /// A clear, or anything else that paints over the frame, happens behind
     /// the screen.
@@ -1257,11 +1257,11 @@ impl BlockScreen {
 ///
 /// A frame of an animation changes a few percent of the cells, and the
 /// cursor jumps over the rest.
-fn update_text_blocks<W: Write>(
+fn update_half_blocks<W: Write>(
     out: &mut W,
     pixmap: &Pixmap,
     buf: &mut Vec<u8>,
-    screen: &mut BlockScreen,
+    screen: &mut HalfBlockScreen,
 ) -> io::Result<()> {
     let cols = pixmap.width() as usize;
     let len = cols * pixmap.height().div_ceil(2) as usize;
@@ -1589,7 +1589,7 @@ mod tests {
         assert_eq!(kitty.to_scene(0, 0), (10.0, 20.0));
         assert_eq!(kitty.to_scene(3, 1), (70.0, 60.0));
         // Half-blocks at scale 0.25: one pixmap pixel across and two down.
-        let blocks = CellMap::new(Backend::TextBlocks, (10, 20), 0.25);
+        let blocks = CellMap::new(Backend::HalfBlocks, (10, 20), 0.25);
         assert_eq!(blocks.to_scene(0, 0), (2.0, 4.0));
     }
 
@@ -1616,7 +1616,7 @@ mod tests {
     fn half_blocks_cap_a_logical_pixel_at_a_screen_pixel() {
         // An 8 by 16 cell holds one pixmap pixel of 8 by 8 screen pixels.
         assert_eq!(
-            max_scale_for_backend(Backend::TextBlocks, (8, 16)),
+            max_scale_for_backend(Backend::HalfBlocks, (8, 16)),
             1.0 / 8.0
         );
         assert_eq!(max_scale_for_backend(Backend::Kitty, (8, 16)), 1.0);
@@ -1628,27 +1628,27 @@ mod tests {
         assert_eq!(max_scale_for_backend(Backend::Kitty, (18, 38)), 2.0);
         assert_eq!(max_scale_for_backend(Backend::Sixel, (18, 38)), 2.0);
         assert_eq!(
-            max_scale_for_backend(Backend::TextBlocks, (18, 38)),
+            max_scale_for_backend(Backend::HalfBlocks, (18, 38)),
             2.0 / 19.0
         );
         assert_eq!(max_scale_for_backend(Backend::Kitty, (10, 19)), 1.0);
     }
 
     #[test]
-    fn text_blocks_renders_some_pixels() {
+    fn half_blocks_renders_some_pixels() {
         let pm = solid(4, 4, 255, 0, 0);
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
+        render_half_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         assert_eq!(rows(&buf), 2);
         // U+2580 in UTF-8.
         assert!(buf.windows(3).any(|w| w == [0xE2, 0x96, 0x80]));
     }
 
     #[test]
-    fn text_blocks_uses_truecolor_codes() {
+    fn half_blocks_uses_truecolor_codes() {
         let pm = solid(2, 2, 0, 0, 255);
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
+        render_half_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         let s = String::from_utf8_lossy(&buf);
         assert!(s.contains("\x1b[38;2;"), "missing 24-bit fg SGR: {s:?}");
         assert!(s.contains(";48;2;"), "missing 24-bit bg SGR: {s:?}");
@@ -1656,10 +1656,10 @@ mod tests {
     }
 
     #[test]
-    fn text_blocks_sets_a_color_once_for_a_run_of_cells() {
+    fn half_blocks_sets_a_color_once_for_a_run_of_cells() {
         let pm = solid(8, 2, 0, 0, 255);
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
+        render_half_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         let s = String::from_utf8_lossy(&buf);
         assert_eq!(s.matches("\x1b[38;2;").count(), 1, "one fg SGR: {s:?}");
         assert_eq!(s.matches("48;2;").count(), 1, "one bg SGR: {s:?}");
@@ -1667,20 +1667,20 @@ mod tests {
     }
 
     #[test]
-    fn text_blocks_handles_odd_height() {
+    fn half_blocks_handles_odd_height() {
         // The last cell row has no bottom pixel and takes black.
         let pm = solid(3, 3, 255, 255, 255);
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
+        render_half_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         // ceil(3 / 2) rows.
         assert_eq!(rows(&buf), 2);
     }
 
     #[test]
-    fn text_blocks_writes_one_row_for_one_pixel() {
+    fn half_blocks_writes_one_row_for_one_pixel() {
         let pm = Pixmap::new(1, 1).unwrap();
         let mut buf: Vec<u8> = Vec::new();
-        render_text_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
+        render_half_blocks(&mut buf, &pm, &mut Vec::new()).expect("write ok");
         assert_eq!(rows(&buf), 1);
     }
 
@@ -1688,11 +1688,11 @@ mod tests {
         buf.windows(2).filter(|w| w == b"\r\n").count()
     }
 
-    /// The frame that `update_text_blocks` writes for `pixmap`, and the
+    /// The frame that `update_half_blocks` writes for `pixmap`, and the
     /// cells it holds.
-    fn update(screen: &mut BlockScreen, pixmap: &Pixmap) -> (Vec<u8>, usize) {
+    fn update(screen: &mut HalfBlockScreen, pixmap: &Pixmap) -> (Vec<u8>, usize) {
         let mut out: Vec<u8> = Vec::new();
-        update_text_blocks(&mut out, pixmap, &mut Vec::new(), screen).expect("write ok");
+        update_half_blocks(&mut out, pixmap, &mut Vec::new(), screen).expect("write ok");
         let cells = String::from_utf8_lossy(&out).matches('▀').count();
         (out, cells)
     }
@@ -1873,7 +1873,7 @@ mod tests {
     #[test]
     fn a_printer_prints_nothing_while_a_session_holds_the_tty() {
         let mut printer = Printer {
-            canvas: Canvas::new(Painter::new(Backend::TextBlocks)),
+            canvas: Canvas::new(Painter::new(Backend::HalfBlocks)),
         };
         let claim = Claim::take().expect("no session runs in a test");
         assert!(matches!(
@@ -1889,7 +1889,7 @@ mod tests {
     const MARKS: [(Backend, &[u8]); 3] = [
         (Backend::Kitty, b"\x1b_Ga=T"),
         (Backend::Sixel, b"\x1bP"),
-        (Backend::TextBlocks, "▀".as_bytes()),
+        (Backend::HalfBlocks, "▀".as_bytes()),
     ];
 
     /// What [`Painter::write_image`] writes for a small blue image.
@@ -1910,7 +1910,7 @@ mod tests {
             let p = pixmap.pixels()[0];
             let expected = match backend {
                 Backend::Sixel => [255, 255, 255, 255],
-                Backend::Kitty | Backend::TextBlocks => [0, 0, 0, 0],
+                Backend::Kitty | Backend::HalfBlocks => [0, 0, 0, 0],
             };
             assert_eq!(
                 [p.red(), p.green(), p.blue(), p.alpha()],
@@ -2002,7 +2002,7 @@ mod tests {
     #[test]
     fn a_cleared_half_block_frame_writes_every_cell_again() {
         let pixmap = solid(4, 2, 0, 0, 255);
-        let mut painter = Painter::new(Backend::TextBlocks);
+        let mut painter = Painter::new(Backend::HalfBlocks);
         let cells = |painter: &mut Painter| {
             let mut out: Vec<u8> = Vec::new();
             painter
@@ -2086,7 +2086,7 @@ mod tests {
     #[test]
     fn a_repeated_half_block_frame_writes_no_cell() {
         let pm = solid(4, 2, 0, 0, 255);
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         assert_eq!(update(&mut screen, &pm).1, 4);
         assert_eq!(update(&mut screen, &pm).0, b"\x1b[0m");
     }
@@ -2103,7 +2103,7 @@ mod tests {
 
     #[test]
     fn a_half_block_frame_sets_both_colors_once_for_a_run_of_cells() {
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         let (out, _) = update(&mut screen, &blue_with_red_tops(2, 2, &[0, 1]));
         assert_eq!(
             String::from_utf8_lossy(&out),
@@ -2113,7 +2113,7 @@ mod tests {
 
     #[test]
     fn a_half_block_frame_jumps_over_a_cell_that_stays() {
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         update(&mut screen, &solid(4, 2, 0, 0, 255));
         let (out, cells) = update(&mut screen, &blue_with_red_tops(4, 2, &[0, 2]));
         assert_eq!(cells, 2);
@@ -2126,7 +2126,7 @@ mod tests {
 
     #[test]
     fn a_half_block_frame_does_not_jump_to_the_next_cell() {
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         update(&mut screen, &solid(4, 2, 0, 0, 255));
         let (out, cells) = update(&mut screen, &blue_with_red_tops(4, 2, &[1, 2]));
         assert_eq!(cells, 2);
@@ -2135,7 +2135,7 @@ mod tests {
 
     #[test]
     fn a_half_block_frame_writes_the_cell_that_changed() {
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         assert_eq!(update(&mut screen, &solid(4, 2, 0, 0, 255)).1, 4);
         let mut pm = solid(4, 2, 0, 0, 255);
         pm.pixels_mut()[1] = tiny_skia::ColorU8::from_rgba(255, 0, 0, 255).premultiply();
@@ -2152,7 +2152,7 @@ mod tests {
     #[test]
     fn a_forgotten_half_block_screen_writes_every_cell() {
         let pm = solid(4, 2, 0, 0, 255);
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         assert_eq!(update(&mut screen, &pm).1, 4);
         screen.forget();
         assert_eq!(update(&mut screen, &pm).1, 4);
@@ -2169,17 +2169,17 @@ mod tests {
                 Ok(())
             }
         }
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         assert_eq!(update(&mut screen, &solid(4, 2, 0, 0, 255)).1, 4);
         let red = solid(4, 2, 255, 0, 0);
-        assert!(update_text_blocks(&mut Broken, &red, &mut Vec::new(), &mut screen).is_err());
+        assert!(update_half_blocks(&mut Broken, &red, &mut Vec::new(), &mut screen).is_err());
         assert_eq!(update(&mut screen, &red).1, 4);
     }
 
     #[test]
     fn a_half_block_frame_of_odd_height_has_a_last_row_of_cells() {
         let pm = solid(2, 3, 0, 0, 255);
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         assert_eq!(update(&mut screen, &pm).1, 4);
         assert_eq!(update(&mut screen, &pm).1, 0);
     }
@@ -2188,14 +2188,14 @@ mod tests {
     fn a_taller_half_block_frame_writes_its_new_rows() {
         // The new rows are black, the color of the fill that the screen
         // grows with.
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         assert_eq!(update(&mut screen, &solid(2, 2, 0, 0, 0)).1, 2);
         assert_eq!(update(&mut screen, &solid(2, 4, 0, 0, 0)).1, 4);
     }
 
     #[test]
     fn a_half_block_frame_of_another_shape_writes_every_cell() {
-        let mut screen = BlockScreen::default();
+        let mut screen = HalfBlockScreen::default();
         // Both hold four cells, in one row of four and in two rows of two.
         assert_eq!(update(&mut screen, &solid(4, 2, 0, 0, 255)).1, 4);
         assert_eq!(update(&mut screen, &solid(2, 4, 0, 0, 255)).1, 4);
