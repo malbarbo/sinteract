@@ -105,21 +105,32 @@ pub enum Next {
     Gone,
 }
 
-/// What went wrong with the bytes of the engine.
+/// What went wrong with the bytes of the engine before the start. Each
+/// one ends the room, and the engine may still run, blocked on a write, so
+/// the host closes its pipe or kills it.
+#[derive(Debug)]
+pub enum LobbyError {
+    /// The stream broke, with a header that is not one of the engine or
+    /// with the end inside a message.
+    Broken(io::Error),
+    /// The first message does not decode.
+    Payload(wire::Error),
+    /// The first message of the engine is not a hello.
+    NoHello,
+    /// A message came after the hello and before the start.
+    BeforeStart,
+}
+
+/// What went wrong with the bytes of the engine after the start.
 #[derive(Debug)]
 pub enum EngineError {
-    /// A message does not decode. The core drops it and goes on.
-    Payload(wire::Error),
     /// The stream broke, with a header that is not one of the engine or
     /// with the end inside a message. The room is over, and the engine may
     /// still run, blocked on a write, so the host closes its pipe or kills
-    /// it, as for the errors below.
+    /// it.
     Broken(io::Error),
-    /// The first message of the engine is not a hello. The room is over.
-    NoHello,
-    /// A message came after the hello and before the start. The room is
-    /// over.
-    BeforeStart,
+    /// A message does not decode. The core drops it and goes on.
+    Payload(wire::Error),
     /// A hello came after the start. The core drops it and goes on.
     SecondHello,
     /// The asset `id` is not an image that a view decodes, or is larger
@@ -158,13 +169,32 @@ impl std::fmt::Display for StartError {
 
 impl std::error::Error for StartError {}
 
+impl std::fmt::Display for LobbyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LobbyError::Broken(e) => write!(f, "broken stream: {e}"),
+            LobbyError::Payload(e) => write!(f, "the first message does not decode: {e}"),
+            LobbyError::NoHello => f.write_str("the first message is not a hello"),
+            LobbyError::BeforeStart => f.write_str("a message came before the start"),
+        }
+    }
+}
+
+impl std::error::Error for LobbyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LobbyError::Broken(e) => Some(e),
+            LobbyError::Payload(e) => Some(e),
+            LobbyError::NoHello | LobbyError::BeforeStart => None,
+        }
+    }
+}
+
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EngineError::Payload(e) => write!(f, "message does not decode: {e}"),
             EngineError::Broken(e) => write!(f, "broken stream: {e}"),
-            EngineError::NoHello => f.write_str("the first message is not a hello"),
-            EngineError::BeforeStart => f.write_str("a message came before the start"),
+            EngineError::Payload(e) => write!(f, "message does not decode: {e}"),
             EngineError::SecondHello => f.write_str("a hello came after the first one"),
             EngineError::Asset { id, error } => write!(f, "asset {id}: {error}"),
             EngineError::LiveId(id) => write!(f, "asset {id}: the id already names a live asset"),
@@ -178,14 +208,10 @@ impl std::fmt::Display for EngineError {
 impl std::error::Error for EngineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            EngineError::Payload(e) => Some(e),
             EngineError::Broken(e) => Some(e),
+            EngineError::Payload(e) => Some(e),
             EngineError::Asset { error, .. } => Some(error),
-            EngineError::NoHello
-            | EngineError::BeforeStart
-            | EngineError::SecondHello
-            | EngineError::LiveId(_)
-            | EngineError::NoSeat(_) => None,
+            EngineError::SecondHello | EngineError::LiveId(_) | EngineError::NoSeat(_) => None,
         }
     }
 }
@@ -250,19 +276,19 @@ impl LobbyCore {
     /// start, so a first message that is not a hello, any message after
     /// the hello, and a broken stream end the room. It skips a
     /// message from a newer schema.
-    pub fn from_engine(mut self, bytes: &[u8]) -> Result<LobbyCore, EngineError> {
+    pub fn from_engine(mut self, bytes: &[u8]) -> Result<LobbyCore, LobbyError> {
         self.engine_in.extend_from_slice(bytes);
         let mut rest = self.engine_in.as_slice();
         while let Some((payload, after)) =
-            framing::split_message(rest, Side::Engine).map_err(EngineError::Broken)?
+            framing::split_message(rest, Side::Engine).map_err(LobbyError::Broken)?
         {
             rest = after;
             match (engine_to_server::arm(payload), self.range) {
                 (Ok(None), _) => {}
                 (Ok(Some(Arm::Hello(range))), None) => self.range = Some(range),
-                (Ok(Some(_)), None) => return Err(EngineError::NoHello),
-                (Err(e), None) => return Err(EngineError::Payload(e)),
-                (Ok(Some(_)) | Err(_), Some(_)) => return Err(EngineError::BeforeStart),
+                (Ok(Some(_)), None) => return Err(LobbyError::NoHello),
+                (Err(e), None) => return Err(LobbyError::Payload(e)),
+                (Ok(Some(_)) | Err(_), Some(_)) => return Err(LobbyError::BeforeStart),
             }
         }
         let taken = self.engine_in.len() - rest.len();
@@ -1025,7 +1051,7 @@ mod tests {
     }
 
     /// The error of the lobby core at `stream`.
-    fn lobby_error(stream: &[u8]) -> EngineError {
+    fn lobby_error(stream: &[u8]) -> LobbyError {
         LobbyCore::new().from_engine(stream).unwrap_err()
     }
 
@@ -1066,7 +1092,7 @@ mod tests {
     fn a_first_message_that_is_not_a_hello_ends_the_room() {
         let mut stream = frame(0, 1.0);
         stream.extend_from_slice(&hello(1, 1));
-        assert!(matches!(lobby_error(&stream), EngineError::NoHello));
+        assert!(matches!(lobby_error(&stream), LobbyError::NoHello));
     }
 
     #[test]
@@ -1077,7 +1103,7 @@ mod tests {
         out.extend_from_slice(&payload);
         assert!(matches!(
             lobby_error(&out),
-            EngineError::Payload(wire::Error::PlayerRange { min: 0, max: 1 })
+            LobbyError::Payload(wire::Error::PlayerRange { min: 0, max: 1 })
         ));
     }
 
@@ -1086,7 +1112,7 @@ mod tests {
         for next in [hello(1, 1), asset(1), frame(0, 1.0)] {
             let mut stream = hello(1, 1);
             stream.extend_from_slice(&next);
-            assert!(matches!(lobby_error(&stream), EngineError::BeforeStart));
+            assert!(matches!(lobby_error(&stream), LobbyError::BeforeStart));
         }
     }
 
