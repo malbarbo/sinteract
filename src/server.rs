@@ -749,7 +749,6 @@ impl Held {
                     kind: KeyKind::Up,
                     key,
                     modifiers: Modifiers::default(),
-                    repeat: false,
                 })
             })
             .collect();
@@ -953,7 +952,6 @@ mod tests {
             kind,
             key: name.into(),
             modifiers: Modifiers::default(),
-            repeat: false,
         })
     }
 
@@ -972,7 +970,6 @@ mod tests {
             kind: KeyKind::Press,
             key: name.into(),
             modifiers: Modifiers::default(),
-            repeat: false,
         })
     }
 

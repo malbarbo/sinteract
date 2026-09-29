@@ -151,7 +151,6 @@ impl Keys {
                 KeyKind::Up,
                 name,
                 Modifiers::default(),
-                false,
             )));
         }
     }
@@ -219,7 +218,7 @@ impl Keys {
             // the session, or before a focus loss.
             if let Some(i) = self.held.iter().position(|(held, _)| *held == id) {
                 let (_, name) = self.held.remove(i);
-                out.push(Input::Key(key_event(KeyKind::Up, name, modifiers, false)));
+                out.push(Input::Key(key_event(KeyKind::Up, name, modifiers)));
             }
             return;
         }
@@ -230,7 +229,6 @@ impl Keys {
         let Some(name) = key_name(id, shifted, modifiers.shift, text) else {
             return;
         };
-        let repeat = event == REPEAT;
         if self.kitty || matches!(id, KeyId::Win32 { .. }) {
             if !self.held.iter().any(|(held, _)| *held == id) {
                 self.held.push((id, name.clone()));
@@ -239,15 +237,9 @@ impl Keys {
                 KeyKind::Down,
                 name.clone(),
                 modifiers,
-                repeat,
             )));
         }
-        out.push(Input::Key(key_event(
-            KeyKind::Press,
-            name,
-            modifiers,
-            repeat,
-        )));
+        out.push(Input::Key(key_event(KeyKind::Press, name, modifiers)));
     }
 
     /// Push the mouse event of the button bits `cb` at the cells of `csi`.
@@ -300,8 +292,7 @@ impl Keys {
         }));
     }
 
-    /// A key of win32-input-mode. A Down of a key that is already down is
-    /// a repeat. AltGr holds Ctrl and Alt, which the key that types text
+    /// A key of win32-input-mode. AltGr holds Ctrl and Alt, which the key that types text
     /// with it does not report.
     fn win32(&mut self, csi: &Csi, out: &mut Vec<Input>) {
         let field = |i| csi.int(i, 0).unwrap_or(0);
@@ -311,13 +302,7 @@ impl Keys {
         };
         let text = field(2);
         let state = field(4);
-        let event = if field(3) == 0 {
-            RELEASE
-        } else if self.held.iter().any(|(held, _)| *held == id) {
-            REPEAT
-        } else {
-            PRESS
-        };
+        let event = if field(3) == 0 { RELEASE } else { PRESS };
         let types = char::from_u32(text).is_some_and(|c| !c.is_control());
         let altgr = types && state & (RIGHT_ALT | LEFT_CTRL) == RIGHT_ALT | LEFT_CTRL;
         let mut bits = 0;
@@ -347,7 +332,7 @@ impl Keys {
             &[KeyKind::Press]
         };
         for &kind in kinds {
-            out.push(Input::Key(key_event(kind, name.into(), modifiers, false)));
+            out.push(Input::Key(key_event(kind, name.into(), modifiers)));
         }
     }
 
@@ -448,9 +433,8 @@ fn opens_string(byte: u8) -> bool {
     matches!(byte, b']' | b'P' | b'_' | b'X' | b'^')
 }
 
-/// The event types of the protocol.
+/// The event types of the protocol. A repeat, 2, goes down as a press.
 const PRESS: u32 = 1;
-const REPEAT: u32 = 2;
 const RELEASE: u32 = 3;
 
 /// The bits of the modifiers in the state of a key of win32-input-mode.
@@ -637,12 +621,11 @@ fn modifiers(mods: u32) -> Modifiers {
     }
 }
 
-fn key_event(kind: KeyKind, key: String, modifiers: Modifiers, repeat: bool) -> KeyEvent {
+fn key_event(kind: KeyKind, key: String, modifiers: Modifiers) -> KeyEvent {
     KeyEvent {
         kind,
         key,
         modifiers,
-        repeat,
     }
 }
 
@@ -807,20 +790,17 @@ mod tests {
 
     #[test]
     fn a_repeat_sends_down_and_press_again() {
-        let out = {
-            let mut parser = VtInput::new(true);
-            let mut out = Vec::new();
-            parser.feed(b"\x1b[97;1;97u\x1b[97;1:2;97u", &mut out);
-            out
-        };
-        let repeats: Vec<bool> = out
-            .iter()
-            .filter_map(|input| match input {
-                Input::Key(k) => Some(k.repeat),
-                Input::Mouse(_) | Input::Interrupt => None,
-            })
-            .collect();
-        assert_eq!(repeats, [false, false, true, true]);
+        let a = |kind| (kind, "a".to_owned());
+        assert_eq!(
+            keys(b"\x1b[97;1;97u\x1b[97;1:2;97u\x1b[97;1:3u"),
+            [
+                a(KeyKind::Down),
+                a(KeyKind::Press),
+                a(KeyKind::Down),
+                a(KeyKind::Press),
+                a(KeyKind::Up)
+            ]
+        );
     }
 
     #[test]
@@ -1131,18 +1111,19 @@ mod tests {
     }
 
     #[test]
-    fn a_second_win32_down_is_a_repeat() {
-        let mut parser = VtInput::new(false);
-        let mut out = Vec::new();
-        parser.feed(b"\x1b[65;30;97;1;0;1_\x1b[65;30;97;1;0;1_", &mut out);
-        let repeats: Vec<bool> = out
-            .iter()
-            .filter_map(|input| match input {
-                Input::Key(k) => Some(k.repeat),
-                Input::Mouse(_) | Input::Interrupt => None,
-            })
-            .collect();
-        assert_eq!(repeats, [false, false, true, true]);
+    fn a_second_win32_down_sends_down_and_press_again() {
+        let bytes = b"\x1b[65;30;97;1;0;1_\x1b[65;30;97;1;0;1_\x1b[65;30;97;0;0;1_";
+        let a = |kind| (kind, Modifiers::default(), "a".to_owned());
+        assert_eq!(
+            win32_keys(bytes),
+            [
+                a(KeyKind::Down),
+                a(KeyKind::Press),
+                a(KeyKind::Down),
+                a(KeyKind::Press),
+                a(KeyKind::Up)
+            ]
+        );
     }
 
     #[test]

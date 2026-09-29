@@ -31,8 +31,6 @@ struct KeyEvent {
     # The W3C KeyboardEvent.key value, such as "ArrowLeft", "a" or " ".
     key       @1 :Text;
     modifiers @2 :Modifiers;
-    # The key is held and the system repeats it.
-    repeat    @3 :Bool;
 }
 
 # The W3C MouseEvent.button numbers.

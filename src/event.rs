@@ -92,8 +92,6 @@ pub struct KeyEvent {
     /// `" "`.
     pub key: String,
     pub modifiers: Modifiers,
-    /// The key is held and the system repeats it.
-    pub repeat: bool,
 }
 
 /// What happened to a key. The window and a browser send `Down` and then

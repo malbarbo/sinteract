@@ -418,7 +418,6 @@ mod tests {
                 shift: true,
                 ..Modifiers::default()
             },
-            repeat: true,
         };
         match decode_event(&encode_event(&InputEvent::Key(key.clone()))).unwrap() {
             InputEvent::Key(k) => assert_eq!(k, key),
@@ -1126,7 +1125,6 @@ mod tests {
             kind: KeyKind::Press,
             key: "a".into(),
             modifiers: Modifiers::default(),
-            repeat: false,
         });
         // The kind is the u16 at byte 0 of the data of a KeyEvent.
         let bytes = with_unknown_server_value(&encode_event(&key), |m| {

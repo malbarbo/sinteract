@@ -45,7 +45,6 @@ fn write_key_event(mut b: wire_key_event::Builder<'_>, k: &KeyEvent) {
     b.set_kind(key_kind_to_wire(k.kind));
     b.set_key(&*k.key);
     write_modifiers(b.reborrow().init_modifiers(), k.modifiers);
-    b.set_repeat(k.repeat);
 }
 
 fn write_mouse_event(mut b: wire_mouse_event::Builder<'_>, m: &MouseEvent) {
@@ -133,7 +132,6 @@ fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEv
                 kind: key_kind_from_wire(k.get_kind()?),
                 key: k.get_key()?.to_str()?.to_owned(),
                 modifiers: read_modifiers(k.get_modifiers()?),
-                repeat: k.get_repeat(),
             })
         }
         Which::Mouse(m) => InputEvent::Mouse(read_mouse_event(m?)?),

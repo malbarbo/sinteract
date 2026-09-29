@@ -402,7 +402,6 @@ mod tests {
             kind: KeyKind::Press,
             key: name.into(),
             modifiers: Modifiers::default(),
-            repeat: false,
         })
     }
 

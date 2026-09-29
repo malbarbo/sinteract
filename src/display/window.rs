@@ -568,23 +568,22 @@ impl App {
                     return;
                 };
                 self.held.press(ev.physical_key, key.clone());
-                self.report_key(KeyKind::Down, key.clone(), ev.repeat);
-                self.report_key(KeyKind::Press, key, ev.repeat);
+                self.report_key(KeyKind::Down, key.clone());
+                self.report_key(KeyKind::Press, key);
             }
             ElementState::Released => {
                 if let Some(key) = self.held.release(ev.physical_key) {
-                    self.report_key(KeyKind::Up, key, false);
+                    self.report_key(KeyKind::Up, key);
                 }
             }
         }
     }
 
-    fn report_key(&self, kind: KeyKind, key: String, repeat: bool) {
+    fn report_key(&self, kind: KeyKind, key: String) {
         let _ = self.tx.send_key(crate::event::KeyEvent {
             kind,
             key,
             modifiers: modifiers(self.modifiers),
-            repeat,
         });
     }
 
@@ -690,7 +689,7 @@ impl ApplicationHandler for App {
             // button too.
             WindowEvent::Focused(false) => {
                 for key in self.held.release_all() {
-                    self.report_key(KeyKind::Up, key, false);
+                    self.report_key(KeyKind::Up, key);
                 }
                 for button in MouseButton::ALL {
                     if self.buttons.contains(button) {
