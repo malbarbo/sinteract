@@ -125,10 +125,10 @@ impl Window {
         }
         // Wayland puts the window on a monitor only after its first frame,
         // so the rate stays to read until a monitor shows the window.
-        if s.app.read_refresh_rate
+        if s.app.refresh_rate_stale
             && let Some(monitor) = s.window.current_monitor()
         {
-            s.app.read_refresh_rate = false;
+            s.app.refresh_rate_stale = false;
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
             self.clock.set_millihertz(rate.unwrap_or(Self::TICK_RATE));
         }
@@ -534,7 +534,7 @@ struct App {
     held: HeldKeys,
     /// The window may be on another monitor, whose refresh rate is still
     /// to read.
-    read_refresh_rate: bool,
+    refresh_rate_stale: bool,
     /// Wayland paces the frames by its frame callback. Other platforms
     /// have none.
     frame_callback: Option<FrameCallback>,
@@ -572,7 +572,7 @@ impl App {
             size,
             reported_size,
             held: HeldKeys::default(),
-            read_refresh_rate: true,
+            refresh_rate_stale: true,
             frame_callback: frame_callbacks.then(FrameCallback::default),
         }
     }
@@ -645,10 +645,10 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                 let _ = self.tx.send_close();
             }
-            WindowEvent::Moved(_) => self.read_refresh_rate = true,
+            WindowEvent::Moved(_) => self.refresh_rate_stale = true,
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = scale_factor;
-                self.read_refresh_rate = true;
+                self.refresh_rate_stale = true;
                 self.report_size();
                 let _ = self.tx.request_redraw();
             }
