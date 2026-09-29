@@ -1,19 +1,20 @@
 //! The messages of the engine, in the `EngineToServer` union, which go to
-//! the server and through it to the views.
+//! the server.
 //!
 //! The engine says first how many players the game takes, in a hello for
 //! the server. Then it uploads each image as an asset, before the first
 //! frame that draws it, and sends a frame per repaint, for one player or
 //! for all of them. It tells the server as it takes each tick. The engine
-//! ends the session with the end of its stream. The server adds a forget
-//! for a view, when the view no longer needs an asset.
+//! ends the session with the end of its stream.
 //!
 //! [`crate::session::Session::write_frame`] writes the assets and the
-//! frame, and a view reads them back with a [`FrameReader`].
+//! frame. The server copies them into messages of
+//! [`super::server_to_view`], which a view reads.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use capnp::Word;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
@@ -27,60 +28,12 @@ use crate::scene_capnp::scene as wire_scene;
 use super::Error;
 use super::framing::{Side, write_framed};
 use super::protocol::decode_root;
-use super::scene::{read_bitmap_ids, read_scene, scene_message};
-
-/// The reader of the frames of the engine for a view, which returns the
-/// scene of each frame. It keeps the images of the assets that the frames
-/// draw, so a view reads its whole connection with one.
-#[derive(Debug, Default)]
-pub struct FrameReader {
-    images: HashMap<u32, Image>,
-}
-
-impl FrameReader {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Read `payload`, a message with no envelope, as
-    /// [`crate::server::Next::Send`] carries it. A frame comes out as its
-    /// scene, with the image of each bitmap. An asset and a forget change
-    /// the images and return `None`, as does every other message. An asset
-    /// that is not an image that [`Image::new`] takes keeps no image, so a
-    /// bitmap of its id is skipped, as is a bitmap of an id with no asset.
-    pub fn read(&mut self, payload: &[u8]) -> Result<Option<Scene>, Error> {
-        decode_root::<engine_to_server::Owned, _>(payload, |msg| {
-            let Ok(which) = msg.which() else {
-                return Ok(None);
-            };
-            match which {
-                engine_to_server::Asset(a) => {
-                    let a = a?;
-                    match Image::new(a.get_blob()?.to_vec()) {
-                        Ok(image) => self.images.insert(a.get_id(), image),
-                        Err(_) => self.images.remove(&a.get_id()),
-                    };
-                    Ok(None)
-                }
-                engine_to_server::Frame(f) => {
-                    let images = |id| self.images.get(&id).cloned();
-                    decode_root::<wire_scene::Owned, _>(f?.get_scene()?, |s| {
-                        Ok(Some(read_scene(s, &images)?))
-                    })
-                }
-                engine_to_server::Forget(id) => {
-                    self.images.remove(&id);
-                    Ok(None)
-                }
-                engine_to_server::Hello(_) | engine_to_server::TickTaken(()) => Ok(None),
-            }
-        })
-    }
-}
+use super::scene::{read_bitmap_ids, scene_message};
+use super::server_to_view;
 
 /// The arm of a message of the engine, with the player of a frame. A
-/// server routes a message by its arm and passes the payload on as it
-/// came.
+/// server routes a message by its arm, and sends the views the message in
+/// `to_view` of an asset or a frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Arm {
     /// An asset, with what the limits of [`crate::asset`] count, or why
@@ -88,6 +41,7 @@ pub enum Arm {
     Asset {
         id: u32,
         footprint: Result<Footprint, ImageError>,
+        to_view: Arc<[u8]>,
     },
     /// A frame for `player`, or for every player when `player` is `None`,
     /// with the ids of its bitmaps. They may include a bitmap that a view
@@ -95,6 +49,7 @@ pub enum Arm {
     Frame {
         player: Option<NonZeroU32>,
         ids: BTreeSet<u32>,
+        to_view: Arc<[u8]>,
     },
     Hello(PlayerRange),
     Forget(u32),
@@ -170,7 +125,8 @@ pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
 
 /// The arm of `payload`, a message with no envelope. Of a frame it reads
 /// the ids of the bitmaps and not the rest of the scene, and of an asset
-/// it does not decode the image. `None` for an arm
+/// it does not decode the image. It copies an asset and the scene of a
+/// frame into a message of [`super::server_to_view`]. `None` for an arm
 /// from a newer schema. A hello whose players are not a [`PlayerRange`]
 /// is an error.
 pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
@@ -181,20 +137,22 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
         Ok(Some(match which {
             engine_to_server::Asset(a) => {
                 let a = a?;
+                let (id, blob) = (a.get_id(), a.get_blob()?);
                 Arm::Asset {
-                    id: a.get_id(),
-                    footprint: Footprint::of(a.get_blob()?),
+                    id,
+                    footprint: Footprint::of(blob),
+                    to_view: server_to_view::encode_asset(id, blob),
                 }
             }
             engine_to_server::Frame(f) => {
                 let f = f?;
+                let scene = f.get_scene()?;
                 let mut ids = BTreeSet::new();
-                decode_root::<wire_scene::Owned, _>(f.get_scene()?, |s| {
-                    read_bitmap_ids(s, &mut ids)
-                })?;
+                decode_root::<wire_scene::Owned, _>(scene, |s| read_bitmap_ids(s, &mut ids))?;
                 Arm::Frame {
                     player: NonZeroU32::new(f.get_player()),
                     ids,
+                    to_view: server_to_view::encode_frame(scene),
                 }
             }
             engine_to_server::Hello(h) => Arm::Hello(read_hello(h?)?),

@@ -43,7 +43,7 @@ pub(super) fn scene_message(scene: &Scene, ids: &dyn Fn(&Image) -> u32) -> Build
 /// Decode a message that [`encode`] produced. A bitmap takes the image that
 /// `images` gives its id, and a bitmap of an id with no image is skipped. A
 /// frame that arrived inside a session goes through
-/// [`super::engine_to_server::FrameReader`] instead.
+/// [`super::server_to_view::FrameReader`] instead.
 pub fn decode(bytes: &[u8], images: &dyn Fn(u32) -> Option<Image>) -> Result<Scene, Error> {
     let reader = super::limit_traversal(capnp::serialize::read_message(
         std::io::Cursor::new(bytes),

@@ -80,10 +80,11 @@ fn decode_message(
         }
         protocol_capnp::engine_to_server::Frame(f) => {
             let f = f?;
-            let images = |id| Image::new(crate::asset::png_head(id, 1)).ok();
             Ok(Some(Message::Frame {
                 player: NonZeroU32::new(f.get_player()),
-                scene: decode_root::<scene::Owned, _>(f.get_scene()?, |s| read_scene(s, &images))?,
+                scene: decode_root::<scene::Owned, _>(f.get_scene()?, |s| {
+                    read_scene(s, &test_image)
+                })?,
             }))
         }
         protocol_capnp::engine_to_server::Hello(h) => {
@@ -92,6 +93,45 @@ fn decode_message(
         protocol_capnp::engine_to_server::Forget(id) => Ok(Some(Message::Forget(id))),
         protocol_capnp::engine_to_server::TickTaken(()) => Ok(Some(Message::TickTaken)),
     }
+}
+
+/// One message of the server for a view, one variant per arm of
+/// `ServerToView`. A bitmap draws as in [`Message`].
+#[derive(Clone, Debug)]
+pub(crate) enum ViewMessage {
+    Asset { id: u32, blob: Vec<u8> },
+    Frame(Scene),
+    Forget(u32),
+}
+
+/// Decode `payload`, a message of the server for a view. `None` for a
+/// message of an arm from a newer schema.
+pub(crate) fn decode_view(payload: &[u8]) -> Result<Option<ViewMessage>, Error> {
+    decode_root::<protocol_capnp::server_to_view::Owned, _>(payload, |msg| {
+        let Ok(which) = msg.which() else {
+            return Ok(None);
+        };
+        Ok(Some(match which {
+            protocol_capnp::server_to_view::Asset(a) => {
+                let a = a?;
+                ViewMessage::Asset {
+                    id: a.get_id(),
+                    blob: a.get_blob()?.to_vec(),
+                }
+            }
+            protocol_capnp::server_to_view::Frame(scene) => {
+                ViewMessage::Frame(decode_root::<scene::Owned, _>(scene?, |s| {
+                    read_scene(s, &test_image)
+                })?)
+            }
+            protocol_capnp::server_to_view::Forget(id) => ViewMessage::Forget(id),
+        }))
+    })
+}
+
+/// The image that a bitmap of the tests names by the id `id`.
+fn test_image(id: u32) -> Option<Image> {
+    Image::new(crate::asset::png_head(id, 1)).ok()
 }
 
 /// Encode a scene as a frame for every player, with no envelope.
@@ -175,8 +215,8 @@ pub(crate) fn with_unknown_view_value(
 /// the tag of a union, at an enum field, or at the first two verbs of a
 /// path.
 /// `bytes` holds a message whose root is `T`, and the compiler cannot infer
-/// `T` from `find`, so each root has a wrapper.
-fn with_unknown_value<T: capnp::traits::Owned>(
+/// `T` from `find`, so a root either has a wrapper or names `T`.
+pub(crate) fn with_unknown_value<T: capnp::traits::Owned>(
     bytes: &[u8],
     find: impl FnOnce(T::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {

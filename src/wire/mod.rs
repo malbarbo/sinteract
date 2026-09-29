@@ -2,16 +2,18 @@
 //!
 //! [`scene`] and [`event`] convert the values of [`crate::scene`] and
 //! [`crate::event`] to and from the Cap'n Proto structs. Neither knows that
-//! a session exists. [`engine_to_server`], [`view_to_server`] and
-//! [`server_to_engine`] wrap the payloads in the root of their direction,
-//! `EngineToServer`, `ViewToServer` or `ServerToEngine`, and unwrap them
-//! again. They own everything about the session.
+//! a session exists. [`engine_to_server`], [`server_to_engine`],
+//! [`view_to_server`] and [`server_to_view`] wrap the payloads in the root
+//! of their direction, `EngineToServer`, `ServerToEngine`, `ViewToServer`
+//! or `ServerToView`, and unwrap them again. They own everything about the
+//! session.
 //!
 //! The engine runs the program and writes with [`engine_to_server`]. A view
 //! draws the frames, sends the input and encodes with [`view_to_server`].
-//! The server owns the session, passes the input of the views on and
-//! writes with [`server_to_engine`]. A view and the server read with the
-//! module of the side that writes to them, and the engine reads with
+//! The server owns the session, passes the input of the views on with
+//! [`server_to_engine`], and passes the assets and the frames of the engine
+//! on with [`server_to_view`]. Each side reads with the module of the
+//! direction that comes to it, and the engine reads with
 //! [`Session`](crate::session::Session). The generated bindings stay
 //! private, and the bytes are the standard `serialize::write_message`
 //! format, so every Cap'n Proto binding reads them.
@@ -28,9 +30,12 @@ pub mod framing;
 mod protocol;
 pub mod scene;
 pub mod server_to_engine;
+pub mod server_to_view;
 #[cfg(test)]
 pub(crate) mod testing;
 pub mod view_to_server;
+
+use std::sync::Arc;
 
 use capnp::message::{self, ReaderOptions, ReaderSegments};
 
@@ -39,6 +44,19 @@ pub(crate) fn to_bytes(builder: capnp::message::Builder<capnp::message::HeapAllo
     let mut bytes = Vec::with_capacity(256);
     capnp::serialize::write_message(&mut bytes, &builder)
         .expect("write_message into Vec is infallible");
+    bytes
+}
+
+/// Serialize a finished builder into bytes that the views of a room share,
+/// with one allocation of the exact size.
+pub(crate) fn to_shared_bytes(
+    builder: &capnp::message::Builder<capnp::message::HeapAllocator>,
+) -> Arc<[u8]> {
+    let len =
+        capnp::serialize::compute_serialized_size_in_words(builder) * size_of::<capnp::Word>();
+    let mut bytes: Arc<[u8]> = std::iter::repeat_n(0, len).collect();
+    let out = Arc::get_mut(&mut bytes).expect("a new Arc has no other owner");
+    capnp::serialize::write_message(out, builder).expect("the bytes fit the message");
     bytes
 }
 
@@ -164,7 +182,7 @@ fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
 #[cfg(test)]
 mod tests {
     use super::testing::{
-        Message, encode_asset, encode_frame, frame_holding, tag_of, with_float,
+        Message, ViewMessage, encode_asset, encode_frame, frame_holding, tag_of, with_float,
         with_unknown_engine_value, with_unknown_scene_value, with_unknown_server_value,
         with_unknown_view_value,
     };
@@ -512,20 +530,23 @@ mod tests {
 
     #[test]
     fn the_arm_of_a_message_of_the_engine_comes_without_a_decode() {
-        let frame = testing::encode_frame(&Scene::new(4.0, 3.0));
+        let scene = Scene::new(4.0, 3.0);
+        let to_view = server_to_view::encode_frame(&scene::encode(&scene, &Image::width));
         assert_eq!(
-            engine_to_server::arm(&frame).unwrap(),
+            engine_to_server::arm(&encode_frame(&scene)).unwrap(),
             Some(engine_to_server::Arm::Frame {
                 player: None,
-                ids: [].into()
+                ids: [].into(),
+                to_view: to_view.clone(),
             })
         );
-        let framed = testing::encode_frame_to(Some(nonzero(2)), &Scene::new(4.0, 3.0));
+        let framed = testing::encode_frame_to(Some(nonzero(2)), &scene);
         assert_eq!(
             engine_to_server::arm(&framed).unwrap(),
             Some(engine_to_server::Arm::Frame {
                 player: Some(nonzero(2)),
-                ids: [].into()
+                ids: [].into(),
+                to_view,
             })
         );
         let asset = testing::encode_asset(1, &[0; 4]);
@@ -533,15 +554,17 @@ mod tests {
             engine_to_server::arm(&asset).unwrap(),
             Some(engine_to_server::Arm::Asset {
                 id: 1,
-                footprint: Err(crate::asset::ImageError::Unsupported)
+                footprint: Err(crate::asset::ImageError::Unsupported),
+                to_view: server_to_view::encode_asset(1, &[0; 4]),
             })
         );
-        let png = testing::encode_asset(2, &crate::asset::png_head(3, 5));
+        let head = crate::asset::png_head(3, 5);
         assert_eq!(
-            engine_to_server::arm(&png).unwrap(),
+            engine_to_server::arm(&testing::encode_asset(2, &head)).unwrap(),
             Some(engine_to_server::Arm::Asset {
                 id: 2,
-                footprint: crate::asset::Footprint::of(&crate::asset::png_head(3, 5))
+                footprint: crate::asset::Footprint::of(&head),
+                to_view: server_to_view::encode_asset(2, &head),
             })
         );
         let unknown = with_unknown_engine_value(&asset, |m| tag_of(m));
@@ -563,8 +586,9 @@ mod tests {
         let image = crate::asset::png_image(3, 1);
         let mut scene = Scene::new(4.0, 4.0);
         scene.add_bitmap(bitmap(3));
-        let frame = encode_frame(&scene);
-        let mut reader = engine_to_server::FrameReader::new();
+        let frame = server_to_view::encode_frame(&scene::encode(&scene, &Image::width));
+        let asset = |blob: &[u8]| server_to_view::encode_asset(3, blob);
+        let mut reader = server_to_view::FrameReader::new();
         let mut drawn = |payload: &[u8]| {
             let scene = reader.read(payload).unwrap()?;
             Some(match scene.elements() {
@@ -574,13 +598,13 @@ mod tests {
             })
         };
         assert_eq!(drawn(&frame), Some(None));
-        assert_eq!(drawn(&encode_asset(3, image.blob())), None);
+        assert_eq!(drawn(&asset(image.blob())), None);
         assert_eq!(drawn(&frame), Some(Some(image.clone())));
-        assert_eq!(drawn(&engine_to_server::encode_forget(3)), None);
+        assert_eq!(drawn(&server_to_view::encode_forget(3)), None);
         assert_eq!(drawn(&frame), Some(None));
         // An asset that is not an image leaves its id with no image.
-        drawn(&encode_asset(3, image.blob()));
-        drawn(&encode_asset(3, b"GIF"));
+        drawn(&asset(image.blob()));
+        drawn(&asset(b"GIF"));
         assert_eq!(drawn(&frame), Some(None));
     }
 
@@ -610,6 +634,40 @@ mod tests {
         assert!(matches!(
             decode(&engine_to_server::encode_forget(u32::MAX)).unwrap(),
             Message::Forget(u32::MAX)
+        ));
+    }
+
+    #[test]
+    fn a_message_for_a_view_round_trips() {
+        let blob: Vec<u8> = (0u8..=255).collect();
+        assert!(matches!(
+            testing::decode_view(&server_to_view::encode_asset(42, &blob)).unwrap(),
+            Some(ViewMessage::Asset { id: 42, blob: b }) if b == blob
+        ));
+        let scene = sample_scene();
+        let frame = server_to_view::encode_frame(&scene::encode(&scene, &Image::width));
+        match testing::decode_view(&frame).unwrap() {
+            Some(ViewMessage::Frame(d)) => assert_scene_eq(&scene, &d),
+            other => panic!("expected a frame, got {other:?}"),
+        }
+        for id in [9, u32::MAX] {
+            assert!(matches!(
+                testing::decode_view(&server_to_view::encode_forget(id)).unwrap(),
+                Some(ViewMessage::Forget(i)) if i == id
+            ));
+        }
+    }
+
+    #[test]
+    fn a_message_for_a_view_of_an_unknown_arm_is_skipped() {
+        let bytes = testing::with_unknown_value::<protocol_capnp::server_to_view::Owned>(
+            &server_to_view::encode_forget(3),
+            |m| tag_of(m),
+        );
+        assert!(matches!(testing::decode_view(&bytes), Ok(None)));
+        assert!(matches!(
+            server_to_view::FrameReader::new().read(&bytes),
+            Ok(None)
         ));
     }
 

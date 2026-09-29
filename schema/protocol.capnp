@@ -6,8 +6,8 @@
 # the player to a frame and to the event of the server.
 #
 # Each direction has its own root, named after it, EngineToServer,
-# ViewToServer and ServerToEngine, so no side can receive a message that
-# only another side sends.
+# ServerToEngine, ViewToServer and ServerToView, so no side can receive a
+# message that only another side sends.
 #
 # This file is the source of truth for the session. The same rules as
 # scene.capnp apply. See its header for how to regenerate the bindings.
@@ -32,7 +32,7 @@ struct Frame {
     # The player that the frame goes to, from 1, or 0 for every player.
     player @0 :UInt32;
     # A whole message whose root is the Scene of scene.capnp. The server
-    # passes the bytes on to the views with a copy and no decode.
+    # copies the bytes into the frame of a ServerToView with no decode.
     scene  @1 :Data;
 }
 
@@ -42,9 +42,9 @@ struct Hello {
     maxPlayers @1 :UInt32;
 }
 
-# Engine to view, through the server. The engine sends an asset before the
-# first frame that draws it, and the server keeps it for the views while
-# the room has room for it.
+# Engine to server. The engine sends an asset before the first frame that
+# draws it, and the server keeps it for the views while the room has room
+# for it.
 struct EngineToServer {
     union {
         # One per bitmap, before the frames that draw it.
@@ -109,5 +109,20 @@ struct ServerToEngine {
         # its limits. The engine sends the image again, under a new id,
         # before a frame that draws it.
         lost  @3 :UInt32;
+    }
+}
+
+# Server to view. The server copies an asset and the scene of a frame from
+# the engine, and sends a view only the assets that its frames draw.
+struct ServerToView {
+    union {
+        # Before the first frame of the view that draws it.
+        asset  @0 :AssetMsg;
+        # A whole message whose root is the Scene of scene.capnp, as the
+        # frame of the engine holds it.
+        frame  @1 :Data;
+        # The view drops the asset of this id, since no frame of the view
+        # draws it.
+        forget @2 :UInt32;
     }
 }

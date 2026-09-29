@@ -39,6 +39,7 @@ use crate::wire;
 use crate::wire::engine_to_server::{self, Arm, PlayerRange};
 use crate::wire::framing::{self, Side};
 use crate::wire::server_to_engine;
+use crate::wire::server_to_view;
 use crate::wire::view_to_server;
 
 /// The rules of a room, from the players and the timer of the host to the
@@ -82,8 +83,9 @@ impl Conn {
 /// What [`ServerCore::next_for`] has for a view.
 #[derive(Debug)]
 pub enum Next {
-    /// A message of the engine, with no envelope, as a WebSocket carries
-    /// it.
+    /// A message of the `ServerToView` root, with no envelope, as a
+    /// WebSocket carries it, which a
+    /// [`FrameReader`](crate::wire::server_to_view::FrameReader) reads.
     Send(Arc<[u8]>),
     /// Nothing for now.
     Idle,
@@ -425,7 +427,6 @@ impl ServerCore {
                 }
             };
             let arm = engine_to_server::arm(payload);
-            let payload = Arc::<[u8]>::from(payload);
             rest = after;
             if matches!(self.phase, Phase::Waiting) && !matches!(arm, Ok(Some(Arm::Hello(_)))) {
                 if let Err(e) = arm {
@@ -449,8 +450,12 @@ impl ServerCore {
                     // A room that closed before the hello never starts.
                     Phase::Closing { .. } | Phase::Over { .. } => {}
                 },
-                Ok(Some(Arm::Asset { id, footprint })) => {
-                    if let Err(e) = self.keep_asset(id, footprint, payload) {
+                Ok(Some(Arm::Asset {
+                    id,
+                    footprint,
+                    to_view,
+                })) => {
+                    if let Err(e) = self.keep_asset(id, footprint, to_view) {
                         errors.push(e);
                     }
                 }
@@ -460,8 +465,12 @@ impl ServerCore {
                         *tick_pending = false;
                     }
                 }
-                Ok(Some(Arm::Frame { player, ids })) => {
-                    if let Err(e) = self.keep_frame(player, &ids, payload) {
+                Ok(Some(Arm::Frame {
+                    player,
+                    ids,
+                    to_view,
+                })) => {
+                    if let Err(e) = self.keep_frame(player, &ids, to_view) {
                         errors.push(e);
                     }
                 }
@@ -513,7 +522,7 @@ impl ServerCore {
         };
         if let Some(&id) = view.assets.iter().find(|id| !needs(id)) {
             view.assets.remove(&id);
-            return Next::Send(engine_to_server::encode_forget(id).into());
+            return Next::Send(server_to_view::encode_forget(id));
         }
         if let Some(next) = view.next.take() {
             if let Some((&id, asset)) = next.assets.iter().find(|(id, _)| !view.assets.contains(id))
@@ -551,9 +560,10 @@ impl ServerCore {
         }
     }
 
-    /// Keep the asset `id`, or refuse it if the id is live or the image is
-    /// too large. An asset that does not fit beside the others that came
-    /// after the last frame is lost at once.
+    /// Keep the asset `id`, with `payload`, its message for a view, or
+    /// refuse it if the id is live or the image is too large. An asset that
+    /// does not fit beside the others that came after the last frame is
+    /// lost at once.
     fn keep_asset(
         &mut self,
         id: u32,
@@ -570,11 +580,11 @@ impl ServerCore {
         Ok(())
     }
 
-    /// Keep the frame in `payload` for `player`, or for every player when
-    /// `player` is `None`, with the assets of its bitmap `ids`, and drop
-    /// the assets that the frames used longest ago to fit the limits. A
-    /// frame for every player before the start reaches no screen, so it
-    /// changes nothing.
+    /// Keep the frame, with `payload`, its message for a view, for
+    /// `player`, or for every player when `player` is `None`, with the
+    /// assets of its bitmap `ids`, and drop the assets that the frames used
+    /// longest ago to fit the limits. A frame for every player before the
+    /// start reaches no screen, so it changes nothing.
     fn keep_frame(
         &mut self,
         player: Option<NonZeroU32>,
@@ -1039,17 +1049,10 @@ mod tests {
             Next::Idle => return "idle".into(),
             Next::Gone => return "gone".into(),
         };
-        let mut framed = framing::header(Side::Engine, payload.len() as u32).to_vec();
-        framed.extend_from_slice(&payload);
-        match testing::read(&mut &framed[..]).unwrap().unwrap() {
-            testing::Message::Asset { id, .. } => format!("asset {id}"),
-            testing::Message::Frame { player, scene } => match player {
-                Some(p) => format!("frame {p} {}", scene.width()),
-                None => format!("frame all {}", scene.width()),
-            },
-            testing::Message::Hello(_) => "hello".into(),
-            testing::Message::Forget(id) => format!("forget {id}"),
-            testing::Message::TickTaken => "tick taken".into(),
+        match testing::decode_view(&payload).unwrap().unwrap() {
+            testing::ViewMessage::Asset { id, .. } => format!("asset {id}"),
+            testing::ViewMessage::Frame(scene) => format!("frame {}", scene.width()),
+            testing::ViewMessage::Forget(id) => format!("forget {id}"),
         }
     }
 
@@ -1128,6 +1131,17 @@ mod tests {
     }
 
     #[test]
+    fn the_views_of_a_frame_for_every_player_share_its_bytes() {
+        let (mut room, conns) = Room::playing(&["Ana", "Beto"]);
+        assert!(room.core.from_engine(&frame(0, 1.0)).is_empty());
+        let mut next = |conn| match room.core.next_for(conn) {
+            Next::Send(payload) => payload,
+            other => panic!("expected a frame, got {other:?}"),
+        };
+        assert!(Arc::ptr_eq(&next(conns[0]), &next(conns[1])));
+    }
+
+    #[test]
     fn a_second_hello_is_an_error_and_the_room_goes_on() {
         let (mut room, conns) = Room::playing(&["Ana"]);
         let mut stream = hello(1, 1);
@@ -1136,7 +1150,7 @@ mod tests {
             room.core.from_engine(&stream)[..],
             [EngineError::SecondHello]
         ));
-        assert_eq!(sent(&mut room.core, conns[0]), ["frame all 1", "idle"]);
+        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "idle"]);
         assert!(room.events().is_empty());
     }
 
@@ -1251,13 +1265,13 @@ mod tests {
         stream.extend_from_slice(&drawing(0, 3.0, &[7]));
         stream.extend_from_slice(&drawing(2, 4.0, &[7, 8]));
         assert!(core.from_engine(&stream).is_empty());
-        assert_eq!(sent(core, conns[0]), ["asset 7", "frame all 3", "idle"]);
+        assert_eq!(sent(core, conns[0]), ["asset 7", "frame 3", "idle"]);
         assert_eq!(
             sent(core, conns[1]),
-            ["asset 7", "asset 8", "frame 2 4", "idle"]
+            ["asset 7", "asset 8", "frame 4", "idle"]
         );
         core.from_engine(&drawing(1, 5.0, &[7]));
-        assert_eq!(sent(core, conns[0]), ["frame 1 5", "idle"]);
+        assert_eq!(sent(core, conns[0]), ["frame 5", "idle"]);
         assert_eq!(sent(core, conns[1]), ["idle"]);
     }
 
@@ -1276,7 +1290,7 @@ mod tests {
         stream.extend_from_slice(&frame(2, 2.0));
         core.from_engine(&stream);
         let ana = core.connect(player(1)).unwrap();
-        assert_eq!(sent(&mut core, ana), ["asset 1", "frame all 1", "idle"]);
+        assert_eq!(sent(&mut core, ana), ["asset 1", "frame 1", "idle"]);
     }
 
     #[test]
@@ -1286,21 +1300,21 @@ mod tests {
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 1.0, &[1]));
         core.from_engine(&stream);
-        assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1 1", "idle"]);
+        assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1", "idle"]);
         let mut stream = asset(2);
         stream.extend_from_slice(&drawing(1, 2.0, &[1, 2]));
         stream.extend_from_slice(&drawing(1, 3.0, &[2]));
         assert!(core.from_engine(&stream).is_empty());
         assert_eq!(
             sent(core, conns[0]),
-            ["asset 2", "frame 1 3", "forget 1", "idle"]
+            ["asset 2", "frame 3", "forget 1", "idle"]
         );
         // The asset stays in the room, and comes back with a frame that
         // draws it.
         core.from_engine(&drawing(1, 4.0, &[1]));
         assert_eq!(
             sent(core, conns[0]),
-            ["asset 1", "frame 1 4", "forget 2", "idle"]
+            ["asset 1", "frame 4", "forget 2", "idle"]
         );
     }
 
@@ -1327,14 +1341,14 @@ mod tests {
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 1.0, &[1]));
         core.from_engine(&stream);
-        assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1 1", "idle"]);
+        assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1", "idle"]);
         let mut stream = asset(2);
         stream.extend_from_slice(&drawing(1, 2.0, &[2]));
         core.from_engine(&stream);
         let again = core.connect(player(1)).unwrap();
-        assert_eq!(sent(core, again), ["asset 2", "frame 1 2", "idle"]);
+        assert_eq!(sent(core, again), ["asset 2", "frame 2", "idle"]);
         core.from_engine(&drawing(1, 3.0, &[2]));
-        assert_eq!(sent(core, again), ["frame 1 3", "idle"]);
+        assert_eq!(sent(core, again), ["frame 3", "idle"]);
     }
 
     #[test]
@@ -1349,7 +1363,7 @@ mod tests {
         assert_eq!(room.events(), ["lost 1"]);
         assert_eq!(
             sent(&mut room.core, conns[0]),
-            ["asset 3", "asset 9", "frame 1 3", "idle"]
+            ["asset 3", "asset 9", "frame 3", "idle"]
         );
     }
 
@@ -1364,7 +1378,7 @@ mod tests {
         assert_eq!(room.events(), ["lost 2"]);
         assert_eq!(
             sent(&mut room.core, conns[0]),
-            ["asset 1", "asset 9", "frame 1 2", "idle"]
+            ["asset 1", "asset 9", "frame 2", "idle"]
         );
     }
 
@@ -1377,7 +1391,7 @@ mod tests {
         assert!(room.core.from_engine(&stream).is_empty());
         assert_eq!(room.events(), ["lost 9"]);
         // The frame goes without the image.
-        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1 1", "idle"]);
+        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "idle"]);
     }
 
     #[test]
@@ -1437,7 +1451,7 @@ mod tests {
             core.from_engine(&stream)[..],
             [EngineError::NoSeat(p)] if p == player(2)
         ));
-        assert_eq!(sent(&mut core, ana), ["frame 1 2", "idle"]);
+        assert_eq!(sent(&mut core, ana), ["frame 2", "idle"]);
     }
 
     #[test]
@@ -1469,7 +1483,7 @@ mod tests {
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 2.0, &[1]));
         feed(&mut core, &stream);
-        assert_eq!(sent(&mut core, ana), ["asset 1", "frame 1 2", "idle"]);
+        assert_eq!(sent(&mut core, ana), ["asset 1", "frame 2", "idle"]);
     }
 
     #[test]
@@ -1483,7 +1497,7 @@ mod tests {
         room.core.from_engine(&frame(0, 2.0));
         assert!(room.core.engine_ended().is_none());
         assert!(room.events().is_empty());
-        assert_eq!(sent(&mut room.core, conns[0]), ["frame all 1", "gone"]);
+        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "gone"]);
         assert_eq!(sent(&mut room.core, conns[0]), ["gone"]);
     }
 
@@ -1497,7 +1511,7 @@ mod tests {
         assert_eq!(sent(&mut room.core, conns[0]), ["gone"]);
         assert!(room.events().is_empty());
         let again = room.core.connect(player(1)).unwrap();
-        assert_eq!(sent(&mut room.core, again), ["frame 1 1", "idle"]);
+        assert_eq!(sent(&mut room.core, again), ["frame 1", "idle"]);
     }
 
     #[test]
@@ -1507,12 +1521,12 @@ mod tests {
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 2.0, &[1]));
         core.from_engine(&stream);
-        assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1 2", "idle"]);
+        assert_eq!(sent(core, conns[0]), ["asset 1", "frame 2", "idle"]);
         core.leave(conns[0]);
         let again = core.connect(player(1)).unwrap();
-        assert_eq!(sent(core, again), ["asset 1", "frame 1 2", "idle"]);
+        assert_eq!(sent(core, again), ["asset 1", "frame 2", "idle"]);
         core.from_engine(&frame(0, 3.0));
-        assert_eq!(sent(core, again), ["frame all 3", "forget 1", "idle"]);
+        assert_eq!(sent(core, again), ["frame 3", "forget 1", "idle"]);
     }
 
     #[test]
@@ -1609,7 +1623,7 @@ mod tests {
         stream.extend_from_slice(&frame(0, 1.0));
         let errors = room.core.from_engine(&stream);
         assert!(matches!(errors[..], [EngineError::Payload(_)]));
-        assert_eq!(sent(&mut room.core, conns[0]), ["frame all 1", "idle"]);
+        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "idle"]);
     }
 
     #[test]
@@ -1620,7 +1634,7 @@ mod tests {
         let errors = room.core.from_engine(&stream);
         assert!(matches!(errors[..], [EngineError::Broken(_)]));
         assert!(room.core.is_over());
-        assert_eq!(sent(&mut room.core, conns[0]), ["frame all 1", "gone"]);
+        assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "gone"]);
     }
 
     #[test]
