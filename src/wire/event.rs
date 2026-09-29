@@ -10,7 +10,7 @@ use crate::event_capnp::{
     pad_event as wire_pad_event, resize_event as wire_resize_event,
 };
 
-use super::scene::finite;
+use super::scene::check_finite;
 use super::{Error, ValueError, skip_unusable};
 
 fn key_kind_to_wire(k: KeyKind) -> WKeyKind {
@@ -138,7 +138,7 @@ fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEv
         Which::Resize(r) => {
             let r = r?;
             let (width, height) = (r.get_width(), r.get_height());
-            finite(width.is_finite() && height.is_finite())?;
+            check_finite(width.is_finite() && height.is_finite())?;
             InputEvent::Resize { width, height }
         }
         Which::Pad(p) => InputEvent::Pad(read_pad_event(p?)?),
@@ -153,13 +153,13 @@ fn read_mouse_event(r: wire_mouse_event::Reader<'_>) -> Result<MouseEvent, Value
         Which::Up(b) => MouseAction::Up(mouse_button_from_wire(b?)),
         Which::Wheel(w) => {
             let (dx, dy) = (w.get_dx(), w.get_dy());
-            finite(dx.is_finite() && dy.is_finite())?;
+            check_finite(dx.is_finite() && dy.is_finite())?;
             MouseAction::Wheel { dx, dy }
         }
         Which::Leave(()) => MouseAction::Leave,
     };
     let (x, y) = (r.get_x(), r.get_y());
-    finite(x.is_finite() && y.is_finite())?;
+    check_finite(x.is_finite() && y.is_finite())?;
     Ok(MouseEvent {
         action,
         x,
