@@ -792,12 +792,8 @@ fn passes<'a>(
 /// Returns `true` if the stops of `g` differ in alpha, `false` otherwise. A
 /// shading has no alpha, so such a gradient draws under a soft mask.
 fn varying_alpha(g: &Gradient) -> bool {
-    match g.stops() {
-        [first, rest @ ..] => rest
-            .iter()
-            .any(|s| alpha_key(s.color.a) != alpha_key(first.color.a)),
-        [] => false,
-    }
+    let first = alpha_key(g.stops().first().color.a);
+    g.stops().iter().any(|s| alpha_key(s.color.a) != first)
 }
 
 const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
@@ -914,32 +910,23 @@ struct Shading {
 impl Shading {
     /// `g` with its stops padded so there are at least two, the first at 0
     /// and the last at 1. The pad repeats the boundary color, as in CSS. A
-    /// [`Gradient`] already raises and clamps its offsets. No stops give two
-    /// transparent ones, a case the visibility check already excludes.
+    /// [`Gradient`] already raises and clamps its offsets.
     fn new(g: &Gradient, matrix: [f32; 6]) -> Self {
-        let stops = match g.stops() {
-            [first, .., last] => {
-                let mut stops = Vec::with_capacity(g.stops().len() + 2);
-                if first.offset > 0.0 {
-                    stops.push(Stop {
-                        offset: 0.0,
-                        color: first.color,
-                    });
-                }
-                stops.extend_from_slice(g.stops());
-                if last.offset < 1.0 {
-                    stops.push(Stop {
-                        offset: 1.0,
-                        color: last.color,
-                    });
-                }
-                stops
-            }
-            one_or_none => {
-                let color = one_or_none.first().map_or(Rgba::default(), |s| s.color);
-                vec![Stop { offset: 0.0, color }, Stop { offset: 1.0, color }]
-            }
-        };
+        let (first, last) = (g.stops().first(), g.stops().last());
+        let mut stops = Vec::new();
+        if first.offset > 0.0 {
+            stops.push(Stop {
+                offset: 0.0,
+                color: first.color,
+            });
+        }
+        stops.extend(g.stops());
+        if last.offset < 1.0 {
+            stops.push(Stop {
+                offset: 1.0,
+                color: last.color,
+            });
+        }
         Self {
             geom: g.geom(),
             stops,

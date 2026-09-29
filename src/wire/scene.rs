@@ -7,9 +7,9 @@
 use std::collections::BTreeSet;
 
 use crate::scene::{
-    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Gradient, GradientGeom, Image, LineCap,
-    LineJoin, MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind,
-    Segments, SpreadMode, Stop, Text, TextSpec, end_segments, push_segment,
+    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeom, Image, LineCap, LineJoin,
+    MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind, Segments,
+    SpreadMode, Stop, Stops, Text, TextSpec, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -166,7 +166,7 @@ fn read_stop(r: wire_stop::Reader<'_>) -> Result<Stop, ValueError> {
     })
 }
 
-fn write_stops(mut b: capnp::struct_list::Builder<'_, wire_stop::Owned>, stops: &[Stop]) {
+fn write_stops(mut b: capnp::struct_list::Builder<'_, wire_stop::Owned>, stops: &Stops) {
     for (i, s) in stops.iter().enumerate() {
         write_stop(b.reborrow().get(i as u32), *s);
     }
@@ -238,11 +238,7 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
             (geom, read_stops(g.get_stops()?)?, g.get_spread()?)
         }
     };
-    Ok(Paint::gradient(Gradient::new(
-        geom,
-        stops,
-        spread_from_wire(spread),
-    )))
+    Ok(Paint::gradient(geom, stops, spread_from_wire(spread)))
 }
 
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {

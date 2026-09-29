@@ -19,7 +19,7 @@ use crate::renderer::{
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, GradientGeom, Image, LineCap, LineJoin, Paint, Path, Rgba,
-    Sampling, SpreadMode, Stop, Text,
+    Sampling, SpreadMode, Stops, Text,
 };
 use crate::text::TextLayout;
 
@@ -631,7 +631,7 @@ fn sk_color(c: Rgba) -> SkColor {
     SkColor::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8)
 }
 
-fn sk_stops(stops: &[Stop], fade: f32) -> Vec<SkStop> {
+fn sk_stops(stops: &Stops, fade: f32) -> Vec<SkStop> {
     stops
         .iter()
         .map(|s| SkStop::new(s.offset, sk_color(faded(s.color, fade))))

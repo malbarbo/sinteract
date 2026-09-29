@@ -20,6 +20,57 @@ pub struct Stop {
     pub color: Rgba,
 }
 
+/// The stops of a gradient, at least one, with offsets that rise in [0, 1].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stops {
+    first: Stop,
+    rest: Vec<Stop>,
+}
+
+impl Stops {
+    /// The stops, or `None` if there are none. It raises a stop that is
+    /// below the one before it, and clamps every offset to [0, 1], as SVG
+    /// and Skia do.
+    fn new(mut stops: Vec<Stop>) -> Option<Self> {
+        let mut prev = 0.0;
+        for stop in &mut stops {
+            stop.offset = stop.offset.clamp(prev, 1.0);
+            prev = stop.offset;
+        }
+        let mut stops = stops.into_iter();
+        let first = stops.next()?;
+        Some(Self {
+            first,
+            rest: stops.collect(),
+        })
+    }
+
+    pub fn first(&self) -> &Stop {
+        &self.first
+    }
+
+    pub fn last(&self) -> &Stop {
+        self.rest.last().unwrap_or(&self.first)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        1 + self.rest.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Stop> {
+        self.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Stops {
+    type Item = &'a Stop;
+    type IntoIter = std::iter::Chain<std::iter::Once<&'a Stop>, std::slice::Iter<'a, Stop>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(&self.first).chain(&self.rest)
+    }
+}
+
 /// How a gradient continues past its axis, as the SVG `spreadMethod`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
@@ -55,33 +106,16 @@ pub enum GradientGeom {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gradient {
     geom: GradientGeom,
-    stops: Vec<Stop>,
+    stops: Stops,
     spread: SpreadMode,
 }
 
 impl Gradient {
-    /// The only constructor, which the wire decoder uses because it reads
-    /// the three parts apart. It raises a stop that is below the one before
-    /// it, and clamps every offset to [0, 1], as SVG and Skia do, and
-    /// shortens an axis too long to measure.
-    pub(crate) fn new(geom: GradientGeom, mut stops: Vec<Stop>, spread: SpreadMode) -> Self {
-        let mut prev = 0.0;
-        for stop in &mut stops {
-            stop.offset = stop.offset.clamp(prev, 1.0);
-            prev = stop.offset;
-        }
-        Self {
-            geom: measurable(geom),
-            stops,
-            spread,
-        }
-    }
-
     pub fn geom(&self) -> GradientGeom {
         self.geom
     }
 
-    pub fn stops(&self) -> &[Stop] {
+    pub fn stops(&self) -> &Stops {
         &self.stops
     }
 
@@ -137,21 +171,21 @@ impl Paint {
     /// A ramp along the line from `(x0, y0)` to `(x1, y1)`, with
     /// [`SpreadMode::Pad`] outside it.
     pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Self {
-        Self::gradient(Gradient::new(
+        Self::gradient(
             GradientGeom::Linear { x0, y0, x1, y1 },
             stops,
             SpreadMode::Pad,
-        ))
+        )
     }
 
     /// A ramp outward from `(cx, cy)` to `radius`, with [`SpreadMode::Pad`]
     /// outside it.
     pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Self {
-        Self::gradient(Gradient::new(
+        Self::gradient(
             GradientGeom::Radial { cx, cy, radius },
             stops,
             SpreadMode::Pad,
-        ))
+        )
     }
 
     /// The paint with `spread` outside its ramp. The spread does not decide
@@ -167,9 +201,18 @@ impl Paint {
     /// A gradient paint, or the solid color of the last stop when the
     /// gradient has no extent, a radius or an axis of 2^-15 or less. SVG
     /// paints the last stop in that case, and tiny-skia and the pdf each did
-    /// something else. The wire decoder calls it, because it reads the three
-    /// parts apart.
-    pub(crate) fn gradient(g: Gradient) -> Self {
+    /// something else. No stops give a transparent color. It shortens an
+    /// axis too long to measure. The wire decoder calls it, because it reads
+    /// the three parts apart.
+    pub(crate) fn gradient(geom: GradientGeom, stops: Vec<Stop>, spread: SpreadMode) -> Self {
+        let Some(stops) = Stops::new(stops) else {
+            return Self::default();
+        };
+        let g = Gradient {
+            geom: measurable(geom),
+            stops,
+            spread,
+        };
         // The threshold of tiny-skia, which cannot tell a gradient below it
         // from one of no extent at all, so the scene decides here and the
         // three backends agree.
@@ -178,9 +221,10 @@ impl Paint {
             GradientGeom::Linear { x0, y0, x1, y1 } => (x1 - x0).hypot(y1 - y0) <= NO_EXTENT,
             GradientGeom::Radial { radius, .. } => radius <= NO_EXTENT,
         };
-        match g.stops.last() {
-            Some(last) if no_extent => Self::Solid(last.color),
-            _ => Self::Gradient(Box::new(g)),
+        if no_extent {
+            Self::Solid(g.stops.last().color)
+        } else {
+            Self::Gradient(Box::new(g))
         }
     }
 
@@ -189,7 +233,7 @@ impl Paint {
     pub fn is_visible(&self) -> bool {
         match self {
             Self::Solid(c) => c.a > 0.0,
-            Self::Gradient(g) => !g.stops.is_empty(),
+            Self::Gradient(_) => true,
         }
     }
 
@@ -198,7 +242,7 @@ impl Paint {
     pub fn primary_color(&self) -> Rgba {
         match self {
             Self::Solid(c) => *c,
-            Self::Gradient(g) => g.stops.first().map(|s| s.color).unwrap_or_default(),
+            Self::Gradient(g) => g.stops.first().color,
         }
     }
 
@@ -1935,17 +1979,20 @@ mod tests {
                 y1: 5.0,
             },
         ] {
-            let g = Gradient {
-                geom,
-                stops: stops.clone(),
-                spread: SpreadMode::Repeat,
-            };
-            assert_eq!(Paint::gradient(g), last, "{geom:?}");
+            let paint = Paint::gradient(geom, stops.clone(), SpreadMode::Repeat);
+            assert_eq!(paint, last, "{geom:?}");
         }
         assert!(matches!(
             Paint::radial(5.0, 5.0, 1.0, stops),
             Paint::Gradient(_)
         ));
+    }
+
+    #[test]
+    fn a_gradient_with_no_stops_is_transparent() {
+        let paint = Paint::linear(0.0, 0.0, 10.0, 0.0, Vec::new());
+        assert_eq!(paint, Paint::default());
+        assert!(!paint.is_visible());
     }
 
     #[test]
