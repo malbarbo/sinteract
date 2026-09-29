@@ -4,11 +4,14 @@
 
 use std::collections::HashMap;
 
+/// The pixels of a render. The re-export lets a caller name the type with
+/// no dependency of its own on tiny-skia.
+pub use tiny_skia::Pixmap;
 use tiny_skia::{
     Color as SkColor, FillRule as SkFillRule, FilterQuality, GradientStop as SkStop,
     LineCap as SkLineCap, LineJoin as SkLineJoin, Mask, Paint as SkPaint, Path as SkPath,
-    PathBuilder, PathStroker, Pixmap, PixmapPaint, Point as SkPoint, Rect as SkRect,
-    Shader as SkShader, SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
+    PathBuilder, PathStroker, PixmapPaint, Point as SkPoint, Rect as SkRect, Shader as SkShader,
+    SpreadMode as SkSpread, Stroke, StrokeDash, Transform,
 };
 
 use crate::asset::{MAX_IMAGE_PIXELS, MAX_LIVE_PIXELS};
