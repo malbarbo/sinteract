@@ -113,9 +113,6 @@ pub enum EngineError {
     /// An asset came for an id that names a live asset. The core drops it
     /// and goes on.
     LiveId(u32),
-    /// A forget came from the engine, which never sends one. The core drops
-    /// it and goes on.
-    Forget(u32),
     /// A frame came for a player that has no seat in the room. The core
     /// drops it and goes on.
     NoSeat(NonZeroU32),
@@ -158,7 +155,6 @@ impl std::fmt::Display for EngineError {
             EngineError::SecondHello => f.write_str("a hello came after the first one"),
             EngineError::Asset { id, error } => write!(f, "asset {id}: {error}"),
             EngineError::LiveId(id) => write!(f, "asset {id}: the id already names a live asset"),
-            EngineError::Forget(id) => write!(f, "a forget of {id} came from the engine"),
             EngineError::NoSeat(player) => {
                 write!(f, "a frame came for player {player}, who has no seat")
             }
@@ -175,7 +171,6 @@ impl std::error::Error for EngineError {
             EngineError::NoHello
             | EngineError::SecondHello
             | EngineError::LiveId(_)
-            | EngineError::Forget(_)
             | EngineError::NoSeat(_) => None,
         }
     }
@@ -459,7 +454,6 @@ impl ServerCore {
                         errors.push(e);
                     }
                 }
-                Ok(Some(Arm::Forget(id))) => errors.push(EngineError::Forget(id)),
                 Ok(Some(Arm::TickTaken)) => {
                     if let Phase::Playing { tick_pending, .. } = &mut self.phase {
                         *tick_pending = false;
@@ -1407,15 +1401,12 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_asset_and_a_forget_of_the_engine_are_errors_and_the_room_goes_on() {
+    fn a_bad_asset_is_an_error_and_the_room_goes_on() {
         let (mut room, _) = Room::playing(&["Ana"]);
         let mut stream = asset_of(1, 2049);
         engine_to_server::write_asset(&mut stream, 2, b"GIF89a").unwrap();
         stream.extend_from_slice(&asset(3));
         stream.extend_from_slice(&asset(3));
-        let forget = engine_to_server::encode_forget(3);
-        stream.extend_from_slice(&framing::header(Side::Engine, forget.len() as u32));
-        stream.extend_from_slice(&forget);
         assert!(matches!(
             room.core.from_engine(&stream)[..],
             [
@@ -1428,7 +1419,6 @@ mod tests {
                     error: ImageError::Unsupported
                 },
                 EngineError::LiveId(3),
-                EngineError::Forget(3),
             ]
         ));
         assert!(!room.core.is_over());

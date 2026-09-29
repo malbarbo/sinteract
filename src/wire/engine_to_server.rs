@@ -52,7 +52,6 @@ pub enum Arm {
         to_view: Arc<[u8]>,
     },
     Hello(PlayerRange),
-    Forget(u32),
     TickTaken,
 }
 
@@ -156,7 +155,6 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
                 }
             }
             engine_to_server::Hello(h) => Arm::Hello(read_hello(h?)?),
-            engine_to_server::Forget(id) => Arm::Forget(id),
             engine_to_server::TickTaken(()) => Arm::TickTaken,
         }))
     })
@@ -196,14 +194,6 @@ pub(super) fn hello_message(min: u32, max: u32) -> MessageBuilder<HeapAllocator>
     builder
 }
 
-fn forget_message(id: u32) -> MessageBuilder<HeapAllocator> {
-    let mut builder = MessageBuilder::new_default();
-    builder
-        .init_root::<engine_to_server::Builder>()
-        .set_forget(id);
-    builder
-}
-
 fn tick_taken_message() -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     builder
@@ -220,10 +210,4 @@ pub(super) fn asset_message(id: u32, blob: &[u8]) -> MessageBuilder<HeapAllocato
     asset.set_id(id);
     asset.set_blob(blob);
     builder
-}
-
-/// Encode that the asset `id` is gone, with no envelope, as a server sends
-/// it to a view.
-pub fn encode_forget(id: u32) -> Vec<u8> {
-    super::to_bytes(forget_message(id))
 }

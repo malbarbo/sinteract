@@ -34,7 +34,7 @@ os braços abaixo.
 
 | quem escreve | raiz             | mágica | braços                                             |
 |--------------|------------------|--------|----------------------------------------------------|
-| engine       | `EngineToServer` | `SIE1` | `asset`, `frame`, `hello`, `forget`, `tickTaken` |
+| engine       | `EngineToServer` | `SIE1` | `asset`, `frame`, `hello`, `tickTaken` |
 | view         | `ViewToServer`   |        | `event`                 |
 | servidor     | `ServerToEngine` | `SIS1` | `event`, `start`, `tick`, `lost` |
 

@@ -37,8 +37,6 @@ pub(crate) enum Message {
         scene: Scene,
     },
     Hello(PlayerRange),
-    /// The view drops the asset of this id. Only a server sends it.
-    Forget(u32),
     /// The engine took a tick. It goes to the server alone.
     TickTaken,
 }
@@ -90,7 +88,6 @@ fn decode_message(
         protocol_capnp::engine_to_server::Hello(h) => {
             Ok(Some(Message::Hello(engine_to_server::read_hello(h?)?)))
         }
-        protocol_capnp::engine_to_server::Forget(id) => Ok(Some(Message::Forget(id))),
         protocol_capnp::engine_to_server::TickTaken(()) => Ok(Some(Message::TickTaken)),
     }
 }

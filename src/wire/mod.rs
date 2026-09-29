@@ -575,10 +575,6 @@ mod tests {
             engine_to_server::arm(&testing::encode_hello(2, 4)).unwrap(),
             Some(engine_to_server::Arm::Hello(players))
         );
-        assert_eq!(
-            engine_to_server::arm(&engine_to_server::encode_forget(7)).unwrap(),
-            Some(engine_to_server::Arm::Forget(7))
-        );
     }
 
     #[test]
@@ -623,18 +619,6 @@ mod tests {
         let ids = testing::bitmap_ids(&encode_frame(&scene));
         assert_eq!(ids.into_iter().collect::<Vec<_>>(), [3, 9]);
         testing::bitmap_ids(&encode_frame(&sample_scene()));
-    }
-
-    #[test]
-    fn a_forget_round_trips_with_its_id() {
-        assert!(matches!(
-            decode(&engine_to_server::encode_forget(9)).unwrap(),
-            Message::Forget(9)
-        ));
-        assert!(matches!(
-            decode(&engine_to_server::encode_forget(u32::MAX)).unwrap(),
-            Message::Forget(u32::MAX)
-        ));
     }
 
     #[test]
