@@ -52,8 +52,10 @@ fn run_session(mut game: Game) -> ExitCode {
     // SAFETY: SINTERACT_SESSION says that the parent opened fd 3 and fd 4
     // for the session, and nothing else in this process uses them.
     let (from_server, to_server) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
-    let mut session = match Session::new(PLAYERS, from_server, BufWriter::new(to_server)) {
-        Ok(session) => session,
+    // The example draws the same scene for every player, so it has no use
+    // for their nicknames.
+    let mut session = match Session::start(PLAYERS, from_server, BufWriter::new(to_server)) {
+        Ok((session, _nicknames)) => session,
         Err(e) => {
             eprintln!("engine: {e}");
             return ExitCode::FAILURE;
@@ -94,8 +96,7 @@ fn run_session(mut game: Game) -> ExitCode {
                 }
                 break;
             }
-            SessionEvent::Start(_)
-            | SessionEvent::Input {
+            SessionEvent::Input {
                 event: InputEvent::Mouse(_) | InputEvent::Resize { .. } | InputEvent::Pad(_),
                 ..
             } => {}

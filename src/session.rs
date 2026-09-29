@@ -1,14 +1,15 @@
 //! [`Session`] is the engine side of a session. The server, or the page
 //! that plays the part of the server, writes a `ServerToEngine` stream to
 //! the engine, and the session turns the bytes into [`SessionEvent`]s with
-//! the rules of the protocol. [`Session::new`] writes the hello of the
-//! engine, and the engine writes its frames back with
+//! the rules of the protocol. [`Session::start`] writes the hello of the
+//! engine and waits for the start of the server, so a session exists only
+//! after its start. The engine writes its frames back with
 //! [`Session::write_frame`], which sends each image once, before the first
 //! frame that draws it. The session writes a tickTaken there as it hands
 //! out each tick, so the server holds the next tick until then.
 //!
 //! The session reads the server from the [`Read`] and writes to the
-//! [`Write`] that the engine passes to [`Session::new`], such as fd 3 and
+//! [`Write`] that the engine passes to [`Session::start`], such as fd 3 and
 //! fd 4. It opens no file or socket of its own, so it builds on wasm32.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -43,7 +44,8 @@ pub struct Session<R, W> {
     /// The buffer of [`Session::wait`] for a read, zeroed once, since a
     /// read into `bytes` would zero its room at every read.
     scratch: Vec<u8>,
-    state: State,
+    /// The session ended, and reads nothing more.
+    ended: bool,
     events: VecDeque<SessionEvent>,
     /// The id of each image that went out and that the server did not lose.
     sent: HashMap<Image, u32>,
@@ -53,10 +55,6 @@ pub struct Session<R, W> {
 /// What [`Session::wait`] delivers.
 #[derive(Debug)]
 pub enum SessionEvent {
-    /// The nicknames of the players of the session, the first of player 1.
-    /// The players are the same until the end. It comes before every other
-    /// event of the server, and once.
-    Start(Vec<String>),
     /// Time to draw the next frames, for every player.
     Tick,
     /// The input of `player`.
@@ -78,8 +76,6 @@ pub enum SessionEvent {
 pub enum SessionError {
     /// The message does not decode.
     Payload(wire::Error),
-    /// A message came before the start.
-    BeforeStart,
     /// A start came after the first one.
     SecondStart,
 }
@@ -88,7 +84,6 @@ impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SessionError::Payload(e) => write!(f, "message does not decode: {e}"),
-            SessionError::BeforeStart => write!(f, "a message came before the start"),
             SessionError::SecondStart => write!(f, "a start came after the first one"),
         }
     }
@@ -98,8 +93,51 @@ impl std::error::Error for SessionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             SessionError::Payload(e) => Some(e),
-            SessionError::BeforeStart | SessionError::SecondStart => None,
+            SessionError::SecondStart => None,
         }
+    }
+}
+
+/// Why [`Session::start`] did not start a session.
+#[derive(Debug)]
+pub enum StartError {
+    /// A read or a write failed.
+    Io(io::Error),
+    /// The stream ended before the start. The error is `Some` when the
+    /// stream broke, with a header that is not one of the server or with
+    /// the end inside a message.
+    End(Option<io::Error>),
+    /// The first message does not decode.
+    Payload(wire::Error),
+    /// The first message is not a start.
+    NoStart,
+}
+
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartError::Io(e) => write!(f, "cannot start the session: {e}"),
+            StartError::End(None) => write!(f, "the server ended before the start"),
+            StartError::End(Some(e)) => write!(f, "the stream broke before the start: {e}"),
+            StartError::Payload(e) => write!(f, "the first message does not decode: {e}"),
+            StartError::NoStart => write!(f, "the first message is not a start"),
+        }
+    }
+}
+
+impl std::error::Error for StartError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StartError::Io(e) | StartError::End(Some(e)) => Some(e),
+            StartError::Payload(e) => Some(e),
+            StartError::End(None) | StartError::NoStart => None,
+        }
+    }
+}
+
+impl From<io::Error> for StartError {
+    fn from(e: io::Error) -> Self {
+        StartError::Io(e)
     }
 }
 
@@ -137,27 +175,36 @@ impl From<io::Error> for FrameError {
     }
 }
 
-/// How much [`Session::wait`] asks of the reader at a time.
+/// How much a session asks of the reader at a time.
 const READ_BYTES: usize = 64 * 1024;
 
 impl<R: Read, W: Write> Session<R, W> {
-    /// A session for a game of `players`, which reads the server from `r`
-    /// and writes to it on `w`. It writes the hello to `w` and flushes `w`,
-    /// since the server sends nothing until it reads the hello. The hello
-    /// is the first message of the engine, and the only one.
-    pub fn new(players: PlayerRange, r: R, mut w: W) -> io::Result<Self> {
+    /// The session of a game of `players`, which reads the server from `r`
+    /// and writes to it on `w`, with the nicknames of the players, the
+    /// first of player 1. It writes the hello to `w`, flushes `w`, since
+    /// the server sends nothing until it reads the hello, and blocks until
+    /// the start. The hello is the first message of the engine, and the
+    /// only one. The players are the same until the end. A message before
+    /// the start breaks the rules of the server, and the session does not
+    /// start. An error of `r` ends the wait as well, since the hello went
+    /// out and cannot go out again.
+    pub fn start(players: PlayerRange, r: R, mut w: W) -> Result<(Self, Vec<String>), StartError> {
         engine_to_server::write_hello(&mut w, players)?;
         w.flush()?;
-        Ok(Session {
+        let mut session = Session {
             r,
             w,
             bytes: Vec::new(),
             scratch: Vec::new(),
-            state: State::BeforeStart,
+            ended: false,
             events: VecDeque::new(),
             sent: HashMap::new(),
             next_id: 0,
-        })
+        };
+        let nicknames = session.read_start()?;
+        // The bytes after the start in the same read.
+        session.take_messages();
+        Ok((session, nicknames))
     }
 
     /// The next event, with bytes from `r` when none waits. It blocks for
@@ -177,32 +224,21 @@ impl<R: Read, W: Write> Session<R, W> {
                     engine_to_server::write_tick_taken(&mut self.w).and_then(|()| self.w.flush())
                 });
                 if let Some(Err(e)) = taken {
-                    self.state = State::Ended;
+                    self.ended = true;
                     self.bytes = Vec::new();
                     self.events.clear();
                     return Err(e);
                 }
                 return Ok(event);
             }
-            if self.state == State::Ended {
+            if self.ended {
                 return Ok(SessionEvent::End(None));
             }
-            if self.scratch.is_empty() {
-                self.scratch = vec![0; READ_BYTES];
-            }
-            match self.r.read(&mut self.scratch) {
-                Ok(0) => {
-                    let broken =
-                        (!self.bytes.is_empty()).then(|| io::ErrorKind::UnexpectedEof.into());
-                    self.finish(broken);
-                }
-                Ok(n) => {
-                    let read = self.scratch.get(..n).expect("a read fits its buffer");
-                    self.bytes.extend_from_slice(read);
-                    self.take_messages();
-                }
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(e),
+            if self.read_more()? {
+                self.take_messages();
+            } else {
+                let broken = self.end_of_stream();
+                self.finish(broken);
             }
         }
     }
@@ -234,17 +270,69 @@ impl<R: Read, W: Write> Session<R, W> {
         Ok(())
     }
 
+    /// Read up to the start, the first message that the session knows, and
+    /// keep the bytes after it.
+    fn read_start(&mut self) -> Result<Vec<String>, StartError> {
+        loop {
+            match framing::split_message(&self.bytes, Side::Server) {
+                Ok(Some((payload, after))) => {
+                    let message = server_to_engine::decode(payload);
+                    let taken = self.bytes.len() - after.len();
+                    self.bytes.drain(..taken);
+                    match message {
+                        Ok(Some(Message::Start(nicknames))) => return Ok(nicknames),
+                        Ok(Some(Message::Tick | Message::Input { .. } | Message::Lost(_))) => {
+                            return Err(StartError::NoStart);
+                        }
+                        Ok(None) => {}
+                        Err(e) => return Err(StartError::Payload(e)),
+                    }
+                }
+                Ok(None) => {
+                    if !self.read_more()? {
+                        return Err(StartError::End(self.end_of_stream()));
+                    }
+                }
+                Err(e) => return Err(StartError::End(Some(e))),
+            }
+        }
+    }
+
+    /// Read the next bytes of `r` into `bytes`. Returns `true` if it read
+    /// some, `false` at the end of `r`.
+    fn read_more(&mut self) -> io::Result<bool> {
+        if self.scratch.is_empty() {
+            self.scratch = vec![0; READ_BYTES];
+        }
+        loop {
+            match self.r.read(&mut self.scratch) {
+                Ok(0) => return Ok(false),
+                Ok(n) => {
+                    let read = self.scratch.get(..n).expect("a read fits its buffer");
+                    self.bytes.extend_from_slice(read);
+                    return Ok(true);
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// The error of the end of `r`, which breaks the stream inside a
+    /// message.
+    fn end_of_stream(&self) -> Option<io::Error> {
+        (!self.bytes.is_empty()).then(|| io::ErrorKind::UnexpectedEof.into())
+    }
+
     /// Turn every whole message in `bytes` into events.
     fn take_messages(&mut self) {
         // Out of `self`, so the loop reads it while the events go in.
         let mut bytes = std::mem::take(&mut self.bytes);
         let mut rest = bytes.as_slice();
         loop {
-            let started = match self.state {
-                State::BeforeStart => false,
-                State::Started => true,
-                State::Ended => return,
-            };
+            if self.ended {
+                return;
+            }
             let (payload, after) = match framing::split_message(rest, Side::Server) {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
@@ -252,7 +340,7 @@ impl<R: Read, W: Write> Session<R, W> {
             };
             rest = after;
             match server_to_engine::decode(payload) {
-                Ok(Some(message)) => self.receive(started, message),
+                Ok(Some(message)) => self.receive(message),
                 Ok(None) => {}
                 Err(e) => self.push(SessionEvent::Error(SessionError::Payload(e))),
             }
@@ -262,25 +350,18 @@ impl<R: Read, W: Write> Session<R, W> {
         self.bytes = bytes;
     }
 
-    /// Turn `message` into an event, by whether the start came before it.
-    fn receive(&mut self, started: bool, message: Message) {
-        let event = match (started, message) {
-            (false, Message::Start(nicknames)) => {
-                self.state = State::Started;
-                SessionEvent::Start(nicknames)
-            }
-            (false, Message::Input { .. } | Message::Tick | Message::Lost(_)) => {
-                SessionEvent::Error(SessionError::BeforeStart)
-            }
-            (true, Message::Start(_)) => SessionEvent::Error(SessionError::SecondStart),
-            (true, Message::Tick) => SessionEvent::Tick,
+    /// Turn `message` into an event.
+    fn receive(&mut self, message: Message) {
+        let event = match message {
+            Message::Start(_) => SessionEvent::Error(SessionError::SecondStart),
+            Message::Tick => SessionEvent::Tick,
             // The next frame that draws the image sends it again, with a new
             // id, as the schema says.
-            (true, Message::Lost(id)) => {
+            Message::Lost(id) => {
                 self.sent.retain(|_, sent| *sent != id);
                 return;
             }
-            (true, Message::Input { player, event }) => SessionEvent::Input { player, event },
+            Message::Input { player, event } => SessionEvent::Input { player, event },
         };
         self.push(event);
     }
@@ -300,7 +381,7 @@ impl<R: Read, W: Write> Session<R, W> {
                     return;
                 }
             }
-            SessionEvent::Start(_) | SessionEvent::Error(_) | SessionEvent::End(_) => {}
+            SessionEvent::Error(_) | SessionEvent::End(_) => {}
         }
         self.events.push_back(event);
     }
@@ -315,10 +396,7 @@ impl<R: Read, W: Write> Session<R, W> {
                     return new.supersedes(event).then_some(old);
                 }
                 SessionEvent::Input { .. } => {}
-                SessionEvent::Start(_)
-                | SessionEvent::Tick
-                | SessionEvent::Error(_)
-                | SessionEvent::End(_) => return None,
+                SessionEvent::Tick | SessionEvent::Error(_) | SessionEvent::End(_) => return None,
             }
         }
         None
@@ -327,7 +405,7 @@ impl<R: Read, W: Write> Session<R, W> {
     /// End the session, with the error of a broken stream. Nothing comes
     /// after the `End`.
     fn finish(&mut self, broken: Option<io::Error>) {
-        self.state = State::Ended;
+        self.ended = true;
         self.bytes = Vec::new();
         self.events.push_back(SessionEvent::End(broken));
     }
@@ -354,15 +432,6 @@ fn images_of(scene: &Scene) -> Vec<&Image> {
     let mut out = Vec::new();
     walk(scene.elements(), &mut HashSet::new(), &mut out);
     out
-}
-
-/// Whether the session waits for its start, runs, or ended.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum State {
-    #[default]
-    BeforeStart,
-    Started,
-    Ended,
 }
 
 #[cfg(test)]
@@ -401,18 +470,8 @@ mod tests {
 
     type TestSession = Session<Pipe, Pipe>;
 
-    /// A session for 1 or 2 players, with the pipe from the server and the
-    /// pipe to the server, which the hello already left.
-    fn session() -> (TestSession, Pipe, Pipe) {
-        let (server, engine) = (Pipe::default(), Pipe::default());
-        let session = Session::new(
-            PlayerRange::new(1, 2).unwrap(),
-            server.clone(),
-            engine.clone(),
-        )
-        .unwrap();
-        engine.drain();
-        (session, server, engine)
+    fn players() -> PlayerRange {
+        PlayerRange::new(1, 2).unwrap()
     }
 
     /// A start with Ana as player 1 and Beto as player 2.
@@ -439,9 +498,8 @@ mod tests {
         out
     }
 
-    /// The next event, or `None` while the next one waits for more bytes,
-    /// with the tickTaken dropped.
-    fn next(session: &mut TestSession) -> Option<SessionEvent> {
+    /// The next event, or `None` while the next one waits for more bytes.
+    fn next<R: Read, W: Write>(session: &mut Session<R, W>) -> Option<SessionEvent> {
         match session.wait() {
             Ok(event) => Some(event),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => None,
@@ -449,17 +507,34 @@ mod tests {
         }
     }
 
-    /// A session after its start, with `bytes` in the pipe from the server.
+    /// A session after its start, with `bytes` after the start in the same
+    /// read, the pipe from the server, and the pipe to the server, which the
+    /// hello already left.
     fn started(bytes: &[u8]) -> (TestSession, Pipe, Pipe) {
-        let (mut session, server, engine) = session();
+        let (server, engine) = (Pipe::default(), Pipe::default());
         server.push(&start());
-        assert!(matches!(next(&mut session), Some(SessionEvent::Start(_))));
         server.push(bytes);
+        let (session, nicknames) =
+            Session::start(players(), server.clone(), engine.clone()).expect("the session starts");
+        assert_eq!(nicknames, ["Ana", "Beto"]);
+        engine.drain();
         (session, server, engine)
     }
 
+    /// Why a session does not start when the server sends `stream` and
+    /// ends.
+    fn no_start(stream: &[u8]) -> StartError {
+        let server = Pipe::default();
+        server.push(stream);
+        server.close();
+        match Session::start(players(), server, io::sink()) {
+            Ok(_) => panic!("the session started"),
+            Err(e) => e,
+        }
+    }
+
     /// Every event that waits, up to the end, in a short form.
-    fn names(session: &mut TestSession) -> Vec<String> {
+    fn names<R: Read, W: Write>(session: &mut Session<R, W>) -> Vec<String> {
         let mut ended = false;
         std::iter::from_fn(|| {
             if ended {
@@ -470,7 +545,6 @@ mod tests {
             Some(event)
         })
         .map(|e| match e {
-            SessionEvent::Start(nicknames) => format!("start {}", nicknames.len()),
             SessionEvent::Tick => "tick".into(),
             SessionEvent::Input { player, event } => match event {
                 InputEvent::Key(k) => format!("{player} key {}", k.key),
@@ -486,14 +560,16 @@ mod tests {
     }
 
     #[test]
-    fn a_new_session_writes_the_hello_and_flushes_it() {
-        let players = PlayerRange::new(1, 2).unwrap();
+    fn the_start_writes_the_hello_and_flushes_it() {
         let engine = Pipe::default();
-        Session::new(players, Pipe::default(), io::BufWriter::new(engine.clone())).unwrap();
-        match testing::read(&mut &engine.drain()[..]).unwrap() {
-            Some(testing::Message::Hello(got)) => assert_eq!(got, players),
+        Session::start(players(), &start()[..], io::BufWriter::new(engine.clone())).unwrap();
+        let hello = engine.drain();
+        let mut r = &hello[..];
+        match testing::read(&mut r).unwrap() {
+            Some(testing::Message::Hello(got)) => assert_eq!(got, players()),
             other => panic!("got {other:?}"),
         }
+        assert!(r.is_empty());
     }
 
     #[test]
@@ -501,15 +577,15 @@ mod tests {
         let mut stream = start();
         stream.extend_from_slice(&tick());
         input(&mut stream, 2, &key("a"));
-        let (mut session, server, _) = session();
-        let mut events = Vec::new();
-        for byte in &stream {
-            server.push(std::slice::from_ref(byte));
-            events.extend(names(&mut session));
-        }
-        server.close();
-        events.extend(names(&mut session));
-        assert_eq!(events, ["start 2", "tick", "2 key a", "end"]);
+        let r = Trickle {
+            bytes: &stream,
+            read: 0,
+            fail_at: usize::MAX,
+            interrupt: false,
+        };
+        let (mut session, nicknames) = Session::start(players(), r, io::sink()).unwrap();
+        assert_eq!(nicknames, ["Ana", "Beto"]);
+        assert_eq!(names(&mut session), ["tick", "2 key a", "end"]);
     }
 
     #[test]
@@ -564,43 +640,55 @@ mod tests {
     }
 
     #[test]
-    fn a_message_before_the_start_and_a_second_start_are_errors() {
-        let mut stream = tick();
-        stream.extend_from_slice(&start());
-        stream.extend_from_slice(&start());
-        stream.extend_from_slice(&tick());
-        let (mut session, server, _) = session();
-        server.push(&stream);
-        assert!(matches!(
-            next(&mut session),
-            Some(SessionEvent::Error(SessionError::BeforeStart))
-        ));
-        assert!(matches!(next(&mut session), Some(SessionEvent::Start(_))));
-        assert!(matches!(
-            next(&mut session),
-            Some(SessionEvent::Error(SessionError::SecondStart))
-        ));
-        assert!(matches!(next(&mut session), Some(SessionEvent::Tick)));
+    fn a_message_before_the_start_stops_the_start() {
+        let mut lost = Vec::new();
+        server_to_engine::write_lost(&mut lost, 7).unwrap();
+        for first in [tick(), lost] {
+            let mut stream = first;
+            stream.extend_from_slice(&start());
+            assert!(matches!(no_start(&stream), StartError::NoStart));
+        }
     }
 
     #[test]
-    fn a_lost_is_an_error_before_the_start() {
-        let mut lost = Vec::new();
-        server_to_engine::write_lost(&mut lost, 7).unwrap();
-        let mut stream = lost.clone();
-        stream.extend_from_slice(&start());
-        stream.extend_from_slice(&tick());
-        stream.extend_from_slice(&lost);
-        stream.extend_from_slice(&tick());
-        let (mut session, server, _) = session();
-        server.push(&stream);
+    fn a_start_that_does_not_come_whole_stops_the_start() {
+        let start = start();
+        assert!(matches!(no_start(&[]), StartError::End(None)));
         assert!(matches!(
-            next(&mut session),
-            Some(SessionEvent::Error(SessionError::BeforeStart))
+            no_start(&start[..start.len() - 1]),
+            StartError::End(Some(e)) if e.kind() == io::ErrorKind::UnexpectedEof
         ));
-        assert!(matches!(next(&mut session), Some(SessionEvent::Start(_))));
-        assert!(matches!(next(&mut session), Some(SessionEvent::Tick)));
-        assert!(next(&mut session).is_none());
+        assert!(matches!(
+            no_start(b"SIE1\0\0\0\0"),
+            StartError::End(Some(e)) if e.kind() == io::ErrorKind::InvalidData
+        ));
+        assert!(matches!(
+            no_start(&framed(&testing::encode_input(0, &key("a")))),
+            StartError::Payload(wire::Error::NoPlayer)
+        ));
+    }
+
+    #[test]
+    fn a_message_of_an_unknown_arm_before_the_start_is_skipped() {
+        let unknown =
+            testing::with_unknown_server_value(&tick()[HEADER_BYTES..], |m| testing::tag_of(m));
+        let mut stream = framed(&unknown);
+        stream.extend_from_slice(&start());
+        let server = Pipe::default();
+        server.push(&stream);
+        let (_, nicknames) = Session::start(players(), server, io::sink()).unwrap();
+        assert_eq!(nicknames, ["Ana", "Beto"]);
+    }
+
+    #[test]
+    fn a_second_start_is_an_error_and_the_session_goes_on() {
+        let mut stream = start();
+        stream.extend_from_slice(&tick());
+        let (mut session, _, _) = started(&stream);
+        assert_eq!(
+            names(&mut session),
+            ["error a start came after the first one", "tick"]
+        );
     }
 
     /// A scene that draws the images of `images`, the last one inside a
@@ -686,13 +774,6 @@ mod tests {
             written(&mut session, &engine, &drawing(&images[..8])).len(),
             9
         );
-    }
-
-    #[test]
-    fn the_end_before_the_start_is_the_end() {
-        let (mut session, server, _) = session();
-        server.close();
-        assert_eq!(names(&mut session), ["end"]);
     }
 
     #[test]
@@ -792,9 +873,7 @@ mod tests {
             fail_at: stream.len() - 4,
             interrupt: false,
         };
-        let players = PlayerRange::new(1, 2).unwrap();
-        let mut session = Session::new(players, r, io::sink()).unwrap();
-        assert!(matches!(session.wait(), Ok(SessionEvent::Start(_))));
+        let (mut session, _) = Session::start(players(), r, io::sink()).unwrap();
         let e = session.wait().expect_err("the error of the reader");
         assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
         assert!(matches!(session.wait(), Ok(SessionEvent::Tick)));
@@ -803,30 +882,13 @@ mod tests {
     }
 
     #[test]
-    fn a_tick_writes_a_tick_taken_and_a_start_does_not() {
-        let mut stream = start();
-        stream.extend_from_slice(&tick());
-        let (mut session, server, engine) = session();
-        server.push(&stream);
-        assert!(matches!(session.wait(), Ok(SessionEvent::Start(_))));
-        assert!(engine.drain().is_empty());
-        assert!(matches!(session.wait(), Ok(SessionEvent::Tick)));
-        assert!(matches!(
-            testing::read(&mut &engine.drain()[..]),
-            Ok(Some(testing::Message::TickTaken))
-        ));
-    }
-
-    #[test]
     fn wait_flushes_the_tick_taken_through_a_buffered_writer() {
         let mut stream = start();
         stream.extend_from_slice(&tick());
         let engine = Pipe::default();
-        let players = PlayerRange::new(1, 2).unwrap();
-        let mut session =
-            Session::new(players, &stream[..], io::BufWriter::new(engine.clone())).unwrap();
+        let (mut session, _) =
+            Session::start(players(), &stream[..], io::BufWriter::new(engine.clone())).unwrap();
         engine.drain();
-        assert!(matches!(session.wait(), Ok(SessionEvent::Start(_))));
         assert!(matches!(session.wait(), Ok(SessionEvent::Tick)));
         assert!(matches!(
             testing::read(&mut &engine.drain()[..]),
@@ -836,12 +898,9 @@ mod tests {
 
     #[test]
     fn an_error_of_the_writer_at_a_tick_ends_the_session() {
-        let mut stream = start();
+        let mut stream = tick();
         stream.extend_from_slice(&tick());
-        stream.extend_from_slice(&tick());
-        let (mut session, server, engine) = session();
-        server.push(&stream);
-        assert!(matches!(session.wait(), Ok(SessionEvent::Start(_))));
+        let (mut session, _, engine) = started(&stream);
         engine.break_writes();
         let e = session.wait().expect_err("the error of the writer");
         assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);

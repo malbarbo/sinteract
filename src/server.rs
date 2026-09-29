@@ -860,10 +860,11 @@ mod tests {
     use crate::wire::testing::{self, Pipe};
 
     /// A core with a session that reads what the core writes, which also
-    /// checks that the core writes nothing that a session rejects.
+    /// checks that the core writes nothing that a session rejects. The
+    /// session starts at the first message of the core.
     struct Room {
         core: ServerCore,
-        engine: Session<Pipe, Pipe>,
+        engine: Option<Session<Pipe, Pipe>>,
         /// The pipe from the core to the engine.
         to_engine: Pipe,
         /// The pipe from the engine to the core.
@@ -872,16 +873,11 @@ mod tests {
 
     impl Room {
         fn new() -> Self {
-            let (to_engine, from_engine) = (Pipe::default(), Pipe::default());
-            let players = PlayerRange::new(1, 9).unwrap();
-            let engine = Session::new(players, to_engine.clone(), from_engine.clone()).unwrap();
-            // The tests send the hello that they need.
-            from_engine.drain();
             Room {
                 core: ServerCore::new(),
-                engine,
-                to_engine,
-                from_engine,
+                engine: None,
+                to_engine: Pipe::default(),
+                from_engine: Pipe::default(),
             }
         }
 
@@ -914,6 +910,9 @@ mod tests {
                     events.push(format!("lost {id}"));
                 }
                 self.to_engine.push(message);
+                if self.engine.is_none() {
+                    events.push(self.start());
+                }
                 events.extend(self.session_events());
                 rest = after;
             }
@@ -922,22 +921,32 @@ mod tests {
             events
         }
 
+        /// Start the session of the engine, and the start in a short form.
+        fn start(&mut self) -> String {
+            let players = PlayerRange::new(1, 9).unwrap();
+            let (engine, nicknames) =
+                Session::start(players, self.to_engine.clone(), self.from_engine.clone())
+                    .expect("the first message of the core is a start");
+            // The tests send the hello that they need.
+            self.from_engine.drain();
+            self.engine = Some(engine);
+            let members: Vec<_> = (1..)
+                .zip(nicknames)
+                .map(|(player, nickname)| format!("{player} {nickname}"))
+                .collect();
+            format!("start {}", members.join(", "))
+        }
+
         /// The events that wait in the session of the engine, in a short
         /// form. A tickTaken goes to the pipe from the engine.
         fn session_events(&mut self) -> Vec<String> {
-            std::iter::from_fn(|| match self.engine.wait() {
+            let engine = self.engine.as_mut().expect("the session started");
+            std::iter::from_fn(|| match engine.wait() {
                 Ok(event) => Some(event),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => None,
                 Err(e) => panic!("{e}"),
             })
             .map(|e| match e {
-                SessionEvent::Start(nicknames) => {
-                    let members: Vec<_> = (1..)
-                        .zip(nicknames)
-                        .map(|(player, nickname)| format!("{player} {nickname}"))
-                        .collect();
-                    format!("start {}", members.join(", "))
-                }
                 SessionEvent::Tick => "tick".into(),
                 SessionEvent::Input { player, event } => match event {
                     InputEvent::Key(k) if k.kind == KeyKind::Up => {

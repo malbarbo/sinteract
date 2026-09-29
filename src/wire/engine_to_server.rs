@@ -107,7 +107,7 @@ pub fn write_frame(
 }
 
 /// Write the hello, the first message of the engine, which
-/// [`crate::session::Session::new`] writes.
+/// [`crate::session::Session::start`] writes.
 pub(crate) fn write_hello(w: &mut impl Write, players: PlayerRange) -> io::Result<()> {
     write_framed(
         w,
