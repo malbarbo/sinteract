@@ -1377,7 +1377,7 @@ mod tests {
                     stroke: Paint::rgba(0, 0, 0, 1.0),
                     stroke_width: 2.0,
                     miter_limit: 7.5,
-                    dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5).map(Box::new),
+                    dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5),
                     ..PathStyle::default()
                 },
                 0.0,

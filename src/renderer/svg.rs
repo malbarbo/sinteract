@@ -732,7 +732,7 @@ mod tests {
             stroke_width: 2.0,
             line_cap: LineCap::Round,
             line_join: LineJoin::Bevel,
-            dash: Dash::new(vec![3.0, 2.0], 1.0).map(Box::new),
+            dash: Dash::new(vec![3.0, 2.0], 1.0),
             closed: true,
             ..PathStyle::default()
         };

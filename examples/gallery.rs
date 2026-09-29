@@ -413,12 +413,12 @@ fn fill_rules(s: &mut Scene, x: f32, y: f32, _: f32) {
 
 fn dashes(s: &mut Scene, x: f32, y: f32, t: f32) {
     let ants = PathStyle {
-        dash: Dash::new([8.0, 4.0], t * 24.0).map(Box::new),
+        dash: Dash::new([8.0, 4.0], t * 24.0),
         ..stroke(rgb(20, 20, 20), 2.0)
     };
     s.add_path(rect(ants, x + 15.0, y + 15.0, 80.0, 90.0));
     let dots = PathStyle {
-        dash: Dash::new([0.0, 12.0], -t * 24.0).map(Box::new),
+        dash: Dash::new([0.0, 12.0], -t * 24.0),
         line_cap: LineCap::Round,
         ..stroke(rgb(200, 40, 90), 7.0)
     };
@@ -426,7 +426,7 @@ fn dashes(s: &mut Scene, x: f32, y: f32, t: f32) {
     // An odd array repeats itself, so this is 12 4 4 12 4 4, and a
     // gradient paints it.
     let odd = PathStyle {
-        dash: Dash::new([12.0, 4.0, 4.0], 0.0).map(Box::new),
+        dash: Dash::new([12.0, 4.0, 4.0], 0.0),
         ..stroke(
             Paint::linear(
                 x,

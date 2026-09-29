@@ -1310,7 +1310,7 @@ mod tests {
             let style = PathStyle {
                 stroke: Paint::rgba(0, 0, 0, 1.0),
                 stroke_width: 2.0,
-                dash: Dash::new(array, 0.0).map(Box::new),
+                dash: Dash::new(array, 0.0),
                 ..PathStyle::default()
             };
             scene.add_path(Path::builder(style, 0.0, 5.0).line_to(40.0, 5.0).build());
@@ -1739,7 +1739,7 @@ mod tests {
                 PathStyle {
                     stroke: Paint::rgba(255, 0, 0, 1.0),
                     stroke_width: 3.0,
-                    dash: Dash::new(vec![10.0, 10.0], 0.0).map(Box::new),
+                    dash: Dash::new(vec![10.0, 10.0], 0.0),
                     ..PathStyle::default()
                 },
                 5.0,

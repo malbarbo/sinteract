@@ -250,8 +250,7 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ValueErr
     let dash = Dash::new(
         r.get_dash_array()?.iter().collect::<Vec<_>>(),
         r.get_dash_offset(),
-    )
-    .map(Box::new);
+    );
     Ok(PathStyle {
         fill: read_paint(r.get_fill()?)?,
         stroke: read_paint(r.get_stroke()?)?,

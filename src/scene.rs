@@ -271,8 +271,14 @@ impl Paint {
 /// repeats, and the pattern starts `offset` units in. The array has an even
 /// length, its lengths are not negative and their sum is positive and
 /// finite, and the offset is finite.
+///
+/// The pattern is boxed, so a `PathStyle` with no dash, the common case,
+/// holds 8 bytes for it.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Dash {
+pub struct Dash(Box<DashPattern>);
+
+#[derive(Clone, Debug, PartialEq)]
+struct DashPattern {
     array: Box<[f32]>,
     offset: f32,
 }
@@ -289,18 +295,20 @@ impl Dash {
         }
         let sum: f32 = array.iter().sum();
         let valid = array.iter().all(|v| *v >= 0.0) && sum > 0.0 && sum.is_finite();
-        (valid && offset.is_finite()).then(|| Self {
-            array: array.into(),
-            offset,
+        (valid && offset.is_finite()).then(|| {
+            Self(Box::new(DashPattern {
+                array: array.into(),
+                offset,
+            }))
         })
     }
 
     pub fn array(&self) -> &[f32] {
-        &self.array
+        &self.0.array
     }
 
     pub fn offset(&self) -> f32 {
-        self.offset
+        self.0.offset
     }
 }
 
@@ -320,9 +328,8 @@ pub struct PathStyle {
     /// A fill closes them either way.
     pub closed: bool,
     pub miter_limit: f32,
-    /// `None` is a solid stroke. Boxed because a dash is rare and a `Dash`
-    /// inline would add 16 bytes to every style.
-    pub dash: Option<Box<Dash>>,
+    /// `None` is a solid stroke.
+    pub dash: Option<Dash>,
 }
 
 impl PathStyle {
@@ -1495,6 +1502,11 @@ mod tests {
             .move_to(2.0, 2.0)
             .build();
         assert_eq!(clip.segments().len(), 0);
+    }
+
+    #[test]
+    fn no_dash_is_one_pointer() {
+        assert_eq!(size_of::<Option<Dash>>(), size_of::<usize>());
     }
 
     #[test]
