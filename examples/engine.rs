@@ -34,6 +34,7 @@ use sinteract::wire::engine_to_server::PlayerRange;
 
 const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 300.0;
+const PLAYERS: PlayerRange = PlayerRange::new(1, 8).expect("1 to 8 is a range");
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -52,8 +53,7 @@ fn run_session(mut game: Game) -> ExitCode {
     // for the session, and nothing else in this process uses them.
     let (mut from_server, to_server) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
     let mut to_server = BufWriter::new(to_server);
-    let players = PlayerRange::new(1, 8).expect("1 to 8 is a range");
-    let mut session = match Session::new(players, &mut to_server) {
+    let mut session = match Session::new(PLAYERS, &mut to_server) {
         Ok(session) => session,
         Err(e) => {
             eprintln!("engine: {e}");

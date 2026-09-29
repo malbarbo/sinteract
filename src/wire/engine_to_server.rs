@@ -70,10 +70,13 @@ pub struct PlayerRange {
 impl PlayerRange {
     /// The range from `min` to `max`, or `None` if `min` is 0 or above
     /// `max`, or `max` is above [`MAX_PLAYERS`].
-    pub fn new(min: u32, max: u32) -> Option<PlayerRange> {
-        let min = NonZeroU32::new(min)?;
-        let max = NonZeroU32::new(max).filter(|&max| max >= min && max.get() <= MAX_PLAYERS)?;
-        Some(PlayerRange { min, max })
+    pub const fn new(min: u32, max: u32) -> Option<PlayerRange> {
+        match (NonZeroU32::new(min), NonZeroU32::new(max)) {
+            (Some(min), Some(max)) if min.get() <= max.get() && max.get() <= MAX_PLAYERS => {
+                Some(PlayerRange { min, max })
+            }
+            _ => None,
+        }
     }
 
     pub fn min(self) -> NonZeroU32 {
