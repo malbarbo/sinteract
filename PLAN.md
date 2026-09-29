@@ -29,14 +29,15 @@ Há três lados. A engine roda o programa e manda os frames, a view desenha e
 manda a entrada, e o servidor é dono da sessão e diz à engine quem joga. O
 formato é Cap'n Proto, e `schema/` é a fonte da verdade, com um arquivo por
 camada: `scene.capnp` para a cena, `event.capnp` para a entrada e
-`protocol.capnp` para a sessão. Cada lado escreve a sua própria raiz, com
-os braços abaixo.
+`protocol.capnp` para a sessão. Cada direção tem a sua raiz, com o nome
+dela, e nenhum lado recebe um braço que só outro lado manda.
 
-| quem escreve | raiz             | mágica | braços                                             |
-|--------------|------------------|--------|----------------------------------------------------|
-| engine       | `EngineToServer` | `SIE1` | `asset`, `frame`, `hello`, `tickTaken` |
-| view         | `ViewToServer`   |        | `event`                 |
-| servidor     | `ServerToEngine` | `SIS1` | `event`, `start`, `tick`, `lost` |
+| direção             | raiz             | mágica | braços                                 |
+|---------------------|------------------|--------|----------------------------------------|
+| engine → servidor   | `EngineToServer` | `SIE1` | `asset`, `frame`, `hello`, `tickTaken` |
+| servidor → engine   | `ServerToEngine` | `SIS1` | `event`, `start`, `tick`, `lost`       |
+| view → servidor     | `ViewToServer`   |        | `event`                                |
+| servidor → view     | `ServerToView`   |        | `asset`, `frame`, `forget`             |
 
 Num pipe, cada mensagem vai atrás de um cabeçalho de 8 bytes: a mágica e o
 tamanho em `u32` LE. Num WebSocket vai só o payload, e a versão vai no
@@ -45,8 +46,17 @@ mágica. O player é o número do jogador na partida, a
 partir de 1, e vai no primeiro campo do payload das mensagens que falam de
 um jogador: o `event` do servidor e o `frame` da engine, em que o 0 quer
 dizer todos. O `start`, o `tick` e o `asset` são
-da sessão inteira e não têm player, e a `ViewToServer` também
-não, porque o servidor sabe o player pela conexão.
+da sessão inteira e não têm player, e a `ViewToServer` e a `ServerToView`
+também não, porque o servidor sabe o player pela conexão.
+
+O `frame` da engine guarda a cena num campo `Data`, como uma mensagem
+inteira cuja raiz é a `Scene`. O servidor lê dela só os `id`s dos bitmaps
+e copia os bytes para o `frame` de uma `ServerToView`, uma vez por frame, e
+todas as views do frame dividem a mesma cópia. Num frame de 1000
+elementos, a cópia soma cerca de 70 µs aos 135 µs do servidor. Copiar a
+cena campo a campo, com a `Scene` como struct nas duas raízes, custava
+cerca de 400 µs. O preço é que o schema diz o tipo da cena só num
+comentário, e um leitor abre duas mensagens.
 
 Um leitor pula a mensagem, o elemento ou o evento de um braço que não
 conhece, e o valor de enum ou o byte de verbo que não conhece. Uma paint de
@@ -121,8 +131,8 @@ Regras da sessão com servidor:
 - o servidor lê os `id`s dos bitmaps de cada frame e guarda o frame com
   os assets que ele desenha. Uma view recebe os que lhe faltam, o frame,
   e o `forget` de um asset que nem o frame na tela nem o próximo
-  desenham. Só o servidor manda `forget`. Enquanto o WebSocket de um
-  jogador está ocupado, o servidor segura o próximo frame dele até
+  desenham. O `forget` só existe na `ServerToView`. Enquanto o WebSocket
+  de um jogador está ocupado, o servidor segura o próximo frame dele até
   entregá-lo, e depois passa ao mais novo, então uma view lenta pula
   frames mas avança;
 - uma conexão nova começa sem assets, e a view aplica um `forget` depois
@@ -242,11 +252,3 @@ Falta:
 ## Pontos abertos
 
 - O que sobrou do item A da revisão: `seq` e `Error`.
-- O `ServerCore` copia cada mensagem da engine duas vezes, do buffer do
-  host para o seu e do seu para um `Arc` próprio. Com o crate `bytes`, o
-  host leria direto no buffer do core, cada mensagem seria uma fatia
-  `Bytes` desse buffer e o `Next::Send` levaria o `Bytes` ao tungstenite
-  sem cópia. Uma fatia guardada prende o bloco inteiro de onde saiu, e a
-  conta do `Cache` deixaria de ser a memória real. Um frame de dezenas de
-  KB a 60 Hz custa poucos MB/s de cópia, então isso espera um host em
-  Tokio e uma medida que mostre a cópia.
