@@ -13,8 +13,8 @@
 //! [`Lobby::players`] hands that to the lobby of the host, and the host
 //! passes the players to [`Lobby::start`], which gives the core. The
 //! engine sends nothing else before the start, so the host needs the core
-//! and its tasks only from the start on. Then
-//! the host gives each player a token of its own, such as 16 random bytes
+//! and its tasks only from the start on. Then the host gives each of
+//! [`ServerCore::players`] a token of its own, such as 16 random bytes
 //! in the link of the player, which the page keeps in its
 //! `sessionStorage`. A connection that brings the token takes the seat
 //! with [`ServerCore::connect`], the first time and after a drop alike.
@@ -306,6 +306,14 @@ impl Lobby {
 }
 
 impl ServerCore {
+    /// Each player of the room, with the nickname that the engine got, in
+    /// the order of the start.
+    pub fn players(&self) -> impl Iterator<Item = (NonZeroU32, &str)> {
+        self.seats
+            .iter()
+            .map(|(player, seat)| (*player, seat.nickname.as_str()))
+    }
+
     /// Say that the WebSocket of `conn` closed. The seat stays, and its
     /// input and frames stop until a connect. The engine gets an `Up` for
     /// each key and button that the view held. A second call, and a call
@@ -1042,6 +1050,13 @@ mod tests {
         let mut room = Room::new(lobby.start(&["Ana", "Beto"]).unwrap());
         room.core.tick();
         assert_eq!(room.events(), ["start 1 Ana, 2 Beto", "tick"]);
+    }
+
+    #[test]
+    fn the_players_come_with_the_nicknames_that_the_engine_got() {
+        let core = started(&["Ana", "Be\nto"]);
+        let players: Vec<_> = core.players().map(|(p, n)| (p.get(), n)).collect();
+        assert_eq!(players, [(1, "Ana"), (2, "Beto")]);
     }
 
     #[test]

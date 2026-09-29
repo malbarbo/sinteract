@@ -18,7 +18,6 @@
 
 use std::fmt;
 use std::io::{self, PipeReader, PipeWriter, Read, Write};
-use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
@@ -38,9 +37,6 @@ const BACKLOG: usize = 4;
 
 /// How much the view asks of the pipe of the engine at a time.
 const READ_BYTES: usize = 64 * 1024;
-
-/// The one player of the room.
-const PLAYER: NonZeroU32 = NonZeroU32::MIN;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -142,7 +138,8 @@ fn start(
             .map_err(|e| e.to_string())?;
     }
     let mut core = lobby.start(&["view"]).map_err(|(_, e)| e.to_string())?;
-    let conn = core.connect(PLAYER).expect("the room has player 1");
+    let (player, _) = core.players().next().expect("the room has one player");
+    let conn = core.connect(player).expect("the player has a seat");
     send_engine(&mut core, to_engine).map_err(|e| e.to_string())?;
     Ok((core, conn))
 }
