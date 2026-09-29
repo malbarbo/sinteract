@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
-use sinteract::server::{Conn, Next, ServerCore};
+use sinteract::server::{Conn, Lobby, Next, ServerCore};
 use sinteract::wire::server_to_view::FrameReader;
 
 /// How many reads of the engine the reader thread holds before it waits
@@ -55,9 +55,8 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut core = ServerCore::new();
-    let conn = match start(&mut core, &mut from_engine, &mut to_engine) {
-        Ok(conn) => conn,
+    let (mut core, conn) = match start(&mut from_engine, &mut to_engine) {
+        Ok(started) => started,
         Err(e) => {
             eprintln!("view: {e}");
             let _ = child.kill();
@@ -126,34 +125,26 @@ fn main() -> ExitCode {
 /// Read the engine up to its hello, start the room with the one player,
 /// and send the engine the start.
 fn start(
-    core: &mut ServerCore,
     from_engine: &mut impl Read,
     to_engine: &mut impl Write,
-) -> Result<Conn, String> {
+) -> Result<(ServerCore, Conn), String> {
+    let mut lobby = Lobby::new();
     let mut buf = vec![0; READ_BYTES];
-    while core.players().is_none() {
-        if core.is_over() {
-            return Err("the engine ended before its hello".into());
-        }
-        match from_engine.read(&mut buf) {
-            Ok(0) => {
-                if let Some(e) = core.engine_ended() {
-                    return Err(e.to_string());
-                }
-            }
-            Ok(n) => {
-                for e in core.from_engine(buf.get(..n).expect("a read fits its buffer")) {
-                    eprintln!("view: {e}");
-                }
-            }
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+    while lobby.players().is_none() {
+        let n = match from_engine.read(&mut buf) {
+            Ok(0) => return Err("the engine ended before its hello".into()),
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e.to_string()),
-        }
+        };
+        lobby = lobby
+            .from_engine(buf.get(..n).expect("a read fits its buffer"))
+            .map_err(|e| e.to_string())?;
     }
-    core.start(&["view"]).map_err(|e| e.to_string())?;
+    let mut core = lobby.start(&["view"]).map_err(|(_, e)| e.to_string())?;
     let conn = core.connect(PLAYER).expect("the room has player 1");
-    send_engine(core, to_engine).map_err(|e| e.to_string())?;
-    Ok(conn)
+    send_engine(&mut core, to_engine).map_err(|e| e.to_string())?;
+    Ok((core, conn))
 }
 
 /// Write what the core has for the engine. The view closes the pipe of

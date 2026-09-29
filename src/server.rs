@@ -8,9 +8,12 @@
 //! engine to [`ServerCore::from_engine`], and asks
 //! [`ServerCore::next_for`] what to send to each view.
 //!
-//! The core has no lobby. The engine says in its hello how many players
-//! the game takes, [`ServerCore::players`] hands that to the lobby of the
-//! host, and the host passes the players to [`ServerCore::start`]. Then
+//! A room starts as a [`Lobby`], which takes the hello of the engine. The
+//! engine says in its hello how many players the game takes,
+//! [`Lobby::players`] hands that to the lobby of the host, and the host
+//! passes the players to [`Lobby::start`], which gives the core. The
+//! engine sends nothing else before the start, so the host needs the core
+//! and its tasks only from the start on. Then
 //! the host gives each player a token of its own, such as 16 random bytes
 //! in the link of the player, which the page keeps in its
 //! `sessionStorage`. A connection that brings the token takes the seat
@@ -42,16 +45,27 @@ use crate::wire::server_to_engine;
 use crate::wire::server_to_view;
 use crate::wire::view_to_server;
 
-/// The rules of a room, from the players and the timer of the host to the
-/// messages for the engine, and from the engine to the views.
+/// A room before the start. It waits for the hello of the engine, then for
+/// the players from the host.
+#[derive(Debug, Default)]
+pub struct Lobby {
+    /// The bytes of the engine that do not make a whole message yet.
+    engine_in: Vec<u8>,
+    /// The players that the game takes, from the hello.
+    range: Option<PlayerRange>,
+}
+
+/// The rules of a room after the start, from the players and the timer of
+/// the host to the messages for the engine, and from the engine to the
+/// views.
 ///
-/// The room waits for the hello of the engine, then for the start from
-/// the host, then plays until [`ServerCore::close`], and is over when the
+/// The room plays until [`ServerCore::close`], and is over when the
 /// engine ends. Only a playing room writes to the engine. A player whose
 /// view drops keeps the seat, so the engine sees the same players until
 /// the end.
 #[derive(Debug)]
 pub struct ServerCore {
+    seats: Seats,
     phase: Phase,
     /// The bytes of the engine that do not make a whole message yet.
     engine_in: Vec<u8>,
@@ -105,7 +119,10 @@ pub enum EngineError {
     Broken(io::Error),
     /// The first message of the engine is not a hello. The room is over.
     NoHello,
-    /// A hello came after the first one. The core drops it and goes on.
+    /// A message came after the hello and before the start. The room is
+    /// over.
+    BeforeStart,
+    /// A hello came after the start. The core drops it and goes on.
     SecondHello,
     /// The asset `id` is not an image that a view decodes, or is larger
     /// than an image can be. The core drops it and goes on.
@@ -118,15 +135,13 @@ pub enum EngineError {
     NoSeat(NonZeroU32),
 }
 
-/// Why [`ServerCore::start`] did not start the room.
+/// Why [`Lobby::start`] did not start the room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartError {
     /// The engine has not said its hello yet.
     NoHello,
     /// The game does not take that many players.
     Players { players: usize, range: PlayerRange },
-    /// The room started, closed or ended before.
-    PastStart,
 }
 
 impl std::fmt::Display for StartError {
@@ -139,7 +154,6 @@ impl std::fmt::Display for StartError {
                 range.min(),
                 range.max()
             ),
-            StartError::PastStart => f.write_str("the room is past its start"),
         }
     }
 }
@@ -152,6 +166,7 @@ impl std::fmt::Display for EngineError {
             EngineError::Payload(e) => write!(f, "message does not decode: {e}"),
             EngineError::Broken(e) => write!(f, "broken stream: {e}"),
             EngineError::NoHello => f.write_str("the first message is not a hello"),
+            EngineError::BeforeStart => f.write_str("a message came before the start"),
             EngineError::SecondHello => f.write_str("a hello came after the first one"),
             EngineError::Asset { id, error } => write!(f, "asset {id}: {error}"),
             EngineError::LiveId(id) => write!(f, "asset {id}: the id already names a live asset"),
@@ -169,6 +184,7 @@ impl std::error::Error for EngineError {
             EngineError::Broken(e) => Some(e),
             EngineError::Asset { error, .. } => Some(error),
             EngineError::NoHello
+            | EngineError::BeforeStart
             | EngineError::SecondHello
             | EngineError::LiveId(_)
             | EngineError::NoSeat(_) => None,
@@ -220,43 +236,54 @@ const MAX_HELD_KEYS: usize = 32;
 /// players, their nicknames and the messages of the views have a cap.
 const UNDER_THE_CAP: &str = "a message for the engine is under the cap of the framing";
 
-impl ServerCore {
+impl Lobby {
     pub fn new() -> Self {
-        ServerCore {
-            phase: Phase::Waiting,
-            engine_in: Vec::new(),
-            cache: Cache::new(),
-        }
+        Self::default()
     }
 
     /// The players that the game takes, from the hello of the engine, or
-    /// `None` before the hello and after the start.
+    /// `None` before the hello.
     pub fn players(&self) -> Option<PlayerRange> {
-        match self.phase {
-            Phase::Ready { range, .. } => Some(range),
-            Phase::Waiting | Phase::Playing { .. } | Phase::Closing { .. } | Phase::Over { .. } => {
-                None
+        self.range
+    }
+
+    /// Take the next bytes of the engine. They may end anywhere, inside a
+    /// message too. The engine says its hello and then waits for the
+    /// start, so a first message that is not a hello, any message after
+    /// the hello, and a broken stream end the room. The lobby skips a
+    /// message from a newer schema.
+    pub fn from_engine(mut self, bytes: &[u8]) -> Result<Lobby, EngineError> {
+        self.engine_in.extend_from_slice(bytes);
+        let mut rest = self.engine_in.as_slice();
+        while let Some((payload, after)) =
+            framing::split_message(rest, Side::Engine).map_err(EngineError::Broken)?
+        {
+            rest = after;
+            match (engine_to_server::arm(payload), self.range) {
+                (Ok(None), _) => {}
+                (Ok(Some(Arm::Hello(range))), None) => self.range = Some(range),
+                (Ok(Some(_)), None) => return Err(EngineError::NoHello),
+                (Err(e), None) => return Err(EngineError::Payload(e)),
+                (Ok(Some(_)) | Err(_), Some(_)) => return Err(EngineError::BeforeStart),
             }
         }
+        let taken = self.engine_in.len() - rest.len();
+        self.engine_in.drain(..taken);
+        Ok(self)
     }
 
     /// Start the room with a player for each of `nicknames`, numbered from
     /// 1 in their order, and give the engine the start. A nickname loses
     /// its control characters, so it cannot move the cursor of a terminal
-    /// that prints it, and is cut to 64 bytes.
-    pub fn start<S: AsRef<str>>(&mut self, nicknames: &[S]) -> Result<(), StartError> {
-        let Phase::Ready { range, lost } = &mut self.phase else {
-            return Err(if matches!(self.phase, Phase::Waiting) {
-                StartError::NoHello
-            } else {
-                StartError::PastStart
-            });
+    /// that prints it, and is cut to 64 bytes. The error gives the lobby
+    /// back, for another try.
+    pub fn start<S: AsRef<str>>(self, nicknames: &[S]) -> Result<ServerCore, (Lobby, StartError)> {
+        let Some(range) = self.range else {
+            return Err((self, StartError::NoHello));
         };
         if !range.contains(nicknames.len()) {
-            return Err(StartError::Players {
-                players: nicknames.len(),
-                range: *range,
-            });
+            let players = nicknames.len();
+            return Err((self, StartError::Players { players, range }));
         }
         let seats: Seats = (1..)
             .map_while(NonZeroU32::new)
@@ -266,27 +293,25 @@ impl ServerCore {
         let nicknames: Vec<&str> = seats.values().map(|s| s.nickname.as_str()).collect();
         let mut engine_out = Vec::new();
         server_to_engine::write_start(&mut engine_out, &nicknames).expect(UNDER_THE_CAP);
-        for id in lost.drain(..) {
-            server_to_engine::write_lost(&mut engine_out, id).expect(UNDER_THE_CAP);
-        }
-        self.phase = Phase::Playing {
+        Ok(ServerCore {
             seats,
-            engine_out,
-            tick_pending: false,
-        };
-        Ok(())
+            phase: Phase::Playing {
+                engine_out,
+                tick_pending: false,
+            },
+            engine_in: self.engine_in,
+            cache: Cache::new(),
+        })
     }
+}
 
+impl ServerCore {
     /// Say that the WebSocket of `conn` closed. The seat stays, and its
     /// input and frames stop until a connect. The engine gets an `Up` for
     /// each key and button that the view held. A second call, and a call
     /// for an old connection of the seat, do nothing.
     pub fn leave(&mut self, conn: Conn) {
-        let Some(seat) = self
-            .phase
-            .seats()
-            .and_then(|seats| seats.get_mut(&conn.player))
-        else {
+        let Some(seat) = self.seats.get_mut(&conn.player) else {
             return;
         };
         if seat.generation != conn.generation {
@@ -298,16 +323,16 @@ impl ServerCore {
     }
 
     /// A connection of a view to the seat of `player`, or `None` if the
-    /// room has no such seat, as before the start, or is over. The host checks
+    /// room has no such seat or is over. The host checks
     /// the token of the player first. The old connection of the seat gets
     /// [`Next::Gone`], and the new one starts with no asset and gets the
     /// newest frame. The engine gets an `Up` for each key and button that
     /// the old view held, since the old view may never have left.
     pub fn connect(&mut self, player: NonZeroU32) -> Option<Conn> {
-        if matches!(self.phase, Phase::Over { .. }) {
+        if matches!(self.phase, Phase::Over) {
             return None;
         }
-        let seat = self.phase.seats()?.get_mut(&player)?;
+        let seat = self.seats.get_mut(&player)?;
         seat.generation = seat
             .generation
             .checked_add(1)
@@ -342,25 +367,15 @@ impl ServerCore {
     /// closes the pipe of the engine, and the end of the pipe tells the
     /// engine to end. The engine may still send its last frames.
     pub fn close(&mut self) {
-        match &mut self.phase {
-            Phase::Waiting | Phase::Ready { .. } => {
-                self.phase = Phase::Closing {
-                    seats: Seats::new(),
-                }
-            }
-            Phase::Playing { seats, .. } => {
-                self.phase = Phase::Closing {
-                    seats: std::mem::take(seats),
-                }
-            }
-            Phase::Closing { .. } | Phase::Over { .. } => {}
+        if matches!(self.phase, Phase::Playing { .. }) {
+            self.phase = Phase::Closing;
         }
     }
 
     /// Returns `true` if the engine ended, `false` otherwise. The timer of
     /// the tick and the task that reads the engine stop here.
     pub fn is_over(&self) -> bool {
-        matches!(self.phase, Phase::Over { .. })
+        matches!(self.phase, Phase::Over)
     }
 
     /// Take a message that the view of `conn` sent over its WebSocket, and
@@ -380,10 +395,10 @@ impl ServerCore {
     /// core drops the input of an old connection, and a `Down` of a new key
     /// when the view holds 32 keys, since it could not release the key.
     pub fn input(&mut self, conn: Conn, event: &InputEvent) {
-        let Some((seats, engine_out)) = self.phase.playing() else {
+        let Phase::Playing { engine_out, .. } = &mut self.phase else {
             return;
         };
-        let Some((view, _)) = view_of(seats, conn) else {
+        let Some((view, _)) = view_of(&mut self.seats, conn) else {
             return;
         };
         if !view.held.track(event) {
@@ -393,18 +408,16 @@ impl ServerCore {
     }
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
-    /// message too. The first message is the hello. Then the core keeps an
-    /// asset, and a frame goes to its player, or to every player, with the
-    /// assets that it draws. At each frame the core drops the assets that
-    /// the frames used longest ago to fit the limits of the room, with a
-    /// lost to the engine for each. Before the start a frame for every
-    /// player goes to no one, and the core drops it. A frame for a player
-    /// with no seat is an error. A broken stream ends the room, and the
-    /// core ignores what comes after the end. Returns what went wrong, in
-    /// the order of the stream.
+    /// message too. The core keeps an asset, and a frame goes to its
+    /// player, or to every player, with the assets that it draws. At each
+    /// frame the core drops the assets that the frames used longest ago to
+    /// fit the limits of the room, with a lost to the engine for each. A
+    /// frame for a player with no seat is an error. A broken stream ends
+    /// the room, and the core ignores what comes after the end. Returns
+    /// what went wrong, in the order of the stream.
     pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
         let mut errors = Vec::new();
-        if matches!(self.phase, Phase::Over { .. }) {
+        if matches!(self.phase, Phase::Over) {
             return errors;
         }
         // Out of `self`, so the loop reads it while the messages go in.
@@ -421,30 +434,9 @@ impl ServerCore {
                     return errors;
                 }
             };
-            let arm = engine_to_server::arm(payload);
             rest = after;
-            if matches!(self.phase, Phase::Waiting) && !matches!(arm, Ok(Some(Arm::Hello(_)))) {
-                if let Err(e) = arm {
-                    errors.push(EngineError::Payload(e));
-                }
-                errors.push(EngineError::NoHello);
-                self.end();
-                return errors;
-            }
-            match arm {
-                Ok(Some(Arm::Hello(range))) => match self.phase {
-                    Phase::Waiting => {
-                        self.phase = Phase::Ready {
-                            range,
-                            lost: Vec::new(),
-                        }
-                    }
-                    Phase::Ready { .. } | Phase::Playing { .. } => {
-                        errors.push(EngineError::SecondHello)
-                    }
-                    // A room that closed before the hello never starts.
-                    Phase::Closing { .. } | Phase::Over { .. } => {}
-                },
+            match engine_to_server::arm(payload) {
+                Ok(Some(Arm::Hello(_))) => errors.push(EngineError::SecondHello),
                 Ok(Some(Arm::Asset {
                     id,
                     footprint,
@@ -481,7 +473,7 @@ impl ServerCore {
     /// Say that the stream of the engine ended, which ends the room. The
     /// part of a message that is left breaks the stream.
     pub fn engine_ended(&mut self) -> Option<EngineError> {
-        if matches!(self.phase, Phase::Over { .. }) {
+        if matches!(self.phase, Phase::Over) {
             return None;
         }
         let broken = (!self.engine_in.is_empty())
@@ -500,7 +492,7 @@ impl ServerCore {
     /// When the room is over, the view gets [`Next::Gone`] after its last
     /// frame, as does an old connection.
     pub fn next_for(&mut self, conn: Conn) -> Next {
-        let Some((view, frame)) = self.phase.seats().and_then(|seats| view_of(seats, conn)) else {
+        let Some((view, frame)) = view_of(&mut self.seats, conn) else {
             return Next::Gone;
         };
         if view.next.is_none() && !view.frame_taken {
@@ -530,11 +522,8 @@ impl ServerCore {
             return Next::Send(next.payload);
         }
         match self.phase {
-            Phase::Waiting
-            | Phase::Ready { .. }
-            | Phase::Playing { .. }
-            | Phase::Closing { .. } => Next::Idle,
-            Phase::Over { .. } => Next::Gone,
+            Phase::Playing { .. } | Phase::Closing => Next::Idle,
+            Phase::Over => Next::Gone,
         }
     }
 
@@ -549,8 +538,7 @@ impl ServerCore {
                 buf.append(engine_out);
                 true
             }
-            Phase::Waiting | Phase::Ready { .. } => true,
-            Phase::Closing { .. } | Phase::Over { .. } => false,
+            Phase::Closing | Phase::Over => false,
         }
     }
 
@@ -577,19 +565,15 @@ impl ServerCore {
     /// Keep the frame, with `payload`, its message for a view, for
     /// `player`, or for every player when `player` is `None`, with the
     /// assets of its bitmap `ids`, and drop the assets that the frames used
-    /// longest ago to fit the limits. A frame for every player before the
-    /// start reaches no screen, so it changes nothing.
+    /// longest ago to fit the limits.
     fn keep_frame(
         &mut self,
         player: Option<NonZeroU32>,
         ids: &BTreeSet<u32>,
         payload: Arc<[u8]>,
     ) -> Result<(), EngineError> {
-        let Some(seats) = self.phase.seats() else {
-            return player.map_or(Ok(()), |player| Err(EngineError::NoSeat(player)));
-        };
         if let Some(player) = player
-            && !seats.contains_key(&player)
+            && !self.seats.contains_key(&player)
         {
             return Err(EngineError::NoSeat(player));
         }
@@ -602,7 +586,8 @@ impl ServerCore {
             payload,
             assets: Arc::new(assets),
         };
-        for (_, seat) in seats
+        for (_, seat) in self
+            .seats
             .iter_mut()
             .filter(|(p, _)| player.is_none_or(|player| **p == player))
         {
@@ -617,16 +602,10 @@ impl ServerCore {
         Ok(())
     }
 
-    /// Tell the engine that the asset `id` is gone. Before the start, the
-    /// lost waits for the start, which comes first.
+    /// Tell the engine that the asset `id` is gone.
     fn lose(&mut self, id: u32) {
-        match &mut self.phase {
-            Phase::Playing { engine_out, .. } => {
-                server_to_engine::write_lost(engine_out, id).expect(UNDER_THE_CAP);
-            }
-            Phase::Ready { lost, .. } => lost.push(id),
-            // No asset comes before the hello.
-            Phase::Waiting | Phase::Closing { .. } | Phase::Over { .. } => {}
+        if let Phase::Playing { engine_out, .. } = &mut self.phase {
+            server_to_engine::write_lost(engine_out, id).expect(UNDER_THE_CAP);
         }
     }
 
@@ -645,15 +624,8 @@ impl ServerCore {
     /// End the room. The engine no longer reads, so the core drops the
     /// messages for it.
     fn end(&mut self) {
-        let seats = self.phase.seats().map(std::mem::take).unwrap_or_default();
-        self.phase = Phase::Over { seats };
+        self.phase = Phase::Over;
         self.engine_in = Vec::new();
-    }
-}
-
-impl Default for ServerCore {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -775,59 +747,18 @@ impl Held {
     }
 }
 
-/// Whether the room waits for the hello, waits for the start, plays, told
-/// the engine to end, or the engine ended.
+/// Whether the room plays, told the engine to end, or the engine ended.
+/// The seats stay after the play, so a view still gets the last frames.
 #[derive(Debug)]
 enum Phase {
-    Waiting,
-    Ready {
-        /// The players that the game takes.
-        range: PlayerRange,
-        /// The ids of the assets that the cache dropped, for the lost that
-        /// follows the start.
-        lost: Vec<u32>,
-    },
     Playing {
-        seats: Seats,
         /// The messages for the engine that the host has not taken yet.
         engine_out: Vec<u8>,
         /// The engine did not take the last tick yet.
         tick_pending: bool,
     },
-    /// The seats stay, so a view still gets the last frames. A room that
-    /// closes before the start has none.
-    Closing {
-        seats: Seats,
-    },
-    Over {
-        seats: Seats,
-    },
-}
-
-impl Phase {
-    /// The seats of the room, or `None` while it waits for the hello or for
-    /// the start.
-    fn seats(&mut self) -> Option<&mut Seats> {
-        match self {
-            Phase::Playing { seats, .. } | Phase::Closing { seats } | Phase::Over { seats } => {
-                Some(seats)
-            }
-            Phase::Waiting | Phase::Ready { .. } => None,
-        }
-    }
-
-    /// The seats and the messages for the engine, or `None` if the room
-    /// does not play.
-    fn playing(&mut self) -> Option<(&mut Seats, &mut Vec<u8>)> {
-        match self {
-            Phase::Playing {
-                seats, engine_out, ..
-            } => Some((seats, engine_out)),
-            Phase::Waiting | Phase::Ready { .. } | Phase::Closing { .. } | Phase::Over { .. } => {
-                None
-            }
-        }
-    }
+    Closing,
+    Over,
 }
 
 /// The view of `conn` and the newest frame of its seat, if `conn` is the
@@ -872,9 +803,9 @@ mod tests {
     }
 
     impl Room {
-        fn new() -> Self {
+        fn new(core: ServerCore) -> Self {
             Room {
-                core: ServerCore::new(),
+                core,
                 engine: None,
                 to_engine: Pipe::default(),
                 from_engine: Pipe::default(),
@@ -884,9 +815,7 @@ mod tests {
         /// A room of `nicknames` after the hello and the start, with a
         /// connection to each seat, and with the start already taken.
         fn playing(nicknames: &[&str]) -> (Self, Vec<Conn>) {
-            let mut room = Room::new();
-            assert!(room.core.from_engine(&hello(1, 9)).is_empty());
-            room.core.start(nicknames).unwrap();
+            let mut room = Room::new(started(nicknames));
             let conns = (1..=nicknames.len() as u32)
                 .map(|p| room.core.connect(NonZeroU32::new(p).unwrap()).unwrap())
                 .collect();
@@ -1073,6 +1002,20 @@ mod tests {
         }
     }
 
+    /// A core of `nicknames`, after a hello of 1 to 9 players.
+    fn started(nicknames: &[&str]) -> ServerCore {
+        Lobby::new()
+            .from_engine(&hello(1, 9))
+            .unwrap()
+            .start(nicknames)
+            .unwrap()
+    }
+
+    /// The error of the lobby at `stream`.
+    fn lobby_error(stream: &[u8]) -> EngineError {
+        Lobby::new().from_engine(stream).unwrap_err()
+    }
+
     fn hello(min: u32, max: u32) -> Vec<u8> {
         let mut out = Vec::new();
         engine_to_server::write_hello(&mut out, PlayerRange::new(min, max).unwrap()).unwrap();
@@ -1084,67 +1027,74 @@ mod tests {
     }
 
     #[test]
-    fn the_start_takes_the_players_after_the_hello_and_once() {
-        let mut room = Room::new();
-        assert_eq!(room.core.players(), None);
-        assert_eq!(room.core.start(&["Ana"]), Err(StartError::NoHello));
-        assert!(room.core.from_engine(&hello(2, 4)).is_empty());
+    fn the_start_takes_the_players_after_the_hello() {
+        let lobby = Lobby::new();
+        assert_eq!(lobby.players(), None);
+        let (lobby, e) = lobby.start(&["Ana"]).unwrap_err();
+        assert_eq!(e, StartError::NoHello);
+        let lobby = lobby.from_engine(&hello(2, 4)).unwrap();
         let range = PlayerRange::new(2, 4).unwrap();
-        assert_eq!(room.core.players(), Some(range));
-        room.core.tick();
-        assert!(room.events().is_empty());
-        assert_eq!(
-            room.core.start(&["Ana"]),
-            Err(StartError::Players { players: 1, range })
-        );
-        assert_eq!(room.core.start(&["Ana", "Beto"]), Ok(()));
-        assert_eq!(
-            room.core.start(&["Ana", "Beto"]),
-            Err(StartError::PastStart)
-        );
-        assert_eq!(room.core.players(), None);
+        assert_eq!(lobby.players(), Some(range));
+        let (lobby, e) = lobby.start(&["Ana"]).unwrap_err();
+        assert_eq!(e, StartError::Players { players: 1, range });
+        let mut room = Room::new(lobby.start(&["Ana", "Beto"]).unwrap());
         room.core.tick();
         assert_eq!(room.events(), ["start 1 Ana, 2 Beto", "tick"]);
     }
 
     #[test]
-    fn a_view_connects_only_after_the_start() {
-        let mut core = ServerCore::new();
-        core.from_engine(&hello(1, 1));
-        assert!(core.connect(player(1)).is_none());
-        core.start(&["Ana"]).unwrap();
-        assert!(core.connect(player(1)).is_some());
-        assert!(core.connect(player(2)).is_none());
-    }
-
-    #[test]
     fn a_first_message_that_is_not_a_hello_ends_the_room() {
-        let mut room = Room::new();
         let mut stream = frame(0, 1.0);
         stream.extend_from_slice(&hello(1, 1));
-        assert!(matches!(
-            room.core.from_engine(&stream)[..],
-            [EngineError::NoHello]
-        ));
-        assert!(room.core.is_over());
-        assert!(room.events().is_empty());
+        assert!(matches!(lobby_error(&stream), EngineError::NoHello));
     }
 
     #[test]
     fn a_first_hello_that_does_not_decode_ends_the_room_with_its_error() {
-        let mut core = ServerCore::new();
         let mut out = Vec::new();
         let payload = testing::encode_hello(0, 1);
         out.extend_from_slice(&framing::header(Side::Engine, payload.len() as u32));
         out.extend_from_slice(&payload);
         assert!(matches!(
-            core.from_engine(&out)[..],
-            [
-                EngineError::Payload(wire::Error::PlayerRange { min: 0, max: 1 }),
-                EngineError::NoHello
-            ]
+            lobby_error(&out),
+            EngineError::Payload(wire::Error::PlayerRange { min: 0, max: 1 })
         ));
-        assert!(core.is_over());
+    }
+
+    #[test]
+    fn a_message_after_the_hello_and_before_the_start_ends_the_room() {
+        for next in [hello(1, 1), asset(1), frame(0, 1.0)] {
+            let mut stream = hello(1, 1);
+            stream.extend_from_slice(&next);
+            assert!(matches!(lobby_error(&stream), EngineError::BeforeStart));
+        }
+    }
+
+    #[test]
+    fn a_message_of_an_unknown_arm_before_the_start_is_skipped() {
+        let payload = testing::with_unknown_engine_value(&testing::encode_asset(1, &[]), |m| {
+            testing::tag_of(m)
+        });
+        let mut unknown = framing::header(Side::Engine, payload.len() as u32).to_vec();
+        unknown.extend_from_slice(&payload);
+        let mut stream = unknown.clone();
+        stream.extend_from_slice(&hello(1, 1));
+        stream.extend_from_slice(&unknown);
+        let lobby = Lobby::new().from_engine(&stream).unwrap();
+        assert_eq!(lobby.players(), PlayerRange::new(1, 1));
+    }
+
+    #[test]
+    fn the_bytes_after_the_hello_go_on_after_the_start() {
+        let mut stream = hello(1, 1);
+        let next = frame(0, 1.0);
+        let (head, tail) = next.split_at(10);
+        stream.extend_from_slice(head);
+        let lobby = Lobby::new().from_engine(&stream).unwrap();
+        let mut core = lobby.start(&["Ana"]).unwrap();
+        let ana = core.connect(player(1)).unwrap();
+        assert!(core.from_engine(tail).is_empty());
+        assert_eq!(sent(&mut core, ana), ["frame 1", "idle"]);
     }
 
     #[test]
@@ -1168,6 +1118,11 @@ mod tests {
             [EngineError::SecondHello]
         ));
         assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "idle"]);
+        room.core.close();
+        assert!(matches!(
+            room.core.from_engine(&hello(1, 1))[..],
+            [EngineError::SecondHello]
+        ));
         assert!(room.events().is_empty());
     }
 
@@ -1193,16 +1148,6 @@ mod tests {
     }
 
     #[test]
-    fn a_room_closed_before_the_hello_never_starts() {
-        let mut room = Room::new();
-        room.core.close();
-        assert!(room.core.from_engine(&hello(1, 1)).is_empty());
-        assert_eq!(room.core.start(&["Ana"]), Err(StartError::PastStart));
-        room.core.tick();
-        assert!(room.events().is_empty());
-    }
-
-    #[test]
     fn a_nickname_loses_its_control_characters_and_is_cut_at_a_character() {
         assert_eq!(clean_nickname("A\u{1b}[2Jna\n"), "A[2Jna");
         let long = "é".repeat(40);
@@ -1211,9 +1156,7 @@ mod tests {
 
     #[test]
     fn the_output_goes_after_what_the_buffer_holds() {
-        let mut core = ServerCore::new();
-        core.from_engine(&hello(1, 1));
-        core.start(&["Ana"]).unwrap();
+        let mut core = started(&["Ana"]);
         let mut buf = b"rest".to_vec();
         assert!(core.take_engine_output(&mut buf));
         assert_eq!(&buf[..4], b"rest");
@@ -1225,12 +1168,11 @@ mod tests {
 
     #[test]
     fn the_output_ends_at_the_close_and_at_the_end_of_the_engine() {
-        let mut core = ServerCore::new();
-        let mut buf = Vec::new();
-        assert!(core.take_engine_output(&mut buf));
+        let mut core = started(&["Ana"]);
         core.close();
+        let mut buf = Vec::new();
         assert!(!core.take_engine_output(&mut buf));
-        let mut core = ServerCore::new();
+        let mut core = started(&["Ana"]);
         assert!(core.engine_ended().is_none());
         assert!(!core.take_engine_output(&mut buf));
         assert!(buf.is_empty());
@@ -1294,16 +1236,9 @@ mod tests {
 
     #[test]
     fn a_view_that_connects_late_gets_the_assets_and_its_newest_frame() {
-        let mut core = ServerCore::new();
-        let mut stream = hello(2, 2);
-        stream.extend_from_slice(&asset(1));
-        stream.extend_from_slice(&drawing(0, 9.0, &[1]));
-        core.from_engine(&stream);
-        core.start(&["Ana", "Beto"]).unwrap();
-        // An asset before the start stays, and a frame is dropped.
-        let beto = core.connect(player(2)).unwrap();
-        assert_eq!(sent(&mut core, beto), ["idle"]);
-        let mut stream = drawing(0, 1.0, &[1]);
+        let mut core = started(&["Ana", "Beto"]);
+        let mut stream = asset(1);
+        stream.extend_from_slice(&drawing(0, 1.0, &[1]));
         stream.extend_from_slice(&frame(2, 2.0));
         core.from_engine(&stream);
         let ana = core.connect(player(1)).unwrap();
@@ -1412,18 +1347,6 @@ mod tests {
     }
 
     #[test]
-    fn a_lost_before_the_start_follows_the_start() {
-        let mut room = Room::new();
-        let mut stream = hello(1, 1);
-        stream.extend_from_slice(&fill(1));
-        stream.extend_from_slice(&asset(9));
-        assert!(room.core.from_engine(&stream).is_empty());
-        assert!(room.events().is_empty());
-        room.core.start(&["Ana"]).unwrap();
-        assert_eq!(room.events(), ["start 1 Ana", "lost 9"]);
-    }
-
-    #[test]
     fn a_bad_asset_is_an_error_and_the_room_goes_on() {
         let (mut room, _) = Room::playing(&["Ana"]);
         let mut stream = asset_of(1, 2049);
@@ -1449,14 +1372,7 @@ mod tests {
 
     #[test]
     fn a_frame_for_a_player_with_no_seat_is_an_error_and_the_room_goes_on() {
-        let mut core = ServerCore::new();
-        assert!(core.from_engine(&hello(1, 2)).is_empty());
-        assert!(core.from_engine(&frame(0, 1.0)).is_empty());
-        assert!(matches!(
-            core.from_engine(&frame(1, 1.0))[..],
-            [EngineError::NoSeat(p)] if p == player(1)
-        ));
-        core.start(&["Ana"]).unwrap();
+        let mut core = started(&["Ana"]);
         let ana = core.connect(player(1)).unwrap();
         let mut stream = frame(2, 1.0);
         stream.extend_from_slice(&frame(1, 2.0));
@@ -1468,9 +1384,8 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_with_a_damaged_scene_is_an_error_before_the_start_too() {
-        let mut core = ServerCore::new();
-        assert!(core.from_engine(&hello(1, 1)).is_empty());
+    fn a_frame_with_a_damaged_scene_is_an_error() {
+        let mut core = started(&["Ana"]);
         // Cut the segment after the root, the message and the frame, so the
         // pointer of the scene points out of it.
         let mut payload = frame(0, 1.0)[framing::HEADER_BYTES..].to_vec();
@@ -1484,18 +1399,16 @@ mod tests {
 
     #[test]
     fn the_messages_come_out_whole_from_bytes_fed_one_at_a_time() {
-        let mut core = ServerCore::new();
-        let feed = |core: &mut ServerCore, stream: &[u8]| {
-            for byte in stream {
-                assert!(core.from_engine(std::slice::from_ref(byte)).is_empty());
-            }
-        };
-        feed(&mut core, &hello(1, 1));
-        core.start(&["Ana"]).unwrap();
+        let lobby = hello(1, 1).iter().fold(Lobby::new(), |lobby, byte| {
+            lobby.from_engine(std::slice::from_ref(byte)).unwrap()
+        });
+        let mut core = lobby.start(&["Ana"]).unwrap();
         let ana = core.connect(player(1)).unwrap();
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 2.0, &[1]));
-        feed(&mut core, &stream);
+        for byte in &stream {
+            assert!(core.from_engine(std::slice::from_ref(byte)).is_empty());
+        }
         assert_eq!(sent(&mut core, ana), ["asset 1", "frame 2", "idle"]);
     }
 
@@ -1556,9 +1469,7 @@ mod tests {
 
     #[test]
     fn a_connect_to_no_seat_or_to_a_room_that_is_over_is_refused() {
-        let mut core = ServerCore::new();
-        core.from_engine(&hello(1, 1));
-        core.start(&["Ana"]).unwrap();
+        let mut core = started(&["Ana"]);
         assert!(core.connect(player(2)).is_none());
         assert!(core.engine_ended().is_none());
         assert!(core.connect(player(1)).is_none());
@@ -1652,8 +1563,8 @@ mod tests {
 
     #[test]
     fn the_end_inside_a_message_breaks_the_stream() {
-        let mut core = ServerCore::new();
-        let stream = hello(1, 1);
+        let mut core = started(&["Ana"]);
+        let stream = frame(0, 1.0);
         core.from_engine(&stream[..stream.len() - 1]);
         let error = core.engine_ended();
         assert!(
