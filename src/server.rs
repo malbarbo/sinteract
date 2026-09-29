@@ -500,31 +500,31 @@ impl ServerCore {
         let Some((view, frame)) = self.phase.seats().and_then(|seats| view_of(seats, conn)) else {
             return Next::Gone;
         };
-        if view.target.is_none() && !view.frame_sent {
-            view.target = frame.cloned();
-            view.frame_sent = true;
+        if view.next.is_none() && !view.frame_taken {
+            view.next = frame.cloned();
+            view.frame_taken = true;
         }
         let needs = |id: &u32| {
-            view.shown.contains(id)
+            view.shown_assets.contains(id)
                 || view
-                    .target
+                    .next
                     .as_ref()
-                    .is_some_and(|t| t.assets.contains_key(id))
+                    .is_some_and(|next| next.assets.contains_key(id))
         };
-        if let Some(&id) = view.has.iter().find(|id| !needs(id)) {
-            view.has.remove(&id);
+        if let Some(&id) = view.assets.iter().find(|id| !needs(id)) {
+            view.assets.remove(&id);
             return Next::Send(engine_message::encode_forget(id).into());
         }
-        if let Some(target) = view.target.take() {
-            if let Some((&id, asset)) = target.assets.iter().find(|(id, _)| !view.has.contains(id))
+        if let Some(next) = view.next.take() {
+            if let Some((&id, asset)) = next.assets.iter().find(|(id, _)| !view.assets.contains(id))
             {
-                view.has.insert(id);
+                view.assets.insert(id);
                 let payload = asset.clone();
-                view.target = Some(target);
+                view.next = Some(next);
                 return Next::Send(payload);
             }
-            view.shown = target.assets.keys().copied().collect();
-            return Next::Send(target.payload);
+            view.shown_assets = next.assets.keys().copied().collect();
+            return Next::Send(next.payload);
         }
         match self.phase {
             Phase::Waiting
@@ -604,7 +604,7 @@ impl ServerCore {
         {
             seat.frame = Some(frame.clone());
             if let Some(view) = &mut seat.view {
-                view.frame_sent = false;
+                view.frame_taken = false;
             }
         }
         for id in gone {
@@ -672,15 +672,15 @@ struct Seat {
 struct View {
     /// What the view holds down, as the engine saw it.
     held: Held,
-    /// Whether the view got the frame of the seat, or waits for it as
-    /// `target`.
-    frame_sent: bool,
+    /// Whether the view took the frame of the seat, into `next` or onto its
+    /// screen, so a new frame of the seat clears it.
+    frame_taken: bool,
     /// The next frame of the view, until the view has its assets and it.
-    target: Option<Frame>,
+    next: Option<Frame>,
     /// The ids of the assets that the view has.
-    has: BTreeSet<u32>,
+    assets: BTreeSet<u32>,
     /// The ids of the assets of the frame on the screen of the view.
-    shown: BTreeSet<u32>,
+    shown_assets: BTreeSet<u32>,
 }
 
 /// A frame, with the assets that it draws, as they were at its arrival. The
