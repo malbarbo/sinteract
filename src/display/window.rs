@@ -93,7 +93,7 @@ impl Window {
             Ok(surface) => surface,
             Err(e) => {
                 drop(window);
-                lent.pump(&mut app, Duration::ZERO);
+                lent.destroy_dropped(&mut app);
                 return Err(e);
             }
         };
@@ -204,8 +204,7 @@ impl super::Display for Window {
         drop(display_link);
         drop(surface);
         drop(window);
-        // Wayland, X11 and Windows destroy a window as the loop runs.
-        lent.pump(&mut app, Duration::ZERO);
+        lent.destroy_dropped(&mut app);
     }
 }
 
@@ -361,6 +360,16 @@ impl Lent {
             }
             true
         })
+    }
+
+    /// Run the loop until the platform destroys a dropped window. Wayland,
+    /// X11 and Windows destroy it as the loop runs. Wayland queues the
+    /// destroy in one pump and sends it in the flush that starts the next
+    /// one, so it takes two.
+    fn destroy_dropped(&mut self, app: &mut App) {
+        for _ in 0..2 {
+            self.pump(app, Duration::ZERO);
+        }
     }
 
     /// Pump until `app` has its window. The window appears in the callbacks,
