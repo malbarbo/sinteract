@@ -214,7 +214,7 @@ impl Inbox {
     /// redraw stale.
     pub(crate) fn take_redraw(&mut self) -> bool {
         self.queue.as_mut().is_some_and(|q| {
-            q.drain();
+            q.receive_all();
             mem::take(&mut q.redraw)
         })
     }
@@ -228,7 +228,7 @@ impl Inbox {
         };
         // The inbox holds a sender, so the channel never disconnects.
         if let Ok(msg) = queue.rx.recv_timeout(timeout) {
-            queue.take(msg);
+            queue.receive(msg);
         }
     }
 
@@ -240,7 +240,7 @@ impl Inbox {
         let Some(queue) = &mut self.queue else {
             return Some(Err(Interrupt::Close));
         };
-        queue.drain();
+        queue.receive_all();
         if !queue.pending.iter().any(|e| matches!(e, Entry::Tick)) && clock.take_due(now) {
             queue.pending.push_back(Entry::Tick);
         }
@@ -258,13 +258,13 @@ impl Inbox {
 }
 
 impl Queue {
-    fn drain(&mut self) {
+    fn receive_all(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
-            self.take(msg);
+            self.receive(msg);
         }
     }
 
-    fn take(&mut self, msg: Msg) {
+    fn receive(&mut self, msg: Msg) {
         match msg {
             Msg::Entry(entry) => self.push(entry),
             Msg::Redraw => self.redraw = true,
