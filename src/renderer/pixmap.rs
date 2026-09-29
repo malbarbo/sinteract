@@ -987,13 +987,13 @@ mod tests {
         };
         let layout = crate::text::TextLayout::new(&node.spec).expect("node draws");
         let u = layout.underline_rect();
-        let y = (60.0 + (u.y_top + u.y_bot) / 2.0) as u32;
-        let x_l = (160.0 + u.x_l).ceil() as u32 + 1;
-        let x_r = (160.0 + u.x_r).floor() as u32 - 1;
+        let y = (60.0 + (u.top + u.bottom) / 2.0) as u32;
+        let left = (160.0 + u.left).ceil() as u32 + 1;
+        let right = (160.0 + u.right).floor() as u32 - 1;
         let mut scene = Scene::new(320.0, 120.0);
         scene.add_text(node);
         let pixmap = render_to_pixmap(&scene, 1.0).expect("pixmap");
-        for x in x_l..x_r {
+        for x in left..right {
             assert_eq!(pixel_rgba(&pixmap, x, y).3, 255, "a hole at x {x}");
         }
     }

@@ -154,10 +154,10 @@ impl<'a> TextLayout<'a> {
     /// The underline as a closed contour.
     pub(crate) fn outline_underline(&self, out: &mut dyn PathSink) {
         let u = self.underline_rect();
-        out.move_to(u.x_l, u.y_top);
-        out.line_to(u.x_r, u.y_top);
-        out.line_to(u.x_r, u.y_bot);
-        out.line_to(u.x_l, u.y_bot);
+        out.move_to(u.left, u.top);
+        out.line_to(u.right, u.top);
+        out.line_to(u.right, u.bottom);
+        out.line_to(u.left, u.bottom);
         out.close();
     }
 
@@ -174,13 +174,13 @@ impl<'a> TextLayout<'a> {
         );
         // The position in `post` is the top of the underline, with y up, and
         // the box has y down.
-        let y_top = self.baseline_y - pos_units * scale;
+        let top = self.baseline_y - pos_units * scale;
         let thickness = thickness_units * scale;
         UnderlineRect {
-            x_l: self.x_left(),
-            x_r: self.x_left() + self.width,
-            y_top,
-            y_bot: y_top + thickness,
+            left: self.x_left(),
+            right: self.x_left() + self.width,
+            top,
+            bottom: top + thickness,
         }
     }
 
@@ -192,10 +192,10 @@ impl<'a> TextLayout<'a> {
 
 /// Axis-aligned underline rectangle in box-local text space.
 pub(crate) struct UnderlineRect {
-    pub(crate) x_l: f32,
-    pub(crate) x_r: f32,
-    pub(crate) y_top: f32,
-    pub(crate) y_bot: f32,
+    pub(crate) left: f32,
+    pub(crate) right: f32,
+    pub(crate) top: f32,
+    pub(crate) bottom: f32,
 }
 
 /// One glyph of a face at a size. Two equal glyphs have the same outline, so
@@ -838,10 +838,10 @@ mod tests {
         let spec = text_spec(24.0, "Hello");
         let layout = TextLayout::new(&spec).expect("node draws");
         let u = layout.underline_rect();
-        assert_eq!(u.x_l, -layout.width / 2.0);
-        assert!((u.x_r - layout.width / 2.0).abs() < 1e-4);
-        assert!(u.y_bot > u.y_top, "the underline has no thickness");
-        let center = (u.y_top + u.y_bot) / 2.0;
+        assert_eq!(u.left, -layout.width / 2.0);
+        assert!((u.right - layout.width / 2.0).abs() < 1e-4);
+        assert!(u.bottom > u.top, "the underline has no thickness");
+        let center = (u.top + u.bottom) / 2.0;
         assert!(
             center > layout.baseline_y,
             "the underline centre sits above the baseline"
@@ -856,8 +856,8 @@ mod tests {
         let spec = text_spec(2048.0, "Hi");
         let layout = TextLayout::new(&spec).expect("node draws");
         let u = layout.underline_rect();
-        assert_eq!(u.y_top - layout.baseline_y, 67.0);
-        assert_eq!(u.y_bot - layout.baseline_y, 217.0);
+        assert_eq!(u.top - layout.baseline_y, 67.0);
+        assert_eq!(u.bottom - layout.baseline_y, 217.0);
     }
 
     #[test]
@@ -866,8 +866,8 @@ mod tests {
         let small = TextLayout::new(&small_spec).expect("node draws");
         let big_spec = text_spec(64.0, "Hi");
         let big = TextLayout::new(&big_spec).expect("node draws");
-        let t_small = small.underline_rect().y_bot - small.underline_rect().y_top;
-        let t_big = big.underline_rect().y_bot - big.underline_rect().y_top;
+        let t_small = small.underline_rect().bottom - small.underline_rect().top;
+        let t_big = big.underline_rect().bottom - big.underline_rect().top;
         assert!(t_small > 0.0);
         assert!(
             (t_big / t_small - 32.0).abs() < 1e-3,
@@ -920,9 +920,9 @@ mod tests {
         let u = TextLayout::new(&spec).expect("node draws").underline_rect();
         let m = spec.fit(rect).expect("text fits").transform;
         let map = |x: f32, y: f32| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
-        let (x_l, y_top) = map(u.x_l, u.y_top);
-        let (x_r, y_bot) = map(u.x_r, u.y_bot);
-        [x_l, y_top, x_r, y_bot]
+        let (left, top) = map(u.left, u.top);
+        let (right, bottom) = map(u.right, u.bottom);
+        [left, top, right, bottom]
     }
 
     #[test]
@@ -947,10 +947,10 @@ mod tests {
         assert_eq!(
             r.ops,
             [
-                format!("M {} {}", u.x_l, u.y_top),
-                format!("L {} {}", u.x_r, u.y_top),
-                format!("L {} {}", u.x_r, u.y_bot),
-                format!("L {} {}", u.x_l, u.y_bot),
+                format!("M {} {}", u.left, u.top),
+                format!("L {} {}", u.right, u.top),
+                format!("L {} {}", u.right, u.bottom),
+                format!("L {} {}", u.left, u.bottom),
                 "Z".to_string(),
             ]
         );
