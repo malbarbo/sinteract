@@ -93,7 +93,7 @@ pub struct Terminal {
 /// What a session holds until it closes.
 struct Active {
     reader: Reader,
-    writer: FrameWriter<Screen>,
+    writer: FrameWriter<FrameState>,
     claim: Claim,
 }
 
@@ -143,12 +143,12 @@ impl Terminal {
             bytes,
             painter,
         } = Printer::with_painter(Painter::for_stdout(backend));
-        let screen = Screen {
+        let state = FrameState {
             painter,
             bytes,
             frame_size: None,
         };
-        let writer = match FrameWriter::spawn(screen, Screen::write_frame) {
+        let writer = match FrameWriter::spawn(state, FrameState::write_frame) {
             Ok(writer) => writer,
             Err(e) => {
                 reader.stop();
@@ -236,11 +236,11 @@ impl super::Display for Terminal {
         active.reader.stop();
         // A writer that panicked hands back nothing, and the panic hook
         // already put the tty back.
-        let Some(screen) = active.writer.finish() else {
+        let Some(state) = active.writer.finish() else {
             return;
         };
         if !active.claim.restored() {
-            leave(self.backend, screen.frame_size.is_some());
+            leave(self.backend, state.frame_size.is_some());
             // The session is over, and close has no way to report that
             // the frame did not print.
             if self.keep_last_frame
@@ -248,8 +248,8 @@ impl super::Display for Terminal {
             {
                 let mut printer = Printer {
                     renderer: std::mem::take(&mut self.renderer),
-                    bytes: screen.bytes,
-                    painter: screen.painter,
+                    bytes: state.bytes,
+                    painter: state.painter,
                 };
                 let _ = printer.print_unchecked(scene);
             }
@@ -374,7 +374,7 @@ impl<S: Send + 'static> FrameWriter<S> {
 }
 
 /// What the writer of a [`Terminal`] keeps from one frame to the next.
-struct Screen {
+struct FrameState {
     painter: Painter,
     /// Where the painter builds the escapes of a frame before the write.
     bytes: Vec<u8>,
@@ -383,7 +383,7 @@ struct Screen {
     frame_size: Option<(u32, u32)>,
 }
 
-impl Screen {
+impl FrameState {
     /// Write `pixmap` to stdout, unless the panic hook put the tty back,
     /// since the frame would then print over the shell. The check holds the
     /// lock of stdout, so a panic hook that puts the tty back waits for
@@ -1809,10 +1809,10 @@ mod tests {
         assert!(writer.finish().is_none());
     }
 
-    /// A Sixel screen, whose painter clears the whole screen for a frame
-    /// that does not replace the one before.
-    fn sixel_screen() -> Screen {
-        Screen {
+    /// The frame state of Sixel, whose painter clears the whole screen for
+    /// a frame that does not replace the one before.
+    fn sixel_state() -> FrameState {
+        FrameState {
             painter: Painter::new(Backend::Sixel),
             bytes: Vec::new(),
             frame_size: None,
@@ -1821,21 +1821,21 @@ mod tests {
 
     /// Returns `true` if a write of `pixmap` clears the screen first,
     /// `false` otherwise.
-    fn clears(screen: &mut Screen, pixmap: &Pixmap, after_resize: bool) -> bool {
+    fn clears(state: &mut FrameState, pixmap: &Pixmap, after_resize: bool) -> bool {
         let mut out = Vec::new();
-        screen.write_to(&mut out, pixmap, after_resize).unwrap();
+        state.write_to(&mut out, pixmap, after_resize).unwrap();
         out.starts_with(b"\x1b[2J")
     }
 
     #[test]
     fn a_frame_clears_the_screen_when_it_does_not_cover_the_one_before() {
-        let mut screen = sixel_screen();
+        let mut state = sixel_state();
         let (small, large) = (solid(2, 2, 0, 0, 255), solid(4, 4, 0, 0, 255));
-        assert!(clears(&mut screen, &large, false), "the first frame");
-        assert!(!clears(&mut screen, &large, false), "the same size");
-        assert!(clears(&mut screen, &small, false), "a smaller frame");
-        assert!(clears(&mut screen, &small, true), "after a resize");
-        assert!(!clears(&mut screen, &small, false), "the same size again");
+        assert!(clears(&mut state, &large, false), "the first frame");
+        assert!(!clears(&mut state, &large, false), "the same size");
+        assert!(clears(&mut state, &small, false), "a smaller frame");
+        assert!(clears(&mut state, &small, true), "after a resize");
+        assert!(!clears(&mut state, &small, false), "the same size again");
     }
 
     /// A write that fails after `room` bytes.
@@ -1860,13 +1860,13 @@ mod tests {
 
     #[test]
     fn a_frame_after_a_failed_write_clears_the_screen() {
-        let mut screen = sixel_screen();
+        let mut state = sixel_state();
         let pixmap = solid(4, 4, 0, 0, 255);
-        assert!(clears(&mut screen, &pixmap, false));
-        let failed = screen.write_to(&mut Short { room: 8 }, &pixmap, false);
+        assert!(clears(&mut state, &pixmap, false));
+        let failed = state.write_to(&mut Short { room: 8 }, &pixmap, false);
         assert!(failed.is_err());
-        assert_eq!(screen.frame_size, None);
-        assert!(clears(&mut screen, &pixmap, false));
+        assert_eq!(state.frame_size, None);
+        assert!(clears(&mut state, &pixmap, false));
     }
 
     #[test]
