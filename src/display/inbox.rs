@@ -8,7 +8,7 @@ use std::fmt;
 use std::io;
 use std::mem;
 use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use super::tick_clock::TickClock;
@@ -101,15 +101,19 @@ impl std::error::Error for Closed {}
 pub(crate) struct Inbox {
     tx: mpsc::Sender<Msg>,
     wake: Option<Waker>,
+    /// `None` after the first Close out or [`Inbox::close`]. Every wait
+    /// returns Close from then on.
+    queue: Option<Queue>,
+}
+
+/// What arrived and did not go out yet.
+struct Queue {
     rx: mpsc::Receiver<Msg>,
     /// What left the channel and did not go out yet, oldest first.
     pending: VecDeque<Entry>,
     /// A redraw was requested and did not go out yet. Many requests make
     /// one redraw.
     redraw: bool,
-    /// Set by the first Close out or by [`Inbox::close`]. Every wait
-    /// returns Close from then on.
-    closed: bool,
 }
 
 enum Msg {
@@ -146,10 +150,11 @@ impl Inbox {
         Self {
             tx,
             wake,
-            rx,
-            pending: VecDeque::new(),
-            redraw: false,
-            closed: false,
+            queue: Some(Queue {
+                rx,
+                pending: VecDeque::new(),
+                redraw: false,
+            }),
         }
     }
 
@@ -171,13 +176,10 @@ impl Inbox {
         }
     }
 
-    /// Deliver Close from now on and drop what is queued. A new receiver
-    /// replaces the channel, so every [`Sender`] fails from now on.
+    /// Deliver Close from now on and drop what is queued. The receiver
+    /// goes with the queue, so every [`Sender`] fails from now on.
     pub(crate) fn close(&mut self) {
-        self.closed = true;
-        self.rx = mpsc::channel().1;
-        self.pending.clear();
-        self.redraw = false;
+        self.queue = None;
     }
 
     /// The next step of `wait_event`, which calls it in a loop until it
@@ -193,7 +195,11 @@ impl Inbox {
         if let Some(ready) = self.pop(clock, now) {
             return Next::Ready(ready);
         }
-        if mem::take(&mut self.redraw) {
+        if self
+            .queue
+            .as_mut()
+            .is_some_and(|q| mem::take(&mut q.redraw))
+        {
             return Next::Redraw;
         }
         if deadline.is_some_and(|d| now >= d) {
@@ -207,19 +213,22 @@ impl Inbox {
     /// display calls it as it presents, since the new scene makes the
     /// redraw stale.
     pub(crate) fn take_redraw(&mut self) -> bool {
-        self.drain();
-        mem::take(&mut self.redraw)
+        self.queue.as_mut().is_some_and(|q| {
+            q.drain();
+            mem::take(&mut q.redraw)
+        })
     }
 
     /// Take the next message of the channel, or wait until `timeout`
     /// passes. A [`Sender`] ends the wait.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub(crate) fn wait_for_message(&mut self, timeout: Duration) {
-        match self.rx.recv_timeout(timeout) {
-            Ok(msg) => self.take(msg),
-            Err(RecvTimeoutError::Timeout) => {}
-            // Only the receiver of a closed inbox disconnects.
-            Err(RecvTimeoutError::Disconnected) => self.closed = true,
+        let Some(queue) = &mut self.queue else {
+            return;
+        };
+        // The inbox holds a sender, so the channel never disconnects.
+        if let Ok(msg) = queue.rx.recv_timeout(timeout) {
+            queue.take(msg);
         }
     }
 
@@ -228,14 +237,14 @@ impl Inbox {
     /// waits. At most one tick waits, so a flood of input delays the
     /// tick but never drops it.
     fn pop(&mut self, clock: &mut TickClock, now: Instant) -> Option<Result<Event, Interrupt>> {
-        if self.closed {
+        let Some(queue) = &mut self.queue else {
             return Some(Err(Interrupt::Close));
+        };
+        queue.drain();
+        if !queue.pending.iter().any(|e| matches!(e, Entry::Tick)) && clock.take_due(now) {
+            queue.pending.push_back(Entry::Tick);
         }
-        self.drain();
-        if !self.pending.iter().any(|e| matches!(e, Entry::Tick)) && clock.take_due(now) {
-            self.pending.push_back(Entry::Tick);
-        }
-        Some(match self.pending.pop_front()? {
+        Some(match queue.pending.pop_front()? {
             Entry::Input(ev) => Ok(Event::Input(ev)),
             Entry::Tick => Ok(Event::Tick),
             Entry::Wake => Err(Interrupt::Wake),
@@ -246,7 +255,9 @@ impl Inbox {
             }
         })
     }
+}
 
+impl Queue {
     fn drain(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
             self.take(msg);
@@ -551,7 +562,7 @@ mod tests {
     }
 
     fn push_key(inbox: &mut TestDisplay, name: &str) {
-        inbox.inbox.push(Entry::Input(InputEvent::Key(key(name))));
+        inbox.inbox.sender().send_key(key(name)).unwrap();
     }
 
     fn pop(inbox: &mut TestDisplay, now: Instant) -> Option<Result<Event, Interrupt>> {
