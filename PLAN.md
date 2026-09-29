@@ -182,10 +182,10 @@ mesma face.
 `open_native` escolhe a janela ou o terminal. A `Session` é o lado da
 engine numa sessão com servidor. A engine chama `wait` sobre um `Read` e
 um `Write`, como os descritores 3 e 4, e ela devolve os eventos com o
-jogador, sempre com no máximo um `Tick` na fila. A engine
-escreve os frames no descritor 4 com `engine_to_server`. Um host roda o jogo
-local num `Display` e o modo servidor numa `Session`, e um adaptador liga o jogo
-de um jogador só ao jogador 1.
+jogador, sempre com no máximo um `Tick` na fila. A engine escreve os frames
+no descritor 4 com `Session::write_frame`, que manda antes cada imagem nova.
+Um host roda o jogo local num `Display` e o modo servidor numa `Session`, e
+um adaptador liga o jogo de um jogador só ao jogador 1.
 
 ## Dependências do servidor
 
