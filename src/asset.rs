@@ -189,7 +189,7 @@ impl Footprint {
 
 /// Returns an error if `images` go over the limits of a room together,
 /// since the server would lose one of them each frame.
-pub(crate) fn fit_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Result<(), RoomFull> {
+pub(crate) fn check_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Result<(), RoomFull> {
     let mut load = Footprint::NONE;
     for image in images {
         load = load.with(Footprint {

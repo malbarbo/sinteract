@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
-use crate::asset::{RoomFull, fit_room};
+use crate::asset::{RoomFull, check_room};
 use crate::event::InputEvent;
 use crate::scene::{Element, Image, Scene};
 use crate::wire;
@@ -224,7 +224,7 @@ impl Session {
         scene: &Scene,
     ) -> Result<(), FrameError> {
         let images = images_of(scene);
-        fit_room(images.iter().copied()).map_err(FrameError::Full)?;
+        check_room(images.iter().copied()).map_err(FrameError::Full)?;
         for image in images {
             if !self.sent.contains_key(image) {
                 let id = self.next_id;
