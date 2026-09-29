@@ -21,10 +21,10 @@ side. It holds the rules of a room, from the players and the timer of the
 host to the messages for the engine, also with no I/O. `view.rs` is the
 view side, with the reader of the frames and the encoder of the input.
 Only these three reach `wire`, which stays private except its `Error`.
-`asset.rs` holds
-the limits of an image, `fit_image`, which shrinks an image to them, and
-`Cache`, which keeps the assets of a room under the limits, for the
-server.
+`asset.rs` holds the limits of an image, `fit_image`, which shrinks an
+image to them for `Image::load`, `image_head`, which reads the size and
+the type of an image for a front end, and `Cache`, which keeps the assets
+of a room under the limits, for the server.
 
 `display/` shows a scene and reads the input back. `driver.rs` holds the
 sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind

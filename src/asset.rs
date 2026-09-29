@@ -1,5 +1,6 @@
-//! The limits of the images of a room. [`fit_image`] shrinks an image to
-//! the limit of one image, and the server keeps the live assets of a room
+//! The limits of the images of a room.
+//! [`Image::load`](crate::scene::Image::load) shrinks an image to the limit
+//! of one image, and the server keeps the live assets of a room
 //! under the limits.
 //!
 //! A limit counts the pixels, since each view decodes an asset to four
@@ -14,7 +15,8 @@ use crate::scene::Image;
 /// The most pixels of one image, 2048 by 2048.
 pub const MAX_IMAGE_PIXELS: u64 = 2048 * 2048;
 
-/// The most pixels of an image that [`fit_image`] shrinks to
+/// The most pixels of an image that
+/// [`Image::load`](crate::scene::Image::load) shrinks to
 /// [`MAX_IMAGE_PIXELS`], sixteen times as many, such as a photo of 8000 by
 /// 6000. A larger one would take the engine more than 256 MiB to decode.
 pub const MAX_SHRINK_PIXELS: u64 = 16 * MAX_IMAGE_PIXELS;
@@ -247,13 +249,10 @@ impl fmt::Display for RoomFull {
 
 impl std::error::Error for RoomFull {}
 
-/// `blob`, or a PNG of it shrunk to [`MAX_IMAGE_PIXELS`] with its ratio if
-/// it is larger, for [`Image::new`](crate::scene::Image::new). A front end
-/// calls it once, as it loads the image. An image shrinks, with the feature
-/// `render`, up to [`MAX_SHRINK_PIXELS`], and is an error past that or
-/// without the feature. It is an error too if `blob` is not a PNG, a JPEG,
-/// a GIF or a WebP.
-pub fn fit_image(blob: Vec<u8>) -> Result<Vec<u8>, ImageError> {
+/// `blob`, or a PNG of it shrunk to [`MAX_IMAGE_PIXELS`], for
+/// [`Image::load`](crate::scene::Image::load). It is an error if `blob` is
+/// not a PNG, a JPEG, a GIF or a WebP.
+pub(crate) fn fit_image(blob: Vec<u8>) -> Result<Vec<u8>, ImageError> {
     let size = head(&blob).ok_or(ImageError::Unsupported)?.size;
     if pixels(size) > MAX_IMAGE_PIXELS {
         shrink(&blob, size)
@@ -275,7 +274,8 @@ pub struct ImageHead {
 
 /// The header of the image in `blob`, or an error if it is not a PNG, a
 /// JPEG, a GIF or a WebP. The size is the one of `blob`, before
-/// [`fit_image`] shrinks it, so a front end shows a shrunk image at the
+/// [`Image::load`](crate::scene::Image::load) shrinks it, so a front end
+/// shows a shrunk image at the
 /// size of the original.
 pub fn image_head(blob: &[u8]) -> Result<ImageHead, ImageError> {
     let head = head(blob).ok_or(ImageError::Unsupported)?;

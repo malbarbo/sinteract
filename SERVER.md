@@ -256,9 +256,9 @@ A engine não cuida disso. O `Session::write_frame` manda cada imagem uma
 vez, antes do primeiro frame que a desenha, e manda de novo, com outro `id`,
 uma imagem que o servidor perdeu. Um frame cujas imagens juntas passam dos
 limites não sai (`FrameError::Full`, ou `PresentError::Full` no `Stage`),
-porque o servidor perderia uma delas a cada frame. O front end chama
-`asset::fit_image` quando carrega uma imagem, e uma imagem acima de
-2048×2048 pixels é reduzida.
+porque o servidor perderia uma delas a cada frame. O front end carrega
+cada imagem uma vez com `Image::load`, que reduz uma imagem acima de
+2048×2048 pixels, e guarda a `Image`.
 
 ### O que vai para cada view
 

@@ -94,8 +94,9 @@ Regras da sessão com servidor:
   um `Up` para cada tecla e botão que ela segurava, como a janela faz ao
   perder o foco;
 - um bitmap guarda a sua `Image`, e a imagem viaja na cena. O front end
-  chama `fit_image` ao carregar a imagem, que reduz uma imagem maior que
-  2048 por 2048 pixels para um PNG, mantendo a proporção. A
+  carrega a imagem uma vez com `Image::load`, que reduz uma imagem maior
+  que 2048 por 2048 pixels para um PNG, mantendo a proporção, e o
+  `asset::image_head` dá o tamanho e o tipo do original. A
   `Session::write_frame` manda um asset logo antes do primeiro frame que
   o desenha e dá o `id` pelo conteúdo da imagem, então um programa que
   monta a mesma imagem a cada frame a manda uma vez só. Na view, o

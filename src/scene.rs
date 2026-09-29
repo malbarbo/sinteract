@@ -636,10 +636,12 @@ struct ImageData {
 }
 
 impl Image {
-    /// The image in `blob`, shrunk as [`crate::asset::fit_image`] does if
-    /// it is larger than
-    /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS). A front end
-    /// calls it once, as it loads the image, and keeps the image.
+    /// The image in `blob`, or a PNG of it shrunk to
+    /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS) with its ratio
+    /// if it is larger. A front end calls it once, as it loads the image,
+    /// and keeps the image. An image shrinks, with the feature `render`, up
+    /// to [`MAX_SHRINK_PIXELS`](crate::asset::MAX_SHRINK_PIXELS), and is an
+    /// error past that or without the feature.
     pub fn load(blob: Vec<u8>) -> Result<Image, ImageError> {
         crate::asset::fit_image(blob).and_then(Image::new)
     }
@@ -647,7 +649,7 @@ impl Image {
     /// Read the header of `blob` and hash it. Returns an error if `blob` is
     /// not a PNG, a JPEG, a GIF or a WebP, or has more than
     /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS).
-    /// [`crate::asset::fit_image`] shrinks a larger one first. The size is
+    /// [`Image::load`] shrinks a larger one first. The size is
     /// the one after the EXIF orientation of a JPEG.
     pub fn new(blob: Vec<u8>) -> Result<Image, ImageError> {
         let (width, height) = crate::asset::screen_size(&blob)?;
