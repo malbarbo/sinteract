@@ -10,20 +10,21 @@
 //! on the thread of the first one. Open windows from a thread that lives as
 //! long as the process, such as the main thread.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::mem;
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::sync::{Arc, OnceLock};
-use std::thread::{self, ThreadId};
+use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use softbuffer::{Context, Surface};
 use tiny_skia::Pixmap;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::error::EventLoopError;
 use winit::event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
@@ -78,7 +79,7 @@ impl Window {
     /// a thread other than the one of the first window.
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
         let mut lent = Lent::take()?;
-        let proxy = lent.event_loop().create_proxy();
+        let proxy = lent.proxy.clone();
         let inbox = Inbox::new(Some(Arc::new(move || {
             let _ = proxy.send_event(());
         })));
@@ -97,8 +98,7 @@ impl Window {
             }
         };
         #[cfg(target_os = "macos")]
-        let display_link =
-            super::display_link::DisplayLink::start(&window, lent.event_loop().create_proxy());
+        let display_link = super::display_link::DisplayLink::start(&window, lent.proxy.clone());
         Ok(Self {
             inbox,
             clock: TickClock::from_millihertz(Self::TICK_RATE),
@@ -288,72 +288,61 @@ fn surface_error(e: impl std::fmt::Display) -> PresentError {
 // The event loop of the process
 // -----------------------------------------------------------------------------
 
-/// The thread that built the event loop, or why the build failed. winit
-/// refuses a second build in the process, so the answer holds for good.
-static LOOP_BUILT: OnceLock<Result<ThreadId, String>> = OnceLock::new();
-
 thread_local! {
-    /// The event loop while no window holds it.
-    static PARKED: RefCell<Parked> = const { RefCell::new(Parked(None)) };
+    /// The event loop of the process, on the thread that built it. winit
+    /// refuses a second build, so the loop stays for every later window.
+    static LOOP: RefCell<Loop> = const { RefCell::new(Loop::Unbuilt) };
+}
+
+enum Loop {
+    Unbuilt,
+    /// The build failed, and winit refuses a second one.
+    Failed(String),
+    /// The loop is leaked, because some platforms tear down under a dropped
+    /// loop.
+    Ready {
+        event_loop: &'static mut EventLoop<()>,
+        /// A [`Lent`] holds the loop.
+        held: bool,
+    },
     /// The platform ended the loop, or a pump unwound, and no window opens
     /// again.
-    static LOOP_DEAD: Cell<bool> = const { Cell::new(false) };
+    Dead,
 }
 
-struct Parked(Option<EventLoop<()>>);
-
-impl Drop for Parked {
-    /// The thread ends. Some platforms tear down under a dropped loop at
-    /// that point, and the process ends soon anyway.
-    fn drop(&mut self) {
-        if let Some(event_loop) = self.0.take() {
-            mem::forget(event_loop);
-        }
-    }
-}
-
-/// The event loop on loan to a [`Window`]. Drop gives it back, unless it
-/// died, in which case it is forgotten.
+/// The event loop on loan to a [`Window`]. Drop gives it back.
 struct Lent {
-    event_loop: Option<EventLoop<()>>,
-    dead: bool,
+    proxy: EventLoopProxy<()>,
 }
 
 impl Lent {
     fn take() -> Result<Self, OpenError> {
-        let mut built = None;
-        let owner = LOOP_BUILT.get_or_init(|| match build_loop() {
-            Ok(event_loop) => {
-                built = Some(event_loop);
-                Ok(thread::current().id())
+        LOOP.with_borrow_mut(|state| match state {
+            Loop::Unbuilt => match build_loop() {
+                Ok(event_loop) => {
+                    let proxy = event_loop.create_proxy();
+                    *state = Loop::Ready {
+                        event_loop: Box::leak(Box::new(event_loop)),
+                        held: true,
+                    };
+                    Ok(Self { proxy })
+                }
+                Err(OpenError::Platform(e)) => {
+                    *state = Loop::Failed(e.clone());
+                    Err(OpenError::Platform(e))
+                }
+                Err(e) => Err(e),
+            },
+            Loop::Failed(e) => Err(OpenError::Platform(e.clone())),
+            Loop::Ready { held: true, .. } => Err(OpenError::Busy),
+            Loop::Ready { event_loop, held } => {
+                *held = true;
+                Ok(Self {
+                    proxy: event_loop.create_proxy(),
+                })
             }
-            Err(e) => Err(e),
-        });
-        if let Some(event_loop) = built {
-            return Ok(Self::of(event_loop));
-        }
-        match owner {
-            Err(e) => Err(OpenError::Platform(e.clone())),
-            Ok(id) if *id != thread::current().id() => Err(OpenError::WrongThread),
-            Ok(_) if LOOP_DEAD.get() => Err(OpenError::LoopEnded),
-            Ok(_) => PARKED
-                .with_borrow_mut(|p| p.0.take())
-                .map(Self::of)
-                .ok_or(OpenError::Busy),
-        }
-    }
-
-    fn of(event_loop: EventLoop<()>) -> Self {
-        Self {
-            event_loop: Some(event_loop),
-            dead: false,
-        }
-    }
-
-    fn event_loop(&self) -> &EventLoop<()> {
-        self.event_loop
-            .as_ref()
-            .expect("the loop leaves only on drop")
+            Loop::Dead => Err(OpenError::LoopEnded),
+        })
     }
 
     /// Run the loop until an event or `timeout`. Returns `true` if the loop
@@ -362,17 +351,16 @@ impl Lent {
     /// The loop never calls `ActiveEventLoop::exit`, because `pump` does
     /// not clear the flag and the next window would find it set.
     fn pump(&mut self, app: &mut App, timeout: Duration) -> bool {
-        if self.dead {
-            return false;
-        }
-        let event_loop = self
-            .event_loop
-            .as_mut()
-            .expect("the loop leaves only on drop");
-        if let PumpStatus::Exit(_) = event_loop.pump_app_events(Some(timeout), app) {
-            self.dead = true;
-        }
-        !self.dead
+        LOOP.with_borrow_mut(|state| {
+            let Loop::Ready { event_loop, .. } = state else {
+                return false;
+            };
+            if let PumpStatus::Exit(_) = event_loop.pump_app_events(Some(timeout), app) {
+                *state = Loop::Dead;
+                return false;
+            }
+            true
+        })
     }
 
     /// Pump until `app` has its window. The window appears in the callbacks,
@@ -398,18 +386,15 @@ impl Lent {
 }
 
 impl Drop for Lent {
-    /// A loop that died, or that unwound in a pump, is in no state to run
-    /// again.
+    /// A loop that unwound in a pump is in no state to run again.
     fn drop(&mut self) {
-        let Some(event_loop) = self.event_loop.take() else {
-            return;
-        };
-        if self.dead || thread::panicking() {
-            mem::forget(event_loop);
-            LOOP_DEAD.set(true);
-        } else {
-            PARKED.with_borrow_mut(|p| p.0 = Some(event_loop));
-        }
+        LOOP.with_borrow_mut(|state| {
+            if thread::panicking() {
+                *state = Loop::Dead;
+            } else if let Loop::Ready { held, .. } = state {
+                *held = false;
+            }
+        });
     }
 }
 
@@ -429,8 +414,9 @@ fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
 
 /// Build the loop of the process on this thread. winit panics on a thread
 /// other than the main one unless told otherwise, so Linux and Windows allow
-/// any thread, and macOS, which cannot, gets an error.
-fn build_loop() -> Result<EventLoop<()>, String> {
+/// any thread, and macOS, which cannot, gets an error. A second build means
+/// that another thread built the loop.
+fn build_loop() -> Result<EventLoop<()>, OpenError> {
     let mut builder = EventLoop::<()>::with_user_event();
     #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
     {
@@ -446,15 +432,18 @@ fn build_loop() -> Result<EventLoop<()>, String> {
     {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
         if unsafe { libc::pthread_main_np() } != 1 {
-            return Err("on macOS a window opens only on the main thread".into());
+            return Err(OpenError::Platform(
+                "on macOS a window opens only on the main thread".into(),
+            ));
         }
         // The default menu quits the process on Cmd+Q, and a quit is the
         // decision of the engine.
         builder.with_default_menu(false);
     }
-    let event_loop = builder
-        .build()
-        .map_err(|e| format!("the window event loop did not build: {e}"))?;
+    let event_loop = builder.build().map_err(|e| match e {
+        EventLoopError::RecreationAttempt => OpenError::WrongThread,
+        e => OpenError::Platform(format!("the window event loop did not build: {e}")),
+    })?;
     event_loop.set_control_flow(ControlFlow::Wait);
     Ok(event_loop)
 }
