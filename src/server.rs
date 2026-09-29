@@ -870,7 +870,7 @@ mod tests {
         fn new() -> Self {
             Room {
                 core: ServerCore::new(),
-                engine: Session::new(),
+                engine: Session::new(PlayerRange::new(1, 9).unwrap(), &mut io::sink()).unwrap(),
             }
         }
 

@@ -103,8 +103,9 @@ pub fn write_frame(
     write_framed(w, Side::Engine, &frame_message(player, scene, ids))
 }
 
-/// Write the hello, the first message of the engine.
-pub fn write_hello(w: &mut impl Write, players: PlayerRange) -> io::Result<()> {
+/// Write the hello, the first message of the engine, which
+/// [`crate::session::Session::new`] writes.
+pub(crate) fn write_hello(w: &mut impl Write, players: PlayerRange) -> io::Result<()> {
     write_framed(
         w,
         Side::Engine,

@@ -30,7 +30,7 @@ use sinteract::display::{TerminalOptions, open_native};
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Bitmap, Image, Paint, PathStyle, RotatedRect, Scene};
 use sinteract::session::{Session, SessionEvent};
-use sinteract::wire::engine_to_server::{self, PlayerRange};
+use sinteract::wire::engine_to_server::PlayerRange;
 
 const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 300.0;
@@ -53,11 +53,13 @@ fn run_session(mut game: Game) -> ExitCode {
     let (mut from_server, to_server) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
     let mut to_server = BufWriter::new(to_server);
     let players = PlayerRange::new(1, 8).expect("1 to 8 is a range");
-    if let Err(e) = engine_to_server::write_hello(&mut to_server, players) {
-        eprintln!("engine: {e}");
-        return ExitCode::FAILURE;
-    }
-    let mut session = Session::new();
+    let mut session = match Session::new(players, &mut to_server) {
+        Ok(session) => session,
+        Err(e) => {
+            eprintln!("engine: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     // The end of fd 4, when the engine exits, ends the session for the
     // server.
     loop {

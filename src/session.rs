@@ -1,7 +1,8 @@
 //! [`Session`] is the engine side of a session. The server, or the page
 //! that plays the part of the server, writes a `ServerToEngine` stream to
 //! the engine, and the session turns the bytes into [`SessionEvent`]s with
-//! the rules of the protocol. The engine writes its frames back with
+//! the rules of the protocol. [`Session::new`] writes the hello of the
+//! engine, and the engine writes its frames back with
 //! [`Session::write_frame`], which sends each image once, before the first
 //! frame that draws it. The session writes a tickTaken there as it hands
 //! out each tick, so the server holds the next tick until then.
@@ -21,7 +22,7 @@ use crate::asset::{RoomFull, check_room};
 use crate::event::InputEvent;
 use crate::scene::{Element, Image, Scene};
 use crate::wire;
-use crate::wire::engine_to_server;
+use crate::wire::engine_to_server::{self, PlayerRange};
 use crate::wire::framing::{self, Side};
 use crate::wire::server_to_engine::{self, Message};
 
@@ -33,7 +34,7 @@ use crate::wire::server_to_engine::{self, Message};
 /// one of the same player that still waits, since only the latest one
 /// counts. It passes the input of the other players, and stops at anything
 /// else.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Session {
     /// The bytes that do not make a whole message yet.
     bytes: Vec<u8>,
@@ -138,8 +139,21 @@ impl From<io::Error> for FrameError {
 const READ_BYTES: usize = 64 * 1024;
 
 impl Session {
-    pub fn new() -> Self {
-        Self::default()
+    /// A session for a game of `players`. It writes the hello to `w` and
+    /// flushes `w`, since the server sends nothing until it reads the
+    /// hello. The hello is the first message of the engine, and the only
+    /// one.
+    pub fn new(players: PlayerRange, w: &mut impl Write) -> io::Result<Session> {
+        engine_to_server::write_hello(w, players)?;
+        w.flush()?;
+        Ok(Session {
+            bytes: Vec::new(),
+            scratch: Vec::new(),
+            state: State::BeforeStart,
+            events: VecDeque::new(),
+            sent: HashMap::new(),
+            next_id: 0,
+        })
     }
 
     /// Take the next bytes of the server. They may end anywhere, inside a
@@ -420,6 +434,11 @@ mod tests {
         InputEvent::Resize { width, height: 1.0 }
     }
 
+    /// A session for 1 or 2 players, with its hello thrown away.
+    fn session() -> Session {
+        Session::new(PlayerRange::new(1, 2).unwrap(), &mut io::sink()).unwrap()
+    }
+
     /// A start with Ana as player 1 and Beto as player 2.
     fn start() -> Vec<u8> {
         let mut out = Vec::new();
@@ -451,7 +470,7 @@ mod tests {
 
     /// A session after its start, fed with `bytes`.
     fn started(bytes: &[u8]) -> Session {
-        let mut session = Session::new();
+        let mut session = session();
         session.feed(&start());
         assert!(matches!(next(&mut session), Some(SessionEvent::Start(_))));
         session.feed(bytes);
@@ -478,11 +497,22 @@ mod tests {
     }
 
     #[test]
+    fn a_new_session_writes_the_hello_and_flushes_it() {
+        let players = PlayerRange::new(1, 2).unwrap();
+        let mut w = io::BufWriter::new(Vec::new());
+        Session::new(players, &mut w).unwrap();
+        match testing::read(&mut &w.get_ref()[..]).unwrap() {
+            Some(testing::Message::Hello(got)) => assert_eq!(got, players),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
     fn the_events_come_out_whole_from_bytes_fed_one_at_a_time() {
         let mut stream = start();
         stream.extend_from_slice(&tick());
         input(&mut stream, 2, &key("a"));
-        let mut session = Session::new();
+        let mut session = session();
         let mut events = Vec::new();
         for byte in &stream {
             session.feed(std::slice::from_ref(byte));
@@ -550,7 +580,7 @@ mod tests {
         stream.extend_from_slice(&start());
         stream.extend_from_slice(&start());
         stream.extend_from_slice(&tick());
-        let mut session = Session::new();
+        let mut session = session();
         session.feed(&stream);
         assert!(matches!(
             next(&mut session),
@@ -573,7 +603,7 @@ mod tests {
         stream.extend_from_slice(&tick());
         stream.extend_from_slice(&lost);
         stream.extend_from_slice(&tick());
-        let mut session = Session::new();
+        let mut session = session();
         session.feed(&stream);
         assert!(matches!(
             next(&mut session),
@@ -669,7 +699,7 @@ mod tests {
 
     #[test]
     fn the_end_before_the_start_is_the_end() {
-        let mut session = Session::new();
+        let mut session = session();
         session.end();
         assert_eq!(names(&mut session), ["end"]);
     }
@@ -772,7 +802,7 @@ mod tests {
             fail_at: stream.len() - 4,
             interrupt: false,
         };
-        let mut session = Session::new();
+        let mut session = session();
         assert!(matches!(
             session.wait(&mut r, &mut io::sink()),
             Ok(SessionEvent::Start(_))
@@ -799,7 +829,7 @@ mod tests {
     fn a_tick_writes_a_tick_taken_and_a_start_does_not() {
         let mut stream = start();
         stream.extend_from_slice(&tick());
-        let mut session = Session::new();
+        let mut session = session();
         session.feed(&stream);
         let mut out = Vec::new();
         assert!(matches!(
@@ -823,7 +853,7 @@ mod tests {
         stream.extend_from_slice(&tick());
         let mut r = &stream[..];
         let mut w = io::BufWriter::new(Vec::new());
-        let mut session = Session::new();
+        let mut session = session();
         assert!(matches!(
             session.wait(&mut r, &mut w),
             Ok(SessionEvent::Start(_))
@@ -858,7 +888,7 @@ mod tests {
         stream.extend_from_slice(&tick());
         stream.extend_from_slice(&tick());
         let mut r = &stream[..];
-        let mut session = Session::new();
+        let mut session = session();
         assert!(matches!(
             session.wait(&mut r, &mut Broken),
             Ok(SessionEvent::Start(_))
