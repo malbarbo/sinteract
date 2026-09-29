@@ -156,19 +156,19 @@ impl Keys {
     }
 
     fn csi(&mut self, csi: &Csi, out: &mut Vec<Input>) {
-        let mods = csi.int(1, 0).unwrap_or(1);
-        let event = csi.int(1, 1).unwrap_or(1);
+        let mods = csi.field(1, 0).unwrap_or(1);
+        let event = csi.field(1, 1).unwrap_or(1);
         match (csi.marker, csi.final_byte) {
             (None, b'u') => {
-                let Some(code) = csi.int(0, 0) else {
+                let Some(code) = csi.field(0, 0) else {
                     return;
                 };
-                let shifted = csi.int(0, 1).and_then(char::from_u32);
+                let shifted = csi.field(0, 1).and_then(char::from_u32);
                 let text = csi.fields(2);
                 self.key(KeyId::Code(code), shifted, mods, event, &text, out);
             }
             (None, b'~') => {
-                if let Some(n) = csi.int(0, 0) {
+                if let Some(n) = csi.field(0, 0) {
                     self.key(KeyId::Tilde(n), None, mods, event, &[], out);
                 }
             }
@@ -180,14 +180,14 @@ impl Keys {
             (None, b'Z') => self.key(KeyId::Letter(b'Z'), None, 2, 1, &[], out),
             (Some(b'<'), b'M' | b'm') => {
                 let released = csi.final_byte == b'm';
-                if let Some(cb) = csi.int(0, 0) {
+                if let Some(cb) = csi.field(0, 0) {
                     self.mouse(cb, csi, released, out);
                 }
             }
             // An rxvt report, `CSI b ; x ; y M`, with the button plus 32,
             // for a terminal that does not take the SGR mode.
             (None, b'M') => {
-                if let Some(cb) = csi.int(0, 0).and_then(|cb| cb.checked_sub(32)) {
+                if let Some(cb) = csi.field(0, 0).and_then(|cb| cb.checked_sub(32)) {
                     self.mouse(cb, csi, false, out);
                 }
             }
@@ -295,7 +295,7 @@ impl Keys {
     /// A key of win32-input-mode. AltGr holds Ctrl and Alt, which the key that types text
     /// with it does not report.
     fn win32(&mut self, csi: &Csi, out: &mut Vec<Input>) {
-        let field = |i| csi.int(i, 0).unwrap_or(0);
+        let field = |i| csi.field(i, 0).unwrap_or(0);
         let id = KeyId::Win32 {
             vk: field(0),
             scan: field(1),
@@ -662,7 +662,7 @@ impl<'a> Csi<'a> {
     }
 
     /// Field `j` of parameter `i`, or `None` when it is absent or empty.
-    fn int(&self, i: usize, j: usize) -> Option<u32> {
+    fn field(&self, i: usize, j: usize) -> Option<u32> {
         number(self.param(i)?.split(is_colon).nth(j)?)
     }
 
@@ -685,7 +685,7 @@ fn number(field: &[CsiParam]) -> Option<u32> {
 
 /// The cell of field `i` of `csi`, which counts from 1, counted from 0.
 fn cell(csi: &Csi, i: usize) -> Option<u16> {
-    u16::try_from(csi.int(i, 0)?.checked_sub(1)?).ok()
+    u16::try_from(csi.field(i, 0)?.checked_sub(1)?).ok()
 }
 
 #[cfg(test)]
