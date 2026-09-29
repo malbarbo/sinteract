@@ -65,10 +65,10 @@ pub struct Caps {
 /// How a terminal that speaks Kitty takes an image.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum KittyTransfer {
-    /// In the escapes.
-    Escapes,
-    /// From shared memory too, which a terminal on another machine, as over
-    /// ssh, cannot read.
+    /// In the escapes, the direct medium (`t=d`) of the protocol.
+    Direct,
+    /// From shared memory too (`t=s`), which a terminal on another machine,
+    /// as over ssh, cannot read.
     #[cfg(unix)]
     SharedMemory,
 }
@@ -155,7 +155,7 @@ impl Replies {
         if self.found.kitty_shm {
             return KittyTransfer::SharedMemory;
         }
-        KittyTransfer::Escapes
+        KittyTransfer::Direct
     }
 }
 
@@ -627,7 +627,7 @@ mod tests {
     fn kitty_ok_in_buffer() {
         assert_eq!(
             replies(b"junk\x1b_Gi=31;OK\x1b\\more").caps().kitty,
-            Some(KittyTransfer::Escapes)
+            Some(KittyTransfer::Direct)
         );
     }
 

@@ -543,7 +543,7 @@ impl Painter {
     /// The painter of `backend`, which sends a Kitty image as a PNG.
     fn new(backend: Backend) -> Self {
         match backend {
-            Backend::Kitty => Painter::Kitty(KittyMedium::Png),
+            Backend::Kitty => Painter::Kitty(KittyMedium::DirectPng),
             Backend::Sixel => Painter::Sixel(sixel::Encoder::new()),
             Backend::HalfBlocks => Painter::HalfBlocks(HalfBlockScreen::default()),
         }
@@ -584,7 +584,7 @@ impl Painter {
                     Placement::Still => None,
                 };
                 match medium {
-                    KittyMedium::Png => emit_kitty(out, pixmap, id, bytes)?,
+                    KittyMedium::DirectPng => emit_kitty(out, pixmap, id, bytes)?,
                     #[cfg(unix)]
                     KittyMedium::SharedMemory { next } => emit_kitty_shared(out, pixmap, id, next)?,
                 }
@@ -644,10 +644,11 @@ impl Placement {
 
 /// How a Kitty image goes to the terminal.
 enum KittyMedium {
-    /// A PNG in the escapes, which reaches a terminal on another machine.
-    Png,
-    /// A shared memory object per image, which the terminal reads without a
-    /// decode. `next` numbers the object of the next image.
+    /// A PNG in the escapes (`t=d`), which reaches a terminal on another
+    /// machine.
+    DirectPng,
+    /// A shared memory object per image (`t=s`), which the terminal reads
+    /// without a decode. `next` numbers the object of the next image.
     #[cfg(unix)]
     SharedMemory { next: u64 },
 }
@@ -658,7 +659,7 @@ impl KittyMedium {
         if super::term_query::caps().kitty == Some(super::term_query::KittyTransfer::SharedMemory) {
             return KittyMedium::SharedMemory { next: 0 };
         }
-        KittyMedium::Png
+        KittyMedium::DirectPng
     }
 }
 
