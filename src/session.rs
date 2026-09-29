@@ -38,7 +38,8 @@ pub struct Session<R, W> {
     r: R,
     /// The stream to the server. Every message of the engine goes out
     /// through the session, so nothing else writes between two of them.
-    w: W,
+    /// `None` after a write fails, since `w` may hold part of a message.
+    w: Option<W>,
     /// The bytes that do not make a whole message yet.
     bytes: Vec<u8>,
     /// The buffer of [`Session::wait`] for a read, zeroed once, since a
@@ -271,7 +272,7 @@ impl<R: Read, W: Write> Session<R, W> {
         w.flush()?;
         let mut session = Session {
             r,
-            w,
+            w: Some(w),
             bytes: Vec::new(),
             scratch: Vec::new(),
             players: 0,
@@ -301,18 +302,16 @@ impl<R: Read, W: Write> Session<R, W> {
     /// and flushes `w` first, since the server sends no other tick until it
     /// reads the tickTaken, and a tick may draw no frame that would flush
     /// it. An error of `w` comes back in place of the tick and ends the
-    /// session, since `w` may hold part of the tickTaken.
+    /// session, as in [`Session::write_frame`].
     pub fn wait(&mut self) -> io::Result<SessionEvent> {
         loop {
             if let Some(event) = self.events.pop_front() {
-                let taken = matches!(event, SessionEvent::Tick).then(|| {
-                    engine_to_server::write_tick_taken(&mut self.w).and_then(|()| self.w.flush())
-                });
-                if let Some(Err(e)) = taken {
-                    self.ended = true;
-                    self.bytes = Vec::new();
-                    self.events.clear();
-                    return Err(e);
+                if matches!(event, SessionEvent::Tick) {
+                    let written = writer(&mut self.w).and_then(|w| {
+                        engine_to_server::write_tick_taken(w)?;
+                        w.flush()
+                    });
+                    self.check_write(written)?;
                 }
                 return Ok(event);
             }
@@ -328,9 +327,12 @@ impl<R: Read, W: Write> Session<R, W> {
         }
     }
 
-    /// Write `scene` to `w` as a frame for `to`. The asset of each image that it draws goes
-    /// out before, unless it went out before and the server did not lose
-    /// it.
+    /// Write `scene` to `w` as a frame for `to`. The asset of each image
+    /// that it draws goes out before, unless it went out before and the
+    /// server did not lose it. An error of `w` ends the session and closes
+    /// `w`, since `w` may hold part of a message. Every frame after it
+    /// fails with [`io::ErrorKind::BrokenPipe`], and [`Session::wait`]
+    /// returns the end.
     pub fn write_frame(&mut self, to: Target, scene: &Scene) -> Result<(), FrameError> {
         let images = images_of(scene);
         check_room(images.iter().copied()).map_err(FrameError::Full)?;
@@ -340,17 +342,21 @@ impl<R: Read, W: Write> Session<R, W> {
                 self.next_id = id
                     .checked_add(1)
                     .expect("an engine sends fewer than 2^32 images");
-                engine_to_server::write_asset(&mut self.w, id, image.blob())?;
+                let written = writer(&mut self.w)
+                    .and_then(|w| engine_to_server::write_asset(w, id, image.blob()));
+                self.check_write(written)?;
                 self.sent.insert(image.clone(), id);
             }
         }
-        let sent = &self.sent;
-        let id = |image: &Image| *sent.get(image).expect("every image of the scene went out");
         let player = match to {
             Target::All => None,
             Target::Player(player) => Some(player.number()),
         };
-        engine_to_server::write_frame(&mut self.w, player, scene, &id)?;
+        let sent = &self.sent;
+        let id = |image: &Image| *sent.get(image).expect("every image of the scene went out");
+        let written =
+            writer(&mut self.w).and_then(|w| engine_to_server::write_frame(w, player, scene, &id));
+        self.check_write(written)?;
         Ok(())
     }
 
@@ -492,6 +498,19 @@ impl<R: Read, W: Write> Session<R, W> {
         None
     }
 
+    /// Pass `written` on. An error drops `w` and ends the session, since
+    /// `w` may hold part of a message, and the server reads the end of `w`
+    /// as the end of the engine.
+    fn check_write(&mut self, written: io::Result<()>) -> io::Result<()> {
+        if written.is_err() {
+            self.w = None;
+            self.ended = true;
+            self.bytes = Vec::new();
+            self.events.clear();
+        }
+        written
+    }
+
     /// End the session, with the error of a broken stream. Nothing comes
     /// after the `End`.
     fn finish(&mut self, broken: Option<io::Error>) {
@@ -499,6 +518,17 @@ impl<R: Read, W: Write> Session<R, W> {
         self.bytes = Vec::new();
         self.events.push_back(SessionEvent::End(broken));
     }
+}
+
+/// The stream to the server, or [`io::ErrorKind::BrokenPipe`] after a
+/// write failed.
+fn writer<W>(w: &mut Option<W>) -> io::Result<&mut W> {
+    w.as_mut().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "an earlier write to the server failed",
+        )
+    })
 }
 
 /// The images that `scene` draws, each once, in the order of their first
@@ -526,6 +556,9 @@ fn images_of(scene: &Scene) -> Vec<&Image> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
     use super::*;
     use crate::event::{KeyEvent, KeyKind, Modifiers, MouseAction, MouseButtons, MouseEvent};
     use crate::scene::Bitmap;
@@ -1034,6 +1067,57 @@ mod tests {
         engine.break_writes();
         let e = session.wait().expect_err("the error of the writer");
         assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
+        assert!(matches!(session.wait(), Ok(SessionEvent::End(None))));
+    }
+
+    /// A writer that keeps its bytes and fails the next write once `fail`
+    /// is set.
+    struct FailOnce {
+        bytes: Rc<RefCell<Vec<u8>>>,
+        fail: Rc<Cell<bool>>,
+    }
+
+    impl Write for FailOnce {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.fail.replace(false) {
+                return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+            }
+            self.bytes.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_error_of_the_writer_at_a_frame_ends_the_session() {
+        let mut stream = start();
+        stream.extend_from_slice(&tick());
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        let fail = Rc::new(Cell::new(false));
+        let w = FailOnce {
+            bytes: bytes.clone(),
+            fail: fail.clone(),
+        };
+        let (mut session, _) = Session::start(players(), &stream[..], w).unwrap();
+        let hello = bytes.borrow().len();
+        fail.set(true);
+        let scene = drawing(&[]);
+        assert!(matches!(
+            session.write_frame(Target::All, &scene),
+            Err(FrameError::Io(_))
+        ));
+        let e = session
+            .write_frame(Target::All, &scene)
+            .expect_err("no writer");
+        assert!(matches!(e, FrameError::Io(e) if e.kind() == io::ErrorKind::BrokenPipe));
+        assert_eq!(
+            bytes.borrow().len(),
+            hello,
+            "nothing after the failed write"
+        );
         assert!(matches!(session.wait(), Ok(SessionEvent::End(None))));
     }
 }
