@@ -636,6 +636,14 @@ struct ImageData {
 }
 
 impl Image {
+    /// The image in `blob`, shrunk as [`crate::asset::fit_image`] does if
+    /// it is larger than
+    /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS). A front end
+    /// calls it once, as it loads the image, and keeps the image.
+    pub fn load(blob: Vec<u8>) -> Result<Image, ImageError> {
+        crate::asset::fit_image(blob).and_then(Image::new)
+    }
+
     /// Read the header of `blob` and hash it. Returns an error if `blob` is
     /// not a PNG, a JPEG, a GIF or a WebP, or has more than
     /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS).
@@ -1402,6 +1410,13 @@ impl ClipPathBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_image_that_loads_under_the_limit_is_the_blob_as_it_is() {
+        let blob = crate::asset::png_head(2, 3);
+        assert_eq!(Image::load(blob.clone()), Image::new(blob));
+        assert_eq!(Image::load(b"GIF".to_vec()), Err(ImageError::Unsupported));
+    }
 
     #[test]
     fn builders_append_one_segment_per_call() {
