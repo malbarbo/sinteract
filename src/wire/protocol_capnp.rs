@@ -254,7 +254,7 @@ pub mod asset_msg {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(56, 4, 0, 0, 115, 4, 0, 0),
+            ::capnp::word(59, 4, 0, 0, 118, 4, 0, 0),
             ::capnp::word(21, 0, 0, 0, 194, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -587,7 +587,7 @@ pub mod frame {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(164, 4, 0, 0, 46, 5, 0, 0),
+            ::capnp::word(167, 4, 0, 0, 49, 5, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -891,7 +891,7 @@ pub mod hello {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(125, 5, 0, 0, 195, 5, 0, 0),
+            ::capnp::word(128, 5, 0, 0, 198, 5, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -965,7 +965,7 @@ pub mod hello {
     }
 }
 
-pub mod engine_message {
+pub mod engine_to_server {
     pub use self::Which::{Asset, Forget, Frame, Hello, TickTaken};
 
     #[derive(Copy, Clone)]
@@ -1324,13 +1324,13 @@ pub mod engine_message {
     mod _private {
         pub(crate) static ENCODED_NODE: [::capnp::Word; 95] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
-            ::capnp::word(109, 191, 215, 250, 239, 155, 126, 153),
+            ::capnp::word(198, 56, 245, 153, 39, 87, 200, 177),
             ::capnp::word(15, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 5, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(117, 6, 0, 0, 83, 9, 0, 0),
-            ::capnp::word(21, 0, 0, 0, 234, 0, 0, 0),
+            ::capnp::word(120, 6, 0, 0, 87, 9, 0, 0),
+            ::capnp::word(21, 0, 0, 0, 242, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 31, 1, 0, 0),
@@ -1338,8 +1338,8 @@ pub mod engine_message {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(112, 114, 111, 116, 111, 99, 111, 108),
             ::capnp::word(46, 99, 97, 112, 110, 112, 58, 69),
-            ::capnp::word(110, 103, 105, 110, 101, 77, 101, 115),
-            ::capnp::word(115, 97, 103, 101, 0, 0, 0, 0),
+            ::capnp::word(110, 103, 105, 110, 101, 84, 111, 83),
+            ::capnp::word(101, 114, 118, 101, 114, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(20, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 255, 255, 0, 0, 0, 0),
@@ -1447,7 +1447,7 @@ pub mod engine_message {
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[];
         pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[0, 1, 2, 3, 4];
         pub(crate) static MEMBERS_BY_NAME: &[u16] = &[0, 3, 1, 2, 4];
-        pub(crate) const TYPE_ID: u64 = 0x997e_9bef_fad7_bf6d;
+        pub(crate) const TYPE_ID: u64 = 0xb1c8_5727_99f5_38c6;
     }
     pub enum Which<A0, A1, A2> {
         Asset(A0),
@@ -1468,7 +1468,7 @@ pub mod engine_message {
     >;
 }
 
-pub mod view_message {
+pub mod view_to_server {
     #[derive(Copy, Clone)]
     pub struct Owned(());
     impl ::capnp::introspect::Introspect for Owned {
@@ -1712,13 +1712,13 @@ pub mod view_message {
     mod _private {
         pub(crate) static ENCODED_NODE: [::capnp::Word; 34] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
-            ::capnp::word(244, 183, 107, 159, 158, 21, 226, 255),
+            ::capnp::word(63, 218, 82, 196, 85, 123, 176, 142),
             ::capnp::word(15, 0, 0, 0, 1, 0, 0, 0),
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(128, 10, 0, 0, 182, 10, 0, 0),
-            ::capnp::word(21, 0, 0, 0, 218, 0, 0, 0),
+            ::capnp::word(132, 10, 0, 0, 187, 10, 0, 0),
+            ::capnp::word(21, 0, 0, 0, 226, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 63, 0, 0, 0),
@@ -1726,8 +1726,8 @@ pub mod view_message {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(112, 114, 111, 116, 111, 99, 111, 108),
             ::capnp::word(46, 99, 97, 112, 110, 112, 58, 86),
-            ::capnp::word(105, 101, 119, 77, 101, 115, 115, 97),
-            ::capnp::word(103, 101, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(105, 101, 119, 84, 111, 83, 101, 114),
+            ::capnp::word(118, 101, 114, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(4, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1770,7 +1770,7 @@ pub mod view_message {
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[0];
         pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[];
         pub(crate) static MEMBERS_BY_NAME: &[u16] = &[0];
-        pub(crate) const TYPE_ID: u64 = 0xffe2_159e_9f6b_b7f4;
+        pub(crate) const TYPE_ID: u64 = 0x8eb0_7b55_c452_da3f;
     }
 }
 
@@ -2020,7 +2020,7 @@ pub mod member {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(77, 11, 0, 0, 117, 11, 0, 0),
+            ::capnp::word(82, 11, 0, 0, 122, 11, 0, 0),
             ::capnp::word(21, 0, 0, 0, 178, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2334,7 +2334,7 @@ pub mod start {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(181, 11, 0, 0, 227, 11, 0, 0),
+            ::capnp::word(186, 11, 0, 0, 232, 11, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2655,7 +2655,7 @@ pub mod player_event {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(254, 11, 0, 0, 102, 12, 0, 0),
+            ::capnp::word(3, 12, 0, 0, 107, 12, 0, 0),
             ::capnp::word(21, 0, 0, 0, 218, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2936,7 +2936,7 @@ pub mod tick {
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(228, 12, 0, 0, 242, 12, 0, 0),
+            ::capnp::word(233, 12, 0, 0, 247, 12, 0, 0),
             ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2973,7 +2973,7 @@ pub mod tick {
     }
 }
 
-pub mod server_message {
+pub mod server_to_engine {
     pub use self::Which::{Event, Lost, Start, Tick};
 
     #[derive(Copy, Clone)]
@@ -3326,13 +3326,13 @@ pub mod server_message {
     mod _private {
         pub(crate) static ENCODED_NODE: [::capnp::Word; 79] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
-            ::capnp::word(130, 140, 51, 84, 228, 49, 4, 252),
+            ::capnp::word(245, 39, 119, 69, 24, 23, 144, 192),
             ::capnp::word(15, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(193, 85, 175, 82, 208, 44, 118, 159),
             ::capnp::word(1, 0, 7, 0, 0, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(56, 13, 0, 0, 10, 15, 0, 0),
-            ::capnp::word(21, 0, 0, 0, 234, 0, 0, 0),
+            ::capnp::word(61, 13, 0, 0, 16, 15, 0, 0),
+            ::capnp::word(21, 0, 0, 0, 242, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 231, 0, 0, 0),
@@ -3340,8 +3340,8 @@ pub mod server_message {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(112, 114, 111, 116, 111, 99, 111, 108),
             ::capnp::word(46, 99, 97, 112, 110, 112, 58, 83),
-            ::capnp::word(101, 114, 118, 101, 114, 77, 101, 115),
-            ::capnp::word(115, 97, 103, 101, 0, 0, 0, 0),
+            ::capnp::word(101, 114, 118, 101, 114, 84, 111, 69),
+            ::capnp::word(110, 103, 105, 110, 101, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(16, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 255, 255, 0, 0, 0, 0),
@@ -3432,7 +3432,7 @@ pub mod server_message {
         pub(crate) static NONUNION_MEMBERS: &[u16] = &[];
         pub(crate) static MEMBERS_BY_DISCRIMINANT: &[u16] = &[0, 1, 2, 3];
         pub(crate) static MEMBERS_BY_NAME: &[u16] = &[0, 3, 1, 2];
-        pub(crate) const TYPE_ID: u64 = 0xfc04_31e4_5433_8c82;
+        pub(crate) const TYPE_ID: u64 = 0xc090_1718_4577_27f5;
     }
     pub enum Which<A0, A1, A2> {
         Event(A0),

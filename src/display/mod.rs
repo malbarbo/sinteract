@@ -11,7 +11,7 @@
 //! win32-input-mode of Windows Terminal, [`sixel`] encodes a pixmap for the
 //! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
 //! in a winit window. An engine in a session with a server reads with
-//! [`crate::session`] and writes with [`crate::wire::engine_message`]
+//! [`crate::session`] and writes with [`crate::wire::engine_to_server`]
 //! instead.
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the

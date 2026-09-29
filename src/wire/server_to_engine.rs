@@ -1,4 +1,4 @@
-//! The messages of the server, in the `ServerMessage` union, which go to
+//! The messages of the server, in the `ServerToEngine` union, which go to
 //! the engine.
 //!
 //! The server starts the session with the players, who stay the same until
@@ -13,15 +13,15 @@ use std::num::NonZeroU32;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::event::InputEvent;
-use crate::protocol_capnp::server_message;
+use crate::protocol_capnp::server_to_engine;
 
 use super::Error;
-use super::engine_message::MAX_PLAYERS;
+use super::engine_to_server::MAX_PLAYERS;
 use super::event::{read_input_event, write_input_event};
 use super::framing::{Side, write_framed};
 use super::protocol::decode_root;
 
-/// One message of the server, one variant per arm of `ServerMessage`. The
+/// One message of the server, one variant per arm of `ServerToEngine`. The
 /// arm `event` is `Input` here, so it does not clash with
 /// [`crate::event::Event`]. `Start` and `Tick` are about the whole
 /// session.
@@ -77,15 +77,15 @@ pub fn write_start<S: AsRef<str>>(w: &mut impl Write, nicknames: &[S]) -> io::Re
 /// Decode `payload`. `None` for a message or an event of an arm from a
 /// newer schema. An event of player 0 is an error.
 pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
-    decode_root::<server_message::Owned, _>(payload, decode_message)
+    decode_root::<server_to_engine::Owned, _>(payload, decode_message)
 }
 
-fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Error> {
+fn decode_message(msg: server_to_engine::Reader<'_>) -> Result<Option<Message>, Error> {
     let Ok(which) = msg.which() else {
         return Ok(None);
     };
     match which {
-        server_message::Event(e) => {
+        server_to_engine::Event(e) => {
             let e = e?;
             let Some(event) = read_input_event(e.get_event()?)? else {
                 return Ok(None);
@@ -95,7 +95,7 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
                 event,
             }))
         }
-        server_message::Start(s) => {
+        server_to_engine::Start(s) => {
             let nicknames = s?
                 .get_members()?
                 .iter()
@@ -103,8 +103,8 @@ fn decode_message(msg: server_message::Reader<'_>) -> Result<Option<Message>, Er
                 .collect::<Result<_, Error>>()?;
             Ok(Some(Message::Start(nicknames)))
         }
-        server_message::Tick(_) => Ok(Some(Message::Tick)),
-        server_message::Lost(id) => Ok(Some(Message::Lost(id))),
+        server_to_engine::Tick(_) => Ok(Some(Message::Tick)),
+        server_to_engine::Lost(id) => Ok(Some(Message::Lost(id))),
     }
 }
 
@@ -115,7 +115,9 @@ fn nonzero_player(player: u32) -> Result<NonZeroU32, Error> {
 
 pub(super) fn input_message(player: u32, ev: &InputEvent) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let mut event = builder.init_root::<server_message::Builder>().init_event();
+    let mut event = builder
+        .init_root::<server_to_engine::Builder>()
+        .init_event();
     event.set_player(player);
     write_input_event(event.init_event(), ev);
     builder
@@ -123,20 +125,24 @@ pub(super) fn input_message(player: u32, ev: &InputEvent) -> MessageBuilder<Heap
 
 fn tick_message() -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    builder.init_root::<server_message::Builder>().init_tick();
+    builder.init_root::<server_to_engine::Builder>().init_tick();
     builder
 }
 
 fn lost_message(id: u32) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    builder.init_root::<server_message::Builder>().set_lost(id);
+    builder
+        .init_root::<server_to_engine::Builder>()
+        .set_lost(id);
     builder
 }
 
 /// A start of the `len` players of `nicknames`.
 fn start_message<S: AsRef<str>>(len: u32, nicknames: &[S]) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let start = builder.init_root::<server_message::Builder>().init_start();
+    let start = builder
+        .init_root::<server_to_engine::Builder>()
+        .init_start();
     let mut list = start.init_members(len);
     for (i, nickname) in (0..len).zip(nicknames) {
         list.reborrow().get(i).set_nickname(nickname.as_ref());

@@ -32,11 +32,11 @@ camada: `scene.capnp` para a cena, `event.capnp` para a entrada e
 `protocol.capnp` para a sessão. Cada lado escreve a sua própria raiz, com
 os braços abaixo.
 
-| quem escreve | raiz            | mágica | braços                                             |
-|--------------|-----------------|--------|----------------------------------------------------|
-| engine       | `EngineMessage` | `SIE1` | `asset`, `frame`, `hello`, `forget`, `tickTaken` |
-| view         | `ViewMessage`   |        | `event`                 |
-| servidor     | `ServerMessage` | `SIS1` | `event`, `start`, `tick`, `lost` |
+| quem escreve | raiz             | mágica | braços                                             |
+|--------------|------------------|--------|----------------------------------------------------|
+| engine       | `EngineToServer` | `SIE1` | `asset`, `frame`, `hello`, `forget`, `tickTaken` |
+| view         | `ViewToServer`   |        | `event`                 |
+| servidor     | `ServerToEngine` | `SIS1` | `event`, `start`, `tick`, `lost` |
 
 Num pipe, cada mensagem vai atrás de um cabeçalho de 8 bytes: a mágica e o
 tamanho em `u32` LE. Num WebSocket vai só o payload, e a versão vai no
@@ -45,7 +45,7 @@ mágica. O player é o número do jogador na partida, a
 partir de 1, e vai no primeiro campo do payload das mensagens que falam de
 um jogador: o `event` do servidor e o `frame` da engine, em que o 0 quer
 dizer todos. O `start`, o `tick` e o `asset` são
-da sessão inteira e não têm player, e a `ViewMessage` também
+da sessão inteira e não têm player, e a `ViewToServer` também
 não, porque o servidor sabe o player pela conexão.
 
 Um leitor pula a mensagem, o elemento ou o evento de um braço que não
@@ -88,7 +88,7 @@ Regras da sessão com servidor:
   `Session::write_frame` manda um asset logo antes do primeiro frame que
   o desenha e dá o `id` pelo conteúdo da imagem, então um programa que
   monta a mesma imagem a cada frame a manda uma vez só. Na view, o
-  `engine_message::FrameReader` guarda as imagens dos assets e devolve
+  `engine_to_server::FrameReader` guarda as imagens dos assets e devolve
   cada frame como uma `Scene` com as imagens;
 - uma imagem é um PNG, um JPEG, um GIF ou um WebP, e o formato vem dos
   primeiros bytes. O servidor não decodifica nada. Ele lê o tamanho no
@@ -174,7 +174,7 @@ engine numa sessão com servidor. Ela não faz E/S. O host lhe dá os bytes
 que leu, com `feed`, ou chama `wait` sobre um `Read`, como o descritor 3,
 e ela devolve os eventos com o jogador, sempre com no máximo um `Tick` na
 fila. A engine
-escreve os frames no descritor 4 com `engine_message`. Um host roda o jogo
+escreve os frames no descritor 4 com `engine_to_server`. Um host roda o jogo
 local num `Display` e o modo servidor numa `Session`, e um adaptador liga o jogo
 de um jogador só ao jogador 1.
 
@@ -224,10 +224,10 @@ Feito no sinteract:
 - a `Session`, com o `tick` do servidor e a fila que junta
   movimentos por jogador;
 - a imagem na cena, os assets com `lost` e `forget`, a
-  `Session::write_frame`, o `engine_message::FrameReader` e o `Cache` de
+  `Session::write_frame`, o `engine_to_server::FrameReader` e o `Cache` de
   uma sala;
 - o `ServerCore`, com as regras de uma sala e sem I/O, sobre
-  `framing::split_message`, `view_message::decode` e `engine_message::arm`;
+  `framing::split_message`, `view_to_server::decode` e `engine_to_server::arm`;
 - a feature `render`, que um servidor desliga.
 
 Falta:

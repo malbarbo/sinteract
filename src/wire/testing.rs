@@ -15,13 +15,13 @@ use crate::protocol_capnp;
 use crate::scene::{Image, Scene};
 
 use super::Error;
-use super::engine_message::{self, PlayerRange};
+use super::engine_to_server::{self, PlayerRange};
 use super::framing::{Side, read_framed};
 use super::protocol::decode_root;
 use super::scene::read_scene;
-use super::server_message;
+use super::server_to_engine;
 
-/// One message of the engine, one variant per arm of `EngineMessage`. A
+/// One message of the engine, one variant per arm of `EngineToServer`. A
 /// bitmap of the id `n` draws [`crate::asset::png_image`] of `n` by 1, as
 /// [`encode_frame`] writes it, and one of the id 0 is skipped.
 #[derive(Clone, Debug)]
@@ -51,33 +51,33 @@ pub(crate) fn read(r: &mut impl Read) -> Result<Option<Message>, Error> {
 /// Decode `payload`, a message with no envelope. `None` for a message of an
 /// arm from a newer schema.
 pub(crate) fn decode(payload: &[u8]) -> Result<Option<Message>, Error> {
-    decode_root::<protocol_capnp::engine_message::Owned, _>(payload, decode_message)
+    decode_root::<protocol_capnp::engine_to_server::Owned, _>(payload, decode_message)
 }
 
-/// The ids of the bitmaps of the frame in `payload`, as [`engine_message::arm`]
-/// reads them.
+/// The ids of the bitmaps of the frame in `payload`, as
+/// [`engine_to_server::arm`] reads them.
 pub(crate) fn bitmap_ids(payload: &[u8]) -> BTreeSet<u32> {
-    match engine_message::arm(payload) {
-        Ok(Some(engine_message::Arm::Frame { ids, .. })) => ids,
+    match engine_to_server::arm(payload) {
+        Ok(Some(engine_to_server::Arm::Frame { ids, .. })) => ids,
         other => panic!("expected a frame, got {other:?}"),
     }
 }
 
 fn decode_message(
-    msg: protocol_capnp::engine_message::Reader<'_>,
+    msg: protocol_capnp::engine_to_server::Reader<'_>,
 ) -> Result<Option<Message>, Error> {
     let Ok(which) = msg.which() else {
         return Ok(None);
     };
     match which {
-        protocol_capnp::engine_message::Asset(a) => {
+        protocol_capnp::engine_to_server::Asset(a) => {
             let a = a?;
             Ok(Some(Message::Asset {
                 id: a.get_id(),
                 blob: a.get_blob()?.to_vec(),
             }))
         }
-        protocol_capnp::engine_message::Frame(f) => {
+        protocol_capnp::engine_to_server::Frame(f) => {
             let f = f?;
             Ok(Some(Message::Frame {
                 player: NonZeroU32::new(f.get_player()),
@@ -86,11 +86,11 @@ fn decode_message(
                 })?,
             }))
         }
-        protocol_capnp::engine_message::Hello(h) => {
-            Ok(Some(Message::Hello(engine_message::read_hello(h?)?)))
+        protocol_capnp::engine_to_server::Hello(h) => {
+            Ok(Some(Message::Hello(engine_to_server::read_hello(h?)?)))
         }
-        protocol_capnp::engine_message::Forget(id) => Ok(Some(Message::Forget(id))),
-        protocol_capnp::engine_message::TickTaken(()) => Ok(Some(Message::TickTaken)),
+        protocol_capnp::engine_to_server::Forget(id) => Ok(Some(Message::Forget(id))),
+        protocol_capnp::engine_to_server::TickTaken(()) => Ok(Some(Message::TickTaken)),
     }
 }
 
@@ -102,24 +102,28 @@ pub(crate) fn encode_frame(scene: &Scene) -> Vec<u8> {
 /// Encode a scene as a frame for `player`, with no envelope. The id of an
 /// image is its width, as [`decode`] reads it.
 pub(crate) fn encode_frame_to(player: Option<NonZeroU32>, scene: &Scene) -> Vec<u8> {
-    super::to_bytes(engine_message::frame_message(player, scene, &Image::width))
+    super::to_bytes(engine_to_server::frame_message(
+        player,
+        scene,
+        &Image::width,
+    ))
 }
 
 /// Encode the blob of an image as the asset `id`, with no envelope.
 pub(crate) fn encode_asset(id: u32, blob: &[u8]) -> Vec<u8> {
-    super::to_bytes(engine_message::asset_message(id, blob))
+    super::to_bytes(engine_to_server::asset_message(id, blob))
 }
 
 /// Encode a hello of `min` to `max` players, with no envelope. A test
-/// passes a range that [`engine_message::write_hello`] cannot.
+/// passes a range that [`engine_to_server::write_hello`] cannot.
 pub(crate) fn encode_hello(min: u32, max: u32) -> Vec<u8> {
-    super::to_bytes(engine_message::hello_message(min, max))
+    super::to_bytes(engine_to_server::hello_message(min, max))
 }
 
 /// Encode the input `ev` of `player`, with no envelope. A test passes 0,
-/// which [`server_message::write_input`] cannot.
+/// which [`server_to_engine::write_input`] cannot.
 pub(crate) fn encode_input(player: u32, ev: &InputEvent) -> Vec<u8> {
-    super::to_bytes(server_message::input_message(player, ev))
+    super::to_bytes(server_to_engine::input_message(player, ev))
 }
 
 /// Read the messages that `side` wrote until `decode` returns one. `decode`
@@ -142,28 +146,28 @@ pub(crate) fn read_next<T>(
     }
 }
 
-/// [`with_unknown_value`] for the bytes of an `EngineMessage`.
+/// [`with_unknown_value`] for the bytes of an `EngineToServer`.
 pub(crate) fn with_unknown_engine_value(
     bytes: &[u8],
-    find: impl FnOnce(protocol_capnp::engine_message::Reader<'_>) -> *const u8,
+    find: impl FnOnce(protocol_capnp::engine_to_server::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
-    with_unknown_value::<protocol_capnp::engine_message::Owned>(bytes, find)
+    with_unknown_value::<protocol_capnp::engine_to_server::Owned>(bytes, find)
 }
 
-/// [`with_unknown_value`] for the bytes of a `ServerMessage`.
+/// [`with_unknown_value`] for the bytes of a `ServerToEngine`.
 pub(crate) fn with_unknown_server_value(
     bytes: &[u8],
-    find: impl FnOnce(protocol_capnp::server_message::Reader<'_>) -> *const u8,
+    find: impl FnOnce(protocol_capnp::server_to_engine::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
-    with_unknown_value::<protocol_capnp::server_message::Owned>(bytes, find)
+    with_unknown_value::<protocol_capnp::server_to_engine::Owned>(bytes, find)
 }
 
-/// [`with_unknown_value`] for the bytes of a `ViewMessage`.
+/// [`with_unknown_value`] for the bytes of a `ViewToServer`.
 pub(crate) fn with_unknown_view_value(
     bytes: &[u8],
-    find: impl FnOnce(protocol_capnp::view_message::Reader<'_>) -> *const u8,
+    find: impl FnOnce(protocol_capnp::view_to_server::Reader<'_>) -> *const u8,
 ) -> Vec<u8> {
-    with_unknown_value::<protocol_capnp::view_message::Owned>(bytes, find)
+    with_unknown_value::<protocol_capnp::view_to_server::Owned>(bytes, find)
 }
 
 /// Overwrite the two bytes that `find` points at with a value this crate
@@ -199,9 +203,9 @@ pub(crate) fn tag_of<'a>(r: impl capnp::traits::IntoInternalStructReader<'a>) ->
 
 /// The scene of a frame, for [`with_unknown_engine_value`].
 pub(crate) fn frame_of(
-    m: protocol_capnp::engine_message::Reader<'_>,
+    m: protocol_capnp::engine_to_server::Reader<'_>,
 ) -> crate::scene_capnp::scene::Reader<'_> {
-    let Ok(protocol_capnp::engine_message::Frame(f)) = m.which() else {
+    let Ok(protocol_capnp::engine_to_server::Frame(f)) = m.which() else {
         panic!("not a frame");
     };
     f.expect("frame").get_scene().expect("scene")

@@ -5,10 +5,9 @@
 # session. It carries the payloads of scene.capnp and event.capnp, and adds
 # the player to a frame and to the event of the server.
 #
-# Each writer has its own root, EngineMessage from the engine,
-# ViewMessage from a view and ServerMessage from the server, so no side can
-# receive a message that only another side sends. The engine reads the
-# server.
+# Each direction has its own root, named after it, EngineToServer,
+# ViewToServer and ServerToEngine, so no side can receive a message that
+# only another side sends.
 #
 # This file is the source of truth for the session. The same rules as
 # scene.capnp apply. See its header for how to regenerate the bindings.
@@ -45,7 +44,7 @@ struct Hello {
 # Engine to view, through the server. The engine sends an asset before the
 # first frame that draws it, and the server keeps it for the views while
 # the room has room for it.
-struct EngineMessage {
+struct EngineToServer {
     union {
         # One per bitmap, before the frames that draw it.
         asset @0 :AssetMsg;
@@ -69,7 +68,7 @@ struct EngineMessage {
 # message makes `event` the first arm of a new union, which Cap'n Proto
 # allows for a field that is alone in the union. A reader skips a message
 # with no event.
-struct ViewMessage {
+struct ViewToServer {
     event @0 :Input.InputEvent;
 }
 
@@ -97,7 +96,7 @@ struct PlayerEvent {
 struct Tick {}
 
 # Server to engine. A start and a tick are about the whole session.
-struct ServerMessage {
+struct ServerToEngine {
     union {
         # The input of a player.
         event @0 :PlayerEvent;

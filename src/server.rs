@@ -36,10 +36,10 @@ use crate::event::{
     PadButton, PadEvent,
 };
 use crate::wire;
-use crate::wire::engine_message::{self, Arm, PlayerRange};
+use crate::wire::engine_to_server::{self, Arm, PlayerRange};
 use crate::wire::framing::{self, Side};
-use crate::wire::server_message;
-use crate::wire::view_message;
+use crate::wire::server_to_engine;
+use crate::wire::view_to_server;
 
 /// The rules of a room, from the players and the timer of the host to the
 /// messages for the engine, and from the engine to the views.
@@ -268,9 +268,9 @@ impl ServerCore {
             .collect();
         let nicknames: Vec<&str> = seats.values().map(|s| s.nickname.as_str()).collect();
         let mut engine_out = Vec::new();
-        server_message::write_start(&mut engine_out, &nicknames).expect(UNDER_THE_CAP);
+        server_to_engine::write_start(&mut engine_out, &nicknames).expect(UNDER_THE_CAP);
         for id in lost.drain(..) {
-            server_message::write_lost(&mut engine_out, id).expect(UNDER_THE_CAP);
+            server_to_engine::write_lost(&mut engine_out, id).expect(UNDER_THE_CAP);
         }
         self.phase = Phase::Playing {
             seats,
@@ -335,7 +335,7 @@ impl ServerCore {
             ..
         } = &mut self.phase
         {
-            server_message::write_tick(engine_out).expect(UNDER_THE_CAP);
+            server_to_engine::write_tick(engine_out).expect(UNDER_THE_CAP);
             *tick_pending = true;
         }
     }
@@ -373,7 +373,7 @@ impl ServerCore {
         if payload.len() > MAX_VIEW_BYTES {
             return Err(ViewError::TooLong(payload.len()));
         }
-        if let Some(event) = view_message::decode(payload).map_err(ViewError::Payload)? {
+        if let Some(event) = view_to_server::decode(payload).map_err(ViewError::Payload)? {
             self.input(conn, &event);
         }
         Ok(())
@@ -392,7 +392,7 @@ impl ServerCore {
         if !view.held.track(event) {
             return;
         }
-        server_message::write_input(engine_out, conn.player, event).expect(UNDER_THE_CAP);
+        server_to_engine::write_input(engine_out, conn.player, event).expect(UNDER_THE_CAP);
     }
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
@@ -424,7 +424,7 @@ impl ServerCore {
                     return errors;
                 }
             };
-            let arm = engine_message::arm(payload);
+            let arm = engine_to_server::arm(payload);
             let payload = Arc::<[u8]>::from(payload);
             rest = after;
             if matches!(self.phase, Phase::Waiting) && !matches!(arm, Ok(Some(Arm::Hello(_)))) {
@@ -513,7 +513,7 @@ impl ServerCore {
         };
         if let Some(&id) = view.assets.iter().find(|id| !needs(id)) {
             view.assets.remove(&id);
-            return Next::Send(engine_message::encode_forget(id).into());
+            return Next::Send(engine_to_server::encode_forget(id).into());
         }
         if let Some(next) = view.next.take() {
             if let Some((&id, asset)) = next.assets.iter().find(|(id, _)| !view.assets.contains(id))
@@ -618,7 +618,7 @@ impl ServerCore {
     fn lose(&mut self, id: u32) {
         match &mut self.phase {
             Phase::Playing { engine_out, .. } => {
-                server_message::write_lost(engine_out, id).expect(UNDER_THE_CAP);
+                server_to_engine::write_lost(engine_out, id).expect(UNDER_THE_CAP);
             }
             Phase::Ready { lost, .. } => lost.push(id),
             // No asset comes before the hello.
@@ -634,7 +634,7 @@ impl ServerCore {
             return;
         };
         for event in held.release() {
-            server_message::write_input(engine_out, player, &event).expect(UNDER_THE_CAP);
+            server_to_engine::write_input(engine_out, player, &event).expect(UNDER_THE_CAP);
         }
     }
 
@@ -894,7 +894,8 @@ mod tests {
             let mut rest = &buf[..];
             while let Some((payload, after)) = framing::split_message(rest, Side::Server).unwrap() {
                 let message = rest.get(..rest.len() - after.len()).unwrap();
-                if let Ok(Some(server_message::Message::Lost(id))) = server_message::decode(payload)
+                if let Ok(Some(server_to_engine::Message::Lost(id))) =
+                    server_to_engine::decode(payload)
                 {
                     events.push(format!("lost {id}"));
                 }
@@ -994,7 +995,7 @@ mod tests {
             scene.add_bitmap(Bitmap::fit(crate::asset::png_image(id, 1), rect));
         }
         let mut out = Vec::new();
-        engine_message::write_frame(&mut out, NonZeroU32::new(player), &scene, &Image::width)
+        engine_to_server::write_frame(&mut out, NonZeroU32::new(player), &scene, &Image::width)
             .unwrap();
         out
     }
@@ -1002,7 +1003,7 @@ mod tests {
     /// An asset of a PNG of `side` by `side`, with its envelope.
     fn asset_of(id: u32, side: u32) -> Vec<u8> {
         let mut out = Vec::new();
-        engine_message::write_asset(&mut out, id, &crate::asset::png_head(side, side)).unwrap();
+        engine_to_server::write_asset(&mut out, id, &crate::asset::png_head(side, side)).unwrap();
         out
     }
 
@@ -1054,7 +1055,7 @@ mod tests {
 
     fn hello(min: u32, max: u32) -> Vec<u8> {
         let mut out = Vec::new();
-        engine_message::write_hello(&mut out, PlayerRange::new(min, max).unwrap()).unwrap();
+        engine_to_server::write_hello(&mut out, PlayerRange::new(min, max).unwrap()).unwrap();
         out
     }
 
@@ -1208,7 +1209,7 @@ mod tests {
     fn the_input_of_a_view_goes_with_its_player() {
         let (mut room, conns) = Room::playing(&["Ana", "Beto"]);
         room.core
-            .from_view(conns[1], &view_message::encode_input(&key("b")))
+            .from_view(conns[1], &view_to_server::encode_input(&key("b")))
             .unwrap();
         room.core.input(conns[0], &key("a"));
         assert_eq!(room.events(), ["2 key b", "1 key a"]);
@@ -1232,7 +1233,7 @@ mod tests {
     fn a_message_of_an_unknown_arm_is_dropped() {
         let (mut room, conns) = Room::playing(&["Ana"]);
         let unknown =
-            testing::with_unknown_view_value(&view_message::encode_input(&key("a")), |m| {
+            testing::with_unknown_view_value(&view_to_server::encode_input(&key("a")), |m| {
                 testing::tag_of(m.get_event().unwrap())
             });
         room.core.from_view(conns[0], &unknown).unwrap();
@@ -1395,10 +1396,10 @@ mod tests {
     fn a_bad_asset_and_a_forget_of_the_engine_are_errors_and_the_room_goes_on() {
         let (mut room, _) = Room::playing(&["Ana"]);
         let mut stream = asset_of(1, 2049);
-        engine_message::write_asset(&mut stream, 2, b"GIF89a").unwrap();
+        engine_to_server::write_asset(&mut stream, 2, b"GIF89a").unwrap();
         stream.extend_from_slice(&asset(3));
         stream.extend_from_slice(&asset(3));
-        let forget = engine_message::encode_forget(3);
+        let forget = engine_to_server::encode_forget(3);
         stream.extend_from_slice(&framing::header(Side::Engine, forget.len() as u32));
         stream.extend_from_slice(&forget);
         assert!(matches!(

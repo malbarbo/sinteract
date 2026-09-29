@@ -1,4 +1,4 @@
-//! The messages of the engine, in the `EngineMessage` union, which go to
+//! The messages of the engine, in the `EngineToServer` union, which go to
 //! the server and through it to the views.
 //!
 //! The engine says first how many players the game takes, in a hello for
@@ -18,7 +18,7 @@ use std::num::NonZeroU32;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::asset::{Footprint, ImageError};
-use crate::protocol_capnp::{engine_message, hello};
+use crate::protocol_capnp::{engine_to_server, hello};
 use crate::scene::{Image, Scene};
 
 use super::Error;
@@ -46,12 +46,12 @@ impl FrameReader {
     /// that is not an image that [`Image::new`] takes keeps no image, so a
     /// bitmap of its id is skipped, as is a bitmap of an id with no asset.
     pub fn read(&mut self, payload: &[u8]) -> Result<Option<Scene>, Error> {
-        decode_root::<engine_message::Owned, _>(payload, |msg| {
+        decode_root::<engine_to_server::Owned, _>(payload, |msg| {
             let Ok(which) = msg.which() else {
                 return Ok(None);
             };
             match which {
-                engine_message::Asset(a) => {
+                engine_to_server::Asset(a) => {
                     let a = a?;
                     match Image::new(a.get_blob()?.to_vec()) {
                         Ok(image) => self.images.insert(a.get_id(), image),
@@ -59,15 +59,15 @@ impl FrameReader {
                     };
                     Ok(None)
                 }
-                engine_message::Frame(f) => {
+                engine_to_server::Frame(f) => {
                     let images = |id| self.images.get(&id).cloned();
                     Ok(Some(read_scene(f?.get_scene()?, &images)?))
                 }
-                engine_message::Forget(id) => {
+                engine_to_server::Forget(id) => {
                     self.images.remove(&id);
                     Ok(None)
                 }
-                engine_message::Hello(_) | engine_message::TickTaken(()) => Ok(None),
+                engine_to_server::Hello(_) | engine_to_server::TickTaken(()) => Ok(None),
             }
         })
     }
@@ -169,19 +169,19 @@ pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
 /// from a newer schema. A hello whose players are not a [`PlayerRange`]
 /// is an error.
 pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
-    decode_root::<engine_message::Owned, _>(payload, |msg| {
+    decode_root::<engine_to_server::Owned, _>(payload, |msg| {
         let Ok(which) = msg.which() else {
             return Ok(None);
         };
         Ok(Some(match which {
-            engine_message::Asset(a) => {
+            engine_to_server::Asset(a) => {
                 let a = a?;
                 Arm::Asset {
                     id: a.get_id(),
                     footprint: Footprint::of(a.get_blob()?),
                 }
             }
-            engine_message::Frame(f) => {
+            engine_to_server::Frame(f) => {
                 let f = f?;
                 let mut ids = BTreeSet::new();
                 read_bitmap_ids(f.get_scene()?, &mut ids)?;
@@ -190,9 +190,9 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
                     ids,
                 }
             }
-            engine_message::Hello(h) => Arm::Hello(read_hello(h?)?),
-            engine_message::Forget(id) => Arm::Forget(id),
-            engine_message::TickTaken(()) => Arm::TickTaken,
+            engine_to_server::Hello(h) => Arm::Hello(read_hello(h?)?),
+            engine_to_server::Forget(id) => Arm::Forget(id),
+            engine_to_server::TickTaken(()) => Arm::TickTaken,
         }))
     })
 }
@@ -208,7 +208,9 @@ pub(super) fn frame_message(
     ids: &dyn Fn(&Image) -> u32,
 ) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let mut frame = builder.init_root::<engine_message::Builder>().init_frame();
+    let mut frame = builder
+        .init_root::<engine_to_server::Builder>()
+        .init_frame();
     frame.set_player(player.map_or(0, NonZeroU32::get));
     write_scene(frame.init_scene(), scene, ids);
     builder
@@ -217,7 +219,9 @@ pub(super) fn frame_message(
 /// A hello for `min` to `max` players, which a test may set out of range.
 pub(super) fn hello_message(min: u32, max: u32) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let mut hello = builder.init_root::<engine_message::Builder>().init_hello();
+    let mut hello = builder
+        .init_root::<engine_to_server::Builder>()
+        .init_hello();
     hello.set_min_players(min);
     hello.set_max_players(max);
     builder
@@ -226,7 +230,7 @@ pub(super) fn hello_message(min: u32, max: u32) -> MessageBuilder<HeapAllocator>
 fn forget_message(id: u32) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     builder
-        .init_root::<engine_message::Builder>()
+        .init_root::<engine_to_server::Builder>()
         .set_forget(id);
     builder
 }
@@ -234,14 +238,16 @@ fn forget_message(id: u32) -> MessageBuilder<HeapAllocator> {
 fn tick_taken_message() -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
     builder
-        .init_root::<engine_message::Builder>()
+        .init_root::<engine_to_server::Builder>()
         .set_tick_taken(());
     builder
 }
 
 pub(super) fn asset_message(id: u32, blob: &[u8]) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let mut asset = builder.init_root::<engine_message::Builder>().init_asset();
+    let mut asset = builder
+        .init_root::<engine_to_server::Builder>()
+        .init_asset();
     asset.set_id(id);
     asset.set_blob(blob);
     builder
