@@ -457,10 +457,10 @@ mod tests {
     #[test]
     fn pad_event_round_trip() {
         let buttons = [
-            PadButton::Up,
-            PadButton::Down,
-            PadButton::Left,
-            PadButton::Right,
+            PadButton::DpadUp,
+            PadButton::DpadDown,
+            PadButton::DpadLeft,
+            PadButton::DpadRight,
             PadButton::A,
             PadButton::B,
             PadButton::X,

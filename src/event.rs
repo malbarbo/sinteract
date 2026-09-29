@@ -279,10 +279,10 @@ pub enum PadEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum PadButton {
-    Up = 0,
-    Down = 1,
-    Left = 2,
-    Right = 3,
+    DpadUp = 0,
+    DpadDown = 1,
+    DpadLeft = 2,
+    DpadRight = 3,
     A = 4,
     B = 5,
     X = 6,

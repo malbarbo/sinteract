@@ -91,10 +91,10 @@ fn write_pad_event(mut b: wire_pad_event::Builder<'_>, p: PadEvent) {
 
 fn pad_button_to_wire(b: PadButton) -> WPadButton {
     match b {
-        PadButton::Up => WPadButton::Up,
-        PadButton::Down => WPadButton::Down,
-        PadButton::Left => WPadButton::Left,
-        PadButton::Right => WPadButton::Right,
+        PadButton::DpadUp => WPadButton::DpadUp,
+        PadButton::DpadDown => WPadButton::DpadDown,
+        PadButton::DpadLeft => WPadButton::DpadLeft,
+        PadButton::DpadRight => WPadButton::DpadRight,
         PadButton::A => WPadButton::A,
         PadButton::B => WPadButton::B,
         PadButton::X => WPadButton::X,
@@ -191,10 +191,10 @@ fn read_pad_event(r: wire_pad_event::Reader<'_>) -> Result<PadEvent, ValueError>
 
 fn pad_button_from_wire(b: WPadButton) -> PadButton {
     match b {
-        WPadButton::Up => PadButton::Up,
-        WPadButton::Down => PadButton::Down,
-        WPadButton::Left => PadButton::Left,
-        WPadButton::Right => PadButton::Right,
+        WPadButton::DpadUp => PadButton::DpadUp,
+        WPadButton::DpadDown => PadButton::DpadDown,
+        WPadButton::DpadLeft => PadButton::DpadLeft,
+        WPadButton::DpadRight => PadButton::DpadRight,
         WPadButton::A => PadButton::A,
         WPadButton::B => PadButton::B,
         WPadButton::X => PadButton::X,

@@ -76,10 +76,10 @@ struct ResizeEvent {
 # Gamepad API. a is the bottom button of the right cluster, b the right
 # one, x the left one and y the top one.
 enum PadButton {
-    up            @0;
-    down          @1;
-    left          @2;
-    right         @3;
+    dpadUp        @0;
+    dpadDown      @1;
+    dpadLeft      @2;
+    dpadRight     @3;
     a             @4;
     b             @5;
     x             @6;
