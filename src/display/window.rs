@@ -87,8 +87,8 @@ impl Window {
         let attrs = WindowAttributes::default()
             .with_title(title)
             .with_inner_size(LogicalSize::new(w as f64, h as f64));
-        let mut app = App::new(inbox.sender_without_waker(), attrs);
-        let window = lent.create_window(&mut app, Self::OPEN_TIMEOUT)?;
+        let (window, mut app) =
+            lent.create_window(inbox.sender_without_waker(), attrs, Self::OPEN_TIMEOUT)?;
         let surface = match new_surface(&window) {
             Ok(surface) => surface,
             Err(e) => {
@@ -349,12 +349,12 @@ impl Lent {
     ///
     /// The loop never calls `ActiveEventLoop::exit`, because `pump` does
     /// not clear the flag and the next window would find it set.
-    fn pump(&mut self, app: &mut App, timeout: Duration) -> bool {
+    fn pump(&mut self, handler: &mut impl ApplicationHandler, timeout: Duration) -> bool {
         LOOP.with_borrow_mut(|state| {
             let Loop::Ready { event_loop, .. } = state else {
                 return false;
             };
-            if let PumpStatus::Exit(_) = event_loop.pump_app_events(Some(timeout), app) {
+            if let PumpStatus::Exit(_) = event_loop.pump_app_events(Some(timeout), handler) {
                 *state = Loop::Dead;
                 return false;
             }
@@ -372,20 +372,27 @@ impl Lent {
         }
     }
 
-    /// Pump until `app` has its window. The window appears in the callbacks,
-    /// so a failure reaches the caller as an error and not as a late Close.
+    /// Pump until the window of `attrs` exists, with the [`App`] of its
+    /// events. The window appears in the callbacks, so a failure reaches the
+    /// caller as an error and not as a late Close.
     fn create_window(
         &mut self,
-        app: &mut App,
+        tx: Sender,
+        attrs: WindowAttributes,
         timeout: Duration,
-    ) -> Result<Rc<WinitWindow>, OpenError> {
+    ) -> Result<(Rc<WinitWindow>, App), OpenError> {
+        let mut opener = Opener {
+            tx,
+            attrs,
+            opened: None,
+        };
         let deadline = Instant::now() + timeout;
         loop {
-            if !self.pump(app, Duration::from_millis(16)) {
+            if !self.pump(&mut opener, Duration::from_millis(16)) {
                 return Err(OpenError::LoopEnded);
             }
-            match app.created.take() {
-                Some(Ok(window)) => return Ok(window),
+            match opener.opened.take() {
+                Some(Ok(opened)) => return Ok(opened),
                 Some(Err(e)) => return Err(OpenError::Platform(e)),
                 None if Instant::now() >= deadline => return Err(OpenError::Timeout),
                 None => {}
@@ -461,14 +468,53 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
 // Callbacks of the event loop
 // -----------------------------------------------------------------------------
 
+/// Creates a window in the first callback that can, and passes the events
+/// that follow in the same pump to the [`App`] of the window.
+struct Opener {
+    tx: Sender,
+    attrs: WindowAttributes,
+    opened: Option<Result<(Rc<WinitWindow>, App), String>>,
+}
+
+impl Opener {
+    fn open(&mut self, event_loop: &ActiveEventLoop) {
+        if self.opened.is_some() {
+            return;
+        }
+        self.opened = Some(match event_loop.create_window(self.attrs.clone()) {
+            Ok(window) => {
+                let app = App::new(self.tx.clone(), &window, is_wayland(event_loop));
+                Ok((Rc::new(window), app))
+            }
+            Err(e) => Err(e.to_string()),
+        });
+    }
+}
+
+impl ApplicationHandler for Opener {
+    /// Only the first pump of the loop resumes.
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.open(event_loop);
+    }
+
+    /// Every pump ends here, on every platform, so the window of a later
+    /// session appears here.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.open(event_loop);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if let Some(Ok((_, app))) = &mut self.opened {
+            app.window_event(event_loop, id, event);
+        }
+    }
+}
+
 struct App {
     tx: Sender,
-    /// What the next callback creates, until it does.
-    to_create: Option<WindowAttributes>,
-    created: Option<Result<Rc<WinitWindow>, String>>,
     /// The window of this session. An event of a window of an earlier
     /// session can still be in the loop.
-    id: Option<WindowId>,
+    id: WindowId,
     modifiers: ModifiersState,
     /// Where the last frame sits in the window, to map the pointer.
     placement: Placement,
@@ -494,62 +540,38 @@ struct App {
 }
 
 impl App {
-    fn new(tx: Sender, attrs: WindowAttributes) -> Self {
+    /// Send the first event of `window`, a Resize, ahead of any from the
+    /// pumps that create it.
+    fn new(tx: Sender, window: &WinitWindow, frame_callbacks: bool) -> Self {
+        let scale_factor = window.scale_factor();
+        let size = window.inner_size();
+        let reported_size = logical_size(size, scale_factor);
+        let _ = tx.send_resize(reported_size.0, reported_size.1);
         Self {
             tx,
-            to_create: Some(attrs),
-            created: None,
-            id: None,
+            id: window.id(),
             modifiers: ModifiersState::empty(),
-            placement: Placement::default(),
+            // Until the first frame, the pointer maps to logical pixels.
+            placement: Placement {
+                scale: scale_factor as f32,
+                offset: (0, 0),
+            },
             cursor: PhysicalPosition::default(),
             buttons: MouseButtons::default(),
-            scale_factor: 1.0,
-            size: PhysicalSize::default(),
-            reported_size: (0.0, 0.0),
+            scale_factor,
+            size,
+            reported_size,
             held: HeldKeys::default(),
             read_refresh_rate: true,
-            frame_callbacks: false,
+            frame_callbacks,
             frame_pending: false,
             frame_shown: None,
         }
     }
 
-    fn create(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(attrs) = self.to_create.take() else {
-            return;
-        };
-        let created = match event_loop.create_window(attrs) {
-            Ok(window) => {
-                self.id = Some(window.id());
-                self.frame_callbacks = is_wayland(event_loop);
-                self.scale_factor = window.scale_factor();
-                self.size = window.inner_size();
-                // The first event of the window, ahead of any from the
-                // pumps that create it.
-                self.reported_size = self.logical_size();
-                let (width, height) = self.reported_size;
-                let _ = self.tx.send_resize(width, height);
-                // Until the first frame, the pointer maps to logical pixels.
-                self.placement = Placement {
-                    scale: self.scale_factor as f32,
-                    offset: (0, 0),
-                };
-                Ok(Rc::new(window))
-            }
-            Err(e) => Err(e.to_string()),
-        };
-        self.created = Some(created);
-    }
-
-    fn logical_size(&self) -> (f32, f32) {
-        let logical = self.size.to_logical::<f32>(self.scale_factor);
-        (logical.width, logical.height)
-    }
-
     /// Send a Resize when the logical size changed since the last one.
     fn report_size(&mut self) {
-        let (width, height) = self.logical_size();
+        let (width, height) = logical_size(self.size, self.scale_factor);
         if (width, height) != self.reported_size {
             self.reported_size = (width, height);
             let _ = self.tx.send_resize(width, height);
@@ -598,19 +620,11 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    /// Only the first pump of the loop resumes.
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        self.create(event_loop);
-    }
-
-    /// Every pump ends here, on every platform, so a window of a later
-    /// session appears here.
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.create(event_loop);
-    }
+    /// Only the first pump of the loop resumes, and the [`Opener`] takes it.
+    fn resumed(&mut self, _: &ActiveEventLoop) {}
 
     fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        if self.id != Some(id) {
+        if self.id != id {
             return;
         }
         match event {
@@ -699,6 +713,11 @@ impl ApplicationHandler for App {
             _ => {}
         }
     }
+}
+
+fn logical_size(size: PhysicalSize<u32>, scale_factor: f64) -> (f32, f32) {
+    let logical = size.to_logical::<f32>(scale_factor);
+    (logical.width, logical.height)
 }
 
 /// The keys down in the window, each with the name from its `Down`. The
@@ -806,7 +825,7 @@ fn winit_key_to_string(key: &Key) -> Option<String> {
 }
 
 /// Where a frame sits in the window.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Placement {
     /// Device pixels per unit of the scene.
     scale: f32,
