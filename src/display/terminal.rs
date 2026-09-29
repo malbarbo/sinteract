@@ -138,11 +138,11 @@ impl Terminal {
                 return Err(OpenError::Io(e));
             }
         };
-        let Canvas {
+        let Printer {
             renderer,
             bytes,
             painter,
-        } = Canvas::new(Painter::for_stdout(backend));
+        } = Printer::with_painter(Painter::for_stdout(backend));
         let screen = Screen {
             painter,
             bytes,
@@ -246,12 +246,12 @@ impl super::Display for Terminal {
             if self.keep_last_frame
                 && let Some(scene) = &self.last
             {
-                let mut canvas = Canvas {
+                let mut printer = Printer {
                     renderer: std::mem::take(&mut self.renderer),
                     bytes: screen.bytes,
                     painter: screen.painter,
                 };
-                let _ = canvas.print(scene);
+                let _ = printer.print_unchecked(scene);
             }
         }
     }
@@ -459,8 +459,16 @@ impl std::error::Error for PrintError {
 /// terminal supports it, else Sixel, else half-blocks. It keeps the images
 /// of the bitmaps and the buffers from one print to the next. A program that
 /// draws one frame over another opens a [`Terminal`] instead.
+///
+/// Every field lives from one print to the next, so a print reuses the
+/// allocations. A [`Terminal`] takes the fields for its frames and puts
+/// them back into a printer to print its last frame at close.
 pub struct Printer {
-    canvas: Canvas,
+    /// The pixmap, the clip masks and the images of the bitmaps.
+    renderer: PixmapRenderer,
+    /// Where the backend builds the escapes of an image before the write.
+    bytes: Vec<u8>,
+    painter: Painter,
 }
 
 impl Printer {
@@ -469,9 +477,7 @@ impl Printer {
     /// prints its values as text then. The probe runs once per process.
     pub fn new() -> Result<Self, NoGraphics> {
         let backend = pick_backend().ok_or(NoGraphics)?;
-        Ok(Self {
-            canvas: Canvas::new(Painter::for_stdout(backend)),
-        })
+        Ok(Self::with_painter(Painter::for_stdout(backend)))
     }
 
     /// Print `scene` at the cursor, and leave the cursor on the line below
@@ -480,23 +486,10 @@ impl Printer {
         if TTY.load(Ordering::Acquire) != FREE {
             return Err(PrintError::Busy);
         }
-        self.canvas.print(scene)
+        self.print_unchecked(scene)
     }
-}
 
-/// What draws a scene into the terminal, for the frames of a [`Terminal`]
-/// and the prints of a [`Printer`]. Every field lives from one image to the
-/// next, so an image reuses the allocations.
-struct Canvas {
-    /// The pixmap, the clip masks and the images of the bitmaps.
-    renderer: PixmapRenderer,
-    /// Where the backend builds the escapes of an image before the write.
-    bytes: Vec<u8>,
-    painter: Painter,
-}
-
-impl Canvas {
-    fn new(painter: Painter) -> Self {
+    fn with_painter(painter: Painter) -> Self {
         let mut renderer = PixmapRenderer::default();
         match painter.backend() {
             Backend::Sixel => renderer.set_background(SIXEL_BACKGROUND),
@@ -512,8 +505,10 @@ impl Canvas {
     }
 
     /// Print `scene` at the cursor, with every cell of the image, and leave
-    /// the cursor on the line below it.
-    fn print(&mut self, scene: &Scene) -> Result<(), PrintError> {
+    /// the cursor on the line below it, even while a session holds the tty.
+    /// A [`Terminal`] prints its last frame at close with it, while it still
+    /// holds the tty.
+    fn print_unchecked(&mut self, scene: &Scene) -> Result<(), PrintError> {
         let scale = scale_for_backend(self.painter.backend(), scene.width(), scene.height());
         self.renderer.set_scale(scale);
         let pixmap = self.renderer.render(scene).map_err(PrintError::Alloc)?;
@@ -525,11 +520,11 @@ impl Canvas {
     }
 }
 
-/// The backend of a [`Canvas`], with what it keeps from one image to the
-/// next.
+/// The backend of a [`Printer`] and of the frames of a [`Terminal`], with
+/// what it keeps from one image to the next.
 #[expect(
     clippy::large_enum_variant,
-    reason = "a Canvas holds one Painter, so a smaller enum saves nothing"
+    reason = "a Printer holds one Painter, so a smaller enum saves nothing"
 )]
 enum Painter {
     Kitty(KittyMedium),
@@ -1876,9 +1871,7 @@ mod tests {
 
     #[test]
     fn a_printer_prints_nothing_while_a_session_holds_the_tty() {
-        let mut printer = Printer {
-            canvas: Canvas::new(Painter::new(Backend::HalfBlocks)),
-        };
+        let mut printer = Printer::with_painter(Painter::new(Backend::HalfBlocks));
         let claim = Claim::take().expect("no session runs in a test");
         assert!(matches!(
             printer.print(&Scene::new(4.0, 4.0)),
@@ -1907,10 +1900,10 @@ mod tests {
     }
 
     #[test]
-    fn only_a_sixel_canvas_draws_over_white() {
+    fn only_a_sixel_printer_draws_over_white() {
         for (backend, _) in MARKS {
-            let mut canvas = Canvas::new(Painter::new(backend));
-            let pixmap = canvas.renderer.render(&Scene::new(4.0, 4.0)).unwrap();
+            let mut printer = Printer::with_painter(Painter::new(backend));
+            let pixmap = printer.renderer.render(&Scene::new(4.0, 4.0)).unwrap();
             let p = pixmap.pixels()[0];
             let expected = match backend {
                 Backend::Sixel => [255, 255, 255, 255],
