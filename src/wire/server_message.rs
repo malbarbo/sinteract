@@ -1,5 +1,5 @@
-//! The messages from the server to the engine, in the `ServerMessage`
-//! union.
+//! The messages of the server, in the `ServerMessage` union, which go to
+//! the engine.
 //!
 //! The server starts the session with the players, who stay the same until
 //! the end, and passes on the input of each view with its player. A tick
@@ -16,10 +16,10 @@ use crate::event::InputEvent;
 use crate::protocol_capnp::server_message;
 
 use super::Error;
+use super::engine_message::MAX_PLAYERS;
 use super::event::{read_input_event, write_input_event};
 use super::framing::{Side, write_framed};
 use super::protocol::decode_root;
-use super::to_view::MAX_PLAYERS;
 
 /// One message of the server, one variant per arm of `ServerMessage`. The
 /// arm `event` is `Input` here, so it does not clash with

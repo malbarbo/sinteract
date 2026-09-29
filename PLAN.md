@@ -88,7 +88,7 @@ Regras da sessão com servidor:
   `Session::write_frame` manda um asset logo antes do primeiro frame que
   o desenha e dá o `id` pelo conteúdo da imagem, então um programa que
   monta a mesma imagem a cada frame a manda uma vez só. Na view, o
-  `to_view::Reader` guarda as imagens dos assets e devolve cada frame
+  `engine_message::Reader` guarda as imagens dos assets e devolve cada frame
   como uma `Scene` com as imagens;
 - uma imagem é um PNG, um JPEG, um GIF ou um WebP, e o formato vem dos
   primeiros bytes. O servidor não decodifica nada. Ele lê o tamanho no
@@ -174,8 +174,8 @@ engine numa sessão com servidor. Ela não faz E/S. O host lhe dá os bytes
 que leu, com `feed`, ou chama `wait` sobre um `Read`, como o descritor 3,
 e ela devolve os eventos com o jogador, sempre com no máximo um `Tick` na
 fila. A engine
-escreve os frames no descritor 4 com `to_view`. Um host roda o jogo local
-num `Display` e o modo servidor numa `Session`, e um adaptador liga o jogo
+escreve os frames no descritor 4 com `engine_message`. Um host roda o jogo
+local num `Display` e o modo servidor numa `Session`, e um adaptador liga o jogo
 de um jogador só ao jogador 1.
 
 ## Dependências do servidor
@@ -224,9 +224,9 @@ Feito no sinteract:
 - a `Session`, com o `tick` do servidor e a fila que junta
   movimentos por jogador;
 - a imagem na cena, os assets com `lost` e `forget`, a
-  `Session::write_frame`, o `to_view::Reader` e o `Cache` de uma sala;
+  `Session::write_frame`, o `engine_message::Reader` e o `Cache` de uma sala;
 - o `ServerCore`, com as regras de uma sala e sem I/O, sobre
-  `framing::split_message`, `to_server::decode` e `to_view::arm`;
+  `framing::split_message`, `view_message::decode` e `engine_message::arm`;
 - a feature `render`, que um servidor desliga.
 
 Falta:

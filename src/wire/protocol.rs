@@ -1,11 +1,11 @@
 //! What the messages of the session share: the opening of a payload.
 //!
 //! The engine sends an `EngineMessage`, a view sends a `ViewMessage` and
-//! the server sends a `ServerMessage`. [`super::to_view`],
-//! [`super::to_server`] and [`super::to_engine`] wrap the payloads of
-//! [`super::scene`] and [`super::event`] in them and unwrap them again.
-//! [`super::to_view`] and [`super::to_engine`] write them with the envelope
-//! of [`super::framing`].
+//! the server sends a `ServerMessage`. [`super::engine_message`],
+//! [`super::view_message`] and [`super::server_message`] wrap the payloads
+//! of [`super::scene`] and [`super::event`] in them and unwrap them again.
+//! [`super::engine_message`] and [`super::server_message`] write them with
+//! the envelope of [`super::framing`].
 
 use capnp::Word;
 use capnp::message::ReaderOptions;

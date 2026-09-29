@@ -1,9 +1,10 @@
-//! The messages from a view to the server, in the `ViewMessage` struct.
+//! The messages of a view, in the `ViewMessage` struct, which go to the
+//! server.
 //!
 //! The view sends its input as events, and the server passes the input on
-//! to the engine with [`super::to_engine`]. A view talks to the server over
-//! a WebSocket, which frames each message itself, so a message of a view
-//! has no envelope. The view ends the session with the close of the
+//! to the engine with [`super::server_message`]. A view talks to the server
+//! over a WebSocket, which frames each message itself, so a message of a
+//! view has no envelope. The view ends the session with the close of the
 //! WebSocket.
 
 use capnp::message::Builder as MessageBuilder;

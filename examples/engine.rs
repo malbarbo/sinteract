@@ -30,7 +30,7 @@ use sinteract::display::{TerminalOptions, open_native};
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Bitmap, Image, Paint, PathStyle, RotatedRect, Scene};
 use sinteract::session::{Session, SessionEvent};
-use sinteract::wire::to_view::{self, PlayerRange};
+use sinteract::wire::engine_message::{self, PlayerRange};
 
 const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 300.0;
@@ -50,10 +50,10 @@ fn main() -> ExitCode {
 fn run_session(mut game: Game) -> ExitCode {
     // SAFETY: SINTERACT_SESSION says that the parent opened fd 3 and fd 4
     // for the session, and nothing else in this process uses them.
-    let (mut from_server, to_view) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
-    let mut to_view = BufWriter::new(to_view);
+    let (mut from_server, to_server) = unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) };
+    let mut to_server = BufWriter::new(to_server);
     let players = PlayerRange::new(1, 8).expect("1 to 8 is a range");
-    if let Err(e) = to_view::write_hello(&mut to_view, players) {
+    if let Err(e) = engine_message::write_hello(&mut to_server, players) {
         eprintln!("engine: {e}");
         return ExitCode::FAILURE;
     }
@@ -61,7 +61,7 @@ fn run_session(mut game: Game) -> ExitCode {
     // The end of fd 4, when the engine exits, ends the session for the
     // server.
     loop {
-        let event = match session.wait(&mut from_server, &mut to_view) {
+        let event = match session.wait(&mut from_server, &mut to_server) {
             Ok(event) => event,
             Err(e) => {
                 eprintln!("engine: {e}");
@@ -71,7 +71,7 @@ fn run_session(mut game: Game) -> ExitCode {
         match event {
             SessionEvent::Tick => {
                 game.tick();
-                if let Err(e) = session.write_frame(&mut to_view, None, &game.scene()) {
+                if let Err(e) = session.write_frame(&mut to_server, None, &game.scene()) {
                     eprintln!("engine: {e}");
                     break;
                 }

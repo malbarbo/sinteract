@@ -21,9 +21,9 @@ use crate::asset::{RoomFull, check_room};
 use crate::event::InputEvent;
 use crate::scene::{Element, Image, Scene};
 use crate::wire;
+use crate::wire::engine_message;
 use crate::wire::framing::{self, Side};
-use crate::wire::to_engine::{self, Message};
-use crate::wire::to_view;
+use crate::wire::server_message::{self, Message};
 
 /// The engine side of a session, from the bytes of the server to the
 /// events of the engine.
@@ -168,7 +168,8 @@ impl Session {
     pub fn next_event(&mut self, out: &mut Vec<u8>) -> Option<SessionEvent> {
         let event = self.events.pop_front()?;
         if matches!(event, SessionEvent::Tick) {
-            to_view::write_tick_taken(out).expect("a tickTaken is under the cap of the framing");
+            engine_message::write_tick_taken(out)
+                .expect("a tickTaken is under the cap of the framing");
         }
         Some(event)
     }
@@ -231,7 +232,7 @@ impl Session {
                 self.next_id = id
                     .checked_add(1)
                     .expect("an engine sends fewer than 2^32 images");
-                to_view::write_asset(w, id, image.blob())?;
+                engine_message::write_asset(w, id, image.blob())?;
                 self.sent.insert(image.clone(), id);
             }
         }
@@ -241,7 +242,7 @@ impl Session {
                 .get(image)
                 .expect("every image of the scene went out")
         };
-        to_view::write_frame(w, player, scene, &id)?;
+        engine_message::write_frame(w, player, scene, &id)?;
         Ok(())
     }
 
@@ -262,7 +263,7 @@ impl Session {
                 Err(e) => return self.finish(Some(e)),
             };
             rest = after;
-            match to_engine::decode(payload) {
+            match server_message::decode(payload) {
                 Ok(Some(message)) => self.receive(started, message),
                 Ok(None) => {}
                 Err(e) => self.push(SessionEvent::Error(SessionError::Payload(e))),
@@ -422,18 +423,18 @@ mod tests {
     /// A start with Ana as player 1 and Beto as player 2.
     fn start() -> Vec<u8> {
         let mut out = Vec::new();
-        to_engine::write_start(&mut out, &["Ana", "Beto"]).unwrap();
+        server_message::write_start(&mut out, &["Ana", "Beto"]).unwrap();
         out
     }
 
     fn tick() -> Vec<u8> {
         let mut out = Vec::new();
-        to_engine::write_tick(&mut out).unwrap();
+        server_message::write_tick(&mut out).unwrap();
         out
     }
 
     fn input(out: &mut Vec<u8>, p: u32, ev: &InputEvent) {
-        to_engine::write_input(out, player(p), ev).unwrap();
+        server_message::write_input(out, player(p), ev).unwrap();
     }
 
     /// `payload` with the envelope of the server.
@@ -566,7 +567,7 @@ mod tests {
     #[test]
     fn a_lost_is_an_error_before_the_start() {
         let mut lost = Vec::new();
-        to_engine::write_lost(&mut lost, 7).unwrap();
+        server_message::write_lost(&mut lost, 7).unwrap();
         let mut stream = lost.clone();
         stream.extend_from_slice(&start());
         stream.extend_from_slice(&tick());
@@ -641,8 +642,8 @@ mod tests {
         let mut session = started(&[]);
         written(&mut session, &drawing(&[a.clone(), b.clone()]));
         let mut lost = Vec::new();
-        to_engine::write_lost(&mut lost, 0).unwrap();
-        to_engine::write_lost(&mut lost, 99).unwrap();
+        server_message::write_lost(&mut lost, 0).unwrap();
+        server_message::write_lost(&mut lost, 99).unwrap();
         session.feed(&lost);
         assert!(next(&mut session).is_none());
         assert_eq!(

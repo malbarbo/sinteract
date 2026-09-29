@@ -1,4 +1,5 @@
-//! The messages from the engine to the view, in the `EngineMessage` union.
+//! The messages of the engine, in the `EngineMessage` union, which go to
+//! the server and through it to the views.
 //!
 //! The engine says first how many players the game takes, in a hello for
 //! the server. Then it uploads each image as an asset, before the first

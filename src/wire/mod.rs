@@ -2,15 +2,16 @@
 //!
 //! [`scene`] and [`event`] convert the values of [`crate::scene`] and
 //! [`crate::event`] to and from the Cap'n Proto structs. Neither knows that
-//! a session exists. [`to_view`], [`to_server`] and [`to_engine`] wrap the
-//! payloads in the message of their direction and unwrap them again, and
-//! own everything about the session.
+//! a session exists. [`engine_message`], [`view_message`] and
+//! [`server_message`] wrap the payloads in the root of the side that
+//! writes them, `EngineMessage`, `ViewMessage` or `ServerMessage`, and
+//! unwrap them again. They own everything about the session.
 //!
-//! The engine runs the program and writes with [`to_view`]. A view draws
-//! the frames, sends the input and encodes with [`to_server`]. The server
-//! owns the session, passes the input of the views on and writes with
-//! [`to_engine`]. A view and the server read with the module of the side
-//! that writes to them, and the engine reads with
+//! The engine runs the program and writes with [`engine_message`]. A view
+//! draws the frames, sends the input and encodes with [`view_message`].
+//! The server owns the session, passes the input of the views on and
+//! writes with [`server_message`]. A view and the server read with the
+//! module of the side that writes to them, and the engine reads with
 //! [`Session`](crate::session::Session). The generated bindings stay
 //! private, and the bytes are the standard `serialize::write_message`
 //! format, so every Cap'n Proto binding reads them.
@@ -21,15 +22,15 @@
 //! The schema files in `schema/` are the source of truth, one per layer,
 //! and the header of `scene.capnp` says how to regenerate the bindings.
 
+pub mod engine_message;
 pub mod event;
 pub mod framing;
 mod protocol;
 pub mod scene;
+pub mod server_message;
 #[cfg(test)]
 pub(crate) mod testing;
-pub mod to_engine;
-pub mod to_server;
-pub mod to_view;
+pub mod view_message;
 
 use capnp::message::{self, ReaderOptions, ReaderSegments};
 
@@ -68,7 +69,7 @@ pub enum Error {
     /// An event has player 0, which is not a player of the session.
     NoPlayer,
     /// A hello has a minimum of 0 players, a maximum below its minimum, or
-    /// a maximum above [`to_view::MAX_PLAYERS`].
+    /// a maximum above [`engine_message::MAX_PLAYERS`].
     PlayerRange { min: u32, max: u32 },
 }
 
@@ -86,7 +87,7 @@ impl std::fmt::Display for Error {
             Error::PlayerRange { min, max } => write!(
                 f,
                 "a hello takes from {min} to {max} players, not from 1 to {}",
-                to_view::MAX_PLAYERS
+                engine_message::MAX_PLAYERS
             ),
         }
     }
@@ -172,7 +173,7 @@ mod tests {
         MouseEvent, PadButton, PadEvent,
     };
     use crate::event_capnp::input_event;
-    use crate::protocol_capnp::{engine_message, server_message, view_message};
+    use crate::protocol_capnp;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Image, LineCap, LineJoin, Paint,
         Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment, SegmentKind, SpreadMode,
@@ -269,12 +270,12 @@ mod tests {
     }
 
     /// Decode a message of the engine of an arm this schema knows, as
-    /// [`to_view::read`] does after the envelope.
+    /// [`engine_message::read`] does after the envelope.
     fn decode(bytes: &[u8]) -> Result<Message, Error> {
         Ok(testing::decode(bytes)?.expect("an arm this schema knows"))
     }
 
-    /// Whether [`to_view::read`] skips the payload in `bytes`.
+    /// Whether [`engine_message::read`] skips the payload in `bytes`.
     fn is_skipped(bytes: &[u8]) -> bool {
         matches!(testing::decode(bytes), Ok(None))
     }
@@ -287,8 +288,8 @@ mod tests {
     /// Decode a message of the server of an arm this schema knows, as
     /// [`Session`](crate::session::Session) does after the envelope.
     fn decode_event(bytes: &[u8]) -> Result<InputEvent, Error> {
-        match to_engine::decode(bytes)?.expect("an arm this schema knows") {
-            to_engine::Message::Input { event, .. } => Ok(event),
+        match server_message::decode(bytes)?.expect("an arm this schema knows") {
+            server_message::Message::Input { event, .. } => Ok(event),
             other => panic!("got {other:?}"),
         }
     }
@@ -296,11 +297,11 @@ mod tests {
     /// Whether [`Session`](crate::session::Session) skips the payload in
     /// `bytes`.
     fn is_event_skipped(bytes: &[u8]) -> bool {
-        matches!(to_engine::decode(bytes), Ok(None))
+        matches!(server_message::decode(bytes), Ok(None))
     }
 
-    fn read_server(r: &mut &[u8]) -> Result<Option<to_engine::Message>, Error> {
-        testing::read_next(r, framing::Side::Server, to_engine::decode)
+    fn read_server(r: &mut &[u8]) -> Result<Option<server_message::Message>, Error> {
+        testing::read_next(r, framing::Side::Server, server_message::decode)
     }
 
     fn nonzero(n: u32) -> std::num::NonZeroU32 {
@@ -308,7 +309,7 @@ mod tests {
     }
 
     /// A bitmap of the image that a frame of the tests names by the id
-    /// `id`, as [`to_view::encode_frame`] writes it.
+    /// `id`, as [`engine_message::encode_frame`] writes it.
     fn bitmap(id: u32) -> Bitmap {
         Bitmap {
             image: crate::asset::png_image(id, 1),
@@ -498,47 +499,47 @@ mod tests {
     fn the_arm_of_a_message_of_the_engine_comes_without_a_decode() {
         let frame = testing::encode_frame(&Scene::new(4.0, 3.0));
         assert_eq!(
-            to_view::arm(&frame).unwrap(),
-            Some(to_view::Arm::Frame {
+            engine_message::arm(&frame).unwrap(),
+            Some(engine_message::Arm::Frame {
                 player: None,
                 ids: [].into()
             })
         );
         let framed = testing::encode_frame_to(Some(nonzero(2)), &Scene::new(4.0, 3.0));
         assert_eq!(
-            to_view::arm(&framed).unwrap(),
-            Some(to_view::Arm::Frame {
+            engine_message::arm(&framed).unwrap(),
+            Some(engine_message::Arm::Frame {
                 player: Some(nonzero(2)),
                 ids: [].into()
             })
         );
         let asset = testing::encode_asset(1, &[0; 4]);
         assert_eq!(
-            to_view::arm(&asset).unwrap(),
-            Some(to_view::Arm::Asset {
+            engine_message::arm(&asset).unwrap(),
+            Some(engine_message::Arm::Asset {
                 id: 1,
                 footprint: Err(crate::asset::ImageError::Unsupported)
             })
         );
         let png = testing::encode_asset(2, &crate::asset::png_head(3, 5));
         assert_eq!(
-            to_view::arm(&png).unwrap(),
-            Some(to_view::Arm::Asset {
+            engine_message::arm(&png).unwrap(),
+            Some(engine_message::Arm::Asset {
                 id: 2,
                 footprint: crate::asset::Footprint::of(&crate::asset::png_head(3, 5))
             })
         );
         let unknown = with_unknown_engine_value(&asset, |m| tag_of(m));
-        assert_eq!(to_view::arm(&unknown).unwrap(), None);
-        assert!(to_view::arm(&[0; 8]).is_err());
-        let players = to_view::PlayerRange::new(2, 4).unwrap();
+        assert_eq!(engine_message::arm(&unknown).unwrap(), None);
+        assert!(engine_message::arm(&[0; 8]).is_err());
+        let players = engine_message::PlayerRange::new(2, 4).unwrap();
         assert_eq!(
-            to_view::arm(&testing::encode_hello(2, 4)).unwrap(),
-            Some(to_view::Arm::Hello(players))
+            engine_message::arm(&testing::encode_hello(2, 4)).unwrap(),
+            Some(engine_message::Arm::Hello(players))
         );
         assert_eq!(
-            to_view::arm(&to_view::encode_forget(7)).unwrap(),
-            Some(to_view::Arm::Forget(7))
+            engine_message::arm(&engine_message::encode_forget(7)).unwrap(),
+            Some(engine_message::Arm::Forget(7))
         );
     }
 
@@ -548,7 +549,7 @@ mod tests {
         let mut scene = Scene::new(4.0, 4.0);
         scene.add_bitmap(bitmap(3));
         let frame = encode_frame(&scene);
-        let mut reader = to_view::Reader::new();
+        let mut reader = engine_message::Reader::new();
         let mut drawn = |payload: &[u8]| {
             let scene = reader.read(payload).unwrap()?;
             Some(match scene.elements() {
@@ -560,7 +561,7 @@ mod tests {
         assert_eq!(drawn(&frame), Some(None));
         assert_eq!(drawn(&encode_asset(3, image.blob())), None);
         assert_eq!(drawn(&frame), Some(Some(image.clone())));
-        assert_eq!(drawn(&to_view::encode_forget(3)), None);
+        assert_eq!(drawn(&engine_message::encode_forget(3)), None);
         assert_eq!(drawn(&frame), Some(None));
         // An asset that is not an image leaves its id with no image.
         drawn(&encode_asset(3, image.blob()));
@@ -588,11 +589,11 @@ mod tests {
     #[test]
     fn a_forget_round_trips_with_its_id() {
         assert!(matches!(
-            decode(&to_view::encode_forget(9)).unwrap(),
+            decode(&engine_message::encode_forget(9)).unwrap(),
             Message::Forget(9)
         ));
         assert!(matches!(
-            decode(&to_view::encode_forget(u32::MAX)).unwrap(),
+            decode(&engine_message::encode_forget(u32::MAX)).unwrap(),
             Message::Forget(u32::MAX)
         ));
     }
@@ -600,11 +601,11 @@ mod tests {
     #[test]
     fn a_tick_taken_round_trips() {
         let mut stream = Vec::new();
-        to_view::write_tick_taken(&mut stream).unwrap();
+        engine_message::write_tick_taken(&mut stream).unwrap();
         let payload = &stream[framing::HEADER_BYTES..];
         assert_eq!(
-            to_view::arm(payload).unwrap(),
-            Some(to_view::Arm::TickTaken)
+            engine_message::arm(payload).unwrap(),
+            Some(engine_message::Arm::TickTaken)
         );
         assert!(matches!(
             testing::read(&mut &stream[..]).unwrap(),
@@ -616,9 +617,9 @@ mod tests {
     /// a range.
     #[test]
     fn a_hello_round_trips() {
-        let players = to_view::PlayerRange::new(1, 3).unwrap();
+        let players = engine_message::PlayerRange::new(1, 3).unwrap();
         let mut stream = Vec::new();
-        to_view::write_hello(&mut stream, players).unwrap();
+        engine_message::write_hello(&mut stream, players).unwrap();
         match testing::read(&mut &stream[..]).unwrap() {
             Some(Message::Hello(got)) => assert_eq!(got, players),
             other => panic!("got {other:?}"),
@@ -627,9 +628,9 @@ mod tests {
 
     #[test]
     fn a_hello_that_is_not_a_range_is_an_error() {
-        for (min, max) in [(0, 2), (3, 2), (1, to_view::MAX_PLAYERS + 1)] {
+        for (min, max) in [(0, 2), (3, 2), (1, engine_message::MAX_PLAYERS + 1)] {
             assert!(matches!(
-                to_view::arm(&testing::encode_hello(min, max)),
+                engine_message::arm(&testing::encode_hello(min, max)),
                 Err(Error::PlayerRange { .. })
             ));
         }
@@ -637,12 +638,12 @@ mod tests {
 
     #[test]
     fn a_player_range_holds_its_ends() {
-        assert!(to_view::PlayerRange::new(0, 1).is_none());
-        assert!(to_view::PlayerRange::new(2, 1).is_none());
-        let most = to_view::MAX_PLAYERS;
-        assert!(to_view::PlayerRange::new(1, most).is_some());
-        assert!(to_view::PlayerRange::new(1, most + 1).is_none());
-        let players = to_view::PlayerRange::new(2, 4).unwrap();
+        assert!(engine_message::PlayerRange::new(0, 1).is_none());
+        assert!(engine_message::PlayerRange::new(2, 1).is_none());
+        let most = engine_message::MAX_PLAYERS;
+        assert!(engine_message::PlayerRange::new(1, most).is_some());
+        assert!(engine_message::PlayerRange::new(1, most + 1).is_none());
+        let players = engine_message::PlayerRange::new(2, 4).unwrap();
         assert_eq!((players.min().get(), players.max().get()), (2, 4));
         assert!(!players.contains(1));
         assert!(players.contains(2));
@@ -653,7 +654,7 @@ mod tests {
     #[test]
     fn a_message_of_a_view_round_trips() {
         assert!(matches!(
-            to_server::decode(&to_server::encode_input(&InputEvent::Resize {
+            view_message::decode(&view_message::encode_input(&InputEvent::Resize {
                 width: 1.0,
                 height: 2.0
             })),
@@ -667,29 +668,29 @@ mod tests {
     #[test]
     fn a_message_of_a_view_with_no_event_is_skipped() {
         let mut builder = MessageBuilder::new_default();
-        builder.init_root::<view_message::Builder>();
-        assert!(matches!(to_server::decode(&finish(builder)), Ok(None)));
+        builder.init_root::<protocol_capnp::view_message::Builder>();
+        assert!(matches!(view_message::decode(&finish(builder)), Ok(None)));
     }
 
     #[test]
     fn a_message_of_a_view_with_an_event_of_an_unknown_arm_is_skipped() {
         let bytes = with_unknown_view_value(
-            &to_server::encode_input(&InputEvent::Resize {
+            &view_message::encode_input(&InputEvent::Resize {
                 width: 1.0,
                 height: 2.0,
             }),
             |m| tag_of(m.get_event().unwrap()),
         );
-        assert!(matches!(to_server::decode(&bytes), Ok(None)));
+        assert!(matches!(view_message::decode(&bytes), Ok(None)));
     }
 
     #[test]
     fn the_start_round_trips() {
         let mut stream = Vec::new();
-        to_engine::write_start(&mut stream, &["Ana", "Beto"]).unwrap();
+        server_message::write_start(&mut stream, &["Ana", "Beto"]).unwrap();
         let mut r = &stream[..];
         match read_server(&mut r).unwrap().expect("a message") {
-            to_engine::Message::Start(got) => assert_eq!(got, ["Ana", "Beto"]),
+            server_message::Message::Start(got) => assert_eq!(got, ["Ana", "Beto"]),
             other => panic!("got {other:?}"),
         }
         assert!(read_server(&mut r).unwrap().is_none());
@@ -697,9 +698,9 @@ mod tests {
 
     #[test]
     fn a_start_of_more_than_max_players_is_not_written() {
-        let nicknames = vec![""; to_view::MAX_PLAYERS as usize + 1];
+        let nicknames = vec![""; engine_message::MAX_PLAYERS as usize + 1];
         let mut stream = Vec::new();
-        let err = to_engine::write_start(&mut stream, &nicknames).expect_err("an error");
+        let err = server_message::write_start(&mut stream, &nicknames).expect_err("an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(stream.is_empty());
     }
@@ -707,11 +708,11 @@ mod tests {
     #[test]
     fn a_tick_round_trips() {
         let mut stream = Vec::new();
-        to_engine::write_tick(&mut stream).unwrap();
+        server_message::write_tick(&mut stream).unwrap();
         let mut r = &stream[..];
         assert!(matches!(
             read_server(&mut r),
-            Ok(Some(to_engine::Message::Tick))
+            Ok(Some(server_message::Message::Tick))
         ));
         assert!(read_server(&mut r).unwrap().is_none());
     }
@@ -725,12 +726,12 @@ mod tests {
         let payload = testing::encode_input(0, &resize);
         let mut stream = framing::header(framing::Side::Server, payload.len() as u32).to_vec();
         stream.extend_from_slice(&payload);
-        to_engine::write_tick(&mut stream).unwrap();
+        server_message::write_tick(&mut stream).unwrap();
         let mut r = &stream[..];
         assert!(matches!(read_server(&mut r), Err(Error::NoPlayer)));
         assert!(matches!(
             read_server(&mut r),
-            Ok(Some(to_engine::Message::Tick))
+            Ok(Some(server_message::Message::Tick))
         ));
     }
 
@@ -755,10 +756,10 @@ mod tests {
 
     #[test]
     fn a_frame_whose_elements_share_a_path_is_an_error() {
-        let bytes =
-            with_shared_path::<engine_message::Owned>(&encode_frame(&scene_of_paths()), |m| {
-                path_slots(frame_of(m).get_elements().unwrap())
-            });
+        let bytes = with_shared_path::<protocol_capnp::engine_message::Owned>(
+            &encode_frame(&scene_of_paths()),
+            |m| path_slots(frame_of(m).get_elements().unwrap()),
+        );
         assert!(matches!(testing::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
     }
 
@@ -842,7 +843,7 @@ mod tests {
         // One Move claims 2 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<engine_message::Builder>();
+            let msg = builder.init_root::<protocol_capnp::engine_message::Builder>();
             let frame = msg.init_frame().init_scene();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -872,7 +873,7 @@ mod tests {
     fn a_path_with_no_initial_move_begins_at_the_origin() {
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<engine_message::Builder>();
+            let msg = builder.init_root::<protocol_capnp::engine_message::Builder>();
             let frame = msg.init_frame().init_scene();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -914,7 +915,7 @@ mod tests {
         ];
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<engine_message::Builder>();
+            let msg = builder.init_root::<protocol_capnp::engine_message::Builder>();
             let frame = msg.init_frame().init_scene();
             let mut nodes = frame.init_elements(paths.len() as u32);
             for (i, (verbs, xs)) in paths.iter().enumerate() {
@@ -947,7 +948,7 @@ mod tests {
         // One Cubic claims 6 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<engine_message::Builder>();
+            let msg = builder.init_root::<protocol_capnp::engine_message::Builder>();
             let frame = msg.init_frame().init_scene();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -1039,7 +1040,7 @@ mod tests {
                 },
             );
             let bytes = with_unknown_server_value(&event, |m| {
-                let Ok(server_message::Event(e)) = m.which() else {
+                let Ok(protocol_capnp::server_message::Event(e)) = m.which() else {
                     panic!("not an event");
                 };
                 tag_of(e.unwrap().get_event().unwrap())
@@ -1048,14 +1049,20 @@ mod tests {
         }
     }
 
-    fn element_at(m: engine_message::Reader<'_>, i: u32) -> element::WhichReader<'_> {
+    fn element_at(
+        m: protocol_capnp::engine_message::Reader<'_>,
+        i: u32,
+    ) -> element::WhichReader<'_> {
         let Ok(which) = frame_of(m).get_elements().unwrap().get(i).which() else {
             panic!("element {i} of an unknown arm");
         };
         which
     }
 
-    fn path_at(m: engine_message::Reader<'_>, i: u32) -> crate::scene_capnp::path::Reader<'_> {
+    fn path_at(
+        m: protocol_capnp::engine_message::Reader<'_>,
+        i: u32,
+    ) -> crate::scene_capnp::path::Reader<'_> {
         let element::Which::Path(p) = element_at(m, i) else {
             panic!("element {i} is not a Path");
         };
@@ -1128,7 +1135,7 @@ mod tests {
         });
         // The kind is the u16 at byte 0 of the data of a KeyEvent.
         let bytes = with_unknown_server_value(&encode_event(&key), |m| {
-            let Ok(server_message::Event(e)) = m.which() else {
+            let Ok(protocol_capnp::server_message::Event(e)) = m.which() else {
                 panic!("not an event");
             };
             let Ok(input_event::Which::Key(k)) = e.unwrap().get_event().unwrap().which() else {
@@ -1152,7 +1159,7 @@ mod tests {
         // MouseEvent, and the button of a down is the u16 at byte 12.
         for offset in [10, 12] {
             let bytes = with_unknown_server_value(&encode_event(&down), |m| {
-                let Ok(server_message::Event(e)) = m.which() else {
+                let Ok(protocol_capnp::server_message::Event(e)) = m.which() else {
                     panic!("not an event");
                 };
                 let Ok(input_event::Which::Mouse(m)) = e.unwrap().get_event().unwrap().which()
@@ -1172,7 +1179,7 @@ mod tests {
         // PadEvent, and the tag of the union is the u16 at byte 2.
         for offset in [0, 2] {
             let bytes = with_unknown_server_value(&encode_event(&down), |m| {
-                let Ok(server_message::Event(e)) = m.which() else {
+                let Ok(protocol_capnp::server_message::Event(e)) = m.which() else {
                     panic!("not an event");
                 };
                 let Ok(input_event::Which::Pad(p)) = e.unwrap().get_event().unwrap().which() else {
@@ -1275,7 +1282,7 @@ mod tests {
         // never writes, so the path is built by hand.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<engine_message::Builder>();
+            let msg = builder.init_root::<protocol_capnp::engine_message::Builder>();
             let frame = msg.init_frame().init_scene();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
@@ -1593,7 +1600,7 @@ mod tests {
         // One Cubic claims 6 floats and 2 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<engine_message::Builder>();
+            let msg = builder.init_root::<protocol_capnp::engine_message::Builder>();
             let frame = msg.init_frame().init_scene();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
