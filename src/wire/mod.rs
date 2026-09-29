@@ -35,7 +35,7 @@ pub mod view_message;
 use capnp::message::{self, ReaderOptions, ReaderSegments};
 
 /// Serialize a finished builder. `write_message` into a `Vec` cannot fail.
-pub(crate) fn finish(builder: capnp::message::Builder<capnp::message::HeapAllocator>) -> Vec<u8> {
+pub(crate) fn to_bytes(builder: capnp::message::Builder<capnp::message::HeapAllocator>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(256);
     capnp::serialize::write_message(&mut bytes, &builder)
         .expect("write_message into Vec is infallible");
@@ -669,7 +669,7 @@ mod tests {
     fn a_message_of_a_view_with_no_event_is_skipped() {
         let mut builder = MessageBuilder::new_default();
         builder.init_root::<protocol_capnp::view_message::Builder>();
-        assert!(matches!(view_message::decode(&finish(builder)), Ok(None)));
+        assert!(matches!(view_message::decode(&to_bytes(builder)), Ok(None)));
     }
 
     #[test]
@@ -855,7 +855,7 @@ mod tests {
                 coords.set(i, i as f32);
             }
         }
-        let bytes = finish(builder);
+        let bytes = to_bytes(builder);
         let err = decode(&bytes).unwrap_err();
         assert!(
             matches!(
@@ -885,7 +885,7 @@ mod tests {
                 coords.set(i as u32, v);
             }
         }
-        let Message::Frame { scene: d, .. } = decode(&finish(builder)).unwrap() else {
+        let Message::Frame { scene: d, .. } = decode(&to_bytes(builder)).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Path(p)] = d.elements() else {
@@ -930,7 +930,7 @@ mod tests {
                 }
             }
         }
-        let Message::Frame { scene: d, .. } = decode(&finish(builder)).unwrap() else {
+        let Message::Frame { scene: d, .. } = decode(&to_bytes(builder)).unwrap() else {
             panic!("expected Frame");
         };
         let [Element::Path(p), Element::Path(lone)] = d.elements() else {
@@ -960,7 +960,7 @@ mod tests {
                 coords.set(i, i as f32);
             }
         }
-        let bytes = finish(builder);
+        let bytes = to_bytes(builder);
         let err = decode(&bytes).unwrap_err();
         assert!(
             matches!(
@@ -1296,7 +1296,7 @@ mod tests {
             coords.set(0, 1.0);
             coords.set(1, 1.0);
         }
-        let bytes = with_unknown_engine_value(&finish(builder), |m| {
+        let bytes = with_unknown_engine_value(&to_bytes(builder), |m| {
             tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
         });
 
@@ -1611,7 +1611,7 @@ mod tests {
             coords.set(0, 0.0);
             coords.set(1, 0.0);
         }
-        let bytes = finish(builder);
+        let bytes = to_bytes(builder);
         let err = decode(&bytes).unwrap_err();
         assert!(
             matches!(

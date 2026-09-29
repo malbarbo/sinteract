@@ -23,7 +23,7 @@ pub fn encode_input(ev: &InputEvent) -> Vec<u8> {
         builder.init_root::<view_message::Builder>().init_event(),
         ev,
     );
-    super::finish(builder)
+    super::to_bytes(builder)
 }
 
 /// Decode the input in `payload`. `None` for a message from a newer schema

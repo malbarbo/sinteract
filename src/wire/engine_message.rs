@@ -250,5 +250,5 @@ pub(super) fn asset_message(id: u32, blob: &[u8]) -> MessageBuilder<HeapAllocato
 /// Encode that the asset `id` is gone, with no envelope, as a server sends
 /// it to a view.
 pub fn encode_forget(id: u32) -> Vec<u8> {
-    super::finish(forget_message(id))
+    super::to_bytes(forget_message(id))
 }

@@ -19,7 +19,7 @@ use crate::scene_capnp::{
     text_node,
 };
 
-use super::{Error, ValueError, finish, skip_unusable};
+use super::{Error, ValueError, skip_unusable, to_bytes};
 
 /// Encode a scene as a message whose root is the `Scene` struct of
 /// `schema/scene.capnp`, with no session envelope around it. An engine that
@@ -30,7 +30,7 @@ use super::{Error, ValueError, finish, skip_unusable};
 pub fn encode(scene: &Scene, ids: &dyn Fn(&Image) -> u32) -> Vec<u8> {
     let mut builder = capnp::message::Builder::new_default();
     write_scene(builder.init_root::<wire_scene::Builder>(), scene, ids);
-    finish(builder)
+    to_bytes(builder)
 }
 
 /// Decode a message that [`encode`] produced. A bitmap takes the image that

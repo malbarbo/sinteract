@@ -102,24 +102,24 @@ pub(crate) fn encode_frame(scene: &Scene) -> Vec<u8> {
 /// Encode a scene as a frame for `player`, with no envelope. The id of an
 /// image is its width, as [`decode`] reads it.
 pub(crate) fn encode_frame_to(player: Option<NonZeroU32>, scene: &Scene) -> Vec<u8> {
-    super::finish(engine_message::frame_message(player, scene, &Image::width))
+    super::to_bytes(engine_message::frame_message(player, scene, &Image::width))
 }
 
 /// Encode the blob of an image as the asset `id`, with no envelope.
 pub(crate) fn encode_asset(id: u32, blob: &[u8]) -> Vec<u8> {
-    super::finish(engine_message::asset_message(id, blob))
+    super::to_bytes(engine_message::asset_message(id, blob))
 }
 
 /// Encode a hello of `min` to `max` players, with no envelope. A test
 /// passes a range that [`engine_message::write_hello`] cannot.
 pub(crate) fn encode_hello(min: u32, max: u32) -> Vec<u8> {
-    super::finish(engine_message::hello_message(min, max))
+    super::to_bytes(engine_message::hello_message(min, max))
 }
 
 /// Encode the input `ev` of `player`, with no envelope. A test passes 0,
 /// which [`server_message::write_input`] cannot.
 pub(crate) fn encode_input(player: u32, ev: &InputEvent) -> Vec<u8> {
-    super::finish(server_message::input_message(player, ev))
+    super::to_bytes(server_message::input_message(player, ev))
 }
 
 /// Read the messages that `side` wrote until `decode` returns one. `decode`
