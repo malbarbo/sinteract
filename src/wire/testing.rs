@@ -13,6 +13,7 @@ use capnp::Word;
 use crate::event::InputEvent;
 use crate::protocol_capnp;
 use crate::scene::{Image, Scene};
+use crate::scene_capnp::scene;
 
 use super::Error;
 use super::engine_to_server::{self, PlayerRange};
@@ -79,11 +80,10 @@ fn decode_message(
         }
         protocol_capnp::engine_to_server::Frame(f) => {
             let f = f?;
+            let images = |id| Image::new(crate::asset::png_head(id, 1)).ok();
             Ok(Some(Message::Frame {
                 player: NonZeroU32::new(f.get_player()),
-                scene: read_scene(f.get_scene()?, &|id| {
-                    Image::new(crate::asset::png_head(id, 1)).ok()
-                })?,
+                scene: decode_root::<scene::Owned, _>(f.get_scene()?, |s| read_scene(s, &images))?,
             }))
         }
         protocol_capnp::engine_to_server::Hello(h) => {
@@ -201,14 +201,35 @@ pub(crate) fn tag_of<'a>(r: impl capnp::traits::IntoInternalStructReader<'a>) ->
     capnp::raw::get_struct_data_section(r).as_ptr()
 }
 
-/// The scene of a frame, for [`with_unknown_engine_value`].
-pub(crate) fn frame_of(
-    m: protocol_capnp::engine_to_server::Reader<'_>,
-) -> crate::scene_capnp::scene::Reader<'_> {
-    let Ok(protocol_capnp::engine_to_server::Frame(f)) = m.which() else {
-        panic!("not a frame");
-    };
-    f.expect("frame").get_scene().expect("scene")
+/// A frame for every player that holds `scene`, the bytes of a message
+/// whose root is a `Scene`, as a test builds or changes it.
+pub(crate) fn frame_holding(scene: &[u8]) -> Vec<u8> {
+    let mut builder = capnp::message::Builder::new_default();
+    builder
+        .init_root::<protocol_capnp::engine_to_server::Builder>()
+        .init_frame()
+        .set_scene(scene);
+    super::to_bytes(builder)
+}
+
+/// [`with_unknown_value`] for the scene inside the frame in `bytes`. The
+/// frame holds the scene as bytes, so `find` points into them.
+pub(crate) fn with_unknown_scene_value(
+    bytes: &[u8],
+    find: impl FnOnce(scene::Reader<'_>) -> *const u8,
+) -> Vec<u8> {
+    with_unknown_engine_value(bytes, |m| {
+        let Ok(protocol_capnp::engine_to_server::Frame(f)) = m.which() else {
+            panic!("not a frame");
+        };
+        let mut bytes = f.expect("frame").get_scene().expect("scene");
+        let msg = capnp::serialize::read_message_from_flat_slice_no_alloc(
+            &mut bytes,
+            capnp::message::ReaderOptions::new(),
+        )
+        .expect("parse the scene");
+        find(msg.get_root().expect("root"))
+    })
 }
 
 /// Replace every float `from` in `bytes` with `to`, as a peer that writes a

@@ -12,7 +12,6 @@
 # This file is the source of truth for the session. The same rules as
 # scene.capnp apply. See its header for how to regenerate the bindings.
 
-using Draw = import "scene.capnp";
 using Input = import "event.capnp";
 
 # A reader skips a message whose arm it does not know. It drops a message
@@ -32,7 +31,9 @@ struct AssetMsg {
 struct Frame {
     # The player that the frame goes to, from 1, or 0 for every player.
     player @0 :UInt32;
-    scene  @1 :Draw.Scene;
+    # A whole message whose root is the Scene of scene.capnp. The server
+    # passes the bytes on to the views with a copy and no decode.
+    scene  @1 :Data;
 }
 
 # The players that a game takes, with 1 <= minPlayers <= maxPlayers <= 1024.

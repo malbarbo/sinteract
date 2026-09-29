@@ -6,6 +6,8 @@
 
 use std::collections::BTreeSet;
 
+use capnp::message::{Builder, HeapAllocator};
+
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
     LineJoin, MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind,
@@ -28,9 +30,14 @@ use super::{Error, ValueError, skip_unusable, to_bytes};
 /// with the id that `ids` gives its image, and the images go some other
 /// way.
 pub fn encode(scene: &Scene, ids: &dyn Fn(&Image) -> u32) -> Vec<u8> {
-    let mut builder = capnp::message::Builder::new_default();
+    to_bytes(scene_message(scene, ids))
+}
+
+/// A message whose root is `scene`, as [`encode`] writes it.
+pub(super) fn scene_message(scene: &Scene, ids: &dyn Fn(&Image) -> u32) -> Builder<HeapAllocator> {
+    let mut builder = Builder::new_default();
     write_scene(builder.init_root::<wire_scene::Builder>(), scene, ids);
-    to_bytes(builder)
+    builder
 }
 
 /// Decode a message that [`encode`] produced. A bitmap takes the image that
@@ -537,11 +544,7 @@ fn write_element_list(
 }
 
 /// Write `scene`, with the id that `ids` gives the image of each bitmap.
-pub(super) fn write_scene(
-    mut b: wire_scene::Builder<'_>,
-    scene: &Scene,
-    ids: &dyn Fn(&Image) -> u32,
-) {
+fn write_scene(mut b: wire_scene::Builder<'_>, scene: &Scene, ids: &dyn Fn(&Image) -> u32) {
     b.set_width(scene.width());
     b.set_height(scene.height());
     write_element_list(

@@ -21,8 +21,8 @@ use super::Error;
 /// an error on both paths.
 pub(super) fn decode_root<T: Owned, M>(
     payload: &[u8],
-    decode: impl FnOnce(T::Reader<'_>) -> Result<Option<M>, Error>,
-) -> Result<Option<M>, Error> {
+    decode: impl FnOnce(T::Reader<'_>) -> Result<M, Error>,
+) -> Result<M, Error> {
     if !payload.len().is_multiple_of(size_of::<Word>()) {
         return Err(capnp::Error::failed(format!(
             "payload of {} bytes is not a whole number of words",

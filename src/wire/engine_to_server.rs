@@ -15,16 +15,19 @@ use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::num::NonZeroU32;
 
+use capnp::Word;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
+use capnp::serialize;
 
 use crate::asset::{Footprint, ImageError};
 use crate::protocol_capnp::{engine_to_server, hello};
 use crate::scene::{Image, Scene};
+use crate::scene_capnp::scene as wire_scene;
 
 use super::Error;
 use super::framing::{Side, write_framed};
 use super::protocol::decode_root;
-use super::scene::{read_bitmap_ids, read_scene, write_scene};
+use super::scene::{read_bitmap_ids, read_scene, scene_message};
 
 /// The reader of the frames of the engine for a view, which returns the
 /// scene of each frame. It keeps the images of the assets that the frames
@@ -61,7 +64,9 @@ impl FrameReader {
                 }
                 engine_to_server::Frame(f) => {
                     let images = |id| self.images.get(&id).cloned();
-                    Ok(Some(read_scene(f?.get_scene()?, &images)?))
+                    decode_root::<wire_scene::Owned, _>(f?.get_scene()?, |s| {
+                        Ok(Some(read_scene(s, &images)?))
+                    })
                 }
                 engine_to_server::Forget(id) => {
                     self.images.remove(&id);
@@ -184,7 +189,9 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
             engine_to_server::Frame(f) => {
                 let f = f?;
                 let mut ids = BTreeSet::new();
-                read_bitmap_ids(f.get_scene()?, &mut ids)?;
+                decode_root::<wire_scene::Owned, _>(f.get_scene()?, |s| {
+                    read_bitmap_ids(s, &mut ids)
+                })?;
                 Arm::Frame {
                     player: NonZeroU32::new(f.get_player()),
                     ids,
@@ -212,7 +219,11 @@ pub(super) fn frame_message(
         .init_root::<engine_to_server::Builder>()
         .init_frame();
     frame.set_player(player.map_or(0, NonZeroU32::get));
-    write_scene(frame.init_scene(), scene, ids);
+    // Straight into the data of the frame, with no buffer in between.
+    let scene = scene_message(scene, ids);
+    let len = serialize::compute_serialized_size_in_words(&scene) * size_of::<Word>();
+    let data: &mut [u8] = frame.init_scene(len as u32);
+    serialize::write_message(data, &scene).expect("the data of the frame fits the scene");
     builder
 }
 

@@ -164,8 +164,9 @@ fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
 #[cfg(test)]
 mod tests {
     use super::testing::{
-        Message, encode_asset, encode_frame, frame_of, tag_of, with_float,
-        with_unknown_engine_value, with_unknown_server_value, with_unknown_view_value,
+        Message, encode_asset, encode_frame, frame_holding, tag_of, with_float,
+        with_unknown_engine_value, with_unknown_scene_value, with_unknown_server_value,
+        with_unknown_view_value,
     };
     use super::*;
     use crate::event::{
@@ -387,6 +388,20 @@ mod tests {
             Message::Frame { scene: d, .. } => assert_scene_eq(&scene, &d),
             other => panic!("expected Frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_frame_whose_scene_is_in_many_segments_round_trips() {
+        let scene = sample_scene();
+        let bytes = frame_holding(&in_small_segments(&scene::encode(&scene, &Image::width)));
+        match decode(&bytes).expect("decode") {
+            Message::Frame { scene: d, .. } => assert_scene_eq(&scene, &d),
+            other => panic!("expected Frame, got {other:?}"),
+        }
+        assert_eq!(
+            testing::bitmap_ids(&bytes).into_iter().collect::<Vec<_>>(),
+            [7]
+        );
     }
 
     /// `bytes` copied into segments of 8 words, or of the size of an object
@@ -759,10 +774,10 @@ mod tests {
 
     #[test]
     fn a_frame_whose_elements_share_a_path_is_an_error() {
-        let bytes = with_shared_path::<protocol_capnp::engine_to_server::Owned>(
-            &encode_frame(&scene_of_paths()),
-            |m| path_slots(frame_of(m).get_elements().unwrap()),
-        );
+        let bytes = frame_holding(&with_shared_path::<crate::scene_capnp::scene::Owned>(
+            &scene::encode(&scene_of_paths(), &Image::width),
+            |s| path_slots(s.get_elements().unwrap()),
+        ));
         assert!(matches!(testing::decode(&bytes), Err(e) if is_read_limit_exceeded(&e)));
     }
 
@@ -846,8 +861,7 @@ mod tests {
         // One Move claims 2 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<protocol_capnp::engine_to_server::Builder>();
-            let frame = msg.init_frame().init_scene();
+            let frame = builder.init_root::<crate::scene_capnp::scene::Builder>();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
@@ -858,7 +872,7 @@ mod tests {
                 coords.set(i, i as f32);
             }
         }
-        let bytes = to_bytes(builder);
+        let bytes = frame_holding(&to_bytes(builder));
         let err = decode(&bytes).unwrap_err();
         assert!(
             matches!(
@@ -876,8 +890,7 @@ mod tests {
     fn a_path_with_no_initial_move_begins_at_the_origin() {
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<protocol_capnp::engine_to_server::Builder>();
-            let frame = msg.init_frame().init_scene();
+            let frame = builder.init_root::<crate::scene_capnp::scene::Builder>();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
@@ -888,7 +901,8 @@ mod tests {
                 coords.set(i as u32, v);
             }
         }
-        let Message::Frame { scene: d, .. } = decode(&to_bytes(builder)).unwrap() else {
+        let Message::Frame { scene: d, .. } = decode(&frame_holding(&to_bytes(builder))).unwrap()
+        else {
             panic!("expected Frame");
         };
         let [Element::Path(p)] = d.elements() else {
@@ -918,8 +932,7 @@ mod tests {
         ];
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<protocol_capnp::engine_to_server::Builder>();
-            let frame = msg.init_frame().init_scene();
+            let frame = builder.init_root::<crate::scene_capnp::scene::Builder>();
             let mut nodes = frame.init_elements(paths.len() as u32);
             for (i, (verbs, xs)) in paths.iter().enumerate() {
                 let node = nodes.reborrow().get(i as u32);
@@ -933,7 +946,8 @@ mod tests {
                 }
             }
         }
-        let Message::Frame { scene: d, .. } = decode(&to_bytes(builder)).unwrap() else {
+        let Message::Frame { scene: d, .. } = decode(&frame_holding(&to_bytes(builder))).unwrap()
+        else {
             panic!("expected Frame");
         };
         let [Element::Path(p), Element::Path(lone)] = d.elements() else {
@@ -951,8 +965,7 @@ mod tests {
         // One Cubic claims 6 floats and 4 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<protocol_capnp::engine_to_server::Builder>();
-            let frame = msg.init_frame().init_scene();
+            let frame = builder.init_root::<crate::scene_capnp::scene::Builder>();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
@@ -963,7 +976,7 @@ mod tests {
                 coords.set(i, i as f32);
             }
         }
-        let bytes = to_bytes(builder);
+        let bytes = frame_holding(&to_bytes(builder));
         let err = decode(&bytes).unwrap_err();
         assert!(
             matches!(
@@ -1005,12 +1018,11 @@ mod tests {
                 ));
             },
         );
-        let bytes = with_unknown_engine_value(&encode_frame(&scene), |m| {
-            tag_of(frame_of(m).get_elements().unwrap().get(0))
+        let bytes = with_unknown_scene_value(&encode_frame(&scene), |s| {
+            tag_of(s.get_elements().unwrap().get(0))
         });
-        let bytes = with_unknown_engine_value(&bytes, |m| {
-            let Ok(element::Which::Clipped(c)) = frame_of(m).get_elements().unwrap().get(1).which()
-            else {
+        let bytes = with_unknown_scene_value(&bytes, |s| {
+            let Ok(element::Which::Clipped(c)) = s.get_elements().unwrap().get(1).which() else {
                 panic!("expected Clipped");
             };
             tag_of(c.unwrap().get_elements().unwrap().get(1))
@@ -1052,21 +1064,18 @@ mod tests {
         }
     }
 
-    fn element_at(
-        m: protocol_capnp::engine_to_server::Reader<'_>,
-        i: u32,
-    ) -> element::WhichReader<'_> {
-        let Ok(which) = frame_of(m).get_elements().unwrap().get(i).which() else {
+    fn element_at(s: crate::scene_capnp::scene::Reader<'_>, i: u32) -> element::WhichReader<'_> {
+        let Ok(which) = s.get_elements().unwrap().get(i).which() else {
             panic!("element {i} of an unknown arm");
         };
         which
     }
 
     fn path_at(
-        m: protocol_capnp::engine_to_server::Reader<'_>,
+        s: crate::scene_capnp::scene::Reader<'_>,
         i: u32,
     ) -> crate::scene_capnp::path::Reader<'_> {
-        let element::Which::Path(p) = element_at(m, i) else {
+        let element::Which::Path(p) = element_at(s, i) else {
             panic!("element {i} is not a Path");
         };
         p.unwrap()
@@ -1098,17 +1107,17 @@ mod tests {
                 .build(),
         );
 
-        let bytes = with_unknown_engine_value(&encode_frame(&scene), |m| {
-            tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
+        let bytes = with_unknown_scene_value(&encode_frame(&scene), |s| {
+            tag_of(path_at(s, 0).get_style().unwrap().get_fill().unwrap())
         });
         // The line cap is the u16 at byte 4 of the data of a PathStyle.
-        let bytes = with_unknown_engine_value(&bytes, |m| {
-            tag_of(path_at(m, 1).get_style().unwrap()).wrapping_add(4)
+        let bytes = with_unknown_scene_value(&bytes, |s| {
+            tag_of(path_at(s, 1).get_style().unwrap()).wrapping_add(4)
         });
         let bytes =
-            with_unknown_engine_value(&bytes, |m| path_at(m, 2).get_verbs().unwrap().as_ptr());
-        let bytes = with_unknown_engine_value(&bytes, |m| {
-            let element::Which::Clipped(c) = element_at(m, 3) else {
+            with_unknown_scene_value(&bytes, |s| path_at(s, 2).get_verbs().unwrap().as_ptr());
+        let bytes = with_unknown_scene_value(&bytes, |s| {
+            let element::Which::Clipped(c) = element_at(s, 3) else {
                 panic!("expected Clipped");
             };
             c.unwrap().get_clip().unwrap().get_verbs().unwrap().as_ptr()
@@ -1234,8 +1243,8 @@ mod tests {
             });
         }
         // The sampling is the u16 at byte 28 of the data of a Bitmap.
-        let bytes = with_unknown_engine_value(&encode_frame(&scene), |m| {
-            let element::Which::Bitmap(b) = element_at(m, 1) else {
+        let bytes = with_unknown_scene_value(&encode_frame(&scene), |s| {
+            let element::Which::Bitmap(b) = element_at(s, 1) else {
                 panic!("expected Bitmap");
             };
             tag_of(b.unwrap()).wrapping_add(28)
@@ -1285,8 +1294,7 @@ mod tests {
         // never writes, so the path is built by hand.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<protocol_capnp::engine_to_server::Builder>();
-            let frame = msg.init_frame().init_scene();
+            let frame = builder.init_root::<crate::scene_capnp::scene::Builder>();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
@@ -1299,8 +1307,8 @@ mod tests {
             coords.set(0, 1.0);
             coords.set(1, 1.0);
         }
-        let bytes = with_unknown_engine_value(&to_bytes(builder), |m| {
-            tag_of(path_at(m, 0).get_style().unwrap().get_fill().unwrap())
+        let bytes = with_unknown_scene_value(&frame_holding(&to_bytes(builder)), |s| {
+            tag_of(path_at(s, 0).get_style().unwrap().get_fill().unwrap())
         });
 
         let Message::Frame { scene: d, .. } = decode(&bytes).unwrap() else {
@@ -1603,8 +1611,7 @@ mod tests {
         // One Cubic claims 6 floats and 2 are present.
         let mut builder = MessageBuilder::new_default();
         {
-            let msg = builder.init_root::<protocol_capnp::engine_to_server::Builder>();
-            let frame = msg.init_frame().init_scene();
+            let frame = builder.init_root::<crate::scene_capnp::scene::Builder>();
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let clipped = node.init_clipped();
@@ -1614,7 +1621,7 @@ mod tests {
             coords.set(0, 0.0);
             coords.set(1, 0.0);
         }
-        let bytes = to_bytes(builder);
+        let bytes = frame_holding(&to_bytes(builder));
         let err = decode(&bytes).unwrap_err();
         assert!(
             matches!(
