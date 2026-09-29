@@ -48,7 +48,9 @@ const KITTY_SHM_OK: &[u8] = b"Gi=32;OK";
 
 #[derive(Default, Copy, Clone)]
 pub struct GraphicsCaps {
-    pub kitty: bool,
+    /// The terminal speaks the graphics protocol of Kitty, and takes an
+    /// image as the [`KittyTransfer`] says.
+    pub kitty: Option<KittyTransfer>,
     pub sixel: bool,
     /// Pixel size of one terminal cell, from `CSI 16 t`. `None` when the
     /// terminal did not answer.
@@ -58,10 +60,17 @@ pub struct GraphicsCaps {
     /// win32-input-mode, so it does not look at the reply.
     #[cfg(unix)]
     pub kitty_keyboard: bool,
-    /// The terminal reads a Kitty image from shared memory, which a
-    /// terminal on another machine, as over ssh, cannot.
+}
+
+/// How a terminal that speaks Kitty takes an image.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum KittyTransfer {
+    /// In the escapes.
+    Escapes,
+    /// From shared memory too, which a terminal on another machine, as over
+    /// ssh, cannot read.
     #[cfg(unix)]
-    pub kitty_shm: bool,
+    SharedMemory,
 }
 
 static CACHED: OnceLock<GraphicsCaps> = OnceLock::new();
@@ -133,14 +142,20 @@ impl Replies {
 
     fn caps(&self) -> GraphicsCaps {
         GraphicsCaps {
-            kitty: self.found.kitty,
+            kitty: self.found.kitty.then(|| self.kitty_transfer()),
             sixel: self.found.sixel,
             cell_px: self.found.cell_px,
             #[cfg(unix)]
             kitty_keyboard: self.found.kitty_keyboard,
-            #[cfg(unix)]
-            kitty_shm: self.found.kitty_shm,
         }
+    }
+
+    fn kitty_transfer(&self) -> KittyTransfer {
+        #[cfg(unix)]
+        if self.found.kitty_shm {
+            return KittyTransfer::SharedMemory;
+        }
+        KittyTransfer::Escapes
     }
 }
 
@@ -610,7 +625,10 @@ mod tests {
 
     #[test]
     fn kitty_ok_in_buffer() {
-        assert!(replies(b"junk\x1b_Gi=31;OK\x1b\\more").caps().kitty);
+        assert_eq!(
+            replies(b"junk\x1b_Gi=31;OK\x1b\\more").caps().kitty,
+            Some(KittyTransfer::Escapes)
+        );
     }
 
     #[test]
@@ -622,6 +640,18 @@ mod tests {
     }
 
     #[test]
+    fn kitty_shm_counts_only_with_kitty() {
+        assert_eq!(replies(b"\x1b_Gi=32;OK\x1b\\").caps().kitty, None);
+        #[cfg(unix)]
+        assert_eq!(
+            replies(b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\")
+                .caps()
+                .kitty,
+            Some(KittyTransfer::SharedMemory)
+        );
+    }
+
+    #[test]
     fn kitty_shm_enoent_is_not_ok() {
         let r = replies(b"\x1b_Gi=32;ENOENT:no such shared memory\x1b\\");
         assert!(!r.found.kitty_shm);
@@ -630,12 +660,12 @@ mod tests {
     #[test]
     fn kitty_enotsupported_is_not_ok() {
         let r = replies(b"\x1b_Gi=31;ENOTSUPPORTED:no graphics\x1b\\");
-        assert!(!r.caps().kitty);
+        assert_eq!(r.caps().kitty, None);
     }
 
     #[test]
     fn kitty_wrong_id_is_not_ok() {
-        assert!(!replies(b"\x1b_Gi=99;OK\x1b\\").caps().kitty);
+        assert_eq!(replies(b"\x1b_Gi=99;OK\x1b\\").caps().kitty, None);
     }
 
     #[test]

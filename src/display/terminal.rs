@@ -655,7 +655,9 @@ enum KittyMedium {
 impl KittyMedium {
     fn for_stdout() -> Self {
         #[cfg(unix)]
-        if super::term_query::graphics_caps().kitty_shm {
+        if super::term_query::graphics_caps().kitty
+            == Some(super::term_query::KittyTransfer::SharedMemory)
+        {
             return KittyMedium::SharedMemory { next: 0 };
         }
         KittyMedium::Png
@@ -704,7 +706,7 @@ pub fn text_blocks_supported() -> bool {
 /// the environment variables are wrong over ssh and under a multiplexer.
 /// The probe runs at most once per process.
 pub fn kitty_supported() -> bool {
-    super::term_query::graphics_caps().kitty
+    super::term_query::graphics_caps().kitty.is_some()
 }
 
 /// Returns `true` if the terminal supports DEC Sixel, `false` otherwise. The
