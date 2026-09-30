@@ -485,9 +485,9 @@ macro_rules! embed_family {
     };
 }
 
-static SANS: Family = embed_family!("Sinteract Sans", "LiberationSans");
-static SERIF: Family = embed_family!("Sinteract Serif", "LiberationSerif");
-static MONO: Family = embed_family!("Sinteract Mono", "LiberationMono");
+static SANS: Family = embed_family!("Sinteract Sans", "SinteractSans");
+static SERIF: Family = embed_family!("Sinteract Serif", "SinteractSerif");
+static MONO: Family = embed_family!("Sinteract Mono", "SinteractMono");
 
 /// A CSS weight at or above this picks the bold face.
 const BOLD_THRESHOLD: u16 = 600;

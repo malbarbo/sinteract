@@ -60,5 +60,5 @@ code.
 
 ## License
 
-MIT or Apache-2.0. The fonts in `fonts/` are the Liberation fonts, under
-the SIL Open Font License 1.1, in `fonts/OFL.txt`.
+MIT or Apache-2.0. The fonts in `fonts/` derive from the Liberation fonts
+and are under the SIL Open Font License 1.1, in `fonts/OFL.txt`.
