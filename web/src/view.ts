@@ -5,7 +5,7 @@
 
 import { listen } from "./input.ts";
 import { encodeInput, readServerMessage, SUBPROTOCOL } from "./protocol.ts";
-import { fit, type Placement, Renderer } from "./render.ts";
+import { Renderer } from "./render.ts";
 import { decodeScene, type Element, type Scene } from "./scene.ts";
 
 export type Status =
@@ -33,7 +33,6 @@ export class View {
   // the one on screen.
   #latest: Scene | null = null;
   #scene: Scene | null = null;
-  #place: Placement = { scale: 1, x: 0, y: 0 };
   #frame = 0;
 
   constructor(canvas: HTMLCanvasElement, options: ViewOptions = {}) {
@@ -89,7 +88,7 @@ export class View {
     // latest, and the next connection starts with no scene.
     this.#latest = null;
     this.#scene = null;
-    this.#place = { scale: 1, x: 0, y: 0 };
+    this.#renderer.clear();
     cancelAnimationFrame(this.#frame);
     this.#frame = 0;
   }
@@ -175,11 +174,8 @@ export class View {
     this.#frame = 0;
     const scene = this.#scene;
     if (!scene) return;
-    const c = this.#canvas;
-    this.#place = fit(scene.width, scene.height, c.width, c.height);
     this.#renderer.draw(
       scene,
-      this.#place,
       (id) => this.#images.get(id)?.image ?? undefined,
     );
   }
@@ -202,7 +198,7 @@ export class View {
     const rect = this.#canvas.getBoundingClientRect();
     const sx = rect.width > 0 ? this.#canvas.width / rect.width : 1;
     const sy = rect.height > 0 ? this.#canvas.height / rect.height : 1;
-    const { scale, x: ox, y: oy } = this.#place;
+    const { scale, x: ox, y: oy } = this.#renderer.place;
     return [(x * sx - ox) / scale, (y * sy - oy) / scale];
   }
 

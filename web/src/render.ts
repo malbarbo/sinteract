@@ -37,23 +37,6 @@ export interface Placement {
   y: number;
 }
 
-// The placement that fits a scene of `width` by `height` in a canvas of
-// `canvasWidth` by `canvasHeight`, centered, at any scale.
-export function fit(
-  width: number,
-  height: number,
-  canvasWidth: number,
-  canvasHeight: number,
-): Placement {
-  if (width <= 0 || height <= 0) return { scale: 1, x: 0, y: 0 };
-  const scale = Math.min(canvasWidth / width, canvasHeight / height);
-  return {
-    scale,
-    x: (canvasWidth - width * scale) / 2,
-    y: (canvasHeight - height * scale) / 2,
-  };
-}
-
 export class Renderer {
   #canvas: HTMLCanvasElement;
   #ctx: Context;
@@ -69,13 +52,23 @@ export class Renderer {
     this.#ctx = context(canvas);
   }
 
-  // Draws `scene` at `place`, with the image of each bitmap from `images`.
-  // A bitmap whose image `images` does not give draws nothing.
+  // Where the last scene went on the canvas.
+  get place(): Placement {
+    return this.#place;
+  }
+
+  // Draws `scene` fit to the canvas, with the image of each bitmap from
+  // `images`. A bitmap whose image `images` does not give draws nothing.
   draw(
     scene: Scene,
-    place: Placement,
     images: (id: number) => CanvasImageSource | undefined,
   ): void {
+    const place = fit(
+      scene.width,
+      scene.height,
+      this.#canvas.width,
+      this.#canvas.height,
+    );
     this.#images = images;
     this.#place = place;
     this.#width = scene.width;
@@ -96,6 +89,13 @@ export class Renderer {
     ctx.clip();
     this.#elements(ctx, scene.elements);
     ctx.restore();
+  }
+
+  // Clears the canvas and forgets the placement of the last scene.
+  clear(): void {
+    this.#place = { scale: 1, x: 0, y: 0 };
+    this.#ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.#ctx.clearRect(0, 0, this.#canvas.width, this.#canvas.height);
   }
 
   #elements(ctx: Context, elements: Element[]): void {
@@ -314,6 +314,23 @@ export class Renderer {
     ctx.clearRect(0, 0, c.width, c.height);
     return c;
   }
+}
+
+// The placement that fits a scene of `width` by `height` in a canvas of
+// `canvasWidth` by `canvasHeight`, centered, at any scale.
+function fit(
+  width: number,
+  height: number,
+  canvasWidth: number,
+  canvasHeight: number,
+): Placement {
+  if (width <= 0 || height <= 0) return { scale: 1, x: 0, y: 0 };
+  const scale = Math.min(canvasWidth / width, canvasHeight / height);
+  return {
+    scale,
+    x: (canvasWidth - width * scale) / 2,
+    y: (canvasHeight - height * scale) / 2,
+  };
 }
 
 const MAX_PERIODS = 256;
