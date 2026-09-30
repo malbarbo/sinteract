@@ -24,8 +24,5 @@ const script = `<script type="module">${
   bundle.replaceAll("</script", "<\\/script")
 }</script>`;
 const output = html.replace(tag, () => script);
-await Deno.mkdir(outputPath.substring(0, outputPath.lastIndexOf("/")) || ".", {
-  recursive: true,
-});
 await Deno.writeTextFile(outputPath, output);
 console.log(`${outputPath}: ${(output.length / 1024).toFixed(1)} KB`);

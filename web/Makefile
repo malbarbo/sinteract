@@ -6,6 +6,7 @@ SRC_TS = $(sort $(shell find src -name '*.ts'))
 SCHEMA = ../schema/scene.capnp ../schema/event.capnp ../schema/protocol.capnp
 
 dist/index.html: build/app.js src/index.html tools/inline.ts
+	@mkdir -p $(@D)
 	deno run --allow-read --allow-write tools/inline.ts build/app.js src/index.html $@
 
 build/app.js: $(SRC_TS) deno.json
