@@ -207,6 +207,10 @@ class Pad {
     let pad = this.#index === null ? null : pads[this.#index];
     if (this.#index !== null && !pad?.connected) {
       this.#index = null;
+      // The engine keeps a button of a lost pad held until its up.
+      for (const button of this.#pressed) {
+        this.#send({ kind: "pad", action: { kind: "up", button } });
+      }
       this.#pressed.clear();
       this.#send({ kind: "pad", action: { kind: "disconnected" } });
     }
