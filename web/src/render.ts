@@ -26,6 +26,9 @@ import {
 
 type Context = CanvasRenderingContext2D;
 
+// A part of a text, which fills or strokes itself with the style of `ctx`.
+type Shape = (ctx: Context, fill: boolean) => void;
+
 // Where the scene goes on the canvas, in the pixels of the canvas.
 export interface Placement {
   scale: number;
@@ -158,74 +161,68 @@ export class Renderer {
     const drawsFill = isVisible(t.fill);
     const drawsStroke = isVisible(t.stroke) && t.strokeWidth > 0;
     if (!(t.size > 0) || !(drawsFill || drawsStroke)) return;
-    for (const underline of t.underline ? [false, true] : [false]) {
-      if (drawsFill) this.#textPart(ctx, t, t.fill, true, underline);
-      if (drawsStroke) this.#textPart(ctx, t, t.stroke, false, underline);
-    }
-  }
-
-  // Paints the fill or the stroke of the glyphs or of the underline of `t`
-  // with `paint`. A gradient goes through a mask of the shape.
-  #textPart(
-    ctx: Context,
-    t: TextElement,
-    paint: Paint,
-    isFill: boolean,
-    underline: boolean,
-  ): void {
-    if (paint.kind === "solid") {
-      this.#glyphs(ctx, t, cssColor(paint.color), isFill, underline);
-      return;
-    }
-    const mask = this.#scratch();
-    const m = context(mask);
-    this.#glyphs(m, t, "#000", isFill, underline);
-    m.globalCompositeOperation = "source-in";
-    this.#base(m);
-    m.fillStyle = this.#paint(m, paint);
-    m.fillRect(0, 0, this.#width, this.#height);
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(mask, 0, 0);
-    ctx.restore();
-    this.#pool.push(mask);
-  }
-
-  // Fills or strokes the glyphs or the underline of `t` with `color`.
-  #glyphs(
-    ctx: Context,
-    t: TextElement,
-    color: string,
-    isFill: boolean,
-    underline: boolean,
-  ): void {
     const face = faceOf(t.family, t.weight);
     const text = drawnText(t.text);
-    this.#transform(ctx, t.transform);
-    ctx.font = cssFont(t, face);
+    const font = cssFont(t, face);
+    ctx.font = font;
     ctx.fontKerning = "none";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "alphabetic";
-    const em = t.size / UNITS_PER_EM;
     const width = ctx.measureText(text).width;
+    const em = t.size / UNITS_PER_EM;
     const left = -width / 2;
     const baseline = (face.ascender + face.descender) / 2 * em;
     // The position of the underline is its top, with y up.
     const top = baseline - face.underlinePosition * em;
     const thickness = face.underlineThickness * em;
-    if (isFill) {
-      ctx.fillStyle = color;
-      if (underline) ctx.fillRect(left, top, width, thickness);
-      else ctx.fillText(text, left, baseline);
-      return;
+    const glyphs: Shape = (c, fill) => {
+      c.font = font;
+      c.fontKerning = "none";
+      c.textAlign = "left";
+      c.textBaseline = "alphabetic";
+      if (fill) c.fillText(text, left, baseline);
+      else c.strokeText(text, left, baseline);
+    };
+    const underline: Shape = (c, fill) => {
+      if (fill) c.fillRect(left, top, width, thickness);
+      else c.strokeRect(left, top, width, thickness);
+    };
+    for (const shape of t.underline ? [glyphs, underline] : [glyphs]) {
+      if (drawsFill) this.#textPart(ctx, t, shape, t.fill, true);
+      if (drawsStroke) this.#textPart(ctx, t, shape, t.stroke, false);
     }
-    ctx.strokeStyle = color;
-    ctx.lineWidth = t.strokeWidth;
-    ctx.lineJoin = "miter";
-    ctx.miterLimit = TEXT_MITER_LIMIT;
-    ctx.setLineDash([]);
-    if (underline) ctx.strokeRect(left, top, width, thickness);
-    else ctx.strokeText(text, left, baseline);
+  }
+
+  // Fills or strokes `shape` of `t` with `paint`. A gradient goes through a
+  // mask of the shape.
+  #textPart(
+    ctx: Context,
+    t: TextElement,
+    shape: Shape,
+    paint: Paint,
+    fill: boolean,
+  ): void {
+    const mask = paint.kind === "solid" ? null : this.#scratch();
+    const c = mask ? context(mask) : ctx;
+    const color = paint.kind === "solid" ? cssColor(paint.color) : "#000";
+    this.#transform(c, t.transform);
+    if (fill) c.fillStyle = color;
+    else {
+      c.strokeStyle = color;
+      c.lineWidth = t.strokeWidth;
+      c.lineJoin = "miter";
+      c.miterLimit = TEXT_MITER_LIMIT;
+      c.setLineDash([]);
+    }
+    shape(c, fill);
+    if (!mask) return;
+    c.globalCompositeOperation = "source-in";
+    this.#base(c);
+    c.fillStyle = this.#paint(c, paint);
+    c.fillRect(0, 0, this.#width, this.#height);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(mask, 0, 0);
+    ctx.restore();
+    this.#pool.push(mask);
   }
 
   // A canvas style for `paint`, in the space of the scene.
@@ -391,7 +388,6 @@ function toPath2D(segments: Segments, closed: boolean): Path2D {
   return path;
 }
 
-// The color of a text without a gradient.
 function cssColor(c: Rgba): string {
   const a = Math.min(Math.max(c.a, 0), 1);
   return `rgba(${c.r},${c.g},${c.b},${a})`;
