@@ -40,8 +40,8 @@ use tokio::time::MissedTickBehavior;
 const USAGE: &str = "usage: sinteract-test-server [--addr ADDR] [--players N] \
                      [--page FILE] ENGINE [ARGS...]";
 
-/// The period of the tick, 30 Hz.
-const TICK: Duration = Duration::from_millis(33);
+/// The period of the tick, 60 Hz.
+const TICK: Duration = Duration::from_micros(16_667);
 
 struct Options {
     addr: SocketAddr,
