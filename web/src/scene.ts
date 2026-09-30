@@ -385,30 +385,42 @@ function rgbaFromU32(c: number): Rgba {
 // damage.
 function readSegments(verbData: $.Data, coordList: $.List<number>): Segments {
   const wire = verbData.toUint8Array();
-  const coords = Float32Array.from(coordList.toArray());
-  const verbs: number[] = [VERB_MOVE];
-  const out: number[] = [0, 0];
+  // A view of the list in the message, as Data.toUint8Array takes. The wire
+  // is little-endian, as every browser.
+  const content = $.utils.getContent(coordList);
+  const coords = new Float32Array(
+    content.segment.buffer,
+    content.byteOffset,
+    coordList.length,
+  );
+  // The implicit move at the start adds one verb and two coords at most.
+  const verbs = new Uint8Array(wire.length + 1);
+  const out = new Float32Array(coords.length + 2);
+  verbs[0] = VERB_MOVE;
+  let nv = 1;
+  let no = 2;
   let i = 0;
   for (const verb of wire) {
     const n = coordCount(verb);
     if (i + n > coords.length) throw mismatch(wire, coords);
-    if (verb === VERB_MOVE && verbs[verbs.length - 1] === VERB_MOVE) {
-      out[out.length - 2] = coords[i];
-      out[out.length - 1] = coords[i + 1];
+    if (verb === VERB_MOVE && verbs[nv - 1] === VERB_MOVE) {
+      out[no - 2] = coords[i];
+      out[no - 1] = coords[i + 1];
     } else {
-      verbs.push(verb);
-      for (let k = 0; k < n; k++) out.push(coords[i + k]);
+      verbs[nv++] = verb;
+      out.set(coords.subarray(i, i + n), no);
+      no += n;
     }
     i += n;
   }
   if (i !== coords.length) throw mismatch(wire, coords);
-  if (verbs[verbs.length - 1] === VERB_MOVE) {
-    verbs.pop();
-    out.length -= 2;
+  if (verbs[nv - 1] === VERB_MOVE) {
+    nv--;
+    no -= 2;
   }
   return {
-    verbs: Uint8Array.from(verbs),
-    coords: finite(Float32Array.from(out)),
+    verbs: verbs.subarray(0, nv),
+    coords: finite(out.subarray(0, no)),
   };
 }
 
