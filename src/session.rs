@@ -183,6 +183,8 @@ pub enum StartError {
     Payload(wire::Error),
     /// The first message is not a start.
     NoStart,
+    /// The start has a number of players that the game does not take.
+    Players { players: usize, range: PlayerRange },
 }
 
 impl std::fmt::Display for StartError {
@@ -192,6 +194,12 @@ impl std::fmt::Display for StartError {
             StartError::End => write!(f, "the server ended before the start"),
             StartError::Payload(e) => write!(f, "the first message does not decode: {e}"),
             StartError::NoStart => write!(f, "the first message is not a start"),
+            StartError::Players { players, range } => write!(
+                f,
+                "the game takes from {} to {} players, not {players}",
+                range.min(),
+                range.max()
+            ),
         }
     }
 }
@@ -201,7 +209,7 @@ impl std::error::Error for StartError {
         match self {
             StartError::Io(e) => Some(e),
             StartError::Payload(e) => Some(e),
-            StartError::End | StartError::NoStart => None,
+            StartError::End | StartError::NoStart | StartError::Players { .. } => None,
         }
     }
 }
@@ -252,13 +260,13 @@ const READ_BYTES: usize = 64 * 1024;
 impl<R: Read, W: Write> Session<R, W> {
     /// The session of a game of `players`, which reads the server from `r`
     /// and writes to it on `w`, with each player of the start and its
-    /// nickname. It writes the hello to `w`, flushes `w`, since
-    /// the server sends nothing until it reads the hello, and blocks until
-    /// the start. The hello is the first message of the engine, and the
-    /// only one. The players are the same until the end. A message before
-    /// the start breaks the rules of the server, and the session does not
-    /// start. An error of `r` ends the wait as well, since the hello went
-    /// out and cannot go out again.
+    /// nickname. It writes the hello to `w`, flushes `w`, since the server
+    /// sends nothing until it reads the hello, and blocks until the start.
+    /// The hello is the first message of the engine, and the only one. The
+    /// players are the same until the end. A message before the start, and
+    /// a start of a number of players outside `players`, break the rules of
+    /// the server, and the session does not start. An error of `r` ends the
+    /// wait as well, since the hello went out and cannot go out again.
     pub fn start(
         players: PlayerRange,
         r: R,
@@ -278,6 +286,12 @@ impl<R: Read, W: Write> Session<R, W> {
             next_id: 0,
         };
         let nicknames = session.read_start()?;
+        if !players.contains(nicknames.len()) {
+            return Err(StartError::Players {
+                players: nicknames.len(),
+                range: players,
+            });
+        }
         session.players = u32::try_from(nicknames.len()).expect("a start has at most 1024 players");
         let players = (1..)
             .map_while(NonZeroU32::new)
@@ -796,6 +810,18 @@ mod tests {
             let mut stream = first;
             stream.extend_from_slice(&start());
             assert!(matches!(no_start(&stream), StartError::NoStart));
+        }
+    }
+
+    #[test]
+    fn a_start_outside_the_range_stops_the_start() {
+        for nicknames in [&[][..], &["Ana", "Beto", "Caio"]] {
+            let mut stream = Vec::new();
+            server_to_engine::write_start(&mut stream, nicknames).unwrap();
+            assert!(matches!(
+                no_start(&stream),
+                StartError::Players { players: n, range } if n == nicknames.len() && range == players()
+            ));
         }
     }
 
