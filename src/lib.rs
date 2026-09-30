@@ -18,14 +18,15 @@
 //! view and encodes its input. The three convert to and from Cap'n Proto
 //! with the codec of `wire`, whose [`wire::Error`] they report.
 //!
-//! The feature `render` carries the pixmap and PDF renderers and the Sixel
-//! encoder, and the displays turn it on. A server that only encodes and
+//! The feature `render` carries the pixmap and PDF renderers, and the
+//! displays turn it on. A server that only encodes and
 //! decodes messages leaves it out, and keeps the scene, the text, the SVG
 //! renderer and the codec.
 //!
-//! [`display`] shows a scene and reads the input back, through the
-//! terminal or a winit window. Only the Sixel encoder of it builds on
-//! wasm32. The rest needs threads, a tty, a window or platform FFI.
+//! `display` shows a scene and reads the input back, through the terminal
+//! or a winit window. It needs the feature `terminal` or `window`, and it
+//! does not build on wasm32, because it needs threads, a tty, a window or
+//! platform FFI.
 
 // A test that fails on an unwrap or a panic reports the failure well
 // enough.
@@ -35,6 +36,10 @@
 )]
 
 pub mod asset;
+#[cfg(all(
+    any(feature = "terminal", feature = "window"),
+    not(target_arch = "wasm32")
+))]
 pub mod display;
 pub mod event;
 mod outline;

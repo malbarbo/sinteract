@@ -14,66 +14,44 @@
 //! [`crate::session::Session`] with a server, with the same loop.
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the
-//! window, and `open_native` needs both. Only `sixel`, with the feature
-//! `render`, builds on wasm32. The rest needs threads, a tty, a window or
-//! platform FFI. In a browser the page, which hosts the engine, implements
-//! `wait_event` itself.
+//! window, and `open_native` needs both. In a browser the page, which hosts
+//! the engine, implements `wait_event` itself.
 
 // Most links above go to items that only a native build with both
 // features has.
 #![cfg_attr(
-    not(all(feature = "terminal", feature = "window", not(target_arch = "wasm32"))),
+    not(all(feature = "terminal", feature = "window")),
     allow(rustdoc::broken_intra_doc_links)
 )]
 
-#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+#[cfg(feature = "terminal")]
 mod sixel;
 
 #[cfg(all(feature = "window", target_os = "macos"))]
 mod display_link;
-#[cfg(all(
-    any(feature = "terminal", feature = "window"),
-    not(target_arch = "wasm32")
-))]
 mod driver;
-#[cfg(all(
-    any(feature = "terminal", feature = "window"),
-    not(target_arch = "wasm32")
-))]
 mod inbox;
 #[cfg(all(feature = "terminal", unix))]
 mod shm;
-#[cfg(all(feature = "terminal", feature = "window", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "terminal", feature = "window"))]
 mod stage;
-#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+#[cfg(feature = "terminal")]
 mod term_input;
-#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+#[cfg(feature = "terminal")]
 mod term_query;
-#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+#[cfg(feature = "terminal")]
 pub mod terminal;
-#[cfg(all(
-    any(feature = "terminal", feature = "window"),
-    not(target_arch = "wasm32")
-))]
 mod tick_clock;
-#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+#[cfg(feature = "window")]
 pub mod window;
 
-#[cfg(all(feature = "terminal", feature = "window", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "terminal", feature = "window"))]
 pub use driver::open_native;
-#[cfg(all(
-    any(feature = "terminal", feature = "window"),
-    not(target_arch = "wasm32")
-))]
 pub use driver::{Display, NoGraphics, OpenError, PresentError};
-#[cfg(all(
-    any(feature = "terminal", feature = "window"),
-    not(target_arch = "wasm32")
-))]
 pub use inbox::{Closed, Sender};
-#[cfg(all(feature = "terminal", feature = "window", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "terminal", feature = "window"))]
 pub use stage::{Stage, StageError, StageEvent};
-#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+#[cfg(feature = "terminal")]
 pub use terminal::{PrintError, Printer, Terminal, TerminalOptions};
-#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+#[cfg(feature = "window")]
 pub use window::Window;
