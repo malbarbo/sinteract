@@ -7,7 +7,7 @@
 //! cargo build --release --examples
 //! cargo run --release --manifest-path web/server/Cargo.toml -- \
 //!     --players 1 target/release/examples/engine 20
-//! target/release/examples/remote 'http://127.0.0.1:8080/?token=...'
+//! target/release/examples/remote 'http://127.0.0.1:8765/?token=...'
 //! ```
 //!
 //! At the end it prints to stderr the rate of the frames and the gaps

@@ -136,7 +136,7 @@ async fn main() -> ExitCode {
 
 fn parse(args: Vec<String>) -> Result<Options, String> {
     let mut options = Options {
-        addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
+        addr: SocketAddr::from(([127, 0, 0, 1], 8765)),
         players: 2,
         page: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../dist/index.html")),
         engine: String::new(),
