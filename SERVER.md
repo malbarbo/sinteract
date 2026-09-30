@@ -309,6 +309,9 @@ parar. O esboço abaixo acorda as duas depois de toda outra chamada, o que
 
 - A view manda um `resize` como primeiro evento de cada conexão, para que
   a engine saiba o tamanho dela.
+- O servidor liga o `TCP_NODELAY` em cada conexão. Sem ele, o algoritmo de
+  Nagle segura um frame até o ACK do anterior, e a 60 Hz os frames chegam
+  à view em pares, o que dá 30 quadros por segundo em tempos irregulares.
 - O servidor usa o ping e o pong do WebSocket. O navegador responde ao
   ping sozinho, até numa aba em segundo plano, então não há mensagem de
   keep-alive.
@@ -346,6 +349,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::serve::ListenerExt;
 use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
@@ -450,7 +454,9 @@ async fn main() -> io::Result<()> {
         .route("/start", post(start))
         .route("/play", get(upgrade))
         .with_state(room.clone());
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+        .await?
+        .tap_io(|tcp| _ = tcp.set_nodelay(true));
     tokio::select! {
         r = axum::serve(listener, app) => r?,
         _ = tokio::signal::ctrl_c() => {
