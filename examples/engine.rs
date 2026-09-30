@@ -20,8 +20,8 @@
 #![cfg_attr(target_arch = "wasm32", no_main)]
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
 use std::process::ExitCode;
-use std::time::Instant;
 
 use sinteract::display::{Stage, StageEvent, TerminalOptions};
 use sinteract::event::{InputEvent, Interrupt, KeyKind, key};
@@ -51,7 +51,7 @@ fn main() -> ExitCode {
     loop {
         match stage.wait(None) {
             Ok(StageEvent::Tick) => {
-                game.tick();
+                game.tick(stage.tick_rate());
                 if let Err(e) = stage.present(Target::All, game.scene()) {
                     eprintln!("engine: {e}");
                     break;
@@ -90,10 +90,9 @@ struct Game {
     /// The image of the paddle, for the color of `moves`. A move encodes it
     /// again, and a frame without a move reuses it.
     paddle_image: Image,
-    /// When the last tick arrived.
-    last_tick: Option<Instant>,
 }
 
+/// A ball at (`x`, `y`), which moves by (`vx`, `vy`) pixels a second.
 struct Ball {
     x: f32,
     y: f32,
@@ -135,22 +134,14 @@ impl Game {
             moves: 0,
             image_size,
             paddle_image: paddle_image(0, image_size),
-            last_tick: None,
         }
     }
 
-    /// Move the balls by the time since the last tick.
-    fn tick(&mut self) {
-        let now = Instant::now();
-        let dt = self
-            .last_tick
-            .replace(now)
-            .map_or(0.0, |t| (now - t).as_secs_f32());
-        // A long pause would throw the balls through the walls.
-        self.step(dt.min(0.1));
-    }
-
-    fn step(&mut self, dt: f32) {
+    /// Move each ball by one tick at `rate` thousandths of a hertz. A tick
+    /// carries no time, so a ball moves by the same step at each tick, and
+    /// at the same speed at any rate.
+    fn tick(&mut self, rate: NonZeroU32) {
+        let dt = 1000.0 / rate.get() as f32;
         for b in &mut self.balls {
             b.x += b.vx * dt;
             b.y += b.vy * dt;
