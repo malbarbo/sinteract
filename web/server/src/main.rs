@@ -54,20 +54,24 @@ struct Options {
 /// The phase of the room. The lobby becomes a game at the hello.
 enum Phase {
     Lobby(LobbyCore),
-    Game(ServerCore),
+    Game(Game),
     /// The room ended before the start.
     Over,
 }
 
-/// The room: the phase behind a mutex, the two ways to wake the tasks, and
-/// the player of each token.
+/// The room after the start, with the player of each token.
+struct Game {
+    core: ServerCore,
+    tokens: HashMap<String, Player>,
+}
+
+/// The room: the phase behind a mutex and the two ways to wake the tasks.
 struct Room {
     phase: Mutex<Phase>,
     /// Wakes the task that writes to fd 3.
     to_engine: Notify,
     /// Wakes the tasks of the views.
     views: watch::Sender<()>,
-    tokens: Mutex<HashMap<String, Player>>,
     players: usize,
     addr: SocketAddr,
     page: PathBuf,
@@ -82,7 +86,7 @@ impl Room {
     /// room that ended before it.
     fn core<T>(&self, f: impl FnOnce(&mut ServerCore) -> T) -> Option<T> {
         match &mut *self.phase() {
-            Phase::Game(core) => Some(f(core)),
+            Phase::Game(game) => Some(f(&mut game.core)),
             Phase::Lobby(_) | Phase::Over => None,
         }
     }
@@ -103,7 +107,7 @@ impl Room {
     fn is_over(&self) -> bool {
         match &*self.phase() {
             Phase::Lobby(_) => false,
-            Phase::Game(core) => core.is_over(),
+            Phase::Game(game) => game.core.is_over(),
             Phase::Over => true,
         }
     }
@@ -191,7 +195,6 @@ async fn run(options: Options) -> io::Result<()> {
         phase: Mutex::new(Phase::Lobby(LobbyCore::new())),
         to_engine: Notify::new(),
         views: watch::channel(()).0,
-        tokens: Mutex::default(),
         players: options.players,
         addr: options.addr,
         page: options.page,
@@ -275,13 +278,13 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
             Phase::Over,
             vec!["the engine ended before the start".into()],
         ),
-        (Phase::Game(mut core), read) => {
+        (Phase::Game(mut game), read) => {
             let errors = match read {
-                Some(bytes) => core.from_engine(bytes),
-                None => core.engine_ended().into_iter().collect(),
+                Some(bytes) => game.core.from_engine(bytes),
+                None => game.core.engine_ended().into_iter().collect(),
             };
             let errors = errors.iter().map(ToString::to_string).collect();
-            (Phase::Game(core), errors)
+            (Phase::Game(game), errors)
         }
         (Phase::Over, _) => (Phase::Over, Vec::new()),
     };
@@ -299,13 +302,13 @@ fn start(room: &Room, lobby: LobbyCore) -> (Phase, Vec<String>) {
         Ok(core) => core,
         Err((_, e)) => return (Phase::Over, vec![e.to_string()]),
     };
-    let mut tokens = room.tokens.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut tokens = HashMap::new();
     for (player, nickname) in core.players() {
         let token = format!("{:032x}", rand::random::<u128>());
         eprintln!("{nickname}: http://{}/?token={token}", room.addr);
         tokens.insert(token, player);
     }
-    (Phase::Game(core), Vec::new())
+    (Phase::Game(Game { core, tokens }), Vec::new())
 }
 
 /// The tick. A late tick does not turn into a burst.
@@ -334,9 +337,9 @@ async fn upgrade(
     Query(q): Query<HashMap<String, String>>,
     State(room): State<Arc<Room>>,
 ) -> Response {
-    let player = q.get("token").and_then(|t| {
-        let tokens = room.tokens.lock().unwrap_or_else(PoisonError::into_inner);
-        tokens.get(t).copied()
+    let player = q.get("token").and_then(|t| match &*room.phase() {
+        Phase::Game(game) => game.tokens.get(t).copied(),
+        Phase::Lobby(_) | Phase::Over => None,
     });
     let Some(player) = player else {
         return StatusCode::FORBIDDEN.into_response();
