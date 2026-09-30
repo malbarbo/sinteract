@@ -26,12 +26,6 @@ export function listen(
   // The key that went down with each physical key, so the up names the key
   // that the down named even when a modifier changed in between.
   const held = new Map<string, string>();
-  const releaseKeys = () => {
-    for (const key of held.values()) {
-      send({ kind: "key", type: "up", key, modifiers: NO_MODIFIERS });
-    }
-    held.clear();
-  };
 
   globalThis.addEventListener("keydown", (e) => {
     if (!claims(e)) return;
@@ -48,22 +42,35 @@ export function listen(
     held.delete(e.code);
     send({ kind: "key", type: "up", key, modifiers: modifiersOf(e) });
   }, { signal });
-  // A key that comes up while the page has no focus sends no keyup, so the
-  // engine gets the up of every held key when the focus goes.
-  globalThis.addEventListener("blur", releaseKeys, { signal });
 
-  // The buttons of the last mouse event, as the engine knows them.
-  let mouseButtons = 0;
-  const mouse = (
-    e: PointerEvent | WheelEvent,
-    action: MouseAction,
-    buttons = buttonsOf(e.buttons),
-  ) => {
+  // The last mouse event, as the engine knows it.
+  const last = { x: 0, y: 0, buttons: 0 };
+  const mouse = (e: PointerEvent | WheelEvent, action: MouseAction) => {
     const rect = canvas.getBoundingClientRect();
-    const [x, y] = toScene(e.clientX - rect.left, e.clientY - rect.top);
-    mouseButtons = buttons;
-    send({ kind: "mouse", x, y, modifiers: modifiersOf(e), buttons, action });
+    [last.x, last.y] = toScene(e.clientX - rect.left, e.clientY - rect.top);
+    last.buttons = buttonsOf(e.buttons);
+    send({ kind: "mouse", ...last, modifiers: modifiersOf(e), action });
   };
+  // Sends the up of each held button, where the mouse was last.
+  const releaseButtons = () => {
+    for (let button = 0; button <= MouseButton.FORWARD; button++) {
+      const bit = 1 << button;
+      if (!(last.buttons & bit)) continue;
+      last.buttons &= ~bit;
+      const action: MouseAction = { kind: "up", button: button as MouseButton };
+      send({ kind: "mouse", ...last, modifiers: NO_MODIFIERS, action });
+    }
+  };
+
+  // A key or a button that comes up while the page has no focus sends no up,
+  // so the engine gets the up of each one when the focus goes.
+  globalThis.addEventListener("blur", () => {
+    for (const key of held.values()) {
+      send({ kind: "key", type: "up", key, modifiers: NO_MODIFIERS });
+    }
+    held.clear();
+    releaseButtons();
+  }, { signal });
   // Sends the down or the up of the button of `e`, from its bit in
   // `e.buttons`.
   const press = (e: PointerEvent) => {
@@ -92,17 +99,7 @@ export function listen(
   // A pointer that the system cancels, as for a gesture of the system,
   // sends no pointerup, so the engine gets the up of each held button.
   canvas.addEventListener("pointercancel", (e) => {
-    if (!e.isPrimary) return;
-    for (let button = 0; button <= MouseButton.FORWARD; button++) {
-      const bit = 1 << button;
-      if (mouseButtons & bit) {
-        mouse(
-          e,
-          { kind: "up", button: button as MouseButton },
-          mouseButtons & ~bit,
-        );
-      }
-    }
+    if (e.isPrimary) releaseButtons();
   }, { signal });
   canvas.addEventListener("pointerleave", (e) => {
     if (e.isPrimary) mouse(e, { kind: "leave" });
