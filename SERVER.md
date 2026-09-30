@@ -59,6 +59,11 @@ O `stdin`, o `stdout` e o `stderr` ficam livres para o programa. Um `print`
 do aluno não passa pelos pipes da sessão e não estraga a partida. O
 servidor pode guardar o `stdout` e o `stderr` como log.
 
+A engine roda num grupo de processos próprio (`process_group(0)`). Um
+Ctrl-C no terminal do servidor manda SIGINT ao grupo inteiro, e a engine
+no mesmo grupo morreria com o sinal, sem a tela final. No grupo próprio,
+só o servidor recebe o sinal, e ele encerra a sala com o `close`.
+
 A engine não tem relógio. Cada passo do jogo começa com uma leitura
 bloqueante do fd 3, e sem `tick` o jogo espera.
 
@@ -416,6 +421,7 @@ async fn main() -> io::Result<()> {
             .args(["server", "jogo.gleam"])
             .env("SINTERACT_SESSION", "1")
             .stdin(Stdio::null())
+            .process_group(0) // o Ctrl-C do servidor não chega à engine
             .kill_on_drop(true)
             .fd_mappings(vec![
                 FdMapping { parent_fd: OwnedFd::from(engine_reads), child_fd: 3 },
@@ -445,8 +451,10 @@ async fn main() -> io::Result<()> {
     tokio::select! {
         r = axum::serve(listener, app) => r?,
         _ = tokio::signal::ctrl_c() => {
-            room.with(ServerCore::close);
-            let _ = reader.await; // a engine ainda manda a tela final
+            // No lobby não há tela final, e o kill_on_drop mata a engine.
+            if room.with(ServerCore::close).is_some() {
+                let _ = reader.await; // a engine ainda manda a tela final
+            }
         }
     }
     Ok(())
