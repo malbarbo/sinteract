@@ -7,7 +7,9 @@
 #
 # Each direction has its own root, named after it, EngineToServer,
 # ServerToEngine, ViewToServer and ServerToView, so no side can receive a
-# message that only another side sends.
+# message that only another side sends. The first message of the engine
+# has the root Hello, and the first message of the server has the root
+# Start. Neither comes again, so neither is an arm of a union.
 #
 # This file is the source of truth for the session. The same rules as
 # scene.capnp apply. See its header for how to regenerate the bindings.
@@ -36,28 +38,27 @@ struct Frame {
     scene  @1 :Data;
 }
 
-# The players that a game takes, with 1 <= minPlayers <= maxPlayers <= 1024.
+# The root of the first message of the engine, and of no other. It gives
+# the players that the game takes, with 1 <= minPlayers <= maxPlayers <=
+# 1024, and the server starts the session if the game takes its players.
 struct Hello {
     minPlayers @0 :UInt32;
     maxPlayers @1 :UInt32;
 }
 
-# Engine to server. The engine sends an asset before the first frame that
-# draws it, and the server keeps it for the views while the room has room
-# for it.
+# Engine to server, after the hello. The engine sends an asset before the
+# first frame that draws it, and the server keeps it for the views while
+# the room has room for it.
 struct EngineToServer {
     union {
         # One per bitmap, before the frames that draw it.
         asset @0 :Asset;
         # One per repaint.
         frame @1 :Frame;
-        # The first message of the engine, and only once. It goes to the
-        # server, which starts the session if the game takes its players.
-        hello @2 :Hello;
         # To the server, as the engine reads a tick. The server sends the
         # next tick only after it, so the ticks of an engine slower than
         # the timer do not pile up.
-        tickTaken @3 :Void;
+        tickTaken @2 :Void;
     }
 }
 
@@ -77,7 +78,8 @@ struct Member {
     nickname @0 :Text;
 }
 
-# The players of the session, who are the same until its end.
+# The root of the first message of the server, and of no other. It gives
+# the players of the session, who are the same until its end.
 struct Start {
     members @0 :List(Member);
 }
@@ -93,19 +95,17 @@ struct PlayerInput {
 # that a sequence number can join it as a field.
 struct Tick {}
 
-# Server to engine. A start and a tick are about the whole session.
+# Server to engine, after the start. A tick is about the whole session.
 struct ServerToEngine {
     union {
         # The input of a player.
         input @0 :PlayerInput;
-        # The first message of the session.
-        start @1 :Start;
         # Time for the engine to draw the next frames.
-        tick  @2 :Tick;
+        tick  @1 :Tick;
         # The server dropped the asset of this id, to keep the room under
         # its limits. The engine sends the image again, under a new id,
         # before a frame that draws it.
-        lost  @3 :UInt32;
+        lost  @2 :UInt32;
     }
 }
 

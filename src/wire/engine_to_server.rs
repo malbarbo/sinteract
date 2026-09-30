@@ -1,10 +1,10 @@
-//! The messages of the engine, in the `EngineToServer` union, which go to
-//! the server.
+//! The messages of the engine, which go to the server.
 //!
-//! The engine says first how many players the game takes, in a hello for
-//! the server. Then it uploads each image as an asset, before the first
-//! frame that draws it, and sends a frame per repaint, for one player or
-//! for all of them. It tells the server as it takes each tick. The engine
+//! The engine says first how many players the game takes, in a message
+//! whose root is a `Hello`. Every message after it is an `EngineToServer`.
+//! The engine uploads each image as an asset, before the first frame that
+//! draws it, and sends a frame per repaint, for one player or for all of
+//! them. It tells the server as it takes each tick. The engine
 //! ends the session with the end of its stream.
 //!
 //! [`crate::session::Session::write_frame`] writes the assets and the
@@ -52,7 +52,6 @@ pub enum Arm {
         ids: BTreeSet<u32>,
         to_view: Arc<[u8]>,
     },
-    Hello(PlayerRange),
     TickTaken,
 }
 
@@ -92,8 +91,7 @@ pub fn write_asset(w: &mut impl Write, id: u32, blob: &[u8]) -> io::Result<()> {
 /// the ids of the bitmaps and not the rest of the scene, and of an asset
 /// it does not decode the image. It copies an asset and the scene of a
 /// frame into a message of [`super::server_to_view`]. `None` for an arm
-/// from a newer schema. A hello whose players are not a [`PlayerRange`]
-/// is an error.
+/// from a newer schema.
 pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
     decode_root::<engine_to_server::Owned, _>(payload, |msg| {
         let Ok(which) = msg.which() else {
@@ -120,15 +118,18 @@ pub fn arm(payload: &[u8]) -> Result<Option<Arm>, Error> {
                     to_view: server_to_view::encode_frame(scene),
                 }
             }
-            engine_to_server::Hello(h) => Arm::Hello(read_hello(h?)?),
             engine_to_server::TickTaken(()) => Arm::TickTaken,
         }))
     })
 }
 
-pub(super) fn read_hello(h: hello::Reader<'_>) -> Result<PlayerRange, Error> {
-    let (min, max) = (h.get_min_players(), h.get_max_players());
-    PlayerRange::new(min, max).ok_or(Error::PlayerRange { min, max })
+/// The players of the hello in `payload`, a message with no envelope. A
+/// hello whose players are not a [`PlayerRange`] is an error.
+pub fn read_hello(payload: &[u8]) -> Result<PlayerRange, Error> {
+    decode_root::<hello::Owned, _>(payload, |h| {
+        let (min, max) = (h.get_min_players(), h.get_max_players());
+        PlayerRange::new(min, max).ok_or(Error::PlayerRange { min, max })
+    })
 }
 
 pub(super) fn frame_message(
@@ -152,9 +153,7 @@ pub(super) fn frame_message(
 /// A hello for `min` to `max` players, which a test may set out of range.
 pub(super) fn hello_message(min: u32, max: u32) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let mut hello = builder
-        .init_root::<engine_to_server::Builder>()
-        .init_hello();
+    let mut hello = builder.init_root::<hello::Builder>();
     hello.set_min_players(min);
     hello.set_max_players(max);
     builder

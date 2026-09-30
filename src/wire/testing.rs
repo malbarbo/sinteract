@@ -99,12 +99,20 @@ pub(crate) enum Message {
         player: Option<NonZeroU32>,
         scene: Scene,
     },
-    Hello(PlayerRange),
     /// The engine took a tick. It goes to the server alone.
     TickTaken,
 }
 
-/// Read the next message of the engine, as [`decode`] does. Returns
+/// Read the hello, the first message of the engine. Returns `None` at the
+/// end of the stream.
+pub(crate) fn read_hello(r: &mut impl Read) -> Result<Option<PlayerRange>, Error> {
+    read_next(r, Side::Engine, |payload| {
+        engine_to_server::read_hello(payload).map(Some)
+    })
+}
+
+/// Read the next message of the engine after the hello, as [`decode`]
+/// does. Returns
 /// `None` at the end of the stream.
 pub(crate) fn read(r: &mut impl Read) -> Result<Option<Message>, Error> {
     read_next(r, Side::Engine, decode)
@@ -147,9 +155,6 @@ fn decode_message(
                     read_scene(s, &test_image)
                 })?,
             }))
-        }
-        protocol_capnp::engine_to_server::Hello(h) => {
-            Ok(Some(Message::Hello(engine_to_server::read_hello(h?)?)))
         }
         protocol_capnp::engine_to_server::TickTaken(()) => Ok(Some(Message::TickTaken)),
     }

@@ -141,8 +141,6 @@ pub enum SessionEvent {
 pub enum SessionError {
     /// The message does not decode.
     Payload(wire::Error),
-    /// A start came after the first one.
-    SecondStart,
     /// An input came for a player that is not in the start.
     NoPlayer(NonZeroU32),
 }
@@ -151,7 +149,6 @@ impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SessionError::Payload(e) => write!(f, "message does not decode: {e}"),
-            SessionError::SecondStart => write!(f, "a start came after the first one"),
             SessionError::NoPlayer(player) => {
                 write!(
                     f,
@@ -166,7 +163,7 @@ impl std::error::Error for SessionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             SessionError::Payload(e) => Some(e),
-            SessionError::SecondStart | SessionError::NoPlayer(_) => None,
+            SessionError::NoPlayer(_) => None,
         }
     }
 }
@@ -179,10 +176,8 @@ pub enum StartError {
     Io(io::Error),
     /// The stream ended before the start.
     End,
-    /// The first message does not decode.
+    /// The first message does not decode as a start.
     Payload(wire::Error),
-    /// The first message is not a start.
-    NoStart,
     /// The start has a number of players that the game does not take.
     Players { players: usize, range: PlayerRange },
 }
@@ -192,8 +187,7 @@ impl std::fmt::Display for StartError {
         match self {
             StartError::Io(e) => write!(f, "cannot start the session: {e}"),
             StartError::End => write!(f, "the server ended before the start"),
-            StartError::Payload(e) => write!(f, "the first message does not decode: {e}"),
-            StartError::NoStart => write!(f, "the first message is not a start"),
+            StartError::Payload(e) => write!(f, "the first message is not a start: {e}"),
             StartError::Players { players, range } => write!(
                 f,
                 "the game takes from {} to {} players, not {players}",
@@ -209,7 +203,7 @@ impl std::error::Error for StartError {
         match self {
             StartError::Io(e) => Some(e),
             StartError::Payload(e) => Some(e),
-            StartError::End | StartError::NoStart | StartError::Players { .. } => None,
+            StartError::End | StartError::Players { .. } => None,
         }
     }
 }
@@ -375,23 +369,16 @@ impl<R: Read, W: Write> Session<R, W> {
         Ok(())
     }
 
-    /// Read up to the start, the first message that the session knows, and
-    /// keep the bytes after it.
+    /// Read the start, the first message of the server, and keep the bytes
+    /// after it.
     fn read_start(&mut self) -> Result<Vec<String>, StartError> {
         loop {
             match framing::split_message(&self.bytes, Side::Server) {
                 Ok(Some((payload, after))) => {
-                    let message = server_to_engine::decode(payload);
+                    let start = server_to_engine::read_start(payload);
                     let taken = self.bytes.len() - after.len();
                     self.bytes.drain(..taken);
-                    match message {
-                        Ok(Some(Message::Start(nicknames))) => return Ok(nicknames),
-                        Ok(Some(Message::Tick | Message::Input { .. } | Message::Lost(_))) => {
-                            return Err(StartError::NoStart);
-                        }
-                        Ok(None) => {}
-                        Err(e) => return Err(StartError::Payload(e)),
-                    }
+                    return start.map_err(StartError::Payload);
                 }
                 Ok(None) => {
                     if !self.read_more()? {
@@ -458,7 +445,6 @@ impl<R: Read, W: Write> Session<R, W> {
     /// Turn `message` into an event.
     fn receive(&mut self, message: Message) {
         let event = match message {
-            Message::Start(_) => SessionEvent::Error(SessionError::SecondStart),
             Message::Tick => SessionEvent::Tick,
             // The next frame that draws the image sends it again, with a new
             // id, as the schema says.
@@ -728,10 +714,7 @@ mod tests {
         Session::start(players(), &start()[..], io::BufWriter::new(engine.clone())).unwrap();
         let hello = engine.drain();
         let mut r = &hello[..];
-        match testing::read(&mut r).unwrap() {
-            Some(testing::Message::Hello(got)) => assert_eq!(got, players()),
-            other => panic!("got {other:?}"),
-        }
+        assert_eq!(testing::read_hello(&mut r).unwrap(), Some(players()));
         assert!(r.is_empty());
     }
 
@@ -802,15 +785,20 @@ mod tests {
         );
     }
 
+    /// A message of the server read as a start does not decode, or has no
+    /// players.
     #[test]
     fn a_message_before_the_start_stops_the_start() {
-        let mut lost = Vec::new();
-        server_to_engine::write_lost(&mut lost, 7).unwrap();
-        for first in [tick(), lost] {
-            let mut stream = first;
-            stream.extend_from_slice(&start());
-            assert!(matches!(no_start(&stream), StartError::NoStart));
-        }
+        let mut stream = tick();
+        stream.extend_from_slice(&start());
+        assert!(matches!(no_start(&stream), StartError::Payload(_)));
+        let mut stream = Vec::new();
+        server_to_engine::write_lost(&mut stream, 7).unwrap();
+        stream.extend_from_slice(&start());
+        assert!(matches!(
+            no_start(&stream),
+            StartError::Players { players: 0, .. }
+        ));
     }
 
     #[test]
@@ -838,21 +826,9 @@ mod tests {
             StartError::Io(e) if e.kind() == io::ErrorKind::InvalidData
         ));
         assert!(matches!(
-            no_start(&framed(&testing::encode_input(0, &key("a")))),
-            StartError::Payload(wire::Error::NoPlayer)
+            no_start(&framed(&testing::encode_input(1, &key("a")))),
+            StartError::Payload(_)
         ));
-    }
-
-    #[test]
-    fn a_message_of_an_unknown_arm_before_the_start_is_skipped() {
-        let unknown =
-            testing::with_unknown_server_value(&tick()[HEADER_BYTES..], |m| testing::tag_of(m));
-        let mut stream = framed(&unknown);
-        stream.extend_from_slice(&start());
-        let server = Pipe::default();
-        server.push(&stream);
-        let (_, players) = Session::start(players(), server, io::sink()).unwrap();
-        assert_eq!(members(&players), ["1 Ana", "2 Beto"]);
     }
 
     #[test]
@@ -867,17 +843,6 @@ mod tests {
                 "error an input came for player 3, who is not in the start",
                 "2 key b"
             ]
-        );
-    }
-
-    #[test]
-    fn a_second_start_is_an_error_and_the_session_goes_on() {
-        let mut stream = start();
-        stream.extend_from_slice(&tick());
-        let (mut session, _, _) = started(&stream);
-        assert_eq!(
-            names(&mut session),
-            ["error a start came after the first one", "tick"]
         );
     }
 

@@ -1,8 +1,8 @@
-//! The messages of the server, in the `ServerToEngine` union, which go to
-//! the engine.
+//! The messages of the server, which go to the engine.
 //!
 //! The server starts the session with the players, who stay the same until
-//! the end, and passes on the input of each view with its player. A tick
+//! the end, in a message whose root is a `Start`. Every message after it is
+//! a `ServerToEngine`. The server passes on the input of each view with its player. A tick
 //! of the server paces the engine for every player, a lost says that the
 //! server dropped an asset, and the server ends the session with the end
 //! of its stream.
@@ -13,7 +13,7 @@ use std::num::NonZeroU32;
 use capnp::message::{Builder as MessageBuilder, HeapAllocator};
 
 use crate::event::InputEvent;
-use crate::protocol_capnp::server_to_engine;
+use crate::protocol_capnp::{server_to_engine, start};
 use crate::session::MAX_PLAYERS;
 
 use super::Error;
@@ -23,8 +23,7 @@ use super::protocol::decode_root;
 
 /// One message of the server, one variant per arm of `ServerToEngine`. The
 /// arm `event` is `Input` here, so it does not clash with
-/// [`crate::event::Event`]. `Start` and `Tick` are about the whole
-/// session.
+/// [`crate::event::Event`]. `Tick` is about the whole session.
 #[derive(Clone, Debug)]
 pub enum Message {
     /// The input of `player`.
@@ -32,8 +31,6 @@ pub enum Message {
         player: NonZeroU32,
         event: InputEvent,
     },
-    /// The nicknames of the players, the first of player 1.
-    Start(Vec<String>),
     /// Time for the engine to draw the next frames.
     Tick,
     /// The server dropped the asset of this id.
@@ -95,17 +92,20 @@ fn decode_message(msg: server_to_engine::Reader<'_>) -> Result<Option<Message>, 
                 event,
             }))
         }
-        server_to_engine::Start(s) => {
-            let nicknames = s?
-                .get_members()?
-                .iter()
-                .map(|m| Ok(m.get_nickname()?.to_str()?.to_owned()))
-                .collect::<Result<_, Error>>()?;
-            Ok(Some(Message::Start(nicknames)))
-        }
         server_to_engine::Tick(_) => Ok(Some(Message::Tick)),
         server_to_engine::Lost(id) => Ok(Some(Message::Lost(id))),
     }
+}
+
+/// The nicknames of the players of the start in `payload`, a message with
+/// no envelope, the first of player 1.
+pub(crate) fn read_start(payload: &[u8]) -> Result<Vec<String>, Error> {
+    decode_root::<start::Owned, _>(payload, |s| {
+        s.get_members()?
+            .iter()
+            .map(|m| Ok(m.get_nickname()?.to_str()?.to_owned()))
+            .collect()
+    })
 }
 
 /// `player`, or [`Error::NoPlayer`] if it is 0.
@@ -140,9 +140,7 @@ fn lost_message(id: u32) -> MessageBuilder<HeapAllocator> {
 /// A start of the `len` players of `nicknames`.
 fn start_message<S: AsRef<str>>(len: u32, nicknames: &[S]) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let start = builder
-        .init_root::<server_to_engine::Builder>()
-        .init_start();
+    let start = builder.init_root::<start::Builder>();
     let mut list = start.init_members(len);
     for (i, nickname) in (0..len).zip(nicknames) {
         list.reborrow().get(i).set_nickname(nickname.as_ref());

@@ -33,10 +33,14 @@ Cada direção tem a sua mensagem raiz no schema `protocol.capnp`:
 
 | de → para          | raiz             | mágica | braços                              |
 |--------------------|------------------|--------|-------------------------------------|
-| engine → servidor  | `EngineToServer` | `SIE1` | `asset`, `frame`, `hello`, `tickTaken` |
-| servidor → engine  | `ServerToEngine` | `SIS1` | `input`, `start`, `tick`, `lost`    |
+| engine → servidor  | `EngineToServer` | `SIE1` | `asset`, `frame`, `tickTaken`       |
+| servidor → engine  | `ServerToEngine` | `SIS1` | `input`, `tick`, `lost`             |
 | view → servidor    | `ViewToServer`   | —      | só o campo `event`                  |
 | servidor → view    | `ServerToView`   | —      | `asset`, `frame`, `forget`          |
+
+A primeira mensagem da engine tem a raiz `Hello`, e a primeira do servidor
+tem a raiz `Start`. Nenhuma das duas vem de novo, então nenhuma é braço de
+uma união.
 
 A view só fala pelo WebSocket, então as mensagens dela e para ela não têm
 mágica.
@@ -71,7 +75,7 @@ A sala passa por cinco fases:
 
 1. O `LobbyCore` espera o `hello` da engine, a primeira mensagem do fd 4,
    que diz quantos jogadores o jogo aceita. Uma primeira mensagem que não
-   é um `hello` encerra a sala (`LobbyError::NoHello`).
+   se lê como um `hello` encerra a sala (`LobbyError::Payload`).
 2. Com o `hello`, o `LobbyCore::players()` diz a faixa de jogadores do
    jogo, e o lobby do servidor junta os jogadores. A engine não manda nada
    até o `start`, e uma mensagem dela nessa fase encerra a sala
@@ -223,11 +227,9 @@ servidor não conhece só passa depois que o servidor atualiza o
 
 ### A engine
 
-O core olha o braço de cada mensagem do fd 4, o jogador de um frame e os
+Depois do `start`, o core olha o braço de cada mensagem do fd 4, o jogador de um frame e os
 ids das imagens dele, sem decodificar o resto da cena:
 
-- O **`hello`** vem primeiro e uma vez. Um segundo `hello` é descartado
-  (`EngineError::SecondHello`).
 - Um **`asset`** é uma imagem, PNG, JPEG, GIF ou WebP, que os frames
   seguintes desenham pelo `id`. Uma imagem de outro formato ou acima de
   2048×2048 pixels é recusada (`EngineError::Asset`), assim como um `id`

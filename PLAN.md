@@ -34,8 +34,8 @@ dela, e nenhum lado recebe um braço que só outro lado manda.
 
 | direção             | raiz             | mágica | braços                                 |
 |---------------------|------------------|--------|----------------------------------------|
-| engine → servidor   | `EngineToServer` | `SIE1` | `asset`, `frame`, `hello`, `tickTaken` |
-| servidor → engine   | `ServerToEngine` | `SIS1` | `input`, `start`, `tick`, `lost`       |
+| engine → servidor   | `EngineToServer` | `SIE1` | `asset`, `frame`, `tickTaken`          |
+| servidor → engine   | `ServerToEngine` | `SIS1` | `input`, `tick`, `lost`                |
 | view → servidor     | `ViewToServer`   |        | `event`                                |
 | servidor → view     | `ServerToView`   |        | `asset`, `frame`, `forget`             |
 
@@ -45,7 +45,7 @@ subprotocolo `sinteract.v1`. A view só fala por WebSocket, então não tem
 mágica. O player é o número do jogador na partida, a
 partir de 1, e vai no primeiro campo do payload das mensagens que falam de
 um jogador: o `input` do servidor e o `frame` da engine, em que o 0 quer
-dizer todos. O `start`, o `tick` e o `asset` são
+dizer todos. O `tick` e o `asset` são
 da sessão inteira e não têm player, e a `ViewToServer` e a `ServerToView`
 também não, porque o servidor sabe o player pela conexão.
 
@@ -72,13 +72,14 @@ view, então uma view não joga em nome de outra.
 
 Regras da sessão com servidor:
 
-- o servidor lança a engine, e a primeira mensagem dela é o `hello`, com
-  o mínimo e o máximo de jogadores do jogo, até 1024. Se a primeira
-  mensagem não é um `hello`, a sala acaba, e depois do `hello` a engine
-  não manda mais nada até o `start`. O lobby é do servidor, fora do
-  protocolo, e usa esses limites. No começo da partida, o servidor manda o
-  `start` com os apelidos dos jogadores, que são os mesmos até o fim. Só
-  então as views conectam e mandam eventos;
+- o servidor lança a engine, e a primeira mensagem dela tem a raiz
+  `Hello`, com o mínimo e o máximo de jogadores do jogo, até 1024. Se a
+  primeira mensagem não se lê como um `hello`, a sala acaba, e depois do
+  `hello` a engine não manda mais nada até o `start`. O lobby é do
+  servidor, fora do protocolo, e usa esses limites. No começo da partida,
+  o servidor manda a sua primeira mensagem, de raiz `Start`, com os
+  apelidos dos jogadores, que são os mesmos até o fim. Só então as views
+  conectam e mandam eventos;
 - o número de um jogador é o lugar dele no `start`, a partir de 1, e um
   `input` de player 0 é erro;
 - nenhuma mensagem encerra a partida. O fim do transporte encerra, o fim

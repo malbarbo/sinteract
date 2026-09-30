@@ -586,11 +586,6 @@ mod tests {
         let unknown = with_unknown_engine_value(&asset, |m| tag_of(m));
         assert_eq!(engine_to_server::arm(&unknown).unwrap(), None);
         assert!(engine_to_server::arm(&[0; 8]).is_err());
-        let players = crate::session::PlayerRange::new(2, 4).unwrap();
-        assert_eq!(
-            engine_to_server::arm(&testing::encode_hello(2, 4)).unwrap(),
-            Some(engine_to_server::Arm::Hello(players))
-        );
     }
 
     #[test]
@@ -693,17 +688,17 @@ mod tests {
         let players = crate::session::PlayerRange::new(1, 3).unwrap();
         let mut stream = Vec::new();
         engine_to_server::write_hello(&mut stream, players).unwrap();
-        match testing::read(&mut &stream[..]).unwrap() {
-            Some(Message::Hello(got)) => assert_eq!(got, players),
-            other => panic!("got {other:?}"),
-        }
+        assert_eq!(
+            testing::read_hello(&mut &stream[..]).unwrap(),
+            Some(players)
+        );
     }
 
     #[test]
     fn a_hello_that_is_not_a_range_is_an_error() {
         for (min, max) in [(0, 2), (3, 2), (1, crate::session::MAX_PLAYERS + 1)] {
             assert!(matches!(
-                engine_to_server::arm(&testing::encode_hello(min, max)),
+                engine_to_server::read_hello(&testing::encode_hello(min, max)),
                 Err(Error::PlayerRange { .. })
             ));
         }
@@ -765,11 +760,11 @@ mod tests {
         let mut stream = Vec::new();
         server_to_engine::write_start(&mut stream, &["Ana", "Beto"]).unwrap();
         let mut r = &stream[..];
-        match read_server(&mut r).unwrap().expect("a message") {
-            server_to_engine::Message::Start(got) => assert_eq!(got, ["Ana", "Beto"]),
-            other => panic!("got {other:?}"),
-        }
-        assert!(read_server(&mut r).unwrap().is_none());
+        let got = testing::read_next(&mut r, framing::Side::Server, |payload| {
+            server_to_engine::read_start(payload).map(Some)
+        });
+        assert_eq!(got.unwrap().expect("a start"), ["Ana", "Beto"]);
+        assert!(r.is_empty());
     }
 
     #[test]
