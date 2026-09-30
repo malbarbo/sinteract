@@ -115,10 +115,16 @@ export function listen(
   // The right button belongs to the game.
   canvas.addEventListener("contextmenu", (e) => e.preventDefault(), { signal });
 
+  let size = { width: -1, height: -1 };
   const resize = () => {
-    const rect = canvas.getBoundingClientRect();
-    send({ kind: "resize", width: rect.width, height: rect.height });
+    const { width, height } = canvas.getBoundingClientRect();
+    if (width === size.width && height === size.height) return;
+    size = { width, height };
+    send({ kind: "resize", width, height });
   };
+  // The protocol asks for a resize as the first event, and the first
+  // callback of the observer comes after the events of the next frame.
+  resize();
   const observer = new ResizeObserver(resize);
   observer.observe(canvas);
 

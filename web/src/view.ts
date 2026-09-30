@@ -53,8 +53,6 @@ export class View {
     socket.binaryType = "arraybuffer";
     socket.onopen = () => {
       this.#status({ kind: "open" });
-      // The first event of a connection is a resize, as the protocol asks,
-      // and the ResizeObserver of listen sends it at once.
       this.#stopInput = listen(
         this.#canvas,
         (x, y) => this.#toScene(x, y),
