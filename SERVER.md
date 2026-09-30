@@ -173,9 +173,9 @@ engine.
   (`session::MAX_PLAYERS`), e o lobby do servidor junta os apelidos.
 - O `LobbyCore::start(&nicknames, tick_rate)` numera os jogadores a partir
   de 1, na ordem da lista, e manda o `start` à engine, com a taxa do
-  `tick`. Ele recusa um número de
-  jogadores fora da faixa e um `start` antes do `hello` (`StartError`), e
-  devolve o lobby junto com o erro, para outra tentativa.
+  `tick`. Ele recusa um número de jogadores fora da faixa e um `start`
+  antes do `hello` (`StartError`), e devolve o lobby junto com o erro,
+  para outra tentativa.
 - O `start` tira os caracteres de controle do apelido e o corta em 64
   bytes. O apelido vem do login ou do lobby, nunca da engine. O
   `ServerCore::players()` dá cada jogador com o apelido que a engine
@@ -234,8 +234,9 @@ servidor não conhece só passa depois que o servidor atualiza o
 
 ### A engine
 
-Depois do `start`, o core olha o braço de cada mensagem do fd 4, o jogador de um frame e os
-ids das imagens dele, sem decodificar o resto da cena:
+Depois do `start`, o core olha o braço de cada mensagem do fd 4, o
+jogador de um frame e os ids das imagens dele, sem decodificar o resto da
+cena:
 
 - Um **`asset`** é uma imagem, PNG, JPEG, GIF ou WebP, que os frames
   seguintes desenham pelo `id`. Uma imagem de outro formato ou acima de
@@ -701,7 +702,8 @@ jogo lê a taxa de novo a cada `Tick`. O `examples/engine.rs` do
 
 Uma engine sem as features de tela, como uma que roda em wasm, usa a
 `session::Session` direto, com o `Session::start(players, r, w)`, o
-`tick_rate`, o `wait` e o `write_frame`, sobre o `Read` e o `Write` que ela tiver.
+`tick_rate`, o `wait` e o `write_frame`, sobre o `Read` e o `Write` que
+ela tiver.
 
 ## O que o navegador mostra
 
@@ -711,5 +713,6 @@ entrada pelo WebSocket. Há duas páginas, cada uma um HTML só: o
 `web/dist/index.html` lê a cena em TypeScript, e o `web/dist/rust.html`
 lê e desenha com o próprio crate, compilado para WebAssembly. As duas
 abrem o WebSocket em `/play?token=` do mesmo servidor e desenham um frame
-por quadro da tela, na ordem em que chegam. O `web/README.md` descreve os módulos, e o `web/server/` é um
-servidor de teste, com uma sala e sem lobby, que segue o esboço acima.
+por quadro da tela, na ordem em que chegam. O `web/README.md` descreve
+os módulos, e o `web/server/` é um servidor de teste, com uma sala e sem
+lobby, que segue o esboço acima.
