@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>sinteract</title>
+    <link rel="icon" href="data:,">
+    <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      color: #ddd;
+      font: 16px system-ui, sans-serif;
+      overflow: hidden;
+    }
+    #stage {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+      touch-action: none;
+    }
+    #status {
+      position: fixed;
+      inset: auto 0 1rem 0;
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      align-items: center;
+    }
+    #status[hidden] {
+      display: none;
+    }
+    #status > * {
+      background: rgb(0 0 0 / 70%);
+      padding: 0.4rem 0.8rem;
+      border-radius: 0.4rem;
+    }
+    #reconnect {
+      color: inherit;
+      font: inherit;
+      border: 1px solid #666;
+      cursor: pointer;
+    }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage" tabindex="0"></canvas>
+    <div id="status">
+      <span id="message">conectando…</span>
+      <button id="reconnect" hidden>reconectar</button>
+    </div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

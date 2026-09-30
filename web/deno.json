@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "esnext", "deno.ns"],
+    "strict": true,
+    // The code that capnp-es generates overrides members of Struct with no
+    // `override`.
+    "noImplicitOverride": false
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@^1",
+    "capnp-es": "npm:capnp-es@0.0.16",
+    "typescript": "npm:typescript@6.0.3"
+  },
+  "lint": {
+    "exclude": ["src/capnp/"]
+  },
+  "fmt": {
+    "exclude": ["src/capnp/", "build/", "dist/", "server/"]
+  },
+  "exclude": ["build/", "dist/", "server/"]
+}
