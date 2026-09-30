@@ -50,12 +50,19 @@ pub use crate::wire::framing::SUBPROTOCOL;
 
 /// A room before the start. It waits for the hello of the engine, then for
 /// the players from the host.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LobbyCore {
-    /// The bytes of the engine that do not make a whole message yet.
-    engine_in: Vec<u8>,
+    stage: Stage,
+}
+
+/// Where a lobby is. The engine writes nothing between its hello and the
+/// start, so a lobby after the hello keeps no bytes.
+#[derive(Debug)]
+enum Stage {
+    /// The bytes of the engine that do not make the hello yet.
+    Hello(Vec<u8>),
     /// The players that the game takes, from the hello.
-    range: Option<PlayerRange>,
+    Ready(PlayerRange),
 }
 
 /// The rules of a room after the start, from the players and the timer of
@@ -117,7 +124,7 @@ pub enum LobbyError {
     Broken(io::Error),
     /// The first message does not decode as a hello.
     Payload(wire::Error),
-    /// A message came after the hello and before the start.
+    /// Bytes came after the hello and before the start.
     BeforeStart,
 }
 
@@ -172,7 +179,7 @@ impl std::fmt::Display for LobbyError {
         match self {
             LobbyError::Broken(e) => write!(f, "broken stream: {e}"),
             LobbyError::Payload(e) => write!(f, "the first message is not a hello: {e}"),
-            LobbyError::BeforeStart => f.write_str("a message came before the start"),
+            LobbyError::BeforeStart => f.write_str("bytes came between the hello and the start"),
         }
     }
 }
@@ -256,36 +263,51 @@ const MAX_HELD_KEYS: usize = 32;
 /// players, their nicknames and the messages of the views have a cap.
 const UNDER_THE_CAP: &str = "a message for the engine is under the cap of the framing";
 
+impl Default for LobbyCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LobbyCore {
     pub fn new() -> Self {
-        Self::default()
+        LobbyCore {
+            stage: Stage::Hello(Vec::new()),
+        }
     }
 
     /// The players that the game takes, from the hello of the engine, or
     /// `None` before the hello.
     pub fn players(&self) -> Option<PlayerRange> {
-        self.range
+        match self.stage {
+            Stage::Hello(_) => None,
+            Stage::Ready(range) => Some(range),
+        }
     }
 
-    /// Take the next bytes of the engine. They may end anywhere, inside a
-    /// message too. The engine says its hello and then waits for the
-    /// start, so a first message that is not a hello, any message after
-    /// the hello, and a broken stream end the room.
+    /// Take the next bytes of the engine. They may end anywhere, inside the
+    /// hello too. The engine says its hello and then waits for the start,
+    /// so a first message that is not a hello, a byte after the hello, and
+    /// a broken stream end the room.
     pub fn from_engine(mut self, bytes: &[u8]) -> Result<LobbyCore, LobbyError> {
-        self.engine_in.extend_from_slice(bytes);
-        let mut rest = self.engine_in.as_slice();
-        while let Some((payload, after)) =
-            framing::split_message(rest, Side::Engine).map_err(LobbyError::Broken)?
-        {
-            rest = after;
-            if self.range.is_some() {
-                return Err(LobbyError::BeforeStart);
-            }
-            let range = engine_to_server::read_hello(payload).map_err(LobbyError::Payload)?;
-            self.range = Some(range);
+        let Stage::Hello(engine_in) = &mut self.stage else {
+            return if bytes.is_empty() {
+                Ok(self)
+            } else {
+                Err(LobbyError::BeforeStart)
+            };
+        };
+        engine_in.extend_from_slice(bytes);
+        let Some((payload, after)) =
+            framing::split_message(engine_in, Side::Engine).map_err(LobbyError::Broken)?
+        else {
+            return Ok(self);
+        };
+        let range = engine_to_server::read_hello(payload).map_err(LobbyError::Payload)?;
+        if !after.is_empty() {
+            return Err(LobbyError::BeforeStart);
         }
-        let taken = self.engine_in.len() - rest.len();
-        self.engine_in.drain(..taken);
+        self.stage = Stage::Ready(range);
         Ok(self)
     }
 
@@ -298,7 +320,7 @@ impl LobbyCore {
         self,
         nicknames: &[S],
     ) -> Result<ServerCore, (LobbyCore, StartError)> {
-        let Some(range) = self.range else {
+        let Stage::Ready(range) = self.stage else {
             return Err((self, StartError::NoHello));
         };
         if !range.contains(nicknames.len()) {
@@ -316,7 +338,7 @@ impl LobbyCore {
         let mut buf = Vec::new();
         server_to_engine::write_start(&mut buf, &nicknames).expect(UNDER_THE_CAP);
         let engine = Engine {
-            input: self.engine_in,
+            input: Vec::new(),
             cache: Cache::new(),
             output: Some(Output {
                 buf,
@@ -1104,25 +1126,18 @@ mod tests {
     }
 
     #[test]
-    fn a_message_after_the_hello_and_before_the_start_ends_the_room() {
-        for next in [hello(1, 1), asset(1), frame(0, 1.0)] {
+    fn a_byte_after_the_hello_and_before_the_start_ends_the_room() {
+        let frame = frame(0, 1.0);
+        for next in [&hello(1, 1)[..], &asset(1), &frame, &frame[..10]] {
             let mut stream = hello(1, 1);
-            stream.extend_from_slice(&next);
+            stream.extend_from_slice(next);
             assert!(matches!(lobby_error(&stream), LobbyError::BeforeStart));
+            let lobby = LobbyCore::new().from_engine(&hello(1, 1)).unwrap();
+            assert!(matches!(
+                lobby.from_engine(next),
+                Err(LobbyError::BeforeStart)
+            ));
         }
-    }
-
-    #[test]
-    fn the_bytes_after_the_hello_go_on_after_the_start() {
-        let mut stream = hello(1, 1);
-        let next = frame(0, 1.0);
-        let (head, tail) = next.split_at(10);
-        stream.extend_from_slice(head);
-        let lobby = LobbyCore::new().from_engine(&stream).unwrap();
-        let mut core = lobby.start(&["Ana"]).unwrap();
-        let ana = core.connect(player(1)).unwrap();
-        assert!(core.from_engine(tail).is_empty());
-        assert_eq!(sent(&mut core, ana), ["frame 1", "idle"]);
     }
 
     #[test]

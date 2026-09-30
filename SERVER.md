@@ -78,7 +78,7 @@ A sala passa por cinco fases:
    se lê como um `hello` encerra a sala (`LobbyError::Payload`).
 2. Com o `hello`, o `LobbyCore::players()` diz a faixa de jogadores do
    jogo, e o lobby do servidor junta os jogadores. A engine não manda nada
-   até o `start`, e uma mensagem dela nessa fase encerra a sala
+   até o `start`, e um byte dela nessa fase encerra a sala
    (`LobbyError::BeforeStart`).
 3. O `LobbyCore::start` começa o jogo com os jogadores do lobby e devolve o
    `ServerCore`. Os jogadores são os mesmos até o fim.
