@@ -2,7 +2,7 @@
 name = "sinteract"
 version = "0.1.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "(MIT OR Apache-2.0) AND OFL-1.1"
 description = "Draw-list based 2D graphics with terminal (Kitty/Sixel/half-blocks) and PDF outputs. Originated in spython; designed to be shared with sgleam."
 repository = "https://github.com/malbarbo/sinteract"
 readme = "README.md"
