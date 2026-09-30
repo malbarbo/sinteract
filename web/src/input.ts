@@ -108,6 +108,8 @@ export function listen(
     if (e.isPrimary) mouse(e, { kind: "leave" });
   }, { signal });
   canvas.addEventListener("wheel", (e) => {
+    // A wheel with Ctrl, or a pinch on a touchpad, zooms the page.
+    if (e.ctrlKey) return;
     e.preventDefault();
     const notches = WHEEL_NOTCH[e.deltaMode] ?? 1;
     mouse(e, { kind: "wheel", dx: e.deltaX * notches, dy: e.deltaY * notches });
