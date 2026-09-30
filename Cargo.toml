@@ -110,6 +110,10 @@ objc2 = { version = "0.6", optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }
 
+# examples/remote.rs talks to a server over a WebSocket.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tungstenite = "0.30"
+
 # examples/view.rs hands the engine fd 3 and fd 4.
 [target.'cfg(unix)'.dev-dependencies]
 command-fds = "0.3"
@@ -136,6 +140,10 @@ required-features = ["terminal", "window"]
 # the game itself when no view runs it.
 [[example]]
 name = "engine"
+required-features = ["terminal", "window"]
+
+[[example]]
+name = "remote"
 required-features = ["terminal", "window"]
 
 [[example]]
