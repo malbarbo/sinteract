@@ -206,7 +206,7 @@ export class Renderer {
     ctx.fontKerning = "none";
     ctx.textAlign = "left";
     ctx.textBaseline = "alphabetic";
-    const em = t.size / face.unitsPerEm;
+    const em = t.size / UNITS_PER_EM;
     const width = ctx.measureText(text).width;
     const left = -width / 2;
     const baseline = (face.ascender + face.descender) / 2 * em;
@@ -403,94 +403,76 @@ function cssColor(c: Rgba): string {
 // measures as it does in the engine.
 interface Face {
   css: string;
-  unitsPerEm: number;
   ascender: number;
   descender: number;
   underlinePosition: number;
   underlineThickness: number;
 }
 
+const UNITS_PER_EM = 2048;
+
 const SANS = '"Liberation Sans", Arimo, Arial, Helvetica, sans-serif';
 const SERIF = '"Liberation Serif", Tinos, "Times New Roman", Times, serif';
 const MONO = '"Liberation Mono", Cousine, "Courier New", Courier, monospace';
 
-// Regular and bold, from the hhea and post tables of the fonts in ../fonts.
+// From the hhea and post tables of the fonts in ../fonts. Regular and bold
+// differ only in the underline, as the position and the thickness of each.
 // The italic of each family has the metrics of the upright one.
-const FACES: Record<"sans" | "serif" | "mono", [Face, Face]> = {
-  sans: [
-    {
-      css: SANS,
-      unitsPerEm: 2048,
-      ascender: 1854,
-      descender: -434,
-      underlinePosition: -67,
-      underlineThickness: 150,
-    },
-    {
-      css: SANS,
-      unitsPerEm: 2048,
-      ascender: 1854,
-      descender: -434,
-      underlinePosition: -2,
-      underlineThickness: 215,
-    },
-  ],
-  serif: [
-    {
-      css: SERIF,
-      unitsPerEm: 2048,
-      ascender: 1825,
-      descender: -443,
-      underlinePosition: -123,
-      underlineThickness: 100,
-    },
-    {
-      css: SERIF,
-      unitsPerEm: 2048,
-      ascender: 1825,
-      descender: -443,
-      underlinePosition: -28,
-      underlineThickness: 195,
-    },
-  ],
-  mono: [
-    {
-      css: MONO,
-      unitsPerEm: 2048,
-      ascender: 1705,
-      descender: -615,
-      underlinePosition: -393,
-      underlineThickness: 84,
-    },
-    {
-      css: MONO,
-      unitsPerEm: 2048,
-      ascender: 1705,
-      descender: -615,
-      underlinePosition: -272,
-      underlineThickness: 205,
-    },
-  ],
+const FAMILIES = {
+  sans: {
+    css: SANS,
+    ascender: 1854,
+    descender: -434,
+    underline: [[-67, 150], [-2, 215]],
+  },
+  serif: {
+    css: SERIF,
+    ascender: 1825,
+    descender: -443,
+    underline: [[-123, 100], [-28, 195]],
+  },
+  mono: {
+    css: MONO,
+    ascender: 1705,
+    descender: -615,
+    underline: [[-393, 84], [-272, 205]],
+  },
 };
 
 // A weight from 600 up is bold, as in text.rs.
 const BOLD = 600;
 
-// The face of a family, by the aliases of ResolvedFont::resolve in Rust. A
-// family of another name draws with that font when the browser has it, and
-// measures as Liberation Sans, the face that the Rust view falls back to.
+// The families by the aliases of ResolvedFont::resolve in Rust.
+const ALIASES: Record<string, typeof FAMILIES.sans> = {
+  "": FAMILIES.sans,
+  "sans-serif": FAMILIES.sans,
+  "sans": FAMILIES.sans,
+  "liberation sans": FAMILIES.sans,
+  "serif": FAMILIES.serif,
+  "liberation serif": FAMILIES.serif,
+  "monospace": FAMILIES.mono,
+  "mono": FAMILIES.mono,
+  "liberation mono": FAMILIES.mono,
+};
+
+// The face of a family. A family of another name draws with that font when
+// the browser has it, and measures as Liberation Sans, the face that the
+// Rust view falls back to.
 function faceOf(family: string, weight: number): Face {
-  const key = family.trim().toLowerCase();
-  const bold = weight >= BOLD ? 1 : 0;
-  if (["", "sans-serif", "sans", "liberation sans"].includes(key)) {
-    return FACES.sans[bold];
-  }
-  if (["serif", "liberation serif"].includes(key)) return FACES.serif[bold];
-  if (["monospace", "mono", "liberation mono"].includes(key)) {
-    return FACES.mono[bold];
-  }
-  const sans = FACES.sans[bold];
-  return { ...sans, css: `${JSON.stringify(family.trim())}, ${SANS}` };
+  const name = family.trim();
+  const known = Object.hasOwn(ALIASES, name.toLowerCase())
+    ? ALIASES[name.toLowerCase()]
+    : null;
+  const f = known ?? FAMILIES.sans;
+  const [underlinePosition, underlineThickness] =
+    f.underline[weight >= BOLD ? 1 : 0];
+  return {
+    css: known ? f.css : `${JSON.stringify(name)}, ${SANS}`,
+    ascender: f.ascender,
+    descender: f.descender,
+    underlinePosition,
+    underlineThickness,
+  };
 }
 
 function cssFont(t: TextElement, face: Face): string {
