@@ -51,6 +51,7 @@ export class View {
       socket,
       stopInput: () => {},
       images: new Map(),
+      bytes: null,
       latest: null,
       scene: null,
     };
@@ -100,7 +101,10 @@ export class View {
           conn.images.delete(message.id);
           break;
         case "frame":
-          this.#decode(conn, message.scene);
+          // Only the newest frame decodes, at the next animation frame, so
+          // a hidden tab decodes none.
+          conn.bytes = message.scene;
+          this.#request();
           break;
       }
     } catch (e) {
@@ -116,6 +120,7 @@ export class View {
     this.#frame = 0;
     const conn = this.#conn;
     if (!conn) return;
+    if (conn.bytes) this.#decode(conn, conn.bytes);
     const scene = conn.scene;
     if (!scene) return;
     this.#renderer.draw(
@@ -127,6 +132,7 @@ export class View {
   // Decodes the frame of `bytes`, which goes on screen once the images that
   // it draws are ready, unless a newer frame comes first.
   #decode(conn: Connection, bytes: Uint8Array): void {
+    conn.bytes = null;
     let scene: Scene;
     try {
       scene = decodeScene(bytes);
@@ -142,7 +148,6 @@ export class View {
     }
     if (pending.length === 0) {
       conn.scene = scene;
-      this.#request();
       return;
     }
     Promise.all(pending).then(() => {
@@ -186,6 +191,8 @@ interface Connection {
   socket: WebSocket;
   stopInput: () => void;
   images: Map<number, Asset>;
+  // The newest frame, not decoded yet.
+  bytes: Uint8Array | null;
   // The newest decoded frame, and the newest one whose images are ready,
   // which is the one on screen.
   latest: Scene | null;
