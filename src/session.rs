@@ -297,11 +297,11 @@ impl<R: Read, W: Write> Session<R, W> {
     /// the events before the break and before `End`, as
     /// [`io::ErrorKind::InvalidData`] or [`io::ErrorKind::UnexpectedEof`].
     /// An error of `r` other than [`io::ErrorKind::Interrupted`] comes back
-    /// as is, and the session keeps the bytes that it read before. A tick writes a tickTaken to `w`
-    /// and flushes `w` first, since the server sends no other tick until it
-    /// reads the tickTaken, and a tick may draw no frame that would flush
-    /// it. An error of `w` comes back in place of the tick and ends the
-    /// session, as in [`Session::write_frame`].
+    /// as is, and the session keeps the bytes that it read before. A tick
+    /// writes a tickTaken to `w` and flushes `w` first, since the server
+    /// sends no other tick until it reads the tickTaken, and a tick may draw
+    /// no frame that would flush it. An error of `w` comes back in place of
+    /// the tick and ends the session, as in [`Session::write_frame`].
     pub fn wait(&mut self) -> io::Result<SessionEvent> {
         loop {
             if let Some(event) = self.events.pop_front() {

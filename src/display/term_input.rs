@@ -292,8 +292,8 @@ impl Keys {
         }));
     }
 
-    /// A key of win32-input-mode. AltGr holds Ctrl and Alt, which the key that types text
-    /// with it does not report.
+    /// A key of win32-input-mode. AltGr holds Ctrl and Alt, which the key
+    /// that types text with it does not report.
     fn win32(&mut self, csi: &Csi, out: &mut Vec<Input>) {
         let field = |i| csi.field(i, 0).unwrap_or(0);
         let id = KeyId::Win32 {

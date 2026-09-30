@@ -1,7 +1,7 @@
 //! What the tests of the wire, the session and the server read and write. A
-//! pipe that does not block, a reader of a stream, a decoder of each message of the engine, and the
-//! encoders of the messages that a test sends with no envelope or with a
-//! value out of range. The helpers at the end change the bytes of a message
+//! pipe that does not block, a reader of a stream, a decoder of each
+//! message of the engine, and the encoders of the messages that a test
+//! sends with no envelope or with a value out of range. The helpers at the end change the bytes of a message
 //! as a newer peer, or one that writes a float that is not finite, would.
 
 use std::cell::RefCell;
