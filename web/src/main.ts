@@ -45,8 +45,10 @@ function start(): void {
 
 function playUrl(token: string | null): string | null {
   if (token === null) return null;
-  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.host}/play?token=${encodeURIComponent(token)}`;
+  const url = new URL("/play", location.href);
+  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("token", token);
+  return url.href;
 }
 
 function show(s: Status): void {
