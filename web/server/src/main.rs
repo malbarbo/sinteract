@@ -309,7 +309,7 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
 /// Starts the room with the players of the options, and prints the link of
 /// each one.
 fn start(room: &Room, lobby: LobbyCore) -> (Phase, Vec<String>) {
-    let nicknames: Vec<String> = (1..=room.players).map(|n| format!("jogador {n}")).collect();
+    let nicknames: Vec<String> = (1..=room.players).map(|n| format!("player {n}")).collect();
     let core = match lobby.start(&nicknames, TICK_RATE) {
         Ok(core) => core,
         Err((_, e)) => return (Phase::Over, vec![e.to_string()]),

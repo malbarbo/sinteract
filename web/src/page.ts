@@ -40,7 +40,7 @@ function connect(view: View): void {
     show({
       kind: "closed",
       code: 0,
-      reason: "sem token: abra o link do jogador",
+      reason: "no token: open the link of a player",
     });
     return;
   }
@@ -61,15 +61,15 @@ function show(s: Status): void {
   reconnect.hidden = s.kind !== "closed";
   switch (s.kind) {
     case "connecting":
-      message.textContent = "conectando…";
+      message.textContent = "connecting…";
       break;
     case "open":
       message.textContent = "";
       break;
     case "closed":
       message.textContent = s.reason
-        ? `conexão encerrada: ${s.reason}`
-        : "conexão encerrada";
+        ? `connection closed: ${s.reason}`
+        : "connection closed";
       break;
   }
 }
