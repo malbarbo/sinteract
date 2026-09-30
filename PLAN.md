@@ -173,9 +173,10 @@ principal empurra o `Tick` a uma taxa fixa.
 
 ## Texto e fontes
 
-As doze Liberation (Sans, Serif e Mono em quatro variantes) vão embutidas.
-Uma família resolve por alias, depois pelas fontes do sistema com a feature
-`native-fonts`, e por fim cai na Liberation Sans. A engine mede o texto, e
+As doze Sinteract (Sans, Serif e Mono em quatro variantes), com os contornos
+das Liberation, vão embutidas. Uma família resolve por alias, depois pelas
+fontes do sistema com a feature `native-fonts`, e por fim cai na Sinteract
+Sans. A engine mede o texto, e
 o `TextSpec` leva a família depois da resolução, então a view desenha com a
 mesma face.
 

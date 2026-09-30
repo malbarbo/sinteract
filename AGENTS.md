@@ -158,8 +158,8 @@ Avoid the constructions that make the reader do the grammar:
   - Yes: `The gradient is boxed. The common case is a solid color.`
 - **A dash in the middle of a sentence.** Same trouble as the colon. Write
   two sentences, or use a comma.
-  - No: `Empty family resolves to Liberation Sans — keeps the historic render`
-  - Yes: `An empty family resolves to Liberation Sans.`
+  - No: `Empty family resolves to Sinteract Sans — keeps the historic render`
+  - Yes: `An empty family resolves to Sinteract Sans.`
 - **A metaphor for something the code states plainly.**
   - No: `it cost what invariants cost`, `a band-aid`, `closes that vector`
   - Yes: `it needed four accessors and a validating constructor`

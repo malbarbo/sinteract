@@ -410,10 +410,11 @@ function cssColor(c: Rgba): string {
   return `rgba(${c.r},${c.g},${c.b},${a})`;
 }
 
-// The metrics of a face of the Liberation fonts, which the Rust side embeds
-// and measures with, in font units. The CSS font of each family names first
-// the Liberation font and then the fonts with the same metrics, so the text
-// measures as it does in the engine.
+// The metrics of a face of the Sinteract fonts, which the Rust side embeds
+// and measures with, in font units. They have the outlines of the Liberation
+// fonts, so the CSS font of each family names first the Liberation font of
+// the system and then the fonts with the same metrics, and the text measures
+// as it does in the engine.
 interface Face {
   css: string;
   ascender: number;
@@ -460,16 +461,16 @@ const ALIASES: Record<string, typeof FAMILIES.sans> = {
   "": FAMILIES.sans,
   "sans-serif": FAMILIES.sans,
   "sans": FAMILIES.sans,
-  "liberation sans": FAMILIES.sans,
+  "sinteract sans": FAMILIES.sans,
   "serif": FAMILIES.serif,
-  "liberation serif": FAMILIES.serif,
+  "sinteract serif": FAMILIES.serif,
   "monospace": FAMILIES.mono,
   "mono": FAMILIES.mono,
-  "liberation mono": FAMILIES.mono,
+  "sinteract mono": FAMILIES.mono,
 };
 
 // The face of a family. A family of another name draws with that font when
-// the browser has it, and measures as Liberation Sans, the face that the
+// the browser has it, and measures as Sinteract Sans, the face that the
 // Rust view falls back to.
 function faceOf(family: string, weight: number): Face {
   const name = family.trim();

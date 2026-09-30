@@ -876,7 +876,7 @@ fn families(s: &mut Scene, x: f32, y: f32, _: f32) {
         ("", "Sans default"),
         ("serif", "Serif"),
         ("mono", "Mono\ttab"),
-        ("Liberation Serif", "By full name"),
+        ("Sinteract Serif", "By full name"),
     ];
     for (i, (family, line)) in lines.into_iter().enumerate() {
         let spec = TextSpec {

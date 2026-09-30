@@ -249,7 +249,7 @@ mod tests {
             |clip| {
                 let text = TextSpec {
                     size: 12.0,
-                    family: "Liberation Sans".into(),
+                    family: "Sinteract Sans".into(),
                     weight: 700,
                     style: FontStyle::Italic,
                     text: "Olá".into(),

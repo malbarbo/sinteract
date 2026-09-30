@@ -4,7 +4,7 @@
 //! replays it. `renderer::pixmap` rasterizes a scene to a tiny-skia
 //! `Pixmap`, and `renderer::pdf` and [`renderer::svg`] write it as PDF
 //! and SVG with the text as glyph outlines. [`text`] holds the embedded
-//! Liberation families and measures and outlines glyphs. These build on
+//! Sinteract families and measures and outlines glyphs. These build on
 //! wasm32 too, except the system font lookup of `text`, which the
 //! `native-fonts` feature carries.
 //!

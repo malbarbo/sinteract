@@ -25,9 +25,10 @@ const view = new View(canvas, { onStatus: (s) => console.log(s.kind) });
 view.connect(`wss://${location.host}/play?token=${token}`);
 ```
 
-The text uses the Liberation fonts when the system has them, and Arial, Times
-New Roman and Courier New otherwise, which have the same metrics, so a text
-measures as it does in the engine.
+The engine embeds the Sinteract fonts, which have the outlines of the Liberation
+fonts. The client draws the text with the Liberation fonts when the system has
+them, and with Arial, Times New Roman and Courier New otherwise, which have the
+same metrics, so a text measures as it does in the engine.
 
 `server/` is a server to try the client with, with one room and no lobby. It
 starts the room as soon as the engine sends its hello and prints the link of

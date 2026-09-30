@@ -1,9 +1,11 @@
 //! Text measurement and glyph outlines.
 //!
-//! The crate embeds Liberation Sans, Serif and Mono in Regular, Bold, Italic
-//! and BoldItalic. An alias such as `sans-serif`, `serif`, `monospace` or
-//! `mono` maps to an embedded family. Any other name goes to a `fontdb`
-//! query over the fonts installed on the system and falls back to Liberation
+//! The crate embeds Sinteract Sans, Serif and Mono in Regular, Bold, Italic
+//! and BoldItalic. They have the outlines and the metrics of Liberation
+//! Sans, Serif and Mono, under the SIL Open Font License 1.1, which reserves
+//! the name Liberation. An alias such as `sans-serif`, `serif`, `monospace`
+//! or `mono` maps to an embedded family. Any other name goes to a `fontdb`
+//! query over the fonts installed on the system and falls back to Sinteract
 //! Sans, so a text in an embedded family measures the same on every target.
 //!
 //! The `native-fonts` feature carries that query. It is on by default, and
@@ -32,10 +34,10 @@ use crate::scene::{FontStyle, TextSpec};
 /// Measure a text in the face that `family`, `weight` and `style` pick.
 ///
 /// The family loses its surrounding space first. An empty family is
-/// Liberation Sans, and an alias (`sans-serif`, `sans`, `serif`, `monospace`,
+/// Sinteract Sans, and an alias (`sans-serif`, `sans`, `serif`, `monospace`,
 /// `mono`, or an embedded family name, in any case) is the embedded family.
 /// Any other name goes to the fonts installed on the system, and to
-/// Liberation Sans when none matches or when the crate carries no system
+/// Sinteract Sans when none matches or when the crate carries no system
 /// lookup. In an embedded family, a weight of 600 or more picks the bold
 /// face, and an italic or oblique style the italic one.
 ///
@@ -301,7 +303,7 @@ impl ttf_parser::OutlineBuilder for OutlineAdapter<'_> {
 /// same face as the engine.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResolvedFont {
-    /// `"Liberation Sans"`, `"Liberation Serif"`, `"Liberation Mono"`, or
+    /// `"Sinteract Sans"`, `"Sinteract Serif"`, `"Sinteract Mono"`, or
     /// the name fontdb reports.
     family: &'static str,
     face: &'static Face<'static>,
@@ -315,11 +317,11 @@ impl ResolvedFont {
         // nothing.
         let key = family.trim();
         let is = |names: &[&str]| names.iter().any(|n| key.eq_ignore_ascii_case(n));
-        let alias = if is(&["", "sans-serif", "sans", "liberation sans"]) {
+        let alias = if is(&["", "sans-serif", "sans", "sinteract sans"]) {
             Some(&SANS)
-        } else if is(&["serif", "liberation serif"]) {
+        } else if is(&["serif", "sinteract serif"]) {
             Some(&SERIF)
-        } else if is(&["monospace", "mono", "liberation mono"]) {
+        } else if is(&["monospace", "mono", "sinteract mono"]) {
             Some(&MONO)
         } else {
             None
@@ -483,9 +485,9 @@ macro_rules! embed_family {
     };
 }
 
-static SANS: Family = embed_family!("Liberation Sans", "LiberationSans");
-static SERIF: Family = embed_family!("Liberation Serif", "LiberationSerif");
-static MONO: Family = embed_family!("Liberation Mono", "LiberationMono");
+static SANS: Family = embed_family!("Sinteract Sans", "LiberationSans");
+static SERIF: Family = embed_family!("Sinteract Serif", "LiberationSerif");
+static MONO: Family = embed_family!("Sinteract Mono", "LiberationMono");
 
 /// A CSS weight at or above this picks the bold face.
 const BOLD_THRESHOLD: u16 = 600;
@@ -496,7 +498,7 @@ mod tests {
     use crate::outline::tests::Recorder;
     use crate::scene::RotatedRect;
 
-    /// Liberation Sans Regular, the face of a node that names no family.
+    /// Sinteract Sans Regular, the face of a node that names no family.
     fn sans() -> &'static Face<'static> {
         SANS.regular.face()
     }
@@ -537,7 +539,7 @@ mod tests {
     #[test]
     fn the_height_spans_the_ascender_to_the_descender() {
         let h = metrics("", 400, 20.0, "").height();
-        // Liberation Sans has an ascender of 1854 and a descender of -434 in
+        // Sinteract Sans has an ascender of 1854 and a descender of -434 in
         // a 2048-unit em, and the division is exact.
         assert_eq!(h, (1854.0 + 434.0) * 20.0 / 2048.0);
     }
@@ -651,29 +653,29 @@ mod tests {
     #[test]
     fn resolve_empty_family_picks_sans_regular() {
         let f = ResolvedFont::resolve("", 400, FontStyle::Normal);
-        assert_eq!(f.family, "Liberation Sans");
+        assert_eq!(f.family, "Sinteract Sans");
         assert!(std::ptr::eq(f.face, sans()), "not the regular face");
     }
 
     #[test]
     fn resolve_serif_alias_picks_serif() {
         let f = ResolvedFont::resolve("serif", 400, FontStyle::Normal);
-        assert_eq!(f.family, "Liberation Serif");
+        assert_eq!(f.family, "Sinteract Serif");
     }
 
     #[test]
     fn resolve_sans_alias_picks_sans() {
-        for name in ["sans", "sans-serif", "Liberation Sans"] {
+        for name in ["sans", "sans-serif", "Sinteract Sans"] {
             let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
-            assert_eq!(f.family, "Liberation Sans", "name={name}");
+            assert_eq!(f.family, "Sinteract Sans", "name={name}");
         }
     }
 
     #[test]
     fn resolve_mono_alias_picks_mono() {
-        for name in ["mono", "monospace", "Liberation Mono"] {
+        for name in ["mono", "monospace", "Sinteract Mono"] {
             let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
-            assert_eq!(f.family, "Liberation Mono", "name={name}");
+            assert_eq!(f.family, "Sinteract Mono", "name={name}");
         }
     }
 
@@ -682,9 +684,9 @@ mod tests {
         for name in ["  serif  ", "\tserif\n", "   "] {
             let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
             let want = if name.trim().is_empty() {
-                "Liberation Sans"
+                "Sinteract Sans"
             } else {
-                "Liberation Serif"
+                "Sinteract Serif"
             };
             assert_eq!(f.family, want, "name={name:?}");
         }
@@ -693,7 +695,7 @@ mod tests {
     #[test]
     fn resolve_is_case_insensitive() {
         let f = ResolvedFont::resolve("SANS-SERIF", 400, FontStyle::Normal);
-        assert_eq!(f.family, "Liberation Sans");
+        assert_eq!(f.family, "Sinteract Sans");
     }
 
     #[test]
@@ -728,9 +730,9 @@ mod tests {
     #[test]
     fn unknown_family_falls_back_to_sans_when_not_in_fontdb() {
         // No system has a font with this name, so resolve falls through to
-        // Liberation Sans.
+        // Sinteract Sans.
         let f = ResolvedFont::resolve("ZZZ_NonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
-        assert_eq!(f.family, "Liberation Sans");
+        assert_eq!(f.family, "Sinteract Sans");
     }
 
     #[test]
@@ -783,16 +785,16 @@ mod tests {
         assert_eq!(m.width(), 0.0);
         assert_eq!(m.height(), hi.height());
         assert_eq!(m.baseline_y(), drawn.baseline_y);
-        assert_eq!(m.family(), "Liberation Sans");
+        assert_eq!(m.family(), "Sinteract Sans");
     }
 
     #[test]
     fn measure_gives_the_family_after_fallback() {
         let family = |name| measure(name, 400, FontStyle::Normal, 20.0, "Hi").map(|m| m.family());
-        assert_eq!(family("serif"), Some("Liberation Serif"));
+        assert_eq!(family("serif"), Some("Sinteract Serif"));
         assert_eq!(
             family("ZZZ_NonexistentFontXyzzy_ZZZ"),
-            Some("Liberation Sans")
+            Some("Sinteract Sans")
         );
     }
 
@@ -850,7 +852,7 @@ mod tests {
 
     #[test]
     fn underline_top_sits_at_the_post_position() {
-        // Liberation Sans puts the underline at -67 with a thickness of 150.
+        // Sinteract Sans puts the underline at -67 with a thickness of 150.
         // At a size of one em in font units, a unit of the font is one unit
         // of the box.
         let spec = text_spec(2048.0, "Hi");
