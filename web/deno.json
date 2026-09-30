@@ -17,7 +17,7 @@
     "exclude": ["src/capnp/"]
   },
   "fmt": {
-    "exclude": ["src/capnp/", "build/", "dist/", "server/"]
+    "exclude": ["src/capnp/", "build/", "dist/", "server/", "wasm/"]
   },
-  "exclude": ["build/", "dist/", "server/"]
+  "exclude": ["build/", "dist/", "server/", "wasm/"]
 }

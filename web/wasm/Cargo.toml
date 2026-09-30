@@ -1,0 +1,19 @@
+[package]
+name = "sinteract-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The part of the HTML client of sinteract that reads the frames and draws them with the canvas renderer."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sinteract = { path = "../..", default-features = false, features = ["render"] }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

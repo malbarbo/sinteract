@@ -3,11 +3,11 @@
 // antialiasing of Chrome never match tiny-skia pixel by pixel, so a tile
 // fails only when its mean difference passes TOLERANCE.
 //
-//   deno run -A tools/render_test.ts CHROME SERVER GALLERY EXPECTED ACTUAL
+//   deno run -A tools/render_test.ts CHROME SERVER PAGE GALLERY EXPECTED ACTUAL
 //
-// SERVER is the binary of web/server, GALLERY the binary of the gallery
-// example, EXPECTED its PNG at scale 2, and ACTUAL the PNG that receives
-// the screenshot of Chrome.
+// SERVER is the binary of web/server, PAGE the page of the client that it
+// serves, GALLERY the binary of the gallery example, EXPECTED its PNG at
+// scale 2, and ACTUAL the PNG that receives the screenshot of Chrome.
 
 import { decode, type DecodedPng } from "fast-png";
 import puppeteer from "puppeteer-core";
@@ -21,9 +21,13 @@ const TIMEOUT_MS = 10_000;
 // The scale of the PNG of the gallery example.
 const SCALE = 2;
 
-const [chrome, server, gallery, expectedPath, actualPath] = Deno.args;
-if (!chrome || !server || !gallery || !expectedPath || !actualPath) {
-  console.error("usage: render_test.ts CHROME SERVER GALLERY EXPECTED ACTUAL");
+const [chrome, server, pagePath, gallery, expectedPath, actualPath] = Deno.args;
+if (
+  !chrome || !server || !pagePath || !gallery || !expectedPath || !actualPath
+) {
+  console.error(
+    "usage: render_test.ts CHROME SERVER PAGE GALLERY EXPECTED ACTUAL",
+  );
   Deno.exit(1);
 }
 
@@ -32,7 +36,16 @@ const width = expected.width / SCALE;
 const height = expected.height / SCALE;
 
 const child = new Deno.Command(server, {
-  args: ["--addr", "127.0.0.1:0", "--players", "1", gallery, "stage"],
+  args: [
+    "--addr",
+    "127.0.0.1:0",
+    "--players",
+    "1",
+    "--page",
+    pagePath,
+    gallery,
+    "stage",
+  ],
   stdout: "null",
   stderr: "piped",
 }).spawn();
@@ -65,7 +78,7 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  ${failure}`);
   Deno.exit(1);
 }
-console.log(`the client draws the gallery as the pixmap does`);
+console.log(`${pagePath} draws the gallery as the pixmap does`);
 
 // The link of the first player, from the lines that the server prints. The
 // rest of the stream still goes to the terminal.

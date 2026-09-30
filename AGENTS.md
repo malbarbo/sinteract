@@ -38,13 +38,16 @@ directory once, on wasm32 and on the two features, and each submodule that
 needs a given feature has its own `cfg` in `display/mod.rs`.
 
 `web/` is the view for a browser, in TypeScript, which Deno checks and
-bundles into one HTML file. `web/src/capnp/` is generated from `schema/`
+bundles into two pages of one HTML file each. `dist/index.html` reads and
+draws the frames in TypeScript, and `dist/rust.html` with the crate of
+`web/wasm/`, which wraps `view::FrameReader` and `renderer::canvas` for
+the page and which wasm-pack builds. `web/src/capnp/` is generated from `schema/`
 by capnp-es and committed, and `make -C web capnp` regenerates it. A change
 of the schema regenerates it in the same commit, and a change of
 `scene.capnp` also updates the layout in `web/src/scene.ts`, which reads a
 frame with a reader of its own. `web/server/` is a crate
 of its own, a server to try the client with, and the library does not
-depend on it.
+depend on it. `web/wasm/` is a crate of its own too.
 
 `PLAN.md` is the plan for the server and client modes. `SERVER.md` is the
 contract with the server of Sarcade, and a change to the public API of
@@ -62,7 +65,7 @@ cargo build --target wasm32-unknown-unknown   # the part a browser client uses
 cargo clippy --all-targets --target wasm32-unknown-unknown
 cargo doc --no-deps                           # warning-free
 cargo doc --no-deps --target wasm32-unknown-unknown
-make -C web check test                        # the HTML client
+make -C web check test                        # the HTML client, with wasm-pack
 make -C web render-test                       # its drawing, in Chrome
 ```
 
