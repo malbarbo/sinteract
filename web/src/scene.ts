@@ -336,18 +336,16 @@ function readPaint(p: W.Paint): Paint {
 
 // The solid color of a gradient with no stops or no extent, or the gradient.
 function collapse(g: Paint & { kind: "linear" | "radial" }): Paint {
-  if (g.stops.length === 0) return TRANSPARENT;
+  if (g.stops.length === 0) {
+    return { kind: "solid", color: { r: 0, g: 0, b: 0, a: 0 } };
+  }
   const extent = g.kind === "linear"
     ? Math.hypot(g.x1 - g.x0, g.y1 - g.y0)
     : g.radius;
-  if (extent <= NO_EXTENT) return lastStop(g.stops);
+  if (extent <= NO_EXTENT) {
+    return { kind: "solid", color: g.stops[g.stops.length - 1].color };
+  }
   return g;
-}
-
-const TRANSPARENT: Paint = { kind: "solid", color: { r: 0, g: 0, b: 0, a: 0 } };
-
-function lastStop(stops: Stop[]): Paint {
-  return { kind: "solid", color: stops[stops.length - 1].color };
 }
 
 // Raises a stop that is below the one before it and clamps every offset to
