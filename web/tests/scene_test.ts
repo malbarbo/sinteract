@@ -114,24 +114,20 @@ Deno.test("the stops rise and stay in [0, 1], and a gradient with no extent is s
   });
 });
 
-Deno.test("a gradient collapses to a solid color before the check for a float that is not finite", () => {
+Deno.test("a gradient with a float that is not finite skips its element, unless it has no stops", () => {
   const bytes = sceneBytes(3, (l) => {
     const radial = writePath(l.get(0), [1], [1, 2])._initFill()._initRadial();
-    radial.cx = NaN;
     radial.radius = -Infinity;
-    radial._initStops(1).get(0)._initColor().g = 7;
+    radial._initStops(1);
     const linear = writePath(l.get(1), [1], [1, 2])._initFill()._initLinear();
     linear.x1 = NaN;
-    const skipped = writePath(l.get(2), [1], [1, 2])._initFill()._initLinear();
-    skipped.x1 = NaN;
-    skipped._initStops(1);
+    linear._initStops(1).get(0).offset = NaN;
+    const empty = writePath(l.get(2), [1], [1, 2])._initFill()._initLinear();
+    empty.x1 = NaN;
   });
   assertEquals(
     decode(bytes).map((e) => e.kind === "path" && e.style.fill),
-    [
-      { kind: "solid", color: { r: 0, g: 7, b: 0, a: 0 } },
-      { kind: "solid", color: { r: 0, g: 0, b: 0, a: 0 } },
-    ],
+    [{ kind: "solid", color: { r: 0, g: 0, b: 0, a: 0 } }],
   );
 });
 

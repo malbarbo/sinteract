@@ -128,6 +128,20 @@ impl Gradient {
     pub fn spread(&self) -> SpreadMode {
         self.spread
     }
+
+    /// Returns `true` if every float of the gradient is finite, `false`
+    /// otherwise.
+    fn is_finite(&self) -> bool {
+        let geometry = match self.geometry {
+            GradientGeometry::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
+            GradientGeometry::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
+        };
+        geometry
+            && self
+                .stops
+                .iter()
+                .all(|s| all_finite(&[s.offset, s.color.a]))
+    }
 }
 
 /// Scales a linear axis too long for an f32 about the origin. tiny-skia
@@ -223,6 +237,11 @@ impl Paint {
             stops,
             spread,
         };
+        // A gradient with a float that is not finite stays a gradient, so
+        // `is_finite` drops its element as it drops any other.
+        if !g.is_finite() {
+            return Self::Gradient(Box::new(g));
+        }
         // The threshold of tiny-skia, which cannot tell a gradient below it
         // from one of no extent at all, so the scene decides here and the
         // three backends agree.
@@ -261,13 +280,7 @@ impl Paint {
     pub(crate) fn is_finite(&self) -> bool {
         match self {
             Self::Solid(c) => c.a.is_finite(),
-            Self::Gradient(g) => {
-                let geometry = match g.geometry {
-                    GradientGeometry::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
-                    GradientGeometry::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
-                };
-                geometry && g.stops.iter().all(|s| all_finite(&[s.offset, s.color.a]))
-            }
+            Self::Gradient(g) => g.is_finite(),
         }
     }
 }
@@ -1949,6 +1962,27 @@ mod tests {
             Paint::radial(5.0, 5.0, 1.0, stops),
             Paint::Gradient(_)
         ));
+    }
+
+    #[test]
+    fn a_gradient_with_a_non_finite_float_does_not_become_solid() {
+        let stops = vec![Stop::default()];
+        for paint in [
+            Paint::radial(5.0, 5.0, f32::NEG_INFINITY, stops.clone()),
+            Paint::radial(f32::NAN, 5.0, 0.0, stops.clone()),
+            Paint::linear(
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                vec![Stop {
+                    offset: f32::NAN,
+                    ..Stop::default()
+                }],
+            ),
+        ] {
+            assert!(!paint.is_finite(), "{paint:?}");
+        }
     }
 
     #[test]

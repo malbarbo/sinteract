@@ -284,18 +284,13 @@ function readText(t: W.TextNode): TextElement {
 // the color of its last stop, as in SVG. No stops paint transparent.
 const NO_EXTENT = 1 / (1 << 15);
 
-// The paint of `p`. As in Rust, a gradient collapses to a solid color before
-// the check for a float that is not finite, so a gradient with no extent and
-// a radius of -Infinity still draws.
 function readPaint(p: W.Paint): Paint {
-  let paint: Paint;
   switch (p.which()) {
     case W.Paint.SOLID:
-      paint = { kind: "solid", color: readRgba(p.solid) };
-      break;
+      return { kind: "solid", color: readRgba(p.solid) };
     case W.Paint.LINEAR: {
       const g = p.linear;
-      paint = collapse({
+      return collapse({
         kind: "linear",
         x0: g.x0,
         y0: g.y0,
@@ -304,11 +299,10 @@ function readPaint(p: W.Paint): Paint {
         stops: readStops(g.stops),
         spread: spreadOf(g.spread),
       });
-      break;
     }
     case W.Paint.RADIAL: {
       const g = p.radial;
-      paint = collapse({
+      return collapse({
         kind: "radial",
         cx: g.cx,
         cy: g.cy,
@@ -316,7 +310,6 @@ function readPaint(p: W.Paint): Paint {
         stops: readStops(g.stops),
         spread: spreadOf(g.spread),
       });
-      break;
     }
     default:
       // An arm from a newer schema draws the fallback color of its writer.
@@ -324,21 +317,18 @@ function readPaint(p: W.Paint): Paint {
       if (!p.hasFallback) throw new Skip();
       return { kind: "solid", color: rgbaFromU32(p.fallback) };
   }
-  if (paint.kind === "solid") finiteNumber(paint.color.a);
-  else {
-    if (paint.kind === "linear") {
-      finite([paint.x0, paint.y0, paint.x1, paint.y1]);
-    } else finite([paint.cx, paint.cy, paint.radius]);
-    for (const s of paint.stops) finite([s.offset, s.color.a]);
-  }
-  return paint;
 }
 
-// The solid color of a gradient with no stops or no extent, or the gradient.
+// The solid color of a gradient with no stops or no extent, or the gradient,
+// in the order of Paint::gradient in Rust. A gradient with a float that is
+// not finite skips its element.
 function collapse(g: Paint & { kind: "linear" | "radial" }): Paint {
   if (g.stops.length === 0) {
     return { kind: "solid", color: { r: 0, g: 0, b: 0, a: 0 } };
   }
+  if (g.kind === "linear") finite([g.x0, g.y0, g.x1, g.y1]);
+  else finite([g.cx, g.cy, g.radius]);
+  for (const s of g.stops) finite([s.offset, s.color.a]);
   const extent = g.kind === "linear"
     ? Math.hypot(g.x1 - g.x0, g.y1 - g.y0)
     : g.radius;
@@ -363,7 +353,7 @@ function readStops(list: $.List<W.Stop>): Stop[] {
 }
 
 function readRgba(c: W.Rgba): Rgba {
-  return { r: c.r, g: c.g, b: c.b, a: c.a };
+  return { r: c.r, g: c.g, b: c.b, a: finiteNumber(c.a) };
 }
 
 // A 0xRRGGBBAA color, as the fallback of a paint carries it.
