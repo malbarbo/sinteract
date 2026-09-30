@@ -2,9 +2,8 @@
 //! `examples/engine.rs`. It runs the engine as a subprocess and plays the
 //! part of the server for one player, with a [`ServerCore`]. At the hello
 //! of the engine it starts the room with player 1, shows the frames in the
-//! terminal or in a window, and sends the input of the user and a tick for
-//! each tick of the display. At the end it prints to stderr what the
-//! frames cost:
+//! terminal or in a window, and sends the input of the user and a tick at
+//! 60 Hz. At the end it prints to stderr what the frames cost:
 //!
 //! ```text
 //! cargo build --examples
@@ -38,6 +37,11 @@ const BACKLOG: usize = 4;
 
 /// How much the view asks of the pipe of the engine at a time.
 const READ_BYTES: usize = 64 * 1024;
+
+/// The period of the tick of the room, 60 Hz. A server keeps one rate for
+/// the whole session, and the rate of a display changes with its monitor,
+/// so the ticks of the display do not pace the room.
+const TICK: Duration = Duration::from_micros(16_667);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -79,12 +83,19 @@ fn main() -> ExitCode {
 
     let mut reader = FrameReader::new();
     let mut stats = Stats::default();
+    let mut next_tick = Instant::now();
     loop {
-        match display.wait_event(None) {
-            Ok(Event::Tick) => {
-                stats.tick();
-                core.tick();
-            }
+        let event = display.wait_event(Some(next_tick));
+        let now = Instant::now();
+        if now >= next_tick {
+            stats.tick();
+            core.tick();
+            // A late tick does not turn into a burst.
+            next_tick = (next_tick + TICK).max(now);
+        }
+        match event {
+            // The room keeps its own time.
+            Ok(Event::Tick) => {}
             Ok(Event::Input(ev)) => core.input(conn, &ev),
             // The bytes of the engine come through the channel, and the
             // reader thread wakes the loop after each read.
@@ -262,7 +273,7 @@ fn show(
 #[derive(Default)]
 struct Stats {
     frames: u32,
-    /// The time between two ticks of the display.
+    /// The time between two ticks of the room.
     tick_gap: Span,
     present: Span,
     last_tick: Option<Instant>,
