@@ -130,7 +130,11 @@ export class View {
     this.#images.get(id)?.image?.close();
     const asset: Asset = {
       image: null,
-      ready: createImageBitmap(new Blob([blob as BlobPart])).then(
+      // The Rust view ignores the color profile of an image, so this one
+      // does too.
+      ready: createImageBitmap(new Blob([blob as BlobPart]), {
+        colorSpaceConversion: "none",
+      }).then(
         (image) => {
           if (this.#images.get(id) === asset) asset.image = image;
           else image.close();
