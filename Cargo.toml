@@ -150,6 +150,10 @@ required-features = ["terminal", "window"]
 name = "gallery"
 required-features = ["terminal", "window"]
 
+[[example]]
+name = "players"
+required-features = ["terminal", "window"]
+
 # The library panics only through an expect or an assert that states an
 # invariant.
 [lints.clippy]
