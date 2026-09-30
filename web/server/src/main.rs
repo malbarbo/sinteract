@@ -26,6 +26,7 @@ use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use axum::serve::{Listener, ListenerExt};
 use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
@@ -193,7 +194,11 @@ async fn run(options: Options) -> io::Result<()> {
     };
     let fd3 = pipe::Sender::from_owned_fd(OwnedFd::from(fd3))?;
     let fd4 = pipe::Receiver::from_owned_fd(OwnedFd::from(fd4))?;
-    let listener = tokio::net::TcpListener::bind(options.addr).await?;
+    // A frame goes out as soon as it is written, so two frames in a row do
+    // not wait for each other in one segment.
+    let listener = tokio::net::TcpListener::bind(options.addr)
+        .await?
+        .tap_io(|tcp| _ = tcp.set_nodelay(true));
     let room = Arc::new(Room {
         phase: Mutex::new(Phase::Lobby(LobbyCore::new())),
         to_engine: Notify::new(),
