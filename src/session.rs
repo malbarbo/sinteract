@@ -87,6 +87,18 @@ pub enum Target {
 /// the cap of the framing, since a nickname has 64 bytes at most.
 pub const MAX_PLAYERS: u32 = 1024;
 
+/// The variable of the environment that the server sets, to any value, when
+/// it runs the engine with a session. The `Stage` of the displays then
+/// reads the server from [`SERVER_TO_ENGINE_FD`] and writes to it on
+/// [`ENGINE_TO_SERVER_FD`].
+pub const SESSION_VAR: &str = "SINTERACT_SESSION";
+
+/// The descriptor of the engine that reads the stream of the server.
+pub const SERVER_TO_ENGINE_FD: i32 = 3;
+
+/// The descriptor of the engine that writes the stream to the server.
+pub const ENGINE_TO_SERVER_FD: i32 = 4;
+
 /// The fewest and the most players that a game takes, from 1 to
 /// [`MAX_PLAYERS`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

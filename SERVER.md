@@ -54,10 +54,11 @@ Cada partida tem um processo de engine. O servidor cria dois pipes e os
 entrega à engine como fd 3 e fd 4, com `SINTERACT_SESSION=1` no ambiente.
 A engine lê as mensagens do servidor (`SIS1`) no fd 3 e escreve as suas
 (`SIE1`) no fd 4. Os números são fixos, porque as permissões do Deno já
-nomeiam `/dev/fd/3` e `/dev/fd/4`. O crate `command-fds` põe os pipes no
-lugar. O `Command` guarda as pontas da engine, então o servidor o descarta
-logo depois do `spawn`. Senão, o servidor guarda a ponta de escrita do fd 4
-e nunca vê o fim dele.
+nomeiam `/dev/fd/3` e `/dev/fd/4`. O módulo `session` dá esses nomes como
+`SESSION_VAR`, `SERVER_TO_ENGINE_FD` e `ENGINE_TO_SERVER_FD`. O crate
+`command-fds` põe os pipes no lugar. O `Command` guarda as pontas da
+engine, então o servidor o descarta logo depois do `spawn`. Senão, o
+servidor guarda a ponta de escrita do fd 4 e nunca vê o fim dele.
 
 O `stdin`, o `stdout` e o `stderr` ficam livres para o programa. Um `print`
 do aluno não passa pelos pipes da sessão e não estraga a partida. O
@@ -349,7 +350,7 @@ use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
 use sinteract::server::{EngineError, LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
-use sinteract::session::Player;
+use sinteract::session::{ENGINE_TO_SERVER_FD, Player, SERVER_TO_ENGINE_FD, SESSION_VAR};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
 use tokio::process::{Child, Command};
@@ -421,13 +422,13 @@ async fn main() -> io::Result<()> {
         let mut command = Command::new("sgleam");
         command
             .args(["server", "jogo.gleam"])
-            .env("SINTERACT_SESSION", "1")
+            .env(SESSION_VAR, "1")
             .stdin(Stdio::null())
             .process_group(0) // o Ctrl-C do servidor não chega à engine
             .kill_on_drop(true)
             .fd_mappings(vec![
-                FdMapping { parent_fd: OwnedFd::from(engine_reads), child_fd: 3 },
-                FdMapping { parent_fd: OwnedFd::from(engine_writes), child_fd: 4 },
+                FdMapping { parent_fd: OwnedFd::from(engine_reads), child_fd: SERVER_TO_ENGINE_FD },
+                FdMapping { parent_fd: OwnedFd::from(engine_writes), child_fd: ENGINE_TO_SERVER_FD },
             ])
             .map_err(io::Error::other)?;
         command.spawn()?

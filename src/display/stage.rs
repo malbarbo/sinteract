@@ -9,8 +9,8 @@ use std::time::Instant;
 use super::{Display, OpenError, PresentError, TerminalOptions, open_native};
 use crate::event::{Event, InputEvent, Interrupt};
 use crate::scene::Scene;
-use crate::session::PlayerRange;
 use crate::session::{FrameError, Player, Session, SessionError, SessionEvent, StartError, Target};
+use crate::session::{PlayerRange, SESSION_VAR};
 
 /// The game of an engine, in a session with a server when the server runs
 /// the engine, and on a window or the terminal otherwise, where the user is
@@ -70,10 +70,6 @@ pub enum StageError {
     /// or the platform has no such descriptors.
     NoSession,
 }
-
-/// The variable of the environment that the server sets when it runs the
-/// engine with the session on fd 3 and fd 4.
-const SESSION_VAR: &str = "SINTERACT_SESSION";
 
 impl Stage {
     /// Open the stage of a game that takes `players`, with each player and
@@ -243,6 +239,8 @@ fn take_session_fds() -> Result<(File, File), StageError> {
     use std::os::fd::FromRawFd;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use crate::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD};
+
     /// Set once a stage takes fd 3 and fd 4, since a second owner of the
     /// same descriptors would close them twice.
     static TAKEN: AtomicBool = AtomicBool::new(false);
@@ -250,7 +248,7 @@ fn take_session_fds() -> Result<(File, File), StageError> {
     // SAFETY: F_GETFD only reads the flags of a descriptor, and fails on
     // one that is not open.
     let open = |fd| unsafe { libc::fcntl(fd, libc::F_GETFD) } != -1;
-    if !open(3) || !open(4) {
+    if !open(SERVER_TO_ENGINE_FD) || !open(ENGINE_TO_SERVER_FD) {
         return Err(StageError::NoSession);
     }
     if TAKEN.swap(true, Ordering::SeqCst) {
@@ -258,7 +256,12 @@ fn take_session_fds() -> Result<(File, File), StageError> {
     }
     // SAFETY: both are open, SINTERACT_SESSION says that the server opened
     // them for the session, and TAKEN gives them to one stage.
-    Ok(unsafe { (File::from_raw_fd(3), File::from_raw_fd(4)) })
+    Ok(unsafe {
+        (
+            File::from_raw_fd(SERVER_TO_ENGINE_FD),
+            File::from_raw_fd(ENGINE_TO_SERVER_FD),
+        )
+    })
 }
 
 #[cfg(not(unix))]

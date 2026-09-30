@@ -28,6 +28,7 @@ use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
 use sinteract::server::{Conn, LobbyCore, Next, ServerCore};
+use sinteract::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD, SESSION_VAR};
 use sinteract::view::FrameReader;
 
 /// How many reads of the engine the reader thread holds before it waits
@@ -168,16 +169,16 @@ fn spawn(engine: &str, args: &[String]) -> io::Result<(Child, PipeWriter, PipeRe
     // stream.
     let child = Command::new(engine)
         .args(args)
-        .env("SINTERACT_SESSION", "1")
+        .env(SESSION_VAR, "1")
         .stdin(Stdio::null())
         .fd_mappings(vec![
             FdMapping {
                 parent_fd: OwnedFd::from(engine_reads),
-                child_fd: 3,
+                child_fd: SERVER_TO_ENGINE_FD,
             },
             FdMapping {
                 parent_fd: OwnedFd::from(engine_writes),
-                child_fd: 4,
+                child_fd: ENGINE_TO_SERVER_FD,
             },
         ])
         .map_err(io::Error::other)?

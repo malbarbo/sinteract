@@ -30,7 +30,7 @@ use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
 use sinteract::server::{LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
-use sinteract::session::Player;
+use sinteract::session::{ENGINE_TO_SERVER_FD, Player, SERVER_TO_ENGINE_FD, SESSION_VAR};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
 use tokio::process::{Child, Command};
@@ -171,7 +171,7 @@ async fn run(options: Options) -> io::Result<()> {
         let mut command = Command::new(&options.engine);
         command
             .args(&options.engine_args)
-            .env("SINTERACT_SESSION", "1")
+            .env(SESSION_VAR, "1")
             .stdin(Stdio::null())
             // The Ctrl-C of the server does not reach the engine.
             .process_group(0)
@@ -179,11 +179,11 @@ async fn run(options: Options) -> io::Result<()> {
             .fd_mappings(vec![
                 FdMapping {
                     parent_fd: OwnedFd::from(engine_reads),
-                    child_fd: 3,
+                    child_fd: SERVER_TO_ENGINE_FD,
                 },
                 FdMapping {
                     parent_fd: OwnedFd::from(engine_writes),
-                    child_fd: 4,
+                    child_fd: ENGINE_TO_SERVER_FD,
                 },
             ])
             .map_err(io::Error::other)?;
