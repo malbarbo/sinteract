@@ -1,7 +1,8 @@
 //! The messages of the server, which go to the engine.
 //!
-//! The server starts the session with the players, who stay the same until
-//! the end, in a message whose root is a `Start`. Every message after it is
+//! The server starts the session with the players and the rate of the
+//! ticks, which stay the same until the end, in a message whose root is a
+//! `Start`. Every message after it is
 //! a `ServerToEngine`. The server passes on the input of each view with its player. A tick
 //! of the server paces the engine for every player, a lost says that the
 //! server dropped an asset, and the server ends the session with the end
@@ -53,9 +54,14 @@ pub fn write_lost(w: &mut impl Write, id: u32) -> io::Result<()> {
 }
 
 /// Write the start of the session, with a player for each of
-/// `nicknames`, numbered from 1 in their order. More than
-/// [`MAX_PLAYERS`] players is [`io::ErrorKind::InvalidInput`].
-pub fn write_start<S: AsRef<str>>(w: &mut impl Write, nicknames: &[S]) -> io::Result<()> {
+/// `nicknames`, numbered from 1 in their order, and ticks at `tick_rate`
+/// thousandths of a hertz. More than [`MAX_PLAYERS`] players is
+/// [`io::ErrorKind::InvalidInput`].
+pub fn write_start<S: AsRef<str>>(
+    w: &mut impl Write,
+    nicknames: &[S],
+    tick_rate: NonZeroU32,
+) -> io::Result<()> {
     let Some(len) = u32::try_from(nicknames.len())
         .ok()
         .filter(|&len| len <= MAX_PLAYERS)
@@ -68,7 +74,11 @@ pub fn write_start<S: AsRef<str>>(w: &mut impl Write, nicknames: &[S]) -> io::Re
             ),
         ));
     };
-    write_framed(w, Side::Server, &start_message(len, nicknames))
+    write_framed(
+        w,
+        Side::Server,
+        &start_message(len, nicknames, tick_rate.get()),
+    )
 }
 
 /// Decode `payload`. `None` for a message or an event of an arm from a
@@ -98,13 +108,17 @@ fn decode_message(msg: server_to_engine::Reader<'_>) -> Result<Option<Message>, 
 }
 
 /// The nicknames of the players of the start in `payload`, a message with
-/// no envelope, the first of player 1.
-pub(crate) fn read_start(payload: &[u8]) -> Result<Vec<String>, Error> {
+/// no envelope, the first of player 1, and the rate of its ticks. A rate
+/// of 0 is [`Error::NoTickRate`].
+pub(crate) fn read_start(payload: &[u8]) -> Result<(Vec<String>, NonZeroU32), Error> {
     decode_root::<start::Owned, _>(payload, |s| {
-        s.get_members()?
+        let nicknames = s
+            .get_members()?
             .iter()
             .map(|m| Ok(m.get_nickname()?.to_str()?.to_owned()))
-            .collect()
+            .collect::<Result<_, Error>>()?;
+        let tick_rate = NonZeroU32::new(s.get_tick_rate()).ok_or(Error::NoTickRate)?;
+        Ok((nicknames, tick_rate))
     })
 }
 
@@ -137,10 +151,16 @@ fn lost_message(id: u32) -> MessageBuilder<HeapAllocator> {
     builder
 }
 
-/// A start of the `len` players of `nicknames`.
-fn start_message<S: AsRef<str>>(len: u32, nicknames: &[S]) -> MessageBuilder<HeapAllocator> {
+/// A start of the `len` players of `nicknames`, with ticks at
+/// `tick_rate`.
+pub(super) fn start_message<S: AsRef<str>>(
+    len: u32,
+    nicknames: &[S],
+    tick_rate: u32,
+) -> MessageBuilder<HeapAllocator> {
     let mut builder = MessageBuilder::new_default();
-    let start = builder.init_root::<start::Builder>();
+    let mut start = builder.init_root::<start::Builder>();
+    start.set_tick_rate(tick_rate);
     let mut list = start.init_members(len);
     for (i, nickname) in (0..len).zip(nicknames) {
         list.reborrow().get(i).set_nickname(nickname.as_ref());

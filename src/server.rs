@@ -312,13 +312,16 @@ impl LobbyCore {
     }
 
     /// Start the room with a player for each of `nicknames`, numbered from
-    /// 1 in their order, and give the engine the start. A nickname loses
+    /// 1 in their order, and give the engine the start, with ticks at
+    /// `tick_rate` thousandths of a hertz. The server calls
+    /// [`ServerCore::tick`] at that rate until the end. A nickname loses
     /// its control characters, so it cannot move the cursor of a terminal
     /// that prints it, and is cut to 64 bytes. The error gives the lobby
     /// core back, for another try.
     pub fn start<S: AsRef<str>>(
         self,
         nicknames: &[S],
+        tick_rate: NonZeroU32,
     ) -> Result<ServerCore, (LobbyCore, StartError)> {
         let Stage::Ready(range) = self.stage else {
             return Err((self, StartError::NoHello));
@@ -336,7 +339,7 @@ impl LobbyCore {
             .collect();
         let nicknames: Vec<&str> = seats.values().map(|s| s.nickname.as_str()).collect();
         let mut buf = Vec::new();
-        server_to_engine::write_start(&mut buf, &nicknames).expect(UNDER_THE_CAP);
+        server_to_engine::write_start(&mut buf, &nicknames, tick_rate).expect(UNDER_THE_CAP);
         let engine = Engine {
             input: Vec::new(),
             cache: Cache::new(),
@@ -913,12 +916,13 @@ mod tests {
                     .expect("the first message of the core is a start");
             // The tests send the hello that they need.
             self.from_engine.drain();
+            let rate = engine.tick_rate();
             self.engine = Some(engine);
             let members: Vec<_> = players
                 .iter()
                 .map(|(player, nickname)| format!("{} {nickname}", player.number()))
                 .collect();
-            format!("start {}", members.join(", "))
+            format!("start {} at {rate}", members.join(", "))
         }
 
         /// The events that wait in the session of the engine, in a short
@@ -1059,12 +1063,15 @@ mod tests {
         }
     }
 
+    /// The tick rate of the tests, 60 Hz.
+    const RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+
     /// A core of `nicknames`, after a hello of 1 to 9 players.
     fn started(nicknames: &[&str]) -> ServerCore {
         LobbyCore::new()
             .from_engine(&hello(1, 9))
             .unwrap()
-            .start(nicknames)
+            .start(nicknames, RATE)
             .unwrap()
     }
 
@@ -1087,16 +1094,16 @@ mod tests {
     fn the_start_takes_the_players_after_the_hello() {
         let lobby = LobbyCore::new();
         assert_eq!(lobby.players(), None);
-        let (lobby, e) = lobby.start(&["Ana"]).unwrap_err();
+        let (lobby, e) = lobby.start(&["Ana"], RATE).unwrap_err();
         assert_eq!(e, StartError::NoHello);
         let lobby = lobby.from_engine(&hello(2, 4)).unwrap();
         let range = PlayerRange::new(2, 4).unwrap();
         assert_eq!(lobby.players(), Some(range));
-        let (lobby, e) = lobby.start(&["Ana"]).unwrap_err();
+        let (lobby, e) = lobby.start(&["Ana"], RATE).unwrap_err();
         assert_eq!(e, StartError::Players { players: 1, range });
-        let mut room = Room::new(lobby.start(&["Ana", "Beto"]).unwrap());
+        let mut room = Room::new(lobby.start(&["Ana", "Beto"], RATE).unwrap());
         room.core.tick();
-        assert_eq!(room.events(), ["start 1 Ana, 2 Beto", "tick"]);
+        assert_eq!(room.events(), ["start 1 Ana, 2 Beto at 60000", "tick"]);
     }
 
     #[test]
@@ -1427,7 +1434,7 @@ mod tests {
         let lobby = hello(1, 1).iter().fold(LobbyCore::new(), |lobby, byte| {
             lobby.from_engine(std::slice::from_ref(byte)).unwrap()
         });
-        let mut core = lobby.start(&["Ana"]).unwrap();
+        let mut core = lobby.start(&["Ana"], RATE).unwrap();
         let ana = core.connect(player(1)).unwrap();
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 2.0, &[1]));

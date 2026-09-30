@@ -235,7 +235,7 @@ export class Start extends $.Struct {
     static readonly _capnp = {
         displayName: "Start",
         id: "f5a707fb1e20309f",
-        size: new $.ObjectSize(0, 1),
+        size: new $.ObjectSize(8, 1),
     };
     static _Members: $.ListCtor<Member>;
     _adoptMembers(value: $.Orphan<$.List<Member>>): void {
@@ -244,6 +244,12 @@ export class Start extends $.Struct {
     _disownMembers(): $.Orphan<$.List<Member>> {
         return $.utils.disown(this.members);
     }
+    /**
+* The rate of the ticks in thousandths of a hertz, 60000 for 60 Hz.
+* The server keeps it until the end, so the engine moves by the same
+* step at each tick, whatever the rate. A start of rate 0 is damage.
+*
+*/
     get members(): $.List<Member> {
         return $.utils.getList(0, Start._Members, this);
     }
@@ -255,6 +261,12 @@ export class Start extends $.Struct {
     }
     set members(value: $.List<Member>) {
         $.utils.copyFrom(value, $.utils.getPointer(0, this));
+    }
+    get tickRate(): number {
+        return $.utils.getUint32(0, this);
+    }
+    set tickRate(value: number) {
+        $.utils.setUint32(0, value, this);
     }
     toString(): string { return "Start_" + super.toString(); }
 }

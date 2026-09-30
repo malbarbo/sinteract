@@ -135,7 +135,7 @@ use sinteract::server::{Conn, EngineError, LobbyCore, LobbyError, Next, ServerCo
 let mut lobby = LobbyCore::new();
 lobby = lobby.from_engine(&bytes)?;       // bytes do fd 4; um erro acaba a sala
 lobby.players();                          // a faixa do hello, ou None antes dele
-let mut core: ServerCore = lobby.start(&nicknames).map_err(|(lobby, e)| e)?;
+let mut core: ServerCore = lobby.start(&nicknames, tick_rate).map_err(|(lobby, e)| e)?;
 core.players();                           // cada jogador com o apelido
 let conn: Conn = core.connect(player)?;   // uma view com o token do jogador
 core.from_view(conn, &payload)?;          // uma mensagem do WebSocket
@@ -171,8 +171,9 @@ engine.
 - O `sinteract` não tem sala de espera. Depois do `hello`, o
   `LobbyCore::players()` devolve a faixa de jogadores do jogo, de 1 a 1024
   (`session::MAX_PLAYERS`), e o lobby do servidor junta os apelidos.
-- O `LobbyCore::start(&nicknames)` numera os jogadores a partir de 1, na
-  ordem da lista, e manda o `start` à engine. Ele recusa um número de
+- O `LobbyCore::start(&nicknames, tick_rate)` numera os jogadores a partir
+  de 1, na ordem da lista, e manda o `start` à engine, com a taxa do
+  `tick`. Ele recusa um número de
   jogadores fora da faixa e um `start` antes do `hello` (`StartError`), e
   devolve o lobby junto com o erro, para outra tentativa.
 - O `start` tira os caracteres de controle do apelido e o corta em 64
@@ -197,6 +198,11 @@ engine.
 - O `tick` manda à engine a hora de desenhar os próximos frames. Um timer
   do servidor chama o `tick`, e o ritmo não sofre com o atraso do
   WebSocket de nenhum jogador.
+- O `start` leva a taxa do timer em milésimos de hertz, no campo
+  `tickRate`, 60000 para 60 Hz, e o servidor mantém essa taxa até o fim.
+  O `tick` não leva hora, então a engine anda um passo dessa taxa a cada
+  `tick`, e o jogo tem a mesma velocidade em qualquer taxa, sem o tremor
+  de um relógio medido na chegada. Uma taxa 0 é dano.
 - A engine responde a cada `tick` com um `tickTaken`, e o core só manda o
   próximo `tick` depois dele. Uma engine mais lenta que o timer não
   acumula `tick`. A `Session` da engine escreve o `tickTaken` sozinha.
@@ -338,6 +344,7 @@ num enum, porque o `LobbyCore::start` consome o lobby e devolve o
 ```rust
 use std::collections::HashMap;
 use std::io;
+use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -536,9 +543,13 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
     errors
 }
 
-/// O tick a 30 Hz. Um tick atrasado não vira rajada.
+/// A taxa do tick em milésimos de hertz, 30 Hz, que o start dá à engine.
+const TICK_RATE: NonZeroU32 = NonZeroU32::new(30_000).unwrap();
+
+/// O tick. Um tick atrasado não vira rajada.
 async fn tick(room: Arc<Room>) {
-    let mut every = tokio::time::interval(Duration::from_millis(33));
+    let period = Duration::from_nanos(1_000_000_000_000 / u64::from(TICK_RATE.get()));
+    let mut every = tokio::time::interval(period);
     every.set_missed_tick_behavior(MissedTickBehavior::Skip);
     while !room.is_over() {
         every.tick().await;
@@ -559,7 +570,7 @@ async fn start(State(room): State<Arc<Room>>) -> Response {
     let Phase::Lobby(core) = std::mem::replace(&mut *phase, Phase::Over) else {
         return (StatusCode::CONFLICT, "a sala não está no lobby").into_response();
     };
-    let core = match core.start(&lobby) {
+    let core = match core.start(&lobby, TICK_RATE) {
         Ok(core) => core,
         Err((core, e)) => {
             *phase = Phase::Lobby(core);
@@ -686,7 +697,7 @@ Uma escrita que falha no fd 4 fecha o fd 4 e encerra a sessão. O
 
 Uma engine sem as features de tela, como uma que roda em wasm, usa a
 `session::Session` direto, com o `Session::start(players, r, w)`, o
-`wait` e o `write_frame`, sobre o `Read` e o `Write` que ela tiver.
+`tick_rate`, o `wait` e o `write_frame`, sobre o `Read` e o `Write` que ela tiver.
 
 ## O que o navegador mostra
 

@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::process::{ExitCode, Stdio};
@@ -41,8 +42,12 @@ use tokio::time::MissedTickBehavior;
 const USAGE: &str = "usage: sinteract-test-server [--addr ADDR] [--players N] \
                      [--page FILE] ENGINE [ARGS...]";
 
-/// The period of the tick, 60 Hz.
-const TICK: Duration = Duration::from_micros(16_667);
+/// The rate of the tick in thousandths of a hertz, 60 Hz, which the start
+/// gives the engine.
+const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+
+/// The period of the tick.
+const TICK: Duration = Duration::from_nanos(1_000_000_000_000 / TICK_RATE.get() as u64);
 
 struct Options {
     addr: SocketAddr,
@@ -305,7 +310,7 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
 /// each one.
 fn start(room: &Room, lobby: LobbyCore) -> (Phase, Vec<String>) {
     let nicknames: Vec<String> = (1..=room.players).map(|n| format!("jogador {n}")).collect();
-    let core = match lobby.start(&nicknames) {
+    let core = match lobby.start(&nicknames, TICK_RATE) {
         Ok(core) => core,
         Err((_, e)) => return (Phase::Over, vec![e.to_string()]),
     };

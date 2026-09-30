@@ -84,6 +84,8 @@ pub enum Error {
     /// A hello has a minimum of 0 players, a maximum below its minimum, or
     /// a maximum above [`crate::session::MAX_PLAYERS`].
     PlayerRange { min: u32, max: u32 },
+    /// A start has a tick rate of 0.
+    NoTickRate,
 }
 
 impl std::fmt::Display for Error {
@@ -102,6 +104,7 @@ impl std::fmt::Display for Error {
                 "a hello takes from {min} to {max} players, not from 1 to {}",
                 crate::session::MAX_PLAYERS
             ),
+            Error::NoTickRate => write!(f, "a start has a tick rate of 0"),
         }
     }
 }
@@ -758,20 +761,33 @@ mod tests {
     #[test]
     fn the_start_round_trips() {
         let mut stream = Vec::new();
-        server_to_engine::write_start(&mut stream, &["Ana", "Beto"]).unwrap();
+        let rate = nonzero(60_000);
+        server_to_engine::write_start(&mut stream, &["Ana", "Beto"], rate).unwrap();
         let mut r = &stream[..];
         let got = testing::read_next(&mut r, framing::Side::Server, |payload| {
             server_to_engine::read_start(payload).map(Some)
         });
-        assert_eq!(got.unwrap().expect("a start"), ["Ana", "Beto"]);
+        assert_eq!(
+            got.unwrap().expect("a start"),
+            (vec!["Ana".into(), "Beto".into()], rate)
+        );
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn a_start_of_tick_rate_0_is_an_error() {
+        assert!(matches!(
+            server_to_engine::read_start(&testing::encode_start(&["Ana"], 0)),
+            Err(Error::NoTickRate)
+        ));
     }
 
     #[test]
     fn a_start_of_more_than_max_players_is_not_written() {
         let nicknames = vec![""; crate::session::MAX_PLAYERS as usize + 1];
         let mut stream = Vec::new();
-        let err = server_to_engine::write_start(&mut stream, &nicknames).expect_err("an error");
+        let err = server_to_engine::write_start(&mut stream, &nicknames, nonzero(1))
+            .expect_err("an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(stream.is_empty());
     }

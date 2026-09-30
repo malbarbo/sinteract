@@ -47,6 +47,8 @@ pub struct Session<R, W> {
     scratch: Vec<u8>,
     /// The number of players, from the start.
     players: u32,
+    /// The rate of the ticks in thousandths of a hertz, from the start.
+    tick_rate: NonZeroU32,
     /// Whether the session still reads the server.
     reading: Reading,
     events: VecDeque<SessionEvent>,
@@ -286,12 +288,13 @@ impl<R: Read, W: Write> Session<R, W> {
             bytes: Vec::new(),
             scratch: Vec::new(),
             players: 0,
+            tick_rate: NonZeroU32::MIN,
             reading: Reading::Open,
             events: VecDeque::new(),
             sent: HashMap::new(),
             next_id: 0,
         };
-        let nicknames = session.read_start()?;
+        let (nicknames, tick_rate) = session.read_start()?;
         if !players.contains(nicknames.len()) {
             return Err(StartError::Players {
                 players: nicknames.len(),
@@ -299,6 +302,7 @@ impl<R: Read, W: Write> Session<R, W> {
             });
         }
         session.players = u32::try_from(nicknames.len()).expect("a start has at most 1024 players");
+        session.tick_rate = tick_rate;
         let players = (1..)
             .map_while(NonZeroU32::new)
             .map(Player)
@@ -307,6 +311,13 @@ impl<R: Read, W: Write> Session<R, W> {
         // The bytes after the start in the same read.
         session.take_messages();
         Ok((session, players))
+    }
+
+    /// The rate of the ticks in thousandths of a hertz, 60000 for 60 Hz,
+    /// the same from the start to the end. A game moves by a step of this
+    /// rate at each tick, so it moves at the same speed at any rate.
+    pub fn tick_rate(&self) -> NonZeroU32 {
+        self.tick_rate
     }
 
     /// The next event, with bytes from `r` when none waits. It blocks for
@@ -383,7 +394,7 @@ impl<R: Read, W: Write> Session<R, W> {
 
     /// Read the start, the first message of the server, and keep the bytes
     /// after it.
-    fn read_start(&mut self) -> Result<Vec<String>, StartError> {
+    fn read_start(&mut self) -> Result<(Vec<String>, NonZeroU32), StartError> {
         loop {
             match framing::split_message(&self.bytes, Side::Server) {
                 Ok(Some((payload, after))) => {
@@ -593,6 +604,9 @@ mod tests {
     use crate::wire::framing::HEADER_BYTES;
     use crate::wire::testing::{self, Pipe};
 
+    /// The tick rate of the tests, 60 Hz.
+    const RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+
     fn player(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).unwrap()
     }
@@ -625,10 +639,10 @@ mod tests {
         PlayerRange::new(1, 2).unwrap()
     }
 
-    /// A start with Ana as player 1 and Beto as player 2.
+    /// A start with Ana as player 1 and Beto as player 2, at 60 Hz.
     fn start() -> Vec<u8> {
         let mut out = Vec::new();
-        server_to_engine::write_start(&mut out, &["Ana", "Beto"]).unwrap();
+        server_to_engine::write_start(&mut out, &["Ana", "Beto"], RATE).unwrap();
         out
     }
 
@@ -668,6 +682,7 @@ mod tests {
         let (session, players) =
             Session::start(players(), server.clone(), engine.clone()).expect("the session starts");
         assert_eq!(members(&players), ["1 Ana", "2 Beto"]);
+        assert_eq!(session.tick_rate(), RATE);
         engine.drain();
         (session, server, engine)
     }
@@ -817,7 +832,7 @@ mod tests {
     fn a_start_outside_the_range_stops_the_start() {
         for nicknames in [&[][..], &["Ana", "Beto", "Caio"]] {
             let mut stream = Vec::new();
-            server_to_engine::write_start(&mut stream, nicknames).unwrap();
+            server_to_engine::write_start(&mut stream, nicknames, RATE).unwrap();
             assert!(matches!(
                 no_start(&stream),
                 StartError::Players { players: n, range } if n == nicknames.len() && range == players()

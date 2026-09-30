@@ -81,7 +81,11 @@ struct Member {
 # The root of the first message of the server, and of no other. It gives
 # the players of the session, who are the same until its end.
 struct Start {
-    members @0 :List(Member);
+    members  @0 :List(Member);
+    # The rate of the ticks in thousandths of a hertz, 60000 for 60 Hz.
+    # The server keeps it until the end, so the engine moves by the same
+    # step at each tick, whatever the rate. A start of rate 0 is damage.
+    tickRate @1 :UInt32;
 }
 
 # The input of a player.

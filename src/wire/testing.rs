@@ -225,6 +225,14 @@ pub(crate) fn encode_hello(min: u32, max: u32) -> Vec<u8> {
     super::to_bytes(engine_to_server::hello_message(min, max))
 }
 
+/// Encode a start of the players of `nicknames` at `tick_rate`, with no
+/// envelope. A test passes 0, which [`server_to_engine::write_start`]
+/// cannot.
+pub(crate) fn encode_start(nicknames: &[&str], tick_rate: u32) -> Vec<u8> {
+    let len = u32::try_from(nicknames.len()).expect("a test has few players");
+    super::to_bytes(server_to_engine::start_message(len, nicknames, tick_rate))
+}
+
 /// Encode the input `ev` of `player`, with no envelope. A test passes 0,
 /// which [`server_to_engine::write_input`] cannot.
 pub(crate) fn encode_input(player: u32, ev: &InputEvent) -> Vec<u8> {
