@@ -683,13 +683,10 @@ Uma engine sem as features de tela, como uma que roda em wasm, usa a
 
 ## O que o navegador mostra
 
-Os frames são cenas do `sinteract`, e não SVG. Há dois caminhos:
-
-- o servidor converte a cena em SVG com o renderer `svg` do `sinteract` e
-  manda o SVG ao navegador, que é o que o Sarcade já mostra hoje;
-- o navegador decodifica a cena e desenha num canvas, com um decodificador
-  JS ou com o `sinteract` em wasm, cujo `view::FrameReader` guarda as
-  imagens dos assets e devolve cada frame como uma `Scene` com as imagens.
-  O `view::encode_input` codifica a entrada para o WebSocket.
-
-Essa decisão está em aberto.
+Os frames são cenas do `sinteract`, e não SVG. O cliente em `web/` é a
+view do navegador. Ele decodifica a cena em TypeScript, com o código que o
+capnp-es gera do schema, desenha no canvas com a API Canvas 2D e manda a
+entrada pelo WebSocket. O build do Deno gera um HTML só, o
+`web/dist/index.html`, que abre o WebSocket em `/play?token=` do mesmo
+servidor. O `web/README.md` descreve os módulos, e o `web/server/` é um
+servidor de teste, com uma sala e sem lobby, que segue o esboço acima.

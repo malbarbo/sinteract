@@ -35,6 +35,13 @@ paces the window on macOS, and
 directory once, on wasm32 and on the two features, and each submodule that
 needs a given feature has its own `cfg` in `display/mod.rs`.
 
+`web/` is the view for a browser, in TypeScript, which Deno checks and
+bundles into one HTML file. `web/src/capnp/` is generated from `schema/`
+by capnp-es and committed, and `make -C web capnp` regenerates it. A change
+of the schema regenerates it in the same commit. `web/server/` is a crate
+of its own, a server to try the client with, and the library does not
+depend on it.
+
 `PLAN.md` is the plan for the server and client modes. `SERVER.md` is the
 contract with the server of Sarcade, and a change to the public API of
 `session`, `server`, `view` or `display::Stage` updates it in the same
@@ -51,6 +58,7 @@ cargo build --target wasm32-unknown-unknown   # the part a browser client uses
 cargo clippy --all-targets --target wasm32-unknown-unknown
 cargo doc --no-deps                           # warning-free
 cargo doc --no-deps --target wasm32-unknown-unknown
+make -C web check test                        # the HTML client
 ```
 
 Tests live next to the code they test, in `#[cfg(test)]` modules. Run

@@ -255,8 +255,8 @@ Falta:
 
 - a migração do spython e do sgleam para `Display` e `Session`, e os modos
   `--server` e `--client`;
-- o lado do navegador no simplecode, e a escolha entre SVG feito no
-  servidor e um decodificador que desenha num canvas;
+- o lado do navegador no simplecode, com o cliente de `web/`, que desenha
+  a cena num canvas;
 - o servidor do Sarcade, que o Gabriel escreve;
 - os eixos do pad.
 
