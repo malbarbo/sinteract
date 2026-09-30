@@ -9,10 +9,10 @@
 //! view drops the oldest ones:
 //!
 //! ```text
-//! cargo build --examples
-//! target/debug/examples/view target/debug/examples/engine 200
-//! target/debug/examples/view target/debug/examples/engine 1 big
-//! target/debug/examples/engine 200        # in a window, with no view
+//! cargo build --release --examples
+//! target/release/examples/view target/release/examples/engine 200
+//! target/release/examples/view target/release/examples/engine 1 big
+//! target/release/examples/engine 200      # in a window, with no view
 //! ```
 
 // The displays do not build on wasm32. Without a `main`, the empty crate

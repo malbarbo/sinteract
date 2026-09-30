@@ -4,19 +4,21 @@
 //! frames per second.
 //!
 //! ```text
-//! cargo run --example gallery              # a window, or the terminal
-//! cargo run --example gallery window       # the window, or why it failed
-//! cargo run --example gallery terminal     # the terminal
-//! cargo run --example gallery print        # one image at the cursor
-//! cargo run --example gallery png > g.png
-//! cargo run --example gallery svg > g.svg
-//! cargo run --example gallery pdf > g.pdf
-//! cargo run --example gallery stage        # the still gallery on a Stage
+//! cargo run --release --example gallery              # a window, or the terminal
+//! cargo run --release --example gallery window       # the window, or why it failed
+//! cargo run --release --example gallery terminal     # the terminal
+//! cargo run --release --example gallery print        # one image at the cursor
+//! cargo run --release --example gallery png > g.png
+//! cargo run --release --example gallery svg > g.svg
+//! cargo run --release --example gallery pdf > g.pdf
+//! cargo run --release --example gallery stage        # the still gallery on a Stage
 //! ```
 //!
 //! The stage mode is an engine for a server, such as `web/server`:
 //!
 //! ```text
+//! make -C web
+//! cargo build --release --examples
 //! cargo run --release --manifest-path web/server/Cargo.toml -- \
 //!     --players 1 target/release/examples/gallery stage
 //! ```

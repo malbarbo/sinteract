@@ -6,8 +6,8 @@
 //! 60 Hz. At the end it prints to stderr what the frames cost:
 //!
 //! ```text
-//! cargo build --examples
-//! target/debug/examples/view target/debug/examples/engine 200
+//! cargo build --release --examples
+//! target/release/examples/view target/release/examples/engine 200
 //! ```
 
 // The view hands the engine fd 3 and fd 4, which only unix has. Without a
