@@ -85,6 +85,13 @@ export class View {
     }
     for (const asset of this.#images.values()) asset.image?.close();
     this.#images.clear();
+    // A frame that still waits for its images sees that it is no longer the
+    // latest, and the next connection starts with no scene.
+    this.#latest = null;
+    this.#scene = null;
+    this.#place = { scale: 1, x: 0, y: 0 };
+    cancelAnimationFrame(this.#frame);
+    this.#frame = 0;
   }
 
   #receive(payload: ArrayBuffer): void {
