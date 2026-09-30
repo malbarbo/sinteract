@@ -138,8 +138,10 @@ export function listen(
 
 // Returns `true` if the game takes `e`, `false` otherwise. A key with Ctrl or
 // Meta, and a function key, stay with the browser, so a reload, a zoom or
-// the tools of the developer still work.
+// the tools of the developer still work. Ctrl and Meta themselves go to the
+// game.
 function claims(e: KeyboardEvent): boolean {
+  if (e.key === "Control" || e.key === "Meta") return true;
   return !(e.ctrlKey || e.metaKey || /^F\d+$/.test(e.key));
 }
 
