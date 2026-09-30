@@ -33,6 +33,9 @@ export class View {
   // the one on screen.
   #latest: Scene | null = null;
   #scene: Scene | null = null;
+  // The size of the canvas in CSS pixels.
+  #width = 0;
+  #height = 0;
   #frame = 0;
 
   constructor(canvas: HTMLCanvasElement, options: ViewOptions = {}) {
@@ -184,6 +187,8 @@ export class View {
   #resize(): void {
     const c = this.#canvas;
     const rect = c.getBoundingClientRect();
+    this.#width = rect.width;
+    this.#height = rect.height;
     const dpr = globalThis.devicePixelRatio || 1;
     const width = Math.max(1, Math.round(rect.width * dpr));
     const height = Math.max(1, Math.round(rect.height * dpr));
@@ -195,9 +200,8 @@ export class View {
 
   // The point of the scene under (x, y), in CSS pixels of the canvas.
   #toScene(x: number, y: number): [number, number] {
-    const rect = this.#canvas.getBoundingClientRect();
-    const sx = rect.width > 0 ? this.#canvas.width / rect.width : 1;
-    const sy = rect.height > 0 ? this.#canvas.height / rect.height : 1;
+    const sx = this.#width > 0 ? this.#canvas.width / this.#width : 1;
+    const sy = this.#height > 0 ? this.#canvas.height / this.#height : 1;
     const { scale, x: ox, y: oy } = this.#renderer.place;
     return [(x * sx - ox) / scale, (y * sy - oy) / scale];
   }
