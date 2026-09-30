@@ -272,21 +272,21 @@ fn fill_and_stroke(s: &mut Scene, x: f32, y: f32, _: f32) {
     s.add_path(rect(both, x + 15.0, y + 15.0, 70.0, 70.0));
     circle(
         s,
-        fill(Paint::rgba(230, 60, 60, 0.6)),
+        fill(Paint::rgba(230, 60, 60, 153)),
         x + 120.0,
         y + 50.0,
         35.0,
     );
     circle(
         s,
-        fill(Paint::rgba(60, 200, 90, 0.6)),
+        fill(Paint::rgba(60, 200, 90, 153)),
         x + 150.0,
         y + 80.0,
         35.0,
     );
     circle(
         s,
-        stroke(Paint::rgba(0, 0, 0, 0.5), 2.0),
+        stroke(Paint::rgba(0, 0, 0, 128), 2.0),
         x + 135.0,
         y + 65.0,
         50.0,
@@ -540,7 +540,7 @@ fn radial_spread(s: &mut Scene, x: f32, y: f32, _: f32) {
             },
             Stop {
                 offset: 1.0,
-                color: Rgba { a: 0.0, ..green },
+                color: Rgba { a: 0, ..green },
             },
         ],
     );
@@ -637,7 +637,7 @@ fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
             for i in 0..10 {
                 let top = y + i as f32 * 13.0;
                 inner.add_path(rect(
-                    fill(Paint::rgba(255, 255, 255, 0.7)),
+                    fill(Paint::rgba(255, 255, 255, 179)),
                     cx,
                     top,
                     80.0,
@@ -651,7 +651,7 @@ fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
 /// Two circles of half opacity darken where they overlap, and two opaque
 /// circles in a layer of half opacity do not.
 fn layer(s: &mut Scene, x: f32, y: f32, _: f32) {
-    let pair = |s: &mut Scene, x: f32, alpha: f32| {
+    let pair = |s: &mut Scene, x: f32, alpha: u8| {
         circle(
             s,
             fill(Paint::rgba(230, 60, 60, alpha)),
@@ -667,8 +667,8 @@ fn layer(s: &mut Scene, x: f32, y: f32, _: f32) {
             28.0,
         );
     };
-    pair(s, x + 5.0, 0.5);
-    s.layer(0.5, |layer| pair(layer, x + 105.0, 1.0));
+    pair(s, x + 5.0, 128);
+    s.layer(0.5, |layer| pair(layer, x + 105.0, 255));
 }
 
 fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
@@ -719,7 +719,7 @@ fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
         y + 50.0,
         0.0,
         Rgba {
-            a: 0.4,
+            a: 102,
             ..opaque(30, 30, 30)
         },
     ) {
@@ -990,7 +990,7 @@ fn rgb(r: u8, g: u8, b: u8) -> Paint {
 }
 
 fn opaque(r: u8, g: u8, b: u8) -> Rgba {
-    Rgba { r, g, b, a: 1.0 }
+    Rgba { r, g, b, a: 255 }
 }
 
 fn stops(list: &[(f32, (u8, u8, u8))]) -> Vec<Stop> {

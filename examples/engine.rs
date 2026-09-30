@@ -182,7 +182,7 @@ impl Game {
     fn scene(&self) -> Scene {
         let mut scene = Scene::new(WIDTH, HEIGHT);
         let fill = |r, g, b| PathStyle {
-            fill: Paint::rgba(r, g, b, 1.0),
+            fill: Paint::rgba(r, g, b, 255),
             closed: true,
             ..PathStyle::default()
         };

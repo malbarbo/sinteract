@@ -13,7 +13,7 @@ use sinteract::display::Printer;
 use sinteract::scene::{Paint, Path, PathStyle, Scene};
 
 let blue = PathStyle {
-    fill: Paint::rgba(0, 0, 255, 1.0),
+    fill: Paint::rgba(0, 0, 255, 255),
     ..PathStyle::default()
 };
 let mut scene = Scene::new(40.0, 30.0);

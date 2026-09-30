@@ -128,13 +128,13 @@ pub(crate) const MISSING_FILL: Rgba = Rgba {
     r: 200,
     g: 200,
     b: 200,
-    a: 1.0,
+    a: 255,
 };
 pub(crate) const MISSING_STROKE: Rgba = Rgba {
     r: 200,
     g: 0,
     b: 0,
-    a: 1.0,
+    a: 255,
 };
 
 /// Feed `out` the outline of the box that stands for a missing image under

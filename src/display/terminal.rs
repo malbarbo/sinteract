@@ -44,7 +44,7 @@ const SIXEL_BACKGROUND: Rgba = Rgba {
     r: 255,
     g: 255,
     b: 255,
-    a: 1.0,
+    a: 255,
 };
 
 /// What an engine adds to [`Terminal::open_with`].
@@ -1699,7 +1699,7 @@ mod tests {
     /// A renderer whose last render is a `w` by `h` frame of `color`.
     fn rendered(renderer: &mut PixmapRenderer, w: f32, h: f32, color: (u8, u8, u8)) {
         let (r, g, b) = color;
-        renderer.set_background(Rgba { r, g, b, a: 1.0 });
+        renderer.set_background(Rgba { r, g, b, a: 255 });
         renderer.render(&Scene::new(w, h)).unwrap();
     }
 

@@ -116,7 +116,7 @@ fn write_rgba(mut b: wire_rgba::Builder<'_>, c: Rgba) {
     b.set_r(c.r);
     b.set_g(c.g);
     b.set_b(c.b);
-    b.set_a(c.a);
+    b.set_a(c.opacity());
 }
 
 fn read_rgba(r: wire_rgba::Reader<'_>) -> Rgba {
@@ -124,19 +124,15 @@ fn read_rgba(r: wire_rgba::Reader<'_>) -> Rgba {
         r: r.get_r(),
         g: r.get_g(),
         b: r.get_b(),
-        a: r.get_a(),
+        // A NaN goes to 0, as `as u8` takes it.
+        a: (r.get_a().clamp(0.0, 1.0) * 255.0).round() as u8,
     }
 }
 
 /// A `0xRRGGBBAA` color, as the fallback of a paint carries it.
 fn rgba_from_u32(c: u32) -> Rgba {
     let [r, g, b, a] = c.to_be_bytes();
-    Rgba {
-        r,
-        g,
-        b,
-        a: f32::from(a) / 255.0,
-    }
+    Rgba { r, g, b, a }
 }
 
 fn write_stop(mut b: wire_stop::Builder<'_>, s: Stop) {

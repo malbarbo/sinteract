@@ -509,8 +509,8 @@ impl SvgRenderer {
 /// 1.
 fn write_color(c: Rgba, attr: &str, opacity_attr: &str, out: &mut String) {
     _ = write!(out, " {attr}=\"{}\"", Hex(c));
-    if c.a < 1.0 {
-        _ = write!(out, " {opacity_attr}=\"{}\"", c.a.max(0.0));
+    if c.a < u8::MAX {
+        _ = write!(out, " {opacity_attr}=\"{}\"", c.opacity());
     }
 }
 
@@ -613,7 +613,7 @@ mod tests {
     use crate::renderer::tests::rect;
     use crate::scene::{Dash, Path, PathStyle, Scene, Stop, TextSpec};
 
-    fn red_fill(a: f32) -> PathStyle {
+    fn red_fill(a: u8) -> PathStyle {
         PathStyle {
             fill: Paint::rgba(255, 0, 0, a),
             ..PathStyle::default()
@@ -673,7 +673,7 @@ mod tests {
             r: 0,
             g: 0,
             b: 0,
-            a: 1.0,
+            a: 255,
         }
     }
 
@@ -702,11 +702,11 @@ mod tests {
     #[test]
     fn a_path_writes_its_segments_and_its_fill() {
         let mut scene = Scene::new(100.0, 50.0);
-        scene.add_path(rect(red_fill(0.5), 0.0, 0.0, 100.0, 50.0));
+        scene.add_path(rect(red_fill(51), 0.0, 0.0, 100.0, 50.0));
         let svg = render_to_svg(&scene);
         assert!(
             svg.contains(
-                "<path d=\"M0 0 L100 0 L100 50 L0 50\" fill=\"#ff0000\" fill-opacity=\"0.5\"/>"
+                "<path d=\"M0 0 L100 0 L100 50 L0 50\" fill=\"#ff0000\" fill-opacity=\"0.2\"/>"
             ),
             "{svg}"
         );
@@ -716,7 +716,7 @@ mod tests {
     fn a_quadratic_stays_a_quadratic() {
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(
-            Path::builder(red_fill(1.0), 0.0, 0.0)
+            Path::builder(red_fill(255), 0.0, 0.0)
                 .quad_to(5.0, 10.0, 10.0, 0.0)
                 .build(),
         );
@@ -728,7 +728,7 @@ mod tests {
     fn a_stroke_writes_its_width_cap_join_and_dash() {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 1.0),
+            stroke: Paint::rgba(0, 0, 0, 255),
             stroke_width: 2.0,
             line_cap: LineCap::Round,
             line_join: LineJoin::Bevel,
@@ -753,7 +753,7 @@ mod tests {
         let svg = |miter_limit: f32| {
             let mut scene = Scene::new(50.0, 50.0);
             let style = PathStyle {
-                stroke: Paint::rgba(0, 0, 0, 1.0),
+                stroke: Paint::rgba(0, 0, 0, 255),
                 stroke_width: 4.0,
                 miter_limit,
                 ..PathStyle::default()
@@ -780,7 +780,7 @@ mod tests {
                         r: 255,
                         g: 0,
                         b: 0,
-                        a: 1.0,
+                        a: 255,
                     },
                 },
                 Stop {
@@ -789,7 +789,7 @@ mod tests {
                         r: 0,
                         g: 0,
                         b: 255,
-                        a: 0.5,
+                        a: 51,
                     },
                 },
             ],
@@ -806,7 +806,7 @@ mod tests {
                 "<linearGradient id=\"p0\" gradientUnits=\"userSpaceOnUse\" \
                  x1=\"0\" y1=\"0\" x2=\"50\" y2=\"0\" spreadMethod=\"reflect\">\
                  <stop offset=\"0\" stop-color=\"#ff0000\"/>\
-                 <stop offset=\"1\" stop-color=\"#0000ff\" stop-opacity=\"0.5\"/>\
+                 <stop offset=\"1\" stop-color=\"#0000ff\" stop-opacity=\"0.2\"/>\
                  </linearGradient>"
             ),
             "{svg}"
@@ -826,7 +826,7 @@ mod tests {
         let mut scene = Scene::new(20.0, 20.0);
         scene.clip(square(FillRule::EvenOdd), |outer| {
             outer.clip(square(FillRule::NonZero), |inner| {
-                inner.add_path(rect(red_fill(1.0), 0.0, 0.0, 20.0, 20.0));
+                inner.add_path(rect(red_fill(255), 0.0, 0.0, 20.0, 20.0));
             });
         });
         let svg = render_to_svg(&scene);

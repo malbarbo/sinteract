@@ -221,8 +221,8 @@ mod tests {
         scene.add_path(
             Path::builder(
                 PathStyle {
-                    fill: Paint::rgba(10, 20, 30, 0.5),
-                    stroke: Paint::rgba(200, 0, 0, 1.0),
+                    fill: Paint::rgba(10, 20, 30, 128),
+                    stroke: Paint::rgba(200, 0, 0, 255),
                     stroke_width: 2.5,
                     line_cap: LineCap::Round,
                     line_join: LineJoin::Bevel,
@@ -267,7 +267,7 @@ mod tests {
                         r: 0,
                         g: 0,
                         b: 0,
-                        a: 1.0,
+                        a: 255,
                     }),
                     stroke: Paint::radial(
                         60.0,
@@ -279,7 +279,7 @@ mod tests {
                                 r: 200,
                                 g: 0,
                                 b: 0,
-                                a: 0.5,
+                                a: 128,
                             },
                         }],
                     ),
@@ -1378,7 +1378,7 @@ mod tests {
             r: 0x33,
             g: 0x66,
             b: 0xff,
-            a: 128.0 / 255.0,
+            a: 128,
         };
         assert_eq!(p.style.fill, Paint::Solid(color));
     }
@@ -1389,7 +1389,7 @@ mod tests {
         scene.add_path(
             Path::builder(
                 PathStyle {
-                    stroke: Paint::rgba(0, 0, 0, 1.0),
+                    stroke: Paint::rgba(0, 0, 0, 255),
                     stroke_width: 2.0,
                     miter_limit: 7.5,
                     dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5),
@@ -1432,7 +1432,7 @@ mod tests {
                         r: 255,
                         g: 0,
                         b: 0,
-                        a: 1.0,
+                        a: 255,
                     },
                 },
                 Stop {
@@ -1441,7 +1441,7 @@ mod tests {
                         r: 0,
                         g: 255,
                         b: 0,
-                        a: 0.8,
+                        a: 204,
                     },
                 },
                 Stop {
@@ -1450,7 +1450,7 @@ mod tests {
                         r: 0,
                         g: 0,
                         b: 255,
-                        a: 1.0,
+                        a: 255,
                     },
                 },
             ],
@@ -1494,7 +1494,7 @@ mod tests {
                         r: 255,
                         g: 255,
                         b: 255,
-                        a: 1.0,
+                        a: 255,
                     },
                 },
                 Stop {
@@ -1503,7 +1503,7 @@ mod tests {
                         r: 0,
                         g: 0,
                         b: 0,
-                        a: 0.0,
+                        a: 0,
                     },
                 },
             ],
@@ -1547,7 +1547,7 @@ mod tests {
                         r: 255,
                         g: 0,
                         b: 0,
-                        a: 1.0,
+                        a: 255,
                     },
                 },
                 Stop {
@@ -1556,7 +1556,7 @@ mod tests {
                         r: 0,
                         g: 0,
                         b: 255,
-                        a: 1.0,
+                        a: 255,
                     },
                 },
             ],
@@ -1585,7 +1585,7 @@ mod tests {
                         r: 0,
                         g: 255,
                         b: 0,
-                        a: 1.0,
+                        a: 255,
                     },
                 },
                 Stop {

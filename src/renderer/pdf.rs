@@ -417,7 +417,8 @@ impl PdfRenderer {
             }
             None => {
                 // The stops of a gradient here share one alpha.
-                let alpha = |paint: Option<&Paint>| paint.map_or(1.0, |p| p.primary_color().a);
+                let alpha =
+                    |paint: Option<&Paint>| paint.map_or(1.0, |p| p.primary_color().opacity());
                 self.apply_alpha(alpha(fill), alpha(stroke));
             }
         }
@@ -775,11 +776,8 @@ fn passes<'a>(
     stroke: Option<&'a Paint>,
 ) -> impl Iterator<Item = (Option<&'a Paint>, Option<&'a Paint>)> {
     let translucent = |p: Option<&Paint>| match p {
-        Some(Paint::Solid(c)) => alpha_key(c.a) < alpha_key(1.0),
-        Some(Paint::Gradient(g)) => g
-            .stops()
-            .iter()
-            .any(|s| alpha_key(s.color.a) < alpha_key(1.0)),
+        Some(Paint::Solid(c)) => c.a < u8::MAX,
+        Some(Paint::Gradient(g)) => g.stops().iter().any(|s| s.color.a < u8::MAX),
         None => false,
     };
     if fill.is_some() && stroke.is_some() && (translucent(fill) || translucent(stroke)) {
@@ -792,8 +790,8 @@ fn passes<'a>(
 /// Returns `true` if the stops of `g` differ in alpha, `false` otherwise. A
 /// shading has no alpha, so such a gradient draws under a soft mask.
 fn varying_alpha(g: &Gradient) -> bool {
-    let first = alpha_key(g.stops().first().color.a);
-    g.stops().iter().any(|s| alpha_key(s.color.a) != first)
+    let first = g.stops().first().color.a;
+    g.stops().iter().any(|s| s.color.a != first)
 }
 
 const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
@@ -962,7 +960,7 @@ impl Shading {
             pat.finish();
         }
         if let Some(mask) = &refs.mask {
-            let alpha = |c: Rgba| [alpha_value(alpha_key(c.a))];
+            let alpha = |c: Rgba| [c.opacity()];
             let function = self.write_functions(pdf, &mask.functions, alpha);
             self.write_shading(pdf, mask.shading, function, |cs| cs.device_gray());
         }
@@ -1083,7 +1081,7 @@ mod tests {
     use crate::renderer::tests::rect;
     use crate::scene::{Dash, PathStyle, RotatedRect, Scene, TextSpec};
 
-    fn red_fill(a: f32) -> PathStyle {
+    fn red_fill(a: u8) -> PathStyle {
         PathStyle {
             fill: Paint::rgba(255, 0, 0, a),
             ..PathStyle::default()
@@ -1098,7 +1096,7 @@ mod tests {
     }
 
     fn opaque(r: u8, g: u8, b: u8) -> Rgba {
-        Rgba { r, g, b, a: 1.0 }
+        Rgba { r, g, b, a: 255 }
     }
 
     fn stop(offset: f32, color: Rgba) -> Stop {
@@ -1133,7 +1131,7 @@ mod tests {
     #[test]
     fn rect_path_emits_fill_op() {
         let mut scene = Scene::new(100.0, 50.0);
-        scene.add_path(rect(red_fill(1.0), 0.0, 0.0, 100.0, 50.0));
+        scene.add_path(rect(red_fill(255), 0.0, 0.0, 100.0, 50.0));
         let s = pdf_text(&scene);
         assert!(s.lines().any(|l| l == "f"), "expected fill operator: {s}");
     }
@@ -1167,7 +1165,7 @@ mod tests {
     fn output_reborrows_the_last_assembled_document() {
         // A second output must not re-assemble an empty document.
         let mut scene = Scene::new(20.0, 20.0);
-        scene.add_path(rect(red_fill(1.0), 0.0, 0.0, 10.0, 10.0));
+        scene.add_path(rect(red_fill(255), 0.0, 0.0, 10.0, 10.0));
         let mut renderer = PdfRenderer::new();
         let Ok(rendered) = renderer.render(&scene);
         let rendered = rendered.to_vec();
@@ -1193,7 +1191,7 @@ mod tests {
     #[test]
     fn alpha_creates_extgstate_resource() {
         let mut scene = Scene::new(100.0, 50.0);
-        scene.add_path(rect(red_fill(0.5), 0.0, 0.0, 100.0, 50.0));
+        scene.add_path(rect(red_fill(128), 0.0, 0.0, 100.0, 50.0));
         let s = pdf_text(&scene);
         assert!(s.contains("ExtGState"), "expected ExtGState resource");
         assert!(s.contains("/Gs0"), "expected gs name reference");
@@ -1203,7 +1201,7 @@ mod tests {
     fn dash_pattern_emits_d_operator() {
         let mut scene = Scene::new(100.0, 50.0);
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 1.0),
+            stroke: Paint::rgba(0, 0, 0, 255),
             stroke_width: 1.0,
             dash: Dash::new(vec![3.0, 2.0], 1.0),
             ..PathStyle::default()
@@ -1222,7 +1220,7 @@ mod tests {
     fn miter_limit_emits_m_operator() {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 1.0),
+            stroke: Paint::rgba(0, 0, 0, 255),
             stroke_width: 4.0,
             miter_limit: 12.0,
             line_join: LineJoin::Miter,
@@ -1321,7 +1319,7 @@ mod tests {
     fn a_gradient_with_varying_alpha_draws_under_a_soft_mask() {
         let mut scene = Scene::new(100.0, 40.0);
         let clear = Rgba {
-            a: 0.0,
+            a: 0,
             ..opaque(0, 0, 255)
         };
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, clear)];
@@ -1340,7 +1338,7 @@ mod tests {
     fn a_gradient_with_one_alpha_draws_with_that_alpha() {
         let mut scene = Scene::new(100.0, 40.0);
         let half = |r, g, b| Rgba {
-            a: 0.5,
+            a: 128,
             ..opaque(r, g, b)
         };
         let stops = vec![stop(0.0, half(255, 0, 0)), stop(1.0, half(0, 0, 255))];
@@ -1355,12 +1353,12 @@ mod tests {
     fn a_soft_mask_on_one_side_draws_the_fill_and_the_stroke_apart() {
         let mut scene = Scene::new(100.0, 40.0);
         let clear = Rgba {
-            a: 0.0,
+            a: 0,
             ..opaque(0, 0, 255)
         };
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, clear)];
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 1.0),
+            stroke: Paint::rgba(0, 0, 0, 255),
             stroke_width: 2.0,
             ..gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops))
         };
@@ -1375,8 +1373,8 @@ mod tests {
     fn a_translucent_fill_and_stroke_draw_apart() {
         let mut scene = Scene::new(100.0, 40.0);
         let style = PathStyle {
-            fill: Paint::rgba(255, 0, 0, 0.5),
-            stroke: Paint::rgba(0, 0, 255, 0.5),
+            fill: Paint::rgba(255, 0, 0, 128),
+            stroke: Paint::rgba(0, 0, 255, 128),
             stroke_width: 4.0,
             ..PathStyle::default()
         };
@@ -1449,7 +1447,7 @@ mod tests {
     fn an_empty_clip_clips_to_an_empty_rectangle() {
         let mut scene = Scene::new(20.0, 20.0);
         scene.clip(ClipPath::default(), |empty| {
-            empty.add_path(rect(red_fill(1.0), 0.0, 0.0, 20.0, 20.0));
+            empty.add_path(rect(red_fill(255), 0.0, 0.0, 20.0, 20.0));
         });
         let s = pdf_text(&scene);
         assert!(s.contains("q\n0 0 0 0 re\nW\nn\n"), "{s}");

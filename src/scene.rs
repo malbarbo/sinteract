@@ -5,12 +5,20 @@ use std::sync::Arc;
 
 use crate::asset::ImageError;
 
+/// An sRGB color. `a` is the opacity, from 0, transparent, to 255, opaque.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rgba {
     pub r: u8,
     pub g: u8,
     pub b: u8,
-    pub a: f32,
+    pub a: u8,
+}
+
+impl Rgba {
+    /// The alpha as a fraction, from 0.0, transparent, to 1.0, opaque.
+    pub(crate) fn opacity(self) -> f32 {
+        f32::from(self.a) / 255.0
+    }
 }
 
 /// One color stop in a gradient. `offset` is in [0, 1].
@@ -136,11 +144,7 @@ impl Gradient {
             GradientGeometry::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
             GradientGeometry::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
         };
-        geometry
-            && self
-                .stops
-                .iter()
-                .all(|s| all_finite(&[s.offset, s.color.a]))
+        geometry && self.stops.iter().all(|s| s.offset.is_finite())
     }
 }
 
@@ -184,7 +188,7 @@ impl Default for Paint {
 }
 
 impl Paint {
-    pub fn rgba(r: u8, g: u8, b: u8, a: f32) -> Self {
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self::Solid(Rgba { r, g, b, a })
     }
 
@@ -261,7 +265,7 @@ impl Paint {
     /// otherwise. A renderer skips a fill or a stroke that does not.
     pub fn is_visible(&self) -> bool {
         match self {
-            Self::Solid(c) => c.a > 0.0,
+            Self::Solid(c) => c.a > 0,
             Self::Gradient(_) => true,
         }
     }
@@ -279,7 +283,7 @@ impl Paint {
     /// otherwise.
     pub(crate) fn is_finite(&self) -> bool {
         match self {
-            Self::Solid(c) => c.a.is_finite(),
+            Self::Solid(_) => true,
             Self::Gradient(g) => g.is_finite(),
         }
     }
@@ -1752,12 +1756,9 @@ mod tests {
     #[test]
     fn an_element_with_a_non_finite_float_is_not_added() {
         let (nan, inf) = (f32::NAN, f32::INFINITY);
-        let stop = |offset, a| Stop {
+        let stop = |offset| Stop {
             offset,
-            color: Rgba {
-                a,
-                ..Rgba::default()
-            },
+            ..Stop::default()
         };
         let styles = [
             PathStyle {
@@ -1769,19 +1770,11 @@ mod tests {
                 ..PathStyle::default()
             },
             PathStyle {
-                fill: Paint::rgba(0, 0, 0, nan),
+                stroke: Paint::radial(0.0, 0.0, inf, vec![stop(0.0)]),
                 ..PathStyle::default()
             },
             PathStyle {
-                stroke: Paint::radial(0.0, 0.0, inf, vec![stop(0.0, 1.0)]),
-                ..PathStyle::default()
-            },
-            PathStyle {
-                fill: Paint::linear(0.0, 0.0, 1.0, 1.0, vec![stop(nan, 1.0)]),
-                ..PathStyle::default()
-            },
-            PathStyle {
-                fill: Paint::linear(0.0, 0.0, 1.0, 1.0, vec![stop(0.0, inf)]),
+                fill: Paint::linear(0.0, 0.0, 1.0, 1.0, vec![stop(nan)]),
                 ..PathStyle::default()
             },
         ];
@@ -1816,10 +1809,6 @@ mod tests {
         });
         scene.add_text(Text {
             stroke_width: nan,
-            ..text.clone()
-        });
-        scene.add_text(Text {
-            fill: Paint::rgba(0, 0, 0, nan),
             ..text.clone()
         });
         scene.add_text(Text {
@@ -1920,7 +1909,7 @@ mod tests {
                 r,
                 g: 0,
                 b: 0,
-                a: 1.0,
+                a: 255,
             },
         };
         let stops = vec![stop(0.0, 10), stop(1.0, 200)];

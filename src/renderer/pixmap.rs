@@ -639,11 +639,14 @@ fn paint_to_shader(p: &Paint, fade: f32) -> SkShader<'static> {
 
 /// `c` with its alpha times `fade`.
 fn faded(c: Rgba, fade: f32) -> Rgba {
-    Rgba { a: c.a * fade, ..c }
+    Rgba {
+        a: (f32::from(c.a) * fade).round() as u8,
+        ..c
+    }
 }
 
 fn sk_color(c: Rgba) -> SkColor {
-    SkColor::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8)
+    SkColor::from_rgba8(c.r, c.g, c.b, c.a)
 }
 
 fn sk_stops(stops: &Stops, fade: f32) -> Vec<SkStop> {
@@ -875,7 +878,7 @@ mod tests {
 
     fn solid(r: u8, g: u8, b: u8) -> PathStyle {
         PathStyle {
-            fill: Paint::rgba(r, g, b, 1.0),
+            fill: Paint::rgba(r, g, b, 255),
             ..PathStyle::default()
         }
     }
@@ -917,7 +920,7 @@ mod tests {
         let ramp = || {
             let stop = |offset, r, b| Stop {
                 offset,
-                color: Rgba { r, g: 0, b, a: 1.0 },
+                color: Rgba { r, g: 0, b, a: 255 },
             };
             Paint::linear(
                 0.0,
@@ -987,7 +990,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 1.0,
+                a: 255,
             }),
             transform: [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
             spec: TextSpec {
@@ -1295,7 +1298,7 @@ mod tests {
         // Two squares, each stroked 6 wide from its top left corner. Only a
         // miter join covers the pixel outside that corner.
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 255, 1.0),
+            stroke: Paint::rgba(0, 0, 255, 255),
             stroke_width: 6.0,
             closed: true,
             ..PathStyle::default()
@@ -1322,7 +1325,7 @@ mod tests {
         let line = |array: Vec<f32>| {
             let mut scene = Scene::new(40.0, 10.0);
             let style = PathStyle {
-                stroke: Paint::rgba(0, 0, 0, 1.0),
+                stroke: Paint::rgba(0, 0, 0, 255),
                 stroke_width: 2.0,
                 dash: Dash::new(array, 0.0),
                 ..PathStyle::default()
@@ -1375,7 +1378,7 @@ mod tests {
         let line = |width: f32| {
             let mut scene = Scene::new(100.0, 100.0);
             let style = PathStyle {
-                stroke: Paint::rgba(0, 0, 255, 1.0),
+                stroke: Paint::rgba(0, 0, 255, 255),
                 stroke_width: width,
                 ..PathStyle::default()
             };
@@ -1395,7 +1398,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 1.0,
+                a: 255,
             }),
             transform: [1e9, 0.0, 0.0, 1e9, 0.0, 50.0],
             spec: TextSpec {
@@ -1417,7 +1420,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b,
-                a: 1.0,
+                a: 255,
             },
         };
         let stops = vec![stop(0.0, 10), stop(1.0, 200)];
@@ -1439,7 +1442,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b,
-                a: 1.0,
+                a: 255,
             },
         };
         let style = PathStyle {
@@ -1464,7 +1467,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 1.0,
+                a: 255,
             }),
             ..TextSpec {
                 size,
@@ -1503,7 +1506,7 @@ mod tests {
             r: 255,
             g: 255,
             b: 255,
-            a: 1.0,
+            a: 255,
         });
         let mut dot = Scene::new(4.0, 4.0);
         dot.add_path(
@@ -1592,7 +1595,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 1.0,
+                a: 255,
             }),
             transform: [1.0, 0.0, 0.0, 1.0, 5.0, 5.0],
             spec: TextSpec {
@@ -1623,7 +1626,7 @@ mod tests {
                             r: 0,
                             g: 0,
                             b: 0,
-                            a: 1.0,
+                            a: 255,
                         },
                     },
                     Stop {
@@ -1632,7 +1635,7 @@ mod tests {
                             r: 255,
                             g: 255,
                             b: 255,
-                            a: 1.0,
+                            a: 255,
                         },
                     },
                 ],
@@ -1668,7 +1671,7 @@ mod tests {
                             r: 255,
                             g: 255,
                             b: 255,
-                            a: 1.0,
+                            a: 255,
                         },
                     },
                     Stop {
@@ -1677,7 +1680,7 @@ mod tests {
                             r: 0,
                             g: 0,
                             b: 0,
-                            a: 0.0,
+                            a: 0,
                         },
                     },
                 ],
@@ -1711,7 +1714,7 @@ mod tests {
                             r: 0,
                             g: 0,
                             b: 0,
-                            a: 1.0,
+                            a: 255,
                         },
                     },
                     Stop {
@@ -1720,7 +1723,7 @@ mod tests {
                             r: 255,
                             g: 255,
                             b: 255,
-                            a: 1.0,
+                            a: 255,
                         },
                     },
                 ],
@@ -1751,7 +1754,7 @@ mod tests {
         scene.add_path(
             Path::builder(
                 PathStyle {
-                    stroke: Paint::rgba(255, 0, 0, 1.0),
+                    stroke: Paint::rgba(255, 0, 0, 255),
                     stroke_width: 3.0,
                     dash: Dash::new(vec![10.0, 10.0], 0.0),
                     ..PathStyle::default()
