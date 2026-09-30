@@ -52,6 +52,7 @@ export class View {
       socket,
       stopInput: () => {},
       screen: make(this.#canvas, () => this.#request()),
+      queue: [],
     };
     socket.onopen = () => {
       this.#status({ kind: "open" });
@@ -88,11 +89,25 @@ export class View {
     conn.screen.free();
   }
 
+  // Queues `payload` for the next animation frames. Past MAX_QUEUED
+  // messages, the oldest one goes to the screen now, so a frame that it
+  // holds never draws and the delay stays bounded, also in a hidden tab,
+  // which has no animation frames.
   #receive(conn: Connection, payload: Uint8Array): void {
+    conn.queue.push(payload);
+    while (conn.queue.length > MAX_QUEUED) {
+      this.#read(conn, conn.queue.shift()!);
+    }
+    this.#request();
+  }
+
+  // Reads `payload` into the screen. Returns true if it held a frame.
+  #read(conn: Connection, payload: Uint8Array): boolean {
     try {
-      if (conn.screen.read(payload)) this.#request();
+      return conn.screen.read(payload);
     } catch (e) {
       this.#options.onError?.(e);
+      return false;
     }
   }
 
@@ -100,13 +115,20 @@ export class View {
     if (!this.#frame) this.#frame = requestAnimationFrame(() => this.#draw());
   }
 
+  // Reads the queue up to its first frame and draws, so the frames that
+  // come in a burst draw one to an animation frame.
   #draw(): void {
     this.#frame = 0;
+    const conn = this.#conn;
+    if (!conn) return;
+    let payload;
+    while ((payload = conn.queue.shift()) && !this.#read(conn, payload));
     try {
-      this.#conn?.screen.draw();
+      conn.screen.draw();
     } catch (e) {
       this.#options.onError?.(e);
     }
+    if (conn.queue.length > 0) this.#request();
   }
 
   // Sizes the canvas to its pixels on the screen, and draws the frame again.
@@ -144,4 +166,12 @@ interface Connection {
   socket: WebSocket;
   stopInput: () => void;
   screen: Screen;
+  // The messages that the screen has not read yet, in order.
+  queue: Uint8Array[];
 }
+
+// The most messages that wait for an animation frame. One frame can wait
+// behind the one that draws next, so a pair of frames that come in one
+// interval of the display both draw, and a frame draws at most one
+// interval late.
+const MAX_QUEUED = 2;
