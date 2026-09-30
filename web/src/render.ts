@@ -15,6 +15,7 @@ import {
   type Rgba,
   type Scene,
   type Segments,
+  type Spread,
   type Stop,
   type TextElement,
   type Transform,
@@ -331,19 +332,18 @@ function context(canvas: HTMLCanvasElement): Context {
 // and reflect runs the odd periods backward.
 function spreadStops(
   stops: Stop[],
-  spread: "pad" | "reflect" | "repeat",
+  spread: Spread,
   t0: number,
   t1: number,
 ): Stop[] {
-  if (spread === "pad") return stops;
+  const backward = stops
+    .map((s) => ({ offset: 1 - s.offset, color: s.color }))
+    .reverse();
   const out: Stop[] = [];
   const span = t1 - t0;
   for (let k = t0; k < t1; k++) {
-    const backward = spread === "reflect" && Math.abs(k % 2) === 1;
-    const period = backward
-      ? stops.map((s) => ({ offset: 1 - s.offset, color: s.color })).reverse()
-      : stops;
-    for (const s of period) {
+    const odd = Math.abs(k % 2) === 1;
+    for (const s of spread === "reflect" && odd ? backward : stops) {
       out.push({ offset: (k - t0 + s.offset) / span, color: s.color });
     }
   }
