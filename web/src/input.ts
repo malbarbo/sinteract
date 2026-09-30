@@ -127,11 +127,8 @@ export function listen(
   const observer = new ResizeObserver(resize);
   observer.observe(canvas);
 
-  const pad = new Pad(send);
-  signal.addEventListener("abort", () => {
-    observer.disconnect();
-    pad.stop();
-  });
+  new Pad(send, signal);
+  signal.addEventListener("abort", () => observer.disconnect());
   return () => controller.abort();
 }
 
@@ -192,27 +189,33 @@ const PAD_BUTTONS: [number, PadButton][] = [
 ];
 
 // The first gamepad of the standard mapping. The Gamepad API has no event
-// for a button, so the pad reads the buttons at each animation frame.
+// for a button, so the pad reads the buttons at each animation frame while
+// a pad is there, and starts again at the gamepadconnected of the window.
 class Pad {
   #send: (event: InputEvent) => void;
   #index: number | null = null;
   #pressed = new Set<PadButton>();
   #frame = 0;
 
-  constructor(send: (event: InputEvent) => void) {
+  constructor(send: (event: InputEvent) => void, signal: AbortSignal) {
     this.#send = send;
-    this.#frame = requestAnimationFrame(this.#poll);
+    globalThis.addEventListener("gamepadconnected", () => this.#start(), {
+      signal,
+    });
+    signal.addEventListener("abort", () => cancelAnimationFrame(this.#frame));
+    // A pad that connected before the listening has no event of its own.
+    this.#start();
   }
 
-  stop(): void {
-    cancelAnimationFrame(this.#frame);
+  #start(): void {
+    if (!this.#frame) this.#frame = requestAnimationFrame(this.#poll);
   }
 
   #poll = () => {
-    this.#frame = requestAnimationFrame(this.#poll);
+    this.#frame = 0;
     const pads = navigator.getGamepads?.() ?? [];
-    let pad = this.#index === null ? null : pads[this.#index];
-    if (this.#index !== null && !pad?.connected) {
+    const held = this.#index === null ? null : pads[this.#index];
+    if (this.#index !== null && !held?.connected) {
       this.#index = null;
       // The engine keeps a button of a lost pad held until its up.
       for (const button of this.#pressed) {
@@ -221,12 +224,7 @@ class Pad {
       this.#pressed.clear();
       this.#send({ kind: "pad", action: { kind: "disconnected" } });
     }
-    if (this.#index === null) {
-      pad = pads.find((p) => p?.connected && p.mapping === "standard") ?? null;
-      if (!pad) return;
-      this.#index = pad.index;
-      this.#send({ kind: "pad", action: { kind: "connected" } });
-    }
+    const pad = held?.connected ? held : this.#find(pads);
     if (!pad) return;
     for (const [index, button] of PAD_BUTTONS) {
       const down = pad.buttons[index]?.pressed ?? false;
@@ -238,5 +236,16 @@ class Pad {
         action: { kind: down ? "down" : "up", button },
       });
     }
+    this.#frame = requestAnimationFrame(this.#poll);
   };
+
+  // The first pad of the standard mapping in `pads`, which becomes the pad
+  // of the view, or `null` for none.
+  #find(pads: (Gamepad | null)[]): Gamepad | null {
+    const pad = pads.find((p) => p?.connected && p.mapping === "standard");
+    if (!pad) return null;
+    this.#index = pad.index;
+    this.#send({ kind: "pad", action: { kind: "connected" } });
+    return pad;
+  }
 }
