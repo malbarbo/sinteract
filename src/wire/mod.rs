@@ -75,7 +75,7 @@ fn limit_traversal<S: ReaderSegments>(msg: message::Reader<S>) -> message::Reade
 pub enum Error {
     /// Cap'n Proto rejected the bytes as malformed, truncated, or of the
     /// wrong root.
-    Parse(capnp::Error),
+    Parse(ParseError),
     /// The verbs of a `Path` claim a number of floats that its coords do not
     /// hold.
     PathLengthMismatch { verbs: usize, coords: usize },
@@ -110,15 +110,35 @@ impl std::error::Error for Error {}
 
 impl From<capnp::Error> for Error {
     fn from(e: capnp::Error) -> Self {
-        Error::Parse(e)
+        Error::Parse(ParseError(e))
     }
 }
 
 impl From<std::str::Utf8Error> for Error {
     fn from(e: std::str::Utf8Error) -> Self {
-        Error::Parse(capnp::Error::failed(e.to_string()))
+        Error::Parse(ParseError(capnp::Error::failed(e.to_string())))
     }
 }
+
+/// Why Cap'n Proto rejected a payload. The type is opaque, so a new version
+/// of capnp does not change the API.
+#[derive(Debug)]
+pub struct ParseError(capnp::Error);
+
+impl ParseError {
+    #[cfg(test)]
+    pub(crate) fn kind(&self) -> capnp::ErrorKind {
+        self.0.kind
+    }
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for ParseError {}
 
 /// How reading the values inside an element or an event fails. Only
 /// `skip_unusable` looks inside, so no decoder returns it.
@@ -892,7 +912,7 @@ mod tests {
     }
 
     fn is_read_limit_exceeded(e: &Error) -> bool {
-        matches!(e, Error::Parse(e) if e.kind == capnp::ErrorKind::ReadLimitExceeded)
+        matches!(e, Error::Parse(e) if e.kind() == capnp::ErrorKind::ReadLimitExceeded)
     }
 
     #[test]
