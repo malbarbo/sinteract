@@ -94,6 +94,7 @@ export interface Dash {
   offset: number;
 }
 
+// A color with each channel, the alpha too, from 0 to 255.
 export interface Rgba {
   r: number;
   g: number;
@@ -346,7 +347,7 @@ function collapse(g: Paint & { kind: "linear" | "radial" }): Paint {
   }
   if (g.kind === "linear") finite([g.x0, g.y0, g.x1, g.y1]);
   else finite([g.cx, g.cy, g.radius]);
-  for (const s of g.stops) finite([s.offset, s.color.a]);
+  finite(g.stops.map((s) => s.offset));
   const extent = g.kind === "linear"
     ? Math.hypot(g.x1 - g.x0, g.y1 - g.y0)
     : g.radius;
@@ -375,7 +376,7 @@ function readRgba(r: Reader, c: Struct): Rgba {
     r: r.u8(c, 0),
     g: r.u8(c, 1),
     b: r.u8(c, 2),
-    a: finiteNumber(r.f32(c, 4)),
+    a: r.u8(c, 3),
   };
 }
 
@@ -385,7 +386,7 @@ function rgbaFromU32(c: number): Rgba {
     r: (c >>> 24) & 0xff,
     g: (c >>> 16) & 0xff,
     b: (c >>> 8) & 0xff,
-    a: (c & 0xff) / 255,
+    a: c & 0xff,
   };
 }
 

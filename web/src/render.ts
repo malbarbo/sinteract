@@ -406,8 +406,7 @@ function toPath2D(segments: Segments, closed: boolean): Path2D {
 }
 
 function cssColor(c: Rgba): string {
-  const a = Math.min(Math.max(c.a, 0), 1);
-  return `rgba(${c.r},${c.g},${c.b},${a})`;
+  return `rgba(${c.r},${c.g},${c.b},${c.a / 255})`;
 }
 
 // The metrics of a face of the Sinteract fonts, which the Rust side embeds

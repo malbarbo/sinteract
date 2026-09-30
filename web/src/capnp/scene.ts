@@ -26,10 +26,10 @@ export class Rgba extends $.Struct {
         $.utils.setUint8(2, value, this);
     }
     get a(): number {
-        return $.utils.getFloat32(4, this);
+        return $.utils.getUint8(3, this);
     }
     set a(value: number) {
-        $.utils.setFloat32(4, value, this);
+        $.utils.setUint8(3, value, this);
     }
     toString(): string { return "Rgba_" + super.toString(); }
 }

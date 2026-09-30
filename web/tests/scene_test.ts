@@ -30,7 +30,7 @@ function writePath(
   const style = p._initStyle();
   const c = style._initFill()._initSolid();
   c.r = 255;
-  c.a = 1;
+  c.a = 255;
   p._initVerbs(verbs.length).copyBuffer(new Uint8Array(verbs));
   const list = p._initCoords(coords.length);
   coords.forEach((v, i) => list.set(i, v));
@@ -87,7 +87,7 @@ Deno.test("a paint of an unknown arm draws its fallback, or skips the element", 
   if (path.kind !== "path") throw new Error(path.kind);
   assertEquals(path.style.fill, {
     kind: "solid",
-    color: { r: 0x11, g: 0x22, b: 0x33, a: 0x80 / 255 },
+    color: { r: 0x11, g: 0x22, b: 0x33, a: 0x80 },
   });
 });
 
@@ -200,11 +200,11 @@ Deno.test("each field of the schema reads from its place in the layout", () => {
     stops.get(0)._initColor().r = 10;
     stops.get(1).offset = 0.75;
     const last = stops.get(1)._initColor();
-    [last.g, last.b, last.a] = [20, 30, 0.5];
+    [last.g, last.b, last.a] = [20, 30, 128];
     const radial = style._initStroke()._initRadial();
     [radial.cx, radial.cy, radial.radius] = [5, 6, 7];
     radial.spread = W.SpreadMode.REPEAT;
-    radial._initStops(1).get(0)._initColor().a = 1;
+    radial._initStops(1).get(0)._initColor().a = 255;
     style.strokeWidth = 3;
     style.lineCap = W.LineCap.ROUND;
     style.lineJoin = W.LineJoin.BEVEL;
@@ -231,9 +231,9 @@ Deno.test("each field of the schema reads from its place in the layout", () => {
 
     const text = l.get(2)._initText();
     const fill = text._initFill()._initSolid();
-    [fill.r, fill.g, fill.b, fill.a] = [1, 2, 3, 0.5];
+    [fill.r, fill.g, fill.b, fill.a] = [1, 2, 3, 128];
     const stroke = text._initStroke()._initSolid();
-    [stroke.r, stroke.g, stroke.b, stroke.a] = [4, 5, 6, 1];
+    [stroke.r, stroke.g, stroke.b, stroke.a] = [4, 5, 6, 255];
     text.strokeWidth = 2;
     [text.m0, text.m1, text.m2] = [7, 8, 9];
     [text.m3, text.m4, text.m5] = [10, 11, 12];
@@ -261,7 +261,7 @@ Deno.test("each field of the schema reads from its place in the layout", () => {
           y1: 4,
           stops: [
             { offset: 0.25, color: { r: 10, g: 0, b: 0, a: 0 } },
-            { offset: 0.75, color: { r: 0, g: 20, b: 30, a: 0.5 } },
+            { offset: 0.75, color: { r: 0, g: 20, b: 30, a: 128 } },
           ],
           spread: "reflect",
         },
@@ -270,7 +270,7 @@ Deno.test("each field of the schema reads from its place in the layout", () => {
           cx: 5,
           cy: 6,
           radius: 7,
-          stops: [{ offset: 0, color: { ...transparent, a: 1 } }],
+          stops: [{ offset: 0, color: { ...transparent, a: 255 } }],
           spread: "repeat",
         },
         strokeWidth: 3,
@@ -296,8 +296,8 @@ Deno.test("each field of the schema reads from its place in the layout", () => {
     },
     {
       kind: "text",
-      fill: { kind: "solid", color: { r: 1, g: 2, b: 3, a: 0.5 } },
-      stroke: { kind: "solid", color: { r: 4, g: 5, b: 6, a: 1 } },
+      fill: { kind: "solid", color: { r: 1, g: 2, b: 3, a: 128 } },
+      stroke: { kind: "solid", color: { r: 4, g: 5, b: 6, a: 255 } },
       strokeWidth: 2,
       transform: [7, 8, 9, 10, 11, 12],
       size: 12,

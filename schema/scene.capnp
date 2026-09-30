@@ -33,7 +33,7 @@ struct Rgba {
     r @0 :UInt8;
     g @1 :UInt8;
     b @2 :UInt8;
-    a @3 :Float32;
+    a @3 :UInt8;
 }
 
 enum LineCap {

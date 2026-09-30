@@ -116,8 +116,8 @@ pub mod rgba {
             self.reader.get_data_field::<u8>(2)
         }
         #[inline]
-        pub fn get_a(self) -> f32 {
-            self.reader.get_data_field::<f32>(1)
+        pub fn get_a(self) -> u8 {
+            self.reader.get_data_field::<u8>(3)
         }
     }
 
@@ -232,12 +232,12 @@ pub mod rgba {
             self.builder.set_data_field::<u8>(2, value);
         }
         #[inline]
-        pub fn get_a(self) -> f32 {
-            self.builder.get_data_field::<f32>(1)
+        pub fn get_a(self) -> u8 {
+            self.builder.get_data_field::<u8>(3)
         }
         #[inline]
-        pub fn set_a(&mut self, value: f32) {
-            self.builder.set_data_field::<f32>(1, value);
+        pub fn set_a(&mut self, value: u8) {
+            self.builder.set_data_field::<u8>(3, value);
         }
     }
 
@@ -260,7 +260,7 @@ pub mod rgba {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(12, 6, 0, 0, 97, 6, 0, 0),
+            ::capnp::word(12, 6, 0, 0, 95, 6, 0, 0),
             ::capnp::word(21, 0, 0, 0, 138, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -293,7 +293,7 @@ pub mod rgba {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(100, 0, 0, 0, 3, 0, 1, 0),
             ::capnp::word(112, 0, 0, 0, 2, 0, 1, 0),
-            ::capnp::word(3, 0, 0, 0, 1, 0, 0, 0),
+            ::capnp::word(3, 0, 0, 0, 3, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 3, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(109, 0, 0, 0, 18, 0, 0, 0),
@@ -325,11 +325,11 @@ pub mod rgba {
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(97, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(10, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(6, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(10, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(6, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
         ];
@@ -338,7 +338,7 @@ pub mod rgba {
                 0 => <u8 as ::capnp::introspect::Introspect>::introspect(),
                 1 => <u8 as ::capnp::introspect::Introspect>::introspect(),
                 2 => <u8 as ::capnp::introspect::Introspect>::introspect(),
-                3 => <f32 as ::capnp::introspect::Introspect>::introspect(),
+                3 => <u8 as ::capnp::introspect::Introspect>::introspect(),
                 _ => ::capnp::introspect::panic_invalid_field_index(index),
             }
         }
@@ -424,7 +424,7 @@ mod line_cap {
         ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-        ::capnp::word(99, 6, 0, 0, 160, 6, 0, 0),
+        ::capnp::word(97, 6, 0, 0, 158, 6, 0, 0),
         ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
         ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -517,7 +517,7 @@ mod line_join {
         ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-        ::capnp::word(162, 6, 0, 0, 224, 6, 0, 0),
+        ::capnp::word(160, 6, 0, 0, 222, 6, 0, 0),
         ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
         ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -608,7 +608,7 @@ mod fill_rule {
         ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-        ::capnp::word(226, 6, 0, 0, 19, 7, 0, 0),
+        ::capnp::word(224, 6, 0, 0, 17, 7, 0, 0),
         ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
         ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -697,7 +697,7 @@ mod font_style {
         ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-        ::capnp::word(21, 7, 0, 0, 87, 7, 0, 0),
+        ::capnp::word(19, 7, 0, 0, 85, 7, 0, 0),
         ::capnp::word(21, 0, 0, 0, 178, 0, 0, 0),
         ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -991,7 +991,7 @@ pub mod stop {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(51, 10, 0, 0, 111, 10, 0, 0),
+            ::capnp::word(49, 10, 0, 0, 109, 10, 0, 0),
             ::capnp::word(21, 0, 0, 0, 138, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1126,7 +1126,7 @@ mod spread_mode {
         ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-        ::capnp::word(113, 10, 0, 0, 180, 10, 0, 0),
+        ::capnp::word(111, 10, 0, 0, 178, 10, 0, 0),
         ::capnp::word(21, 0, 0, 0, 186, 0, 0, 0),
         ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1480,7 +1480,7 @@ pub mod linear_gradient {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(182, 10, 0, 0, 101, 11, 0, 0),
+            ::capnp::word(180, 10, 0, 0, 99, 11, 0, 0),
             ::capnp::word(21, 0, 0, 0, 218, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1930,7 +1930,7 @@ pub mod radial_gradient {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(103, 11, 0, 0, 254, 11, 0, 0),
+            ::capnp::word(101, 11, 0, 0, 252, 11, 0, 0),
             ::capnp::word(21, 0, 0, 0, 218, 0, 0, 0),
             ::capnp::word(33, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2430,7 +2430,7 @@ pub mod paint {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 3, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(0, 12, 0, 0, 213, 13, 0, 0),
+            ::capnp::word(254, 11, 0, 0, 211, 13, 0, 0),
             ::capnp::word(21, 0, 0, 0, 146, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2992,7 +2992,7 @@ pub mod path_style {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(3, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(8, 14, 0, 0, 239, 16, 0, 0),
+            ::capnp::word(6, 14, 0, 0, 237, 16, 0, 0),
             ::capnp::word(21, 0, 0, 0, 178, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -3496,7 +3496,7 @@ pub mod clip_path {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(2, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(216, 17, 0, 0, 61, 18, 0, 0),
+            ::capnp::word(214, 17, 0, 0, 59, 18, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -3897,7 +3897,7 @@ pub mod bitmap {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(73, 19, 0, 0, 113, 20, 0, 0),
+            ::capnp::word(71, 19, 0, 0, 111, 20, 0, 0),
             ::capnp::word(21, 0, 0, 0, 154, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -4126,7 +4126,7 @@ mod sampling {
         ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-        ::capnp::word(115, 20, 0, 0, 164, 20, 0, 0),
+        ::capnp::word(113, 20, 0, 0, 162, 20, 0, 0),
         ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
         ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
         ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -4653,7 +4653,7 @@ pub mod text_node {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(4, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(252, 23, 0, 0, 197, 25, 0, 0),
+            ::capnp::word(250, 23, 0, 0, 195, 25, 0, 0),
             ::capnp::word(21, 0, 0, 0, 170, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -5256,7 +5256,7 @@ pub mod path {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(3, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(200, 27, 0, 0, 36, 28, 0, 0),
+            ::capnp::word(198, 27, 0, 0, 34, 28, 0, 0),
             ::capnp::word(21, 0, 0, 0, 138, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -5785,7 +5785,7 @@ pub mod element {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 5, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(12, 29, 0, 0, 188, 29, 0, 0),
+            ::capnp::word(10, 29, 0, 0, 186, 29, 0, 0),
             ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -6224,7 +6224,7 @@ pub mod clipped {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(2, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(190, 29, 0, 0, 11, 30, 0, 0),
+            ::capnp::word(188, 29, 0, 0, 9, 30, 0, 0),
             ::capnp::word(21, 0, 0, 0, 162, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -6571,7 +6571,7 @@ pub mod layer {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(254, 30, 0, 0, 78, 31, 0, 0),
+            ::capnp::word(252, 30, 0, 0, 76, 31, 0, 0),
             ::capnp::word(21, 0, 0, 0, 146, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -6929,7 +6929,7 @@ pub mod scene {
             ::capnp::word(183, 242, 177, 153, 38, 39, 254, 230),
             ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(226, 31, 0, 0, 70, 32, 0, 0),
+            ::capnp::word(224, 31, 0, 0, 68, 32, 0, 0),
             ::capnp::word(21, 0, 0, 0, 146, 0, 0, 0),
             ::capnp::word(29, 0, 0, 0, 7, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
