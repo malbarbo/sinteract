@@ -289,27 +289,39 @@ function readText(t: W.TextNode): TextElement {
 // the color of its last stop, as in SVG. No stops paint transparent.
 const NO_EXTENT = 1 / (1 << 15);
 
+// The paint of `p`. As in Rust, a gradient collapses to a solid color before
+// the check for a float that is not finite, so a gradient with no extent and
+// a radius of -Infinity still draws.
 function readPaint(p: W.Paint): Paint {
+  let paint: Paint;
   switch (p.which()) {
     case W.Paint.SOLID:
-      return { kind: "solid", color: readRgba(p.solid) };
+      paint = { kind: "solid", color: readRgba(p.solid) };
+      break;
     case W.Paint.LINEAR: {
       const g = p.linear;
-      const [x0, y0, x1, y1] = finite([g.x0, g.y0, g.x1, g.y1]);
-      const stops = readStops(g.stops);
-      const spread = spreadOf(g.spread);
-      if (stops.length === 0) return TRANSPARENT;
-      if (Math.hypot(x1 - x0, y1 - y0) <= NO_EXTENT) return lastStop(stops);
-      return { kind: "linear", x0, y0, x1, y1, stops, spread };
+      paint = collapse({
+        kind: "linear",
+        x0: g.x0,
+        y0: g.y0,
+        x1: g.x1,
+        y1: g.y1,
+        stops: readStops(g.stops),
+        spread: spreadOf(g.spread),
+      });
+      break;
     }
     case W.Paint.RADIAL: {
       const g = p.radial;
-      const [cx, cy, radius] = finite([g.cx, g.cy, g.radius]);
-      const stops = readStops(g.stops);
-      const spread = spreadOf(g.spread);
-      if (stops.length === 0) return TRANSPARENT;
-      if (radius <= NO_EXTENT) return lastStop(stops);
-      return { kind: "radial", cx, cy, radius, stops, spread };
+      paint = collapse({
+        kind: "radial",
+        cx: g.cx,
+        cy: g.cy,
+        radius: g.radius,
+        stops: readStops(g.stops),
+        spread: spreadOf(g.spread),
+      });
+      break;
     }
     default:
       // An arm from a newer schema draws the fallback color of its writer.
@@ -317,6 +329,24 @@ function readPaint(p: W.Paint): Paint {
       if (!p.hasFallback) throw new Skip();
       return { kind: "solid", color: rgbaFromU32(p.fallback) };
   }
+  if (paint.kind === "solid") finiteNumber(paint.color.a);
+  else {
+    if (paint.kind === "linear") {
+      finite([paint.x0, paint.y0, paint.x1, paint.y1]);
+    } else finite([paint.cx, paint.cy, paint.radius]);
+    for (const s of paint.stops) finite([s.offset, s.color.a]);
+  }
+  return paint;
+}
+
+// The solid color of a gradient with no stops or no extent, or the gradient.
+function collapse(g: Paint & { kind: "linear" | "radial" }): Paint {
+  if (g.stops.length === 0) return TRANSPARENT;
+  const extent = g.kind === "linear"
+    ? Math.hypot(g.x1 - g.x0, g.y1 - g.y0)
+    : g.radius;
+  if (extent <= NO_EXTENT) return lastStop(g.stops);
+  return g;
 }
 
 const TRANSPARENT: Paint = { kind: "solid", color: { r: 0, g: 0, b: 0, a: 0 } };
@@ -332,7 +362,7 @@ function readStops(list: $.List<W.Stop>): Stop[] {
   let prev = 0;
   for (let i = 0; i < list.length; i++) {
     const s = list.get(i);
-    const offset = Math.min(Math.max(finiteNumber(s.offset), prev), 1);
+    const offset = Math.min(Math.max(s.offset, prev), 1);
     stops.push({ offset, color: readRgba(s.color) });
     prev = offset;
   }
@@ -340,7 +370,7 @@ function readStops(list: $.List<W.Stop>): Stop[] {
 }
 
 function readRgba(c: W.Rgba): Rgba {
-  return { r: c.r, g: c.g, b: c.b, a: finiteNumber(c.a) };
+  return { r: c.r, g: c.g, b: c.b, a: c.a };
 }
 
 // A 0xRRGGBBAA color, as the fallback of a paint carries it.
