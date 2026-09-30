@@ -58,20 +58,30 @@ export function listen(
     const buttons = buttonsOf(e.buttons);
     send({ kind: "mouse", x, y, modifiers: modifiersOf(e), buttons, action });
   };
+  // Sends the down or the up of the button of `e`, from its bit in
+  // `e.buttons`.
+  const press = (e: PointerEvent) => {
+    const button = buttonOf(e.button);
+    if (button === null) return;
+    const down = (buttonsOf(e.buttons) & (1 << button)) !== 0;
+    mouse(e, { kind: down ? "down" : "up", button });
+  };
   canvas.addEventListener("pointermove", (e) => {
-    if (e.isPrimary) mouse(e, { kind: "move" });
+    if (!e.isPrimary) return;
+    // A button that goes down or up while another one is held comes as a
+    // move with its button set.
+    if (e.button === -1) mouse(e, { kind: "move" });
+    else press(e);
   }, { signal });
   canvas.addEventListener("pointerdown", (e) => {
-    const button = buttonOf(e.button);
-    if (!e.isPrimary || button === null) return;
+    if (!e.isPrimary) return;
     canvas.focus();
     // The up comes to the canvas even outside it.
     canvas.setPointerCapture(e.pointerId);
-    mouse(e, { kind: "down", button });
+    press(e);
   }, { signal });
   canvas.addEventListener("pointerup", (e) => {
-    const button = buttonOf(e.button);
-    if (e.isPrimary && button !== null) mouse(e, { kind: "up", button });
+    if (e.isPrimary) press(e);
   }, { signal });
   canvas.addEventListener("pointerleave", (e) => {
     if (e.isPrimary) mouse(e, { kind: "leave" });
