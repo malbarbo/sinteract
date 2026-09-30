@@ -16,8 +16,8 @@ function sceneBytes(
   return new Uint8Array(message.toArrayBuffer());
 }
 
-function decode(bytes: Uint8Array, images: number[] = []): Element[] {
-  return decodeScene(bytes, (id) => images.includes(id)).elements;
+function decode(bytes: Uint8Array): Element[] {
+  return decodeScene(bytes).elements;
 }
 
 // A path of a red fill with `verbs` and `coords`.
@@ -191,16 +191,4 @@ Deno.test("a clip that holds a float that is not finite drops all it holds", () 
     writePath(c._initElements(1).get(0), [1], [1, 2]);
   });
   assertEquals(decode(bytes), []);
-});
-
-Deno.test("a bitmap with no image is skipped", () => {
-  const bytes = sceneBytes(2, (l) => {
-    for (const i of [0, 1]) {
-      const b = l.get(i)._initBitmap();
-      b.id = i;
-      b.m0 = 10;
-      b.m3 = 10;
-    }
-  });
-  assertEquals(decode(bytes, [1]).map((e) => e.kind === "bitmap" && e.id), [1]);
 });

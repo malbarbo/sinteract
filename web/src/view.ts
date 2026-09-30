@@ -113,7 +113,7 @@ export class View {
       case "frame": {
         let scene;
         try {
-          scene = decodeScene(message.scene, (id) => this.#images.has(id));
+          scene = decodeScene(message.scene);
         } catch (e) {
           this.#options.onError?.(e);
           return;

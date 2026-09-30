@@ -153,22 +153,20 @@ export function isVisible(paint: Paint): boolean {
   return paint.kind !== "solid" || paint.color.a > 0;
 }
 
-// Reads `bytes`, a whole message whose root is a Scene. `hasImage` says if a
-// bitmap of an id has an image, and a bitmap without one is skipped.
-export function decodeScene(
-  bytes: Uint8Array,
-  hasImage: (id: number) => boolean,
-): Scene {
+// Reads `bytes`, a whole message whose root is a Scene. A bitmap keeps the
+// id of its image, and the renderer skips a bitmap whose image it does not
+// have.
+export function decodeScene(bytes: Uint8Array): Scene {
   const root = new $.Message(bytes, false).getRoot(W.Scene);
   return {
     width: frameSize(root.width),
     height: frameSize(root.height),
-    elements: readElements(root.elements, 0, hasImage),
+    elements: readElements(root.elements, 0),
   };
 }
 
 // Why the decoder skips an element: a value from a newer schema, a float
-// that is not finite or a bitmap with no image. Any other error is damage.
+// that is not finite. Any other error is damage.
 class Skip extends Error {}
 
 function frameSize(size: number): number {
@@ -178,12 +176,11 @@ function frameSize(size: number): number {
 function readElements(
   list: $.List<W.Element>,
   depth: number,
-  hasImage: (id: number) => boolean,
 ): Element[] {
   const out: Element[] = [];
   for (let i = 0; i < list.length; i++) {
     try {
-      readElement(list.get(i), depth, hasImage, out);
+      readElement(list.get(i), depth, out);
     } catch (e) {
       if (!(e instanceof Skip)) throw e;
     }
@@ -194,7 +191,6 @@ function readElements(
 function readElement(
   e: W.Element,
   depth: number,
-  hasImage: (id: number) => boolean,
   out: Element[],
 ): void {
   switch (e.which()) {
@@ -214,7 +210,7 @@ function readElement(
       const clip = c.clip;
       const fillRule = fillRuleOf(clip.fillRule);
       const segments = readSegments(clip.verbs, clip.coords);
-      const elements = readElements(c.elements, depth + 1, hasImage);
+      const elements = readElements(c.elements, depth + 1);
       out.push({ kind: "clipped", clip: segments, fillRule, elements });
       return;
     }
@@ -223,7 +219,6 @@ function readElement(
       return;
     case W.Element.BITMAP: {
       const b = e.bitmap;
-      if (!hasImage(b.id)) throw new Skip();
       const sampling = b.sampling === W.Sampling.NEAREST ? "nearest" : "smooth";
       const transform = transformOf(b);
       out.push({ kind: "bitmap", id: b.id, transform, sampling });
@@ -232,7 +227,7 @@ function readElement(
     case W.Element.LAYER: {
       if (depth >= MAX_NESTING) return;
       const l = e.layer;
-      const elements = readElements(l.elements, depth + 1, hasImage);
+      const elements = readElements(l.elements, depth + 1);
       const opacity = l.opacity;
       if (!Number.isFinite(opacity) || opacity <= 0) return;
       if (opacity >= 1) out.push(...elements);
