@@ -184,6 +184,10 @@ impl super::Display for Window {
         self.inbox.sender()
     }
 
+    fn tick_rate(&self) -> NonZeroU32 {
+        self.clock.millihertz()
+    }
+
     /// Destroy the window and give the event loop back.
     fn close(&mut self) {
         let Some(Active {

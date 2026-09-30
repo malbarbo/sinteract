@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 /// When the next tick of a display falls due. The first one is due at
 /// once.
 pub(crate) struct TickClock {
+    rate: NonZeroU32,
     period: Duration,
     due: Instant,
 }
@@ -15,6 +16,7 @@ impl TickClock {
     /// in winit.
     pub(crate) fn from_millihertz(rate: NonZeroU32) -> Self {
         Self {
+            rate,
             period: period(rate),
             due: Instant::now(),
         }
@@ -24,7 +26,13 @@ impl TickClock {
     /// keeps its time.
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn set_millihertz(&mut self, rate: NonZeroU32) {
+        self.rate = rate;
         self.period = period(rate);
+    }
+
+    /// The rate in thousandths of a hertz.
+    pub(crate) fn millihertz(&self) -> NonZeroU32 {
+        self.rate
     }
 
     /// Move the next tick to the nearest time that is a whole number of

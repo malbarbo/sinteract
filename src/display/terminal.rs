@@ -226,6 +226,10 @@ impl super::Display for Terminal {
         self.inbox.sender()
     }
 
+    fn tick_rate(&self) -> NonZeroU32 {
+        self.clock.millihertz()
+    }
+
     /// Stop the reader thread, wait for the frame that the writer holds,
     /// and leave the alt screen and raw mode.
     fn close(&mut self) {

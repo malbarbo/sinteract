@@ -4,6 +4,7 @@
 use std::fmt;
 use std::fs::File;
 use std::io::BufWriter;
+use std::num::NonZeroU32;
 use std::time::Instant;
 
 use super::{Display, OpenError, PresentError, TerminalOptions, open_native};
@@ -93,6 +94,7 @@ impl Stage {
                 Session::start(players, from_server, BufWriter::new(to_server))
                     .map_err(StageError::Start)?;
             let remote = Remote {
+                tick_rate: session.tick_rate(),
                 session: Some(session),
                 ended: false,
             };
@@ -150,6 +152,19 @@ impl Stage {
         }
     }
 
+    /// The rate of the ticks in thousandths of a hertz, 60000 for 60 Hz. A
+    /// game moves by a step of this rate at each tick, so it moves at the
+    /// same speed at any rate. In a session the rate is the one of the
+    /// server, the same until the end. On a display of this process it is
+    /// [`Display::tick_rate`], which changes with the monitor, so a game
+    /// reads it again at each tick.
+    pub fn tick_rate(&self) -> NonZeroU32 {
+        match &self.inner {
+            Inner::Local(display) => display.tick_rate(),
+            Inner::Remote(remote) => remote.tick_rate,
+        }
+    }
+
     /// End the stage. A session closes fd 4, which ends the room for the
     /// server. A second call does nothing, and drop calls it.
     pub fn close(&mut self) {
@@ -204,6 +219,8 @@ enum Inner {
 
 /// A session with a server, on fd 3 and fd 4.
 struct Remote {
+    /// The rate of the ticks, from the start of the session.
+    tick_rate: NonZeroU32,
     /// `None` after [`Stage::close`].
     session: Option<Session<File, BufWriter<File>>>,
     /// The stream of the server ended or failed, and every wait returns

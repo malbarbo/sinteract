@@ -673,6 +673,7 @@ mundo.start(&jogadores); // cada Player com o apelido, o jogador 1 primeiro
 loop {
     match stage.wait(None) {
         Ok(StageEvent::Tick) => {
+            mundo.on_tick(1000.0 / stage.tick_rate().get() as f32); // segundos por tick
             for (p, _) in &jogadores {
                 stage.present(Target::Player(*p), mundo.cena_de(*p))?;
             }
@@ -693,7 +694,10 @@ que ainda não foi lido é substituído pelo mais novo do mesmo jogador, sem
 passar por cima da entrada de outro jogador. A sessão guarda os `lost` do
 servidor e manda de novo a imagem perdida no próximo frame que a desenha.
 Uma escrita que falha no fd 4 fecha o fd 4 e encerra a sessão. O
-`examples/engine.rs` do `sinteract` é uma engine completa.
+`tick_rate` dá a taxa do `start` numa sessão, e a taxa do monitor numa
+janela, que muda quando a janela passa para outro monitor. Por isso o
+jogo lê a taxa de novo a cada `Tick`. O `examples/engine.rs` do
+`sinteract` é uma engine completa.
 
 Uma engine sem as features de tela, como uma que roda em wasm, usa a
 `session::Session` direto, com o `Session::start(players, r, w)`, o
