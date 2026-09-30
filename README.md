@@ -54,6 +54,15 @@ carry each image once. The schema is in `schema/`, one file for the
 drawing, one for the input and one for the session, and `PLAN.md`
 describes the server and client modes.
 
+The examples try each part, and the top of each one gives the commands
+that run it. `examples/gallery.rs` draws every kind of element.
+`examples/engine.rs` and `examples/players.rs` are games for a session,
+and `examples/view.rs` runs one of them as a subprocess, in the place of
+a server for one player. `web/server/` is a server with one room for the
+page in `web/`, and `web/README.md` shows how to start it with a game.
+`examples/remote.rs` plays in a room of that server from the terminal or
+a window.
+
 The scene, the rasterizer, the text measuring and the PDF and SVG writers
 build on `wasm32`, so a view in a browser can paint a scene without native
 code.
