@@ -11,6 +11,14 @@
 //! cargo run --example gallery png > g.png
 //! cargo run --example gallery svg > g.svg
 //! cargo run --example gallery pdf > g.pdf
+//! cargo run --example gallery stage        # the still gallery on a Stage
+//! ```
+//!
+//! The stage mode is an engine for a server, such as `web/server`:
+//!
+//! ```text
+//! cargo run --release --manifest-path web/server/Cargo.toml -- \
+//!     --players 1 target/release/examples/gallery stage
 //! ```
 
 // The gallery opens a terminal or a window, which wasm32 lacks. Without a
@@ -23,7 +31,9 @@ use std::process::ExitCode;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use sinteract::display::{Display, Printer, Terminal, TerminalOptions, Window, open_native};
+use sinteract::display::{
+    Display, Printer, Stage, StageEvent, Terminal, TerminalOptions, Window, open_native,
+};
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::renderer::Renderer;
 use sinteract::renderer::pdf::PdfRenderer;
@@ -33,6 +43,7 @@ use sinteract::scene::{
     Bitmap, ClipPath, DEFAULT_MITER_LIMIT, Dash, FillRule, FontStyle, Image, LineCap, LineJoin,
     Paint, Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, Text, TextSpec,
 };
+use sinteract::session::{PlayerRange, Target};
 
 /// Draws a cell into the box at `(x, y)`, at the time `t` in seconds.
 type DrawCell = fn(s: &mut Scene, x: f32, y: f32, t: f32);
@@ -102,8 +113,9 @@ fn main() -> ExitCode {
         Some("png") => png(),
         Some("svg") => svg(),
         Some("pdf") => pdf(),
+        Some("stage") => stage(),
         Some(other) => Err(format!(
-            "unknown mode {other}, try window, terminal, print, png, svg or pdf"
+            "unknown mode {other}, try window, terminal, print, png, svg, pdf or stage"
         )),
     };
     match result {
@@ -180,6 +192,33 @@ fn pdf() -> Result<(), String> {
     let mut renderer = PdfRenderer::new();
     let Ok(pdf) = renderer.render(&gallery(STILL));
     std::io::stdout().write_all(pdf).map_err(|e| e.to_string())
+}
+
+/// Shows the gallery at [`STILL`] to every player, on each tick of the
+/// stage, until the stage closes.
+fn stage() -> Result<(), String> {
+    let players = PlayerRange::new(1, 8).expect("1 to 8 is a range");
+    let (mut stage, _players) = Stage::open(
+        "sinteract gallery",
+        WIDTH,
+        HEIGHT,
+        players,
+        TerminalOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    loop {
+        match stage.wait(None) {
+            Ok(StageEvent::Tick) => stage
+                .present(Target::All, gallery(STILL))
+                .map_err(|e| e.to_string())?,
+            Ok(StageEvent::Input { .. }) | Err(Interrupt::Wake | Interrupt::Timeout) => {}
+            Ok(StageEvent::Error(e)) => eprintln!("gallery: {e}"),
+            Err(Interrupt::Read(e)) => eprintln!("gallery: {e}"),
+            Err(Interrupt::Close) => break,
+        }
+    }
+    stage.close();
+    Ok(())
 }
 
 /// A PNG of four colored quarters and a white dot, drawn by sinteract.
