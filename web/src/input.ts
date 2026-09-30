@@ -52,10 +52,16 @@ export function listen(
   // engine gets the up of every held key when the focus goes.
   globalThis.addEventListener("blur", releaseKeys, { signal });
 
-  const mouse = (e: PointerEvent | WheelEvent, action: MouseAction) => {
+  // The buttons of the last mouse event, as the engine knows them.
+  let mouseButtons = 0;
+  const mouse = (
+    e: PointerEvent | WheelEvent,
+    action: MouseAction,
+    buttons = buttonsOf(e.buttons),
+  ) => {
     const rect = canvas.getBoundingClientRect();
     const [x, y] = toScene(e.clientX - rect.left, e.clientY - rect.top);
-    const buttons = buttonsOf(e.buttons);
+    mouseButtons = buttons;
     send({ kind: "mouse", x, y, modifiers: modifiersOf(e), buttons, action });
   };
   // Sends the down or the up of the button of `e`, from its bit in
@@ -82,6 +88,21 @@ export function listen(
   }, { signal });
   canvas.addEventListener("pointerup", (e) => {
     if (e.isPrimary) press(e);
+  }, { signal });
+  // A pointer that the system cancels, as for a gesture of the system,
+  // sends no pointerup, so the engine gets the up of each held button.
+  canvas.addEventListener("pointercancel", (e) => {
+    if (!e.isPrimary) return;
+    for (let button = 0; button <= MouseButton.FORWARD; button++) {
+      const bit = 1 << button;
+      if (mouseButtons & bit) {
+        mouse(
+          e,
+          { kind: "up", button: button as MouseButton },
+          mouseButtons & ~bit,
+        );
+      }
+    }
   }, { signal });
   canvas.addEventListener("pointerleave", (e) => {
     if (e.isPrimary) mouse(e, { kind: "leave" });
