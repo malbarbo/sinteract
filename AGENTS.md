@@ -59,6 +59,7 @@ cargo clippy --all-targets --target wasm32-unknown-unknown
 cargo doc --no-deps                           # warning-free
 cargo doc --no-deps --target wasm32-unknown-unknown
 make -C web check test                        # the HTML client
+make -C web render-test                       # its drawing, in Chrome
 ```
 
 Tests live next to the code they test, in `#[cfg(test)]` modules. Run

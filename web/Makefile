@@ -1,9 +1,11 @@
 # The HTML client of a view. `make` builds dist/index.html, one file with
 # the whole client. `make check` checks the format and the types, and
-# `make test` runs the tests with Deno.
+# `make test` runs the tests with Deno. `make render-test` draws the gallery
+# in Chrome and compares it with the PNG of the pixmap renderer.
 
 SRC_TS = $(sort $(shell find src -name '*.ts'))
 SCHEMA = ../schema/scene.capnp ../schema/event.capnp ../schema/protocol.capnp
+CHROME ?= $(firstword $(shell command -v chromium google-chrome))
 
 dist/index.html: build/app.js src/index.html tools/inline.ts
 	@mkdir -p $(@D)
@@ -25,7 +27,15 @@ check:
 test:
 	deno test --allow-read tests/
 
+render-test: dist/index.html
+	cargo build --release --example gallery --manifest-path ../Cargo.toml
+	cargo build --release --manifest-path server/Cargo.toml
+	../target/release/examples/gallery png > build/gallery.png
+	deno run -A tools/render_test.ts $(CHROME) \
+		server/target/release/sinteract-test-server \
+		../target/release/examples/gallery build/gallery.png build/gallery-web.png
+
 clean:
 	rm -rf build dist
 
-.PHONY: capnp check test clean
+.PHONY: capnp check test render-test clean

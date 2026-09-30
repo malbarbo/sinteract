@@ -38,4 +38,10 @@ cargo run --release --manifest-path web/server/Cargo.toml -- \
 ```
 
 `make check` checks the format, the lint and the types, and `make test` runs the
-tests.
+tests. `make render-test` draws the gallery of `examples/gallery.rs` with the
+client in a headless Chrome, through the test server, and compares it with the
+PNG of the pixmap renderer. The text and the antialiasing of Chrome never match
+tiny-skia pixel by pixel, so the test compares the mean difference of each tile
+of 50 by 50 pixels. It looks for Chromium or Google Chrome on the path, and
+`make render-test CHROME=...` names another one. The screenshot of Chrome goes
+to `build/gallery-web.png`.
