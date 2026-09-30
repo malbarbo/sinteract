@@ -38,7 +38,9 @@ needs a given feature has its own `cfg` in `display/mod.rs`.
 `web/` is the view for a browser, in TypeScript, which Deno checks and
 bundles into one HTML file. `web/src/capnp/` is generated from `schema/`
 by capnp-es and committed, and `make -C web capnp` regenerates it. A change
-of the schema regenerates it in the same commit. `web/server/` is a crate
+of the schema regenerates it in the same commit, and a change of
+`scene.capnp` also updates the layout in `web/src/scene.ts`, which reads a
+frame with a reader of its own. `web/server/` is a crate
 of its own, a server to try the client with, and the library does not
 depend on it.
 

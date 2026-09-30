@@ -10,12 +10,15 @@ the server.
 `make capnp` generates it again after a change of the schema. The files are
 committed, so a build needs only Deno. `src/scene.ts` turns the bytes of a frame
 into plain values, with the rules of the Rust reader for a value it does not
-know. `src/render.ts` draws those values with the Canvas 2D API, `src/input.ts`
-turns the keys, the pointer, the wheel, the size of the page and a gamepad into
-the events of the protocol, and `src/protocol.ts` encodes and decodes the
-messages. `src/view.ts` ties them together behind one class, and `src/main.ts`
-is the page of a player, which takes its token from `?token=` and connects to
-`/play` of the same server:
+know. It reads the frame with `src/reader.ts`, a reader of the wire format that
+reads each field at its place in the layout. The accessors of capnp-es take
+about 5 ms to read a frame of 200 paths, and this reader takes under 1 ms.
+`src/render.ts` draws those values with the Canvas 2D API, `src/input.ts` turns
+the keys, the pointer, the wheel, the size of the page and a gamepad into the
+events of the protocol, and `src/protocol.ts` encodes and decodes the messages.
+`src/view.ts` ties them together behind one class, and `src/main.ts` is the page
+of a player, which takes its token from `?token=` and connects to `/play` of the
+same server:
 
 ```ts
 const view = new View(canvas, { onStatus: (s) => console.log(s.kind) });

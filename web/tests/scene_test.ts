@@ -188,3 +188,188 @@ Deno.test("a clip that holds a float that is not finite drops all it holds", () 
   });
   assertEquals(decode(bytes), []);
 });
+
+Deno.test("each field of the schema reads from its place in the layout", () => {
+  const bytes = sceneBytes(4, (l) => {
+    const style = writePath(l.get(0), [1], [8, 9]);
+    const linear = style._initFill()._initLinear();
+    [linear.x0, linear.y0, linear.x1, linear.y1] = [1, 2, 30, 4];
+    linear.spread = W.SpreadMode.REFLECT;
+    const stops = linear._initStops(2);
+    stops.get(0).offset = 0.25;
+    stops.get(0)._initColor().r = 10;
+    stops.get(1).offset = 0.75;
+    const last = stops.get(1)._initColor();
+    [last.g, last.b, last.a] = [20, 30, 0.5];
+    const radial = style._initStroke()._initRadial();
+    [radial.cx, radial.cy, radial.radius] = [5, 6, 7];
+    radial.spread = W.SpreadMode.REPEAT;
+    radial._initStops(1).get(0)._initColor().a = 1;
+    style.strokeWidth = 3;
+    style.lineCap = W.LineCap.ROUND;
+    style.lineJoin = W.LineJoin.BEVEL;
+    style.fillRule = W.FillRule.EVEN_ODD;
+    style.closed = true;
+    style.miterLimit = 6;
+    const dash = style._initDashArray(2);
+    dash.set(0, 4);
+    dash.set(1, 2);
+    style.dashOffset = 1.5;
+
+    const clipped = l.get(1)._initClipped();
+    const clip = clipped._initClip();
+    clip.fillRule = W.FillRule.EVEN_ODD;
+    clip._initVerbs(1).copyBuffer(new Uint8Array([1]));
+    const coords = clip._initCoords(2);
+    coords.set(0, 1);
+    coords.set(1, 2);
+    const bitmap = clipped._initElements(1).get(0)._initBitmap();
+    bitmap.id = 42;
+    [bitmap.m0, bitmap.m1, bitmap.m2] = [1, 2, 3];
+    [bitmap.m3, bitmap.m4, bitmap.m5] = [4, 5, 6];
+    bitmap.sampling = W.Sampling.NEAREST;
+
+    const text = l.get(2)._initText();
+    const fill = text._initFill()._initSolid();
+    [fill.r, fill.g, fill.b, fill.a] = [1, 2, 3, 0.5];
+    const stroke = text._initStroke()._initSolid();
+    [stroke.r, stroke.g, stroke.b, stroke.a] = [4, 5, 6, 1];
+    text.strokeWidth = 2;
+    [text.m0, text.m1, text.m2] = [7, 8, 9];
+    [text.m3, text.m4, text.m5] = [10, 11, 12];
+    text.size = 12;
+    text.family = "serif";
+    text.weight = 700;
+    text.style = W.FontStyle.ITALIC;
+    text.underline = true;
+    text.text = "Olá";
+
+    const layer = l.get(3)._initLayer();
+    layer.opacity = 0.25;
+    layer._initElements(1).get(0)._initBitmap().id = 7;
+  });
+  const transparent = { r: 0, g: 0, b: 0, a: 0 };
+  assertEquals(JSON.parse(JSON.stringify(decode(bytes), typedArrays)), [
+    {
+      kind: "path",
+      style: {
+        fill: {
+          kind: "linear",
+          x0: 1,
+          y0: 2,
+          x1: 30,
+          y1: 4,
+          stops: [
+            { offset: 0.25, color: { r: 10, g: 0, b: 0, a: 0 } },
+            { offset: 0.75, color: { r: 0, g: 20, b: 30, a: 0.5 } },
+          ],
+          spread: "reflect",
+        },
+        stroke: {
+          kind: "radial",
+          cx: 5,
+          cy: 6,
+          radius: 7,
+          stops: [{ offset: 0, color: { ...transparent, a: 1 } }],
+          spread: "repeat",
+        },
+        strokeWidth: 3,
+        lineCap: "round",
+        lineJoin: "bevel",
+        fillRule: "evenodd",
+        closed: true,
+        miterLimit: 6,
+        dash: { array: [4, 2], offset: 1.5 },
+      },
+      segments: { verbs: [0, 1], coords: [0, 0, 8, 9] },
+    },
+    {
+      kind: "clipped",
+      clip: { verbs: [0, 1], coords: [0, 0, 1, 2] },
+      fillRule: "evenodd",
+      elements: [{
+        kind: "bitmap",
+        id: 42,
+        transform: [1, 2, 3, 4, 5, 6],
+        sampling: "nearest",
+      }],
+    },
+    {
+      kind: "text",
+      fill: { kind: "solid", color: { r: 1, g: 2, b: 3, a: 0.5 } },
+      stroke: { kind: "solid", color: { r: 4, g: 5, b: 6, a: 1 } },
+      strokeWidth: 2,
+      transform: [7, 8, 9, 10, 11, 12],
+      size: 12,
+      family: "serif",
+      weight: 700,
+      style: "italic",
+      underline: true,
+      text: "Olá",
+    },
+    {
+      kind: "layer",
+      opacity: 0.25,
+      elements: [{
+        kind: "bitmap",
+        id: 7,
+        transform: [0, 0, 0, 0, 0, 0],
+        sampling: "smooth",
+      }],
+    },
+  ]);
+});
+
+// Writes a typed array as a plain array, for JSON.
+function typedArrays(_: string, v: unknown): unknown {
+  return ArrayBuffer.isView(v) ? [...(v as Float32Array)] : v;
+}
+
+Deno.test("a root behind a far pointer reads through its landing pad", () => {
+  const words = new BigUint64Array([
+    // Two segments of 1 and 2 words.
+    1n | (1n << 32n),
+    2n,
+    // Segment 0, the root: a far pointer to word 0 of segment 1.
+    2n | (1n << 32n),
+    // Segment 1, the pad: a pointer to the next word, a struct of one data
+    // word, the Scene with a width of 100 and a height of 50.
+    1n << 32n,
+    0x42c80000n | (0x42480000n << 32n),
+  ]);
+  const scene = decodeScene(new Uint8Array(words.buffer));
+  assertEquals([scene.width, scene.height], [100, 50]);
+});
+
+Deno.test("a root behind a double far pointer reads through its landing pad", () => {
+  const words = new BigUint64Array([
+    // Three segments of 1, 2 and 1 words.
+    2n | (1n << 32n),
+    2n | (1n << 32n),
+    // Segment 0, the root: a double far pointer to word 0 of segment 1.
+    6n | (1n << 32n),
+    // Segment 1, the pad: a far pointer to word 0 of segment 2, and a tag
+    // of a struct of one data word.
+    2n | (2n << 32n),
+    1n << 32n,
+    // Segment 2, the Scene: a width of 100 and a height of 50.
+    0x42c80000n | (0x42480000n << 32n),
+  ]);
+  const scene = decodeScene(new Uint8Array(words.buffer));
+  assertEquals([scene.width, scene.height], [100, 50]);
+});
+
+Deno.test("a truncated message, a pointer out of its segment or a Text that is not UTF-8 throws", () => {
+  const bytes = sceneBytes(1, (l) => {
+    writePath(l.get(0), [1], [1, 2]);
+  });
+  assertThrows(() => decodeScene(bytes.subarray(0, bytes.length - 8)));
+  const far = bytes.slice();
+  new DataView(far.buffer).setUint32(8, 0x7ffffc, true);
+  assertThrows(() => decodeScene(far));
+  const text = sceneBytes(1, (l) => {
+    l.get(0)._initText().text = "zzzz";
+  });
+  text[text.indexOf("z".charCodeAt(0))] = 0xff;
+  assertThrows(() => decodeScene(text));
+});

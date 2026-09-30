@@ -6,8 +6,7 @@
 // finite. Damage, such as a bad pointer or verbs that disagree with their
 // coords, throws, and the whole scene is unusable.
 
-import * as $ from "capnp-es";
-import * as W from "./capnp/scene.ts";
+import { Reader, type Struct, type StructList } from "./reader.ts";
 
 export interface Scene {
   width: number;
@@ -139,7 +138,7 @@ export interface Segments {
   coords: Float32Array;
 }
 
-// The verb bytes of scene.capnp. capnp-es generates no constants.
+// The verb bytes of scene.capnp.
 export const VERB_MOVE = 0;
 export const VERB_LINE = 1;
 export const VERB_QUAD = 2;
@@ -157,13 +156,31 @@ export function isVisible(paint: Paint): boolean {
 // id of its image, and the renderer skips a bitmap whose image it does not
 // have.
 export function decodeScene(bytes: Uint8Array): Scene {
-  const root = new $.Message(bytes, false).getRoot(W.Scene);
+  const r = new Reader(bytes);
+  const root = r.root();
   return {
-    width: frameSize(root.width),
-    height: frameSize(root.height),
-    elements: readElements(root.elements, 0),
+    width: frameSize(r.f32(root, 0)),
+    height: frameSize(r.f32(root, 4)),
+    elements: readElements(r, r.structs(root, 0), 0),
   };
 }
+
+// The layout of the structs of scene.capnp, the byte of each field in the
+// data section and the index of each pointer, as capnp compiles it into
+// src/capnp/scene.ts. The layout test of tests/scene_test.ts writes every
+// field with capnp-es and reads it back, so a change of the schema that
+// moves a field fails it.
+const ELEMENT_PATH = 0;
+const ELEMENT_CLIPPED = 1;
+const ELEMENT_TEXT = 2;
+const ELEMENT_BITMAP = 3;
+const ELEMENT_LAYER = 4;
+const PAINT_SOLID = 0;
+const PAINT_LINEAR = 1;
+const PAINT_RADIAL = 2;
+const SAMPLING_NEAREST = 1;
+// The bits of 1.0, the default opacity of a layer.
+const ONE_BITS = 0x3f800000;
 
 // Why the decoder skips an element: a value from a newer schema, a float
 // that is not finite. Any other error is damage.
@@ -174,13 +191,14 @@ function frameSize(size: number): number {
 }
 
 function readElements(
-  list: $.List<W.Element>,
+  r: Reader,
+  list: StructList,
   depth: number,
 ): Element[] {
   const out: Element[] = [];
   for (let i = 0; i < list.length; i++) {
     try {
-      readElement(list.get(i), depth, out);
+      readElement(r, r.at(list, i), depth, out);
     } catch (e) {
       if (!(e instanceof Skip)) throw e;
     }
@@ -189,46 +207,47 @@ function readElements(
 }
 
 function readElement(
-  e: W.Element,
+  r: Reader,
+  e: Struct,
   depth: number,
   out: Element[],
 ): void {
-  switch (e.which()) {
-    case W.Element.PATH: {
-      const p = e.path;
-      const style = readPathStyle(p.style);
+  switch (r.u16(e, 0)) {
+    case ELEMENT_PATH: {
+      const p = r.struct(e, 0);
+      const style = readPathStyle(r, r.struct(p, 0));
       out.push({
         kind: "path",
         style,
-        segments: readSegments(p.verbs, p.coords),
+        segments: readSegments(r.data(p, 1), r.float32s(p, 2)),
       });
       return;
     }
-    case W.Element.CLIPPED: {
+    case ELEMENT_CLIPPED: {
       if (depth >= MAX_NESTING) return;
-      const c = e.clipped;
-      const clip = c.clip;
-      const fillRule = fillRuleOf(clip.fillRule);
-      const segments = readSegments(clip.verbs, clip.coords);
-      const elements = readElements(c.elements, depth + 1);
+      const c = r.struct(e, 0);
+      const clip = r.struct(c, 0);
+      const fillRule = fillRuleOf(r.u16(clip, 0));
+      const segments = readSegments(r.data(clip, 0), r.float32s(clip, 1));
+      const elements = readElements(r, r.structs(c, 1), depth + 1);
       out.push({ kind: "clipped", clip: segments, fillRule, elements });
       return;
     }
-    case W.Element.TEXT:
-      out.push(readText(e.text));
+    case ELEMENT_TEXT:
+      out.push(readText(r, r.struct(e, 0)));
       return;
-    case W.Element.BITMAP: {
-      const b = e.bitmap;
-      const sampling = b.sampling === W.Sampling.NEAREST ? "nearest" : "smooth";
-      const transform = transformOf(b);
-      out.push({ kind: "bitmap", id: b.id, transform, sampling });
+    case ELEMENT_BITMAP: {
+      const b = r.struct(e, 0);
+      const sampling = r.u16(b, 28) === SAMPLING_NEAREST ? "nearest" : "smooth";
+      const transform = transformAt(r, b, 4);
+      out.push({ kind: "bitmap", id: r.u32(b, 0), transform, sampling });
       return;
     }
-    case W.Element.LAYER: {
+    case ELEMENT_LAYER: {
       if (depth >= MAX_NESTING) return;
-      const l = e.layer;
-      const elements = readElements(l.elements, depth + 1);
-      const opacity = l.opacity;
+      const l = r.struct(e, 0);
+      const elements = readElements(r, r.structs(l, 0), depth + 1);
+      const opacity = r.f32(l, 0, ONE_BITS);
       if (!Number.isFinite(opacity) || opacity <= 0) return;
       if (opacity >= 1) out.push(...elements);
       else out.push({ kind: "layer", opacity, elements });
@@ -240,17 +259,17 @@ function readElement(
   }
 }
 
-function readPathStyle(s: W.PathStyle): PathStyle {
+function readPathStyle(r: Reader, s: Struct): PathStyle {
   return {
-    fill: readPaint(s.fill),
-    stroke: readPaint(s.stroke),
-    strokeWidth: finiteNumber(s.strokeWidth),
-    lineCap: lineCapOf(s.lineCap),
-    lineJoin: lineJoinOf(s.lineJoin),
-    fillRule: fillRuleOf(s.fillRule),
-    closed: s.closed,
-    miterLimit: Math.max(finiteNumber(s.miterLimit), 1),
-    dash: readDash(s.dashArray.toArray(), s.dashOffset),
+    fill: readPaint(r, r.struct(s, 0)),
+    stroke: readPaint(r, r.struct(s, 1)),
+    strokeWidth: finiteNumber(r.f32(s, 0)),
+    lineCap: lineCapOf(r.u16(s, 4)),
+    lineJoin: lineJoinOf(r.u16(s, 6)),
+    fillRule: fillRuleOf(r.u16(s, 8)),
+    closed: r.bit(s, 80),
+    miterLimit: Math.max(finiteNumber(r.f32(s, 12)), 1),
+    dash: readDash([...r.float32s(s, 2)], r.f32(s, 16)),
   };
 }
 
@@ -264,19 +283,19 @@ function readDash(array: number[], offset: number): Dash | null {
   return valid && Number.isFinite(offset) ? { array, offset } : null;
 }
 
-function readText(t: W.TextNode): TextElement {
+function readText(r: Reader, t: Struct): TextElement {
   return {
     kind: "text",
-    fill: readPaint(t.fill),
-    stroke: readPaint(t.stroke),
-    strokeWidth: finiteNumber(t.strokeWidth),
-    transform: transformOf(t),
-    size: finiteNumber(t.size),
-    family: t.family,
-    weight: t.weight,
-    style: fontStyleOf(t.style),
-    underline: t.underline,
-    text: t.text,
+    fill: readPaint(r, r.struct(t, 0)),
+    stroke: readPaint(r, r.struct(t, 1)),
+    strokeWidth: finiteNumber(r.f32(t, 0)),
+    transform: transformAt(r, t, 4),
+    size: finiteNumber(r.f32(t, 28)),
+    family: r.text(t, 2),
+    weight: r.u16(t, 32),
+    style: fontStyleOf(r.u16(t, 34)),
+    underline: r.bit(t, 288),
+    text: r.text(t, 3),
   };
 }
 
@@ -284,41 +303,40 @@ function readText(t: W.TextNode): TextElement {
 // the color of its last stop, as in SVG. No stops paint transparent.
 const NO_EXTENT = 1 / (1 << 15);
 
-function readPaint(p: W.Paint): Paint {
-  switch (p.which()) {
-    case W.Paint.SOLID:
-      return { kind: "solid", color: readRgba(p.solid) };
-    case W.Paint.LINEAR: {
-      const g = p.linear;
+function readPaint(r: Reader, p: Struct): Paint {
+  switch (r.u16(p, 0)) {
+    case PAINT_SOLID:
+      return { kind: "solid", color: readRgba(r, r.struct(p, 0)) };
+    case PAINT_LINEAR: {
+      const g = r.struct(p, 0);
       return collapse({
         kind: "linear",
-        x0: g.x0,
-        y0: g.y0,
-        x1: g.x1,
-        y1: g.y1,
-        stops: readStops(g.stops),
-        spread: spreadOf(g.spread),
+        x0: r.f32(g, 0),
+        y0: r.f32(g, 4),
+        x1: r.f32(g, 8),
+        y1: r.f32(g, 12),
+        stops: readStops(r, r.structs(g, 0)),
+        spread: spreadOf(r.u16(g, 16)),
       });
     }
-    case W.Paint.RADIAL: {
-      const g = p.radial;
+    case PAINT_RADIAL: {
+      const g = r.struct(p, 0);
       return collapse({
         kind: "radial",
-        cx: g.cx,
-        cy: g.cy,
-        radius: g.radius,
-        stops: readStops(g.stops),
-        spread: spreadOf(g.spread),
+        cx: r.f32(g, 0),
+        cy: r.f32(g, 4),
+        radius: r.f32(g, 8),
+        stops: readStops(r, r.structs(g, 0)),
+        spread: spreadOf(r.u16(g, 12)),
       });
     }
     default:
       // An arm from a newer schema draws the fallback color of its writer.
       // Without one, the element that holds the paint is skipped.
-      if (!p.hasFallback) throw new Skip();
-      return { kind: "solid", color: rgbaFromU32(p.fallback) };
+      if (!r.bit(p, 16)) throw new Skip();
+      return { kind: "solid", color: rgbaFromU32(r.u32(p, 4)) };
   }
 }
-
 // The solid color of a gradient with no stops or no extent, or the gradient,
 // in the order of Paint::gradient in Rust. A gradient with a float that is
 // not finite skips its element.
@@ -340,20 +358,25 @@ function collapse(g: Paint & { kind: "linear" | "radial" }): Paint {
 
 // Raises a stop that is below the one before it and clamps every offset to
 // [0, 1], as SVG and Skia do.
-function readStops(list: $.List<W.Stop>): Stop[] {
+function readStops(r: Reader, list: StructList): Stop[] {
   const stops: Stop[] = [];
   let prev = 0;
   for (let i = 0; i < list.length; i++) {
-    const s = list.get(i);
-    const offset = Math.min(Math.max(s.offset, prev), 1);
-    stops.push({ offset, color: readRgba(s.color) });
+    const s = r.at(list, i);
+    const offset = Math.min(Math.max(r.f32(s, 0), prev), 1);
+    stops.push({ offset, color: readRgba(r, r.struct(s, 0)) });
     prev = offset;
   }
   return stops;
 }
 
-function readRgba(c: W.Rgba): Rgba {
-  return { r: c.r, g: c.g, b: c.b, a: finiteNumber(c.a) };
+function readRgba(r: Reader, c: Struct): Rgba {
+  return {
+    r: r.u8(c, 0),
+    g: r.u8(c, 1),
+    b: r.u8(c, 2),
+    a: finiteNumber(r.f32(c, 4)),
+  };
 }
 
 // A 0xRRGGBBAA color, as the fallback of a paint carries it.
@@ -371,16 +394,7 @@ function rgbaFromU32(c: number): Rgba {
 // before it, and a move that ends the path is dropped. An unknown verb is a
 // value from a newer schema, and coords that do not match the verbs are
 // damage.
-function readSegments(verbData: $.Data, coordList: $.List<number>): Segments {
-  const wire = verbData.toUint8Array();
-  // A view of the list in the message, as Data.toUint8Array takes. The wire
-  // is little-endian, as every browser.
-  const content = $.utils.getContent(coordList);
-  const coords = new Float32Array(
-    content.segment.buffer,
-    content.byteOffset,
-    coordList.length,
-  );
+function readSegments(wire: Uint8Array, coords: Float32Array): Segments {
   // The implicit move at the start adds one verb and two coords at most.
   const verbs = new Uint8Array(wire.length + 1);
   const out = new Float32Array(coords.length + 2);
@@ -458,10 +472,16 @@ function enumOf<T>(v: number, names: readonly T[]): T {
   return names[v];
 }
 
-function transformOf(
-  m: { m0: number; m1: number; m2: number; m3: number; m4: number; m5: number },
-): Transform {
-  return finite([m.m0, m.m1, m.m2, m.m3, m.m4, m.m5]);
+// The six Float32 from byte `at` of `s`, m0 to m5.
+function transformAt(r: Reader, s: Struct, at: number): Transform {
+  return finite([
+    r.f32(s, at),
+    r.f32(s, at + 4),
+    r.f32(s, at + 8),
+    r.f32(s, at + 12),
+    r.f32(s, at + 16),
+    r.f32(s, at + 20),
+  ]);
 }
 
 function finiteNumber(v: number): number {
