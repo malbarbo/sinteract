@@ -20,7 +20,9 @@ export type ServerMessage =
 
 // Reads a message of the server, or returns `null` for a message of an arm
 // from a newer schema. Throws for a message that does not decode.
-export function readServerMessage(payload: ArrayBuffer): ServerMessage | null {
+export function readServerMessage(
+  payload: ArrayBuffer | Uint8Array,
+): ServerMessage | null {
   const m = new $.Message(payload, false).getRoot(P.ServerToView);
   switch (m.which()) {
     case P.ServerToView.ASSET: {
