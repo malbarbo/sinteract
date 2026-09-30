@@ -34,6 +34,11 @@ impl Stops {
     fn new(mut stops: Vec<Stop>) -> Option<Self> {
         let mut prev = 0.0;
         for stop in &mut stops {
+            // A NaN offset stays NaN, so `is_finite` fails later, and it does
+            // not become `prev`, because `clamp` panics on a NaN bound.
+            if stop.offset.is_nan() {
+                continue;
+            }
             stop.offset = stop.offset.clamp(prev, 1.0);
             prev = stop.offset;
         }
@@ -1980,6 +1985,16 @@ mod tests {
         // The ends keep their direction from the origin, so the color under a
         // path near it stays where it was.
         assert_eq!((y0, y1, x0 / x1), (0.0, 0.0, -1.0));
+    }
+
+    #[test]
+    fn a_stop_with_a_nan_offset_makes_the_paint_not_finite() {
+        let stop = |offset| Stop {
+            offset,
+            color: Rgba::default(),
+        };
+        let paint = Paint::linear(0.0, 0.0, 5.0, 5.0, vec![stop(f32::NAN), stop(0.5)]);
+        assert!(!paint.is_finite());
     }
 
     #[test]
