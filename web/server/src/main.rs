@@ -73,6 +73,8 @@ struct Room {
     /// Wakes the tasks of the views.
     views: watch::Sender<()>,
     players: usize,
+    /// The address of the listener, with its port when `--addr` asks for
+    /// port 0.
     addr: SocketAddr,
     page: PathBuf,
 }
@@ -191,12 +193,13 @@ async fn run(options: Options) -> io::Result<()> {
     };
     let fd3 = pipe::Sender::from_owned_fd(OwnedFd::from(fd3))?;
     let fd4 = pipe::Receiver::from_owned_fd(OwnedFd::from(fd4))?;
+    let listener = tokio::net::TcpListener::bind(options.addr).await?;
     let room = Arc::new(Room {
         phase: Mutex::new(Phase::Lobby(LobbyCore::new())),
         to_engine: Notify::new(),
         views: watch::channel(()).0,
         players: options.players,
-        addr: options.addr,
+        addr: listener.local_addr()?,
         page: options.page,
     });
     tokio::spawn(write_engine(room.clone(), fd3));
@@ -206,7 +209,6 @@ async fn run(options: Options) -> io::Result<()> {
         .route("/", get(page))
         .route("/play", get(upgrade))
         .with_state(room.clone());
-    let listener = tokio::net::TcpListener::bind(options.addr).await?;
     eprintln!("waiting for the hello of the engine");
     tokio::select! {
         r = axum::serve(listener, app) => r?,
