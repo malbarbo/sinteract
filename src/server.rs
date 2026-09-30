@@ -46,6 +46,8 @@ use crate::wire::server_to_engine;
 use crate::wire::server_to_view;
 use crate::wire::view_to_server;
 
+pub use crate::wire::framing::SUBPROTOCOL;
+
 /// A room before the start. It waits for the hello of the engine, then for
 /// the players from the host.
 #[derive(Debug, Default)]

@@ -15,7 +15,7 @@
 //! cannot.
 //!
 //! A WebSocket, which frames its own messages, carries the payload alone
-//! and the version in its subprotocol, `sinteract.v1`. A view only talks
+//! and the version in its subprotocol, [`SUBPROTOCOL`]. A view only talks
 //! over a WebSocket, so it has no magic.
 //!
 //! A message goes from the builder to the writer, and from the reader into
@@ -53,6 +53,10 @@ impl Side {
             .find(|side| side.magic() == magic)
     }
 }
+
+/// The subprotocol of a WebSocket that carries the payloads. Its version
+/// is the one in the magic.
+pub const SUBPROTOCOL: &str = "sinteract.v1";
 
 /// The length of the header in front of each payload.
 pub const HEADER_BYTES: usize = 8;
@@ -199,6 +203,14 @@ mod tests {
             .expect_err("an error");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("Engine side"), "{err}");
+    }
+
+    #[test]
+    fn the_subprotocol_has_the_version_of_the_magic() {
+        for side in [Side::Engine, Side::Server] {
+            let version = side.magic()[3] as char;
+            assert_eq!(SUBPROTOCOL, format!("sinteract.v{version}"));
+        }
     }
 
     #[test]

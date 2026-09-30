@@ -104,8 +104,9 @@ os cabeçalhos do fd 3 e separam as mensagens do fd 4, então o servidor
 passa os bytes como chegaram, em pedaços de qualquer tamanho.
 
 No WebSocket não há cabeçalho. Cada mensagem binária do WebSocket é um
-payload inteiro, e a versão vai no subprotocolo, `sinteract.v1`. O
-`ServerCore` monta as mensagens para a view e lê as da view como chegaram.
+payload inteiro, e a versão vai no subprotocolo, `sinteract.v1`, que o
+`server::SUBPROTOCOL` e o `view::SUBPROTOCOL` guardam. O `ServerCore`
+monta as mensagens para a view e lê as da view como chegaram.
 
 O `player` é o número do jogador na partida, a partir de 1, a posição dele
 nos membros do `start`. Ele vai no primeiro campo do payload das mensagens
@@ -340,7 +341,7 @@ use axum::routing::{get, post};
 use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
-use sinteract::server::{EngineError, LobbyCore, MAX_VIEW_BYTES, Next, ServerCore};
+use sinteract::server::{EngineError, LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
 use sinteract::session::Player;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
@@ -571,7 +572,7 @@ async fn upgrade(
     let Some(player) = player else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    ws.protocols(["sinteract.v1"])
+    ws.protocols([SUBPROTOCOL])
         .max_message_size(MAX_VIEW_BYTES)
         .on_upgrade(move |socket| play(socket, room, player))
 }
