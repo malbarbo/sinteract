@@ -26,5 +26,16 @@ The text uses the Liberation fonts when the system has them, and Arial,
 Times New Roman and Courier New otherwise, which have the same metrics, so
 a text measures as it does in the engine.
 
+`server/` is a server to try the client with, with one room and no lobby.
+It starts the room as soon as the engine sends its hello and prints the
+link of each player, so two tabs play the same game:
+
+```sh
+make -C web
+cargo build --release --examples
+cargo run --release --manifest-path web/server/Cargo.toml -- \
+    --players 2 target/release/examples/engine 20
+```
+
 `make check` checks the format, the lint and the types, and `make test`
 runs the tests.
