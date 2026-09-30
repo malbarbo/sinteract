@@ -6,7 +6,8 @@
 //! and SVG with the text as glyph outlines. [`text`] holds the embedded
 //! Sinteract families and measures and outlines glyphs. These build on
 //! wasm32 too, except the system font lookup of `text`, which the
-//! `native-fonts` feature carries.
+//! `native-fonts` feature carries. On wasm32, `renderer::canvas` draws a
+//! scene on an HTML canvas.
 //!
 //! [`asset`] holds the limits on the images of a room.
 //!

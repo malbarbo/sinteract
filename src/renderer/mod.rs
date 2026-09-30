@@ -17,6 +17,8 @@
 //! as on the wire. A backend with another convention applies a transform
 //! when it sizes its surface.
 
+#[cfg(all(feature = "render", target_arch = "wasm32"))]
+pub mod canvas;
 #[cfg(feature = "render")]
 pub mod pdf;
 #[cfg(feature = "render")]

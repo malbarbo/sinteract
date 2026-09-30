@@ -5,8 +5,10 @@ a draw list of paths, text, bitmaps and clipped subtrees, and a renderer
 replays it. `scene.rs` and `event.rs` hold the value types and the
 builders, and `text.rs` resolves a font, measures it and outlines a glyph.
 
-`renderer/` holds the `Renderer` trait in `mod.rs` and the three backends,
-`pixmap.rs` for tiny-skia, `pdf.rs` for vector PDF and `svg.rs` for SVG.
+`renderer/` holds the `Renderer` trait in `mod.rs` and the four backends,
+`pixmap.rs` for tiny-skia, `pdf.rs` for vector PDF, `svg.rs` for SVG and
+`canvas.rs` for the Canvas 2D API of a browser, which builds only on
+wasm32.
 
 `wire/` is the Cap'n Proto codec, in three layers: `wire/scene.rs` and
 `wire/event.rs` convert the values of `scene.rs` and `event.rs` to and from
