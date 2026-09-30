@@ -691,9 +691,10 @@ Uma engine sem as features de tela, como uma que roda em wasm, usa a
 ## O que o navegador mostra
 
 Os frames são cenas do `sinteract`, e não SVG. O cliente em `web/` é a
-view do navegador. Ele decodifica a cena em TypeScript, com o código que o
-capnp-es gera do schema, desenha no canvas com a API Canvas 2D e manda a
-entrada pelo WebSocket. O build do Deno gera um HTML só, o
-`web/dist/index.html`, que abre o WebSocket em `/play?token=` do mesmo
-servidor. O `web/README.md` descreve os módulos, e o `web/server/` é um
+view do navegador. Ele desenha no canvas com a API Canvas 2D e manda a
+entrada pelo WebSocket. Há duas páginas, cada uma um HTML só: o
+`web/dist/index.html` lê a cena em TypeScript, e o `web/dist/rust.html`
+lê e desenha com o próprio crate, compilado para WebAssembly. As duas
+abrem o WebSocket em `/play?token=` do mesmo servidor e desenham um frame
+por quadro da tela, na ordem em que chegam. O `web/README.md` descreve os módulos, e o `web/server/` é um
 servidor de teste, com uma sala e sem lobby, que segue o esboço acima.
