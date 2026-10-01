@@ -6,7 +6,8 @@ The derived fonts keep every character, its outline and its advance, and
 the metrics that src/text.rs reads. They drop the hinting, the OpenType
 layout tables and the glyph names, which no renderer of the crate reads.
 The OFL reserves the name Liberation for the original fonts, so the
-derived fonts take the name Sinteract.
+derived fonts take the name Sinteract. Each font also goes out as WOFF2,
+for the web fonts of the HTML client.
 """
 
 import sys
@@ -34,6 +35,9 @@ def main() -> None:
             derived = target / f"Sinteract{family}-{style}.ttf"
             derive(original, derived, family, style)
             check(original, derived)
+            web = TTFont(derived, recalcTimestamp=False)
+            web.flavor = "woff2"
+            web.save(derived.with_suffix(".woff2"))
 
 
 def derive(original: Path, derived: Path, family: str, style: str) -> None:
