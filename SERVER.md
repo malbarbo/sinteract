@@ -716,3 +716,15 @@ abrem o WebSocket em `/play?token=` do mesmo servidor e desenham um frame
 por quadro da tela, na ordem em que chegam. O `web/README.md` descreve
 os módulos, e o `web/server/` é um servidor de teste, com uma sala e sem
 lobby, que segue o esboço acima.
+
+A página em TypeScript desenha o texto com as fontes da engine, que ela
+carrega como fontes web. O servidor serve a pasta `web/dist/fonts/` ao
+lado da página. Para uma página em `/sala/`, as fontes ficam em
+`/sala/fonts/`, como `/sala/fonts/SinteractSans-Regular.woff2`, com o
+tipo `font/woff2`. O navegador baixa só as faces que o jogo usa, cerca de
+70 KB cada, e os arquivos não mudam entre as salas, então o servidor pode
+mandar o navegador guardá-los em cache. Sem as fontes, a página desenha
+com as fontes Liberation do sistema, ou com Arial, Times New Roman e
+Courier New, que têm as mesmas métricas, mas o desenho das letras muda. A
+página em Rust desenha com as fontes que vêm dentro do wasm e não pede
+nada.

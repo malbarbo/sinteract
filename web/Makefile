@@ -1,5 +1,5 @@
 # The HTML client of a view. `make` builds the two pages of the client,
-# each one file. dist/index.html reads and draws the frames in TypeScript,
+# each one file, and copies the web fonts to dist/fonts. dist/index.html reads and draws the frames in TypeScript,
 # and dist/rust.html in Rust, with the crate of wasm/, which wasm-pack
 # builds. `make check` checks the format and the types, and `make test`
 # runs the tests with Deno. `make render-test` draws the gallery with each
@@ -11,7 +11,13 @@ SRC_RS = $(sort $(shell find wasm/src ../src -name '*.rs')) wasm/Cargo.toml \
 SCHEMA = ../schema/scene.capnp ../schema/event.capnp ../schema/protocol.capnp
 CHROME ?= $(firstword $(shell command -v chromium google-chrome))
 
-all: dist/index.html dist/rust.html
+FONTS = $(patsubst ../fonts/%,dist/fonts/%,$(wildcard ../fonts/*.woff2))
+
+all: dist/index.html dist/rust.html $(FONTS)
+
+dist/fonts/%.woff2: ../fonts/%.woff2
+	@mkdir -p $(@D)
+	cp $< $@
 
 dist/%.html: build/%.js src/index.html tools/inline.ts
 	@mkdir -p $(@D)
@@ -45,7 +51,7 @@ check: build/wasm/sinteract_bg.ts
 test:
 	deno test --allow-read tests/
 
-render-test: dist/index.html dist/rust.html
+render-test: all
 	cargo build --release --example gallery --manifest-path ../Cargo.toml
 	cargo build --release --manifest-path server/Cargo.toml
 	../target/release/examples/gallery png > build/gallery.png

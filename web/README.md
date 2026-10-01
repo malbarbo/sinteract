@@ -35,10 +35,14 @@ const view = new View(canvas, { onStatus: (s) => console.log(s.kind) });
 view.connect(`wss://${location.host}/play?token=${token}`);
 ```
 
-The engine embeds the Sinteract fonts, which have the outlines of the Liberation
-fonts. The TypeScript page draws the text with the Liberation fonts when the
-system has them, and with Arial, Times New Roman and Courier New otherwise,
-which have the same metrics, so a text measures as it does in the engine.
+The engine embeds the Sinteract fonts, and `make` copies them as WOFF2 to
+`dist/fonts/`. The TypeScript page loads them as web fonts from `fonts/`, beside
+the page, and a frame waits for the fonts of its text as it waits for its
+images. The browser loads only the faces that a frame uses, about 70 KB each.
+The Sinteract fonts have the outlines of the Liberation fonts, so when a font
+does not load, the page draws with the Liberation fonts of the system, and then
+with Arial, Times New Roman and Courier New, which have the same metrics. A text
+then measures as it does in the engine.
 
 `server/` is a server to try the client with, with one room and no lobby. It
 starts the room as soon as the engine sends its hello and prints the link of
@@ -51,8 +55,8 @@ cargo run --release --manifest-path web/server/Cargo.toml -- \
     --players 2 target/release/examples/engine 20
 ```
 
-The test server serves `dist/index.html`, and `--page web/dist/rust.html` serves
-the Rust page.
+The test server serves `dist/index.html` and the fonts of `dist/fonts/`, and
+`--page web/dist/rust.html` serves the Rust page.
 
 `make check` checks the format, the lint and the types, and `make test` runs the
 tests. `make render-test` draws the gallery of `examples/gallery.rs` with each

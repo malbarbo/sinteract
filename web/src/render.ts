@@ -164,7 +164,7 @@ export class Renderer {
     if (!(t.size > 0) || !(drawsFill || drawsStroke)) return;
     const face = faceOf(t.family, t.weight);
     const text = drawnText(t.text);
-    const font = cssFont(t, face);
+    const font = cssFont(t, face, t.size);
     ctx.font = font;
     ctx.fontKerning = "none";
     const width = ctx.measureText(text).width;
@@ -410,10 +410,11 @@ function cssColor(c: Rgba): string {
 }
 
 // The metrics of a face of the Sinteract fonts, which the Rust side embeds
-// and measures with, in font units. They have the outlines of the Liberation
-// fonts, so the CSS font of each family names first the Liberation font of
-// the system and then the fonts with the same metrics, and the text measures
-// as it does in the engine.
+// and measures with, in font units. The page loads them as web fonts from
+// fonts/, beside the page. They have the outlines of the Liberation fonts,
+// so the CSS font of each family names next the Liberation font of the
+// system and then the fonts with the same metrics, and the text measures as
+// it does in the engine when the web fonts do not load.
 interface Face {
   css: string;
   ascender: number;
@@ -424,9 +425,12 @@ interface Face {
 
 const UNITS_PER_EM = 2048;
 
-const SANS = '"Liberation Sans", Arimo, Arial, Helvetica, sans-serif';
-const SERIF = '"Liberation Serif", Tinos, "Times New Roman", Times, serif';
-const MONO = '"Liberation Mono", Cousine, "Courier New", Courier, monospace';
+const SANS =
+  '"Sinteract Sans", "Liberation Sans", Arimo, Arial, Helvetica, sans-serif';
+const SERIF =
+  '"Sinteract Serif", "Liberation Serif", Tinos, "Times New Roman", Times, serif';
+const MONO =
+  '"Sinteract Mono", "Liberation Mono", Cousine, "Courier New", Courier, monospace';
 
 // From the hhea and post tables of the fonts in ../fonts. Regular and bold
 // differ only in the underline, as the position and the thickness of each.
@@ -488,10 +492,16 @@ function faceOf(family: string, weight: number): Face {
   };
 }
 
-function cssFont(t: TextElement, face: Face): string {
+// The CSS font of `t` at 16 pixels, which picks the same faces as the font
+// that draws `t`, for the FontFaceSet to load.
+export function fontToLoad(t: TextElement): string {
+  return cssFont(t, faceOf(t.family, t.weight), 16);
+}
+
+function cssFont(t: TextElement, face: Face, size: number): string {
   const style = t.style === "normal" ? "normal" : "italic";
   const weight = t.weight >= BOLD ? "bold" : "normal";
-  return `${style} ${weight} ${t.size}px ${face.css}`;
+  return `${style} ${weight} ${size}px ${face.css}`;
 }
 
 // A tab advances by eight spaces, and any other control character draws

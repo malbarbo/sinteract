@@ -3,7 +3,7 @@
 // TsScreen reads and draws in TypeScript, and the Screen of wasm/ in Rust.
 
 import { readServerMessage } from "./protocol.ts";
-import { Renderer } from "./render.ts";
+import { fontToLoad, Renderer } from "./render.ts";
 import { decodeScene, type Element, type Scene } from "./scene.ts";
 
 export interface Screen {
@@ -24,7 +24,7 @@ export interface Screen {
 
 // Makes the screen of a connection. The screen calls `redraw` when it has
 // something new to draw with no message, such as an image that finished
-// decoding.
+// decoding or a font that finished loading.
 export type MakeScreen = (
   canvas: HTMLCanvasElement,
   redraw: () => void,
@@ -99,16 +99,21 @@ export class TsScreen implements Screen {
     this.#images.clear();
   }
 
-  // Decodes the frame of `bytes`, which goes on screen once the images that
-  // it draws are ready, unless a newer frame comes first. It throws for a
-  // frame that does not decode, and the frame on screen stays.
+  // Decodes the frame of `bytes`, which goes on screen once the images and
+  // the fonts that it draws are ready, unless a newer frame comes first. It
+  // throws for a frame that does not decode, and the frame on screen stays.
   #decode(bytes: Uint8Array): void {
     const scene = decodeScene(bytes);
     this.#latest = scene;
     const pending: Promise<void>[] = [];
-    for (const id of bitmapIds(scene.elements)) {
-      const asset = this.#images.get(id);
-      if (asset && !asset.image) pending.push(asset.ready);
+    for (const e of leaves(scene.elements)) {
+      if (e.kind === "bitmap") {
+        const asset = this.#images.get(e.id);
+        if (asset && !asset.image) pending.push(asset.ready);
+      } else if (e.kind === "text") {
+        const ready = fontReady(fontToLoad(e));
+        if (ready) pending.push(ready);
+      }
     }
     if (pending.length === 0) {
       this.#scene = scene;
@@ -128,15 +133,31 @@ interface Asset {
   ready: Promise<void>;
 }
 
-// The id of each bitmap of `elements`, and of what their clips and layers
-// hold.
-function* bitmapIds(elements: Element[]): Generator<number> {
+// Each element of `elements` and of what their clips and layers hold, but
+// the clips and the layers themselves.
+function* leaves(elements: Element[]): Generator<Element> {
   for (const e of elements) {
-    if (e.kind === "bitmap") yield e.id;
-    else if (e.kind === "clipped" || e.kind === "layer") {
-      yield* bitmapIds(e.elements);
-    }
+    if (e.kind === "clipped" || e.kind === "layer") yield* leaves(e.elements);
+    else yield e;
   }
+}
+
+// The web fonts by the CSS font that loads them, with null for a font that
+// loaded. A font that fails to load is null too, and its text draws with
+// the next font of its list.
+const fonts = new Map<string, Promise<void> | null>();
+
+// The promise of the load of `font`, or null when it is over.
+function fontReady(font: string): Promise<void> | null {
+  let ready = fonts.get(font);
+  if (ready === undefined) {
+    const settle = () => {
+      fonts.set(font, null);
+    };
+    ready = document.fonts.load(font).then(settle, settle);
+    fonts.set(font, ready);
+  }
+  return ready;
 }
 
 // Decodes the image of an asset into `images`. createImageBitmap is
