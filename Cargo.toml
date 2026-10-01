@@ -71,13 +71,16 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
+    "Blob",
     "CanvasGradient",
     "CanvasRenderingContext2d",
     "CanvasWindingRule",
+    "ColorSpaceConversion",
     "Document",
     "Element",
     "HtmlCanvasElement",
-    "ImageData",
+    "ImageBitmap",
+    "ImageBitmapOptions",
     "Path2d",
     "Window",
 ] }

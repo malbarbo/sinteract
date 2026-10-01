@@ -4,26 +4,32 @@
 //! The page keeps the size of the canvas, and the scene fits it, centered,
 //! as in the window. The glyphs are the outlines of the embedded fonts, as
 //! in the other backends, so a text draws with the widths from the engine.
+//! The browser decodes the images, so the module needs no decoder of its
+//! own.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::hash::Hash;
+use std::rc::Rc;
 
-use wasm_bindgen::{Clamped, JsCast, JsValue};
+use js_sys::{Array, Promise, Uint8Array};
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{
-    CanvasGradient, CanvasRenderingContext2d, CanvasWindingRule, HtmlCanvasElement, ImageData,
-    Path2d,
+    Blob, CanvasGradient, CanvasRenderingContext2d, CanvasWindingRule, ColorSpaceConversion,
+    HtmlCanvasElement, ImageBitmap, ImageBitmapOptions, Path2d,
 };
 
-use crate::asset::MAX_IMAGE_PIXELS;
 use crate::outline::PathSink;
 use crate::renderer::{
     MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side,
     missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin, Paint, Path,
-    Rgba, Sampling, SpreadMode, Text,
+    Bitmap, ClipPath, Element, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin,
+    Paint, Path, Rgba, Sampling, Scene, SpreadMode, Text,
 };
 use crate::text::{Glyph, TextLayout};
 
@@ -40,9 +46,19 @@ pub struct CanvasRenderer {
     width: f32,
     height: f32,
     glyphs: FrameCache<Glyph, Option<Path2d>>,
-    /// An image that does not decode keeps `None`, so it draws the marker
+    /// The decode of each image, which the browser fills in later. An image
+    /// that does not decode keeps [`Decode::Failed`], so it draws the marker
     /// of a missing image with no second decode.
-    images: FrameCache<Image, Option<HtmlCanvasElement>>,
+    images: FrameCache<Image, Rc<RefCell<Decode>>>,
+}
+
+/// Where the decode of an image is.
+enum Decode {
+    /// The browser decodes it, and the promise resolves after that, in
+    /// success or in failure.
+    Pending(Promise),
+    Ready(ImageBitmap),
+    Failed,
 }
 
 /// Where the scene goes on the canvas, in the pixels of the canvas. A point
@@ -74,6 +90,24 @@ impl CanvasRenderer {
             glyphs: FrameCache::default(),
             images: FrameCache::default(),
         }
+    }
+
+    /// Start to decode each image of `scene` that the renderer does not hold.
+    /// Returns a promise that resolves when they all decoded or failed, or
+    /// `None` if none of them is pending. The browser decodes an image
+    /// asynchronously, and a render draws nothing for a pending image, so
+    /// a caller that does not want a frame with a hole waits for the
+    /// promise. An image stays while the renders or the loads use it, so a
+    /// caller that waits calls `load` before each render of an older scene.
+    pub fn load(&mut self, scene: &Scene) -> Option<Promise> {
+        let pending = Array::new();
+        let mut visit = |image: &Image| {
+            if let Decode::Pending(p) = &*self.decode(image).borrow() {
+                pending.push(p);
+            }
+        };
+        for_each_image(scene.elements(), &mut visit);
+        (pending.length() > 0).then(|| Promise::all(&pending))
     }
 
     /// Where the last scene went on the canvas.
@@ -204,9 +238,9 @@ impl CanvasRenderer {
             .clone()
     }
 
-    fn image(&mut self, image: &Image) -> Option<HtmlCanvasElement> {
+    fn decode(&mut self, image: &Image) -> Rc<RefCell<Decode>> {
         self.images
-            .get_or_insert_with(image.clone(), || image_canvas(image))
+            .get_or_insert_with(image.clone(), || start_decode(image))
             .clone()
     }
 
@@ -391,17 +425,23 @@ impl Canvas<Infallible> for CanvasRenderer {
         }
     }
 
-    /// Draw the image of `bitmap`. An image that does not decode draws a
-    /// gray box with a red cross in its place, as in the pixmap.
+    /// Draw the image of `bitmap`, or nothing while it decodes. An image
+    /// that does not decode draws a gray box with a red cross in its place,
+    /// as in the pixmap.
     fn draw_bitmap(&mut self, bitmap: &Bitmap) {
-        let Some(img) = self.image(&bitmap.image) else {
-            self.draw_missing(bitmap.transform);
-            return;
+        let decode = self.decode(&bitmap.image);
+        let img = match &*decode.borrow() {
+            Decode::Ready(img) => img.clone(),
+            Decode::Pending(_) => return,
+            Decode::Failed => {
+                self.draw_missing(bitmap.transform);
+                return;
+            }
         };
         self.set(bitmap.transform);
         let ctx = self.ctx();
         ctx.set_image_smoothing_enabled(bitmap.sampling == Sampling::Smooth);
-        _ = ctx.draw_image_with_html_canvas_element_and_dw_and_dh(&img, -0.5, -0.5, 1.0, 1.0);
+        _ = ctx.draw_image_with_image_bitmap_and_dw_and_dh(&img, -0.5, -0.5, 1.0, 1.0);
     }
 
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
@@ -535,29 +575,61 @@ fn css(c: Rgba) -> String {
     format!("#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a)
 }
 
-/// A canvas with the pixels of `image`, or `None` if it does not decode.
-fn image_canvas(image: &Image) -> Option<HtmlCanvasElement> {
-    let pixmap = crate::asset::decode(image.blob(), MAX_IMAGE_PIXELS).ok()?;
-    // ImageData takes the colors with no premultiply.
-    let data: Vec<u8> = pixmap
-        .pixels()
-        .iter()
-        .flat_map(|p| {
-            let c = p.demultiply();
-            [c.red(), c.green(), c.blue(), c.alpha()]
+/// Call `visit` with the image of each bitmap of `elements`, and of what
+/// their clips and layers hold.
+fn for_each_image(elements: &[Element], visit: &mut impl FnMut(&Image)) {
+    for e in elements {
+        match e {
+            Element::Bitmap(b) => visit(&b.image),
+            Element::Clipped { elements, .. } | Element::Layer { elements, .. } => {
+                for_each_image(elements, visit);
+            }
+            Element::Path(_) | Element::Text(_) => {}
+        }
+    }
+}
+
+/// Ask the browser to decode `image`. The decode fills in the slot that it
+/// returns. The image ignores its color profile, as in the other backends.
+fn start_decode(image: &Image) -> Rc<RefCell<Decode>> {
+    let slot = Rc::new(RefCell::new(Decode::Failed));
+    let parts = Array::of1(&Uint8Array::from(image.blob()));
+    let options = ImageBitmapOptions::new();
+    options.set_color_space_conversion(ColorSpaceConversion::None);
+    let Some(decoding) = Blob::new_with_u8_array_sequence(&parts)
+        .ok()
+        .and_then(|blob| {
+            web_sys::window()?
+                .create_image_bitmap_with_blob_and_image_bitmap_options(&blob, &options)
+                .ok()
         })
-        .collect();
-    let data = ImageData::new_with_u8_clamped_array_and_sh(
-        Clamped(&data),
-        pixmap.width(),
-        pixmap.height(),
-    )
-    .ok()?;
-    let canvas = new_canvas();
-    canvas.set_width(pixmap.width());
-    canvas.set_height(pixmap.height());
-    context(&canvas).put_image_data(&data, 0.0, 0.0).ok()?;
-    Some(canvas)
+    else {
+        return slot;
+    };
+    // One function takes both the bitmap and the error, and the promise
+    // calls it once, which frees it.
+    let settle = {
+        let slot = Rc::clone(&slot);
+        Closure::once_into_js(move |value: JsValue| {
+            *slot.borrow_mut() = value.dyn_into().map_or(Decode::Failed, Decode::Ready);
+        })
+    };
+    *slot.borrow_mut() = Decode::Pending(
+        decoding
+            .unchecked_ref::<Thenable>()
+            .then_settle(&settle, &settle),
+    );
+    slot
+}
+
+#[wasm_bindgen]
+extern "C" {
+    /// A promise seen through `then` with two plain functions, which
+    /// [`Promise::then2`] does not take.
+    type Thenable;
+
+    #[wasm_bindgen(method, js_name = then)]
+    fn then_settle(this: &Thenable, ok: &JsValue, err: &JsValue) -> Promise;
 }
 
 fn new_canvas() -> HtmlCanvasElement {
