@@ -39,33 +39,99 @@ a renderer only sees moves, lines, quadratics and cubics.
 A `Printer` prints images where the cursor sits. It fails to open when the
 terminal shows no graphics, so a REPL falls back to the text of the value.
 A bitmap holds its `Image`, a PNG, a JPEG, a GIF or a WebP, so a scene
-draws the same in a `Printer`, a `Display` or a document.
+draws the same in a `Printer`, a `Display` or a document. The fonts of the
+text are embedded, so a scene measures and draws the same on every
+machine.
 
 For an animation, a `Display` owns the terminal or the window, presents a
-scene per frame and delivers the input as a stream of `Event`s. A frame that
-does not reach the display comes back as a `PresentError`, and a read of the
-terminal that fails comes back as an `Interrupt`, both with the error that
-caused them. The library writes nothing to stderr and ends no session on its
-own, so the program chooses the words and decides whether to stop. A
-`Sender` wakes it from another thread with a close or a bare wake. In a
-session with a server, the engine reads the input of the players with a
-`Session` and writes its frames with it, as Cap'n Proto messages that
-carry each image once. The schema is in `schema/`, one file for the
-drawing, one for the input and one for the session, and `PLAN.md`
-describes the server and client modes.
+scene per frame and delivers the input as a stream of `Event`s, a key, the
+mouse, a resize or a tick. A frame that does not reach the display comes
+back as a `PresentError`, and a read of the terminal that fails comes back
+as an `Interrupt`, both with the error that caused them. The library
+writes nothing to stderr and ends no session on its own, so the program
+chooses the words and decides whether to stop. A `Sender` wakes the loop
+from another thread with a close or a bare wake.
 
-The examples try each part, and the top of each one gives the commands
-that run it. `examples/gallery.rs` draws every kind of element.
-`examples/engine.rs` and `examples/players.rs` are games for a session,
-and `examples/view.rs` runs one of them as a subprocess, in the place of
-a server for one player. `web/server/` is a server with one room for the
-page in `web/`, and `web/README.md` shows how to start it with a game.
-`examples/remote.rs` plays in a room of that server from the terminal or
-a window.
+A game runs on a `Stage`, which keeps one loop for two cases. When a
+server runs the game, the stage opens a session with the server, reads
+the input of each player and writes the frames for the players. When
+nobody runs it, the stage opens a window or the terminal, and the user is
+player 1:
 
-The scene, the rasterizer, the text measuring and the PDF and SVG writers
-build on `wasm32`, so a view in a browser can paint a scene without native
-code.
+```rust,ignore
+let (mut stage, _players) = Stage::open("My game", 400.0, 300.0, players, options)?;
+loop {
+    match stage.wait(None) {
+        Ok(StageEvent::Tick) => stage.present(Target::All, draw())?,
+        Ok(StageEvent::Input { player, event }) => update(player, event),
+        Ok(StageEvent::Error(e)) => eprintln!("{e}"),
+        Err(Interrupt::Read(e)) => eprintln!("{e}"),
+        Err(Interrupt::Close) => break,
+        Err(Interrupt::Wake | Interrupt::Timeout) => {}
+    }
+}
+```
+
+A session has three sides. The engine runs the program, the view draws
+the frames and sends the input, and the server owns the room and tells
+the engine who plays. `session` is the side of the engine, `server` holds
+the rules of a room and `view` reads the frames for a view. None of the
+three does I/O, so a server that runs on Tokio and a page in a browser
+use the same rules. The messages are Cap'n Proto and carry each image
+once. The schema is in `schema/`, one file for the drawing, one for the
+input and one for the session. A server needs neither the displays nor
+the rasterizer, and builds with `default-features = false`.
+
+The scene, the rasterizer, the text, the PDF and SVG writers and the three
+sides of a session build on `wasm32`, so a view in a browser paints a
+scene without native code. `web/` holds that view, a page in TypeScript
+that draws on a canvas, and a second page that draws with the renderer of
+the crate compiled to WebAssembly.
+
+## Examples
+
+The top of each example gives the commands that run it, all with
+`--release`. `examples/gallery.rs` draws every kind of element, in a
+window, in the terminal, at the cursor or as PNG, SVG or PDF:
+
+```sh
+cargo run --release --example gallery
+cargo run --release --example gallery pdf > gallery.pdf
+```
+
+`examples/engine.rs` is a game of balls and paddles for 1 to 8 players,
+and `examples/players.rs` is a game where each player moves a square of
+its own. Both run on a `Stage`, so each one runs alone in a window, or
+in a session. `examples/view.rs` runs an engine as a subprocess and plays
+the part of the server for one player:
+
+```sh
+cargo build --release --examples
+target/release/examples/view target/release/examples/engine 200
+```
+
+`web/server/` is a server with one room, which serves the page of `web/`
+and prints the link of each player. `examples/remote.rs` plays in a room
+of that server from the terminal or a window, with the link of a player:
+
+```sh
+make -C web
+cargo run --release --manifest-path web/server/Cargo.toml -- \
+    --players 2 target/release/examples/players
+target/release/examples/remote 'http://127.0.0.1:8765/?token=...'
+```
+
+## Other documents
+
+`SERVER.md` is the contract with the server of Sarcade. It says how a
+server drives a room with `server`, and what the engine and the view
+expect. `PLAN.md` is the plan for the server and client modes of spython
+and sgleam. Both are in Portuguese. `web/README.md` describes the HTML
+client, its two pages, its tests in Chrome and the test server.
+`fonts/README.md` tells where the Sinteract fonts come from and how
+`fonts/derive.py` writes them. `AGENTS.md` describes the layout of the
+code, the commands that check a change and the rules for the code and the
+English of the repository.
 
 ## License
 
