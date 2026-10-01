@@ -1,7 +1,8 @@
 //! A server to test the HTML client with one room. It runs the engine with
 //! fd 3 and fd 4, starts the room with `--players` players as soon as the
 //! hello comes, prints the link of each player and serves the page of
-//! `web/dist/index.html` at each link. It follows the sketch of SERVER.md,
+//! `web/dist/index.html` at each link, with the fonts of the `fonts/`
+//! beside it. It follows the sketch of SERVER.md,
 //! with no lobby:
 //!
 //! ```text
@@ -23,7 +24,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ws::{Message as Ws, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -217,6 +218,7 @@ async fn run(options: Options) -> io::Result<()> {
     tokio::spawn(tick(room.clone()));
     let app = Router::new()
         .route("/", get(page))
+        .route("/fonts/{name}", get(font))
         .route("/play", get(upgrade))
         .with_state(room.clone());
     eprintln!("waiting for the hello of the engine");
@@ -341,6 +343,20 @@ async fn page(State(room): State<Arc<Room>>) -> Response {
             let message = format!("{}: {e}; run make -C web", room.page.display());
             (StatusCode::NOT_FOUND, message).into_response()
         }
+    }
+}
+
+/// A WOFF2 font of the `fonts/` beside the page. Axum decodes a `%2F` of
+/// the path into a slash, so a name with one, or with a leading dot, is
+/// not found, and the server reads no file out of that directory.
+async fn font(Path(name): Path<String>, State(room): State<Arc<Room>>) -> Response {
+    let fonts = room.page.with_file_name("fonts");
+    if !name.ends_with(".woff2") || name.starts_with('.') || name.contains(['/', '\\']) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match tokio::fs::read(fonts.join(&name)).await {
+        Ok(woff2) => ([(header::CONTENT_TYPE, "font/woff2")], woff2).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
