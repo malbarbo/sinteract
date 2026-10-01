@@ -165,8 +165,7 @@ export class Renderer {
     const face = faceOf(t.family, t.weight);
     const text = drawnText(t.text);
     const font = cssFont(t, face, t.size);
-    ctx.font = font;
-    ctx.fontKerning = "none";
+    setFont(ctx, font);
     const width = ctx.measureText(text).width;
     const em = t.size / UNITS_PER_EM;
     const left = -width / 2;
@@ -175,8 +174,7 @@ export class Renderer {
     const top = baseline - face.underlinePosition * em;
     const thickness = face.underlineThickness * em;
     const glyphs: Shape = (c, fill) => {
-      c.font = font;
-      c.fontKerning = "none";
+      setFont(c, font);
       c.textAlign = "left";
       c.textBaseline = "alphabetic";
       if (fill) c.fillText(text, left, baseline);
@@ -502,6 +500,15 @@ function cssFont(t: TextElement, face: Face, size: number): string {
   const style = t.style === "normal" ? "normal" : "italic";
   const weight = t.weight >= BOLD ? "bold" : "normal";
   return `${style} ${weight} ${size}px ${face.css}`;
+}
+
+// Sets `font` with the advances of the font as they are. The engine does
+// not kern, and with the default text rendering Chrome on Linux rounds each
+// advance to a whole pixel, which makes a small text wider.
+function setFont(ctx: Context, font: string): void {
+  ctx.font = font;
+  ctx.fontKerning = "none";
+  ctx.textRendering = "geometricPrecision";
 }
 
 // A tab advances by eight spaces, and any other control character draws
