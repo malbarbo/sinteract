@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 sinteract = { path = "../..", default-features = false, features = ["render"] }
 wasm-bindgen = "0.2"
+js-sys = "0.3"
 web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
 
 [profile.release]

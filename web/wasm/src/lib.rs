@@ -15,17 +15,25 @@ use web_sys::HtmlCanvasElement;
 pub struct Screen {
     reader: FrameReader,
     renderer: CanvasRenderer,
+    /// Called when the images of `latest` are ready.
+    redraw: js_sys::Function,
+    /// The frame on the canvas.
     scene: Option<Scene>,
+    /// The newest frame, which goes on the canvas once the browser decoded
+    /// its images, unless a newer frame comes first.
+    latest: Option<Scene>,
 }
 
 #[wasm_bindgen]
 impl Screen {
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: HtmlCanvasElement) -> Screen {
+    pub fn new(canvas: HtmlCanvasElement, redraw: js_sys::Function) -> Screen {
         Screen {
             reader: FrameReader::new(),
             renderer: CanvasRenderer::new(canvas),
+            redraw,
             scene: None,
+            latest: None,
         }
     }
 
@@ -35,12 +43,20 @@ impl Screen {
         let Some(scene) = self.reader.read(payload)? else {
             return Ok(false);
         };
-        self.scene = Some(scene);
+        self.latest = Some(scene);
         Ok(true)
     }
 
-    /// Draw the last frame, fit to the size of the canvas.
+    /// Draw the newest frame whose images are ready, fit to the size of the
+    /// canvas. While the images of a newer frame decode, the frame before
+    /// it stays, and `redraw` runs when they are ready.
     pub fn draw(&mut self) {
+        if let Some(latest) = &self.latest {
+            match self.renderer.load(latest) {
+                None => self.scene = self.latest.take(),
+                Some(ready) => _ = ready.unchecked_ref::<Thenable>().then_call(&self.redraw),
+            }
+        }
         if let Some(scene) = &self.scene {
             let Ok(()) = self.renderer.render(scene);
         }
@@ -68,4 +84,14 @@ impl Screen {
     pub fn y(&self) -> f32 {
         self.renderer.place().y
     }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    /// A promise seen through `then` with a plain function, which
+    /// [`js_sys::Promise::then`] does not take.
+    type Thenable;
+
+    #[wasm_bindgen(method, js_name = then)]
+    fn then_call(this: &Thenable, f: &js_sys::Function) -> js_sys::Promise;
 }

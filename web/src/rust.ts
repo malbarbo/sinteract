@@ -7,4 +7,4 @@ import { initSync, Screen } from "../build/wasm/sinteract.js";
 import wasm from "../build/wasm/sinteract_bg.ts";
 
 initSync({ module: Uint8Array.fromBase64(wasm) });
-runPage((canvas) => new Screen(canvas));
+runPage((canvas, redraw) => new Screen(canvas, redraw));

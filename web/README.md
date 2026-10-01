@@ -10,7 +10,7 @@ draws the frames in TypeScript. `dist/rust.html` reads them with the
 `FrameReader` of the crate and draws them with its canvas renderer, compiled to
 WebAssembly from `wasm/`, and draws the text with the glyphs of the engine. The
 two share the rest of the page, and `make` builds both. The Rust page needs
-`wasm-pack` and carries the module in base64, so it weighs about 3.7 MB, against
+`wasm-pack` and carries the module in base64, so it weighs about 3.0 MB, against
 about 80 KB for the TypeScript page.
 
 `src/capnp/` holds the code that capnp-es generates from `../schema`, and
