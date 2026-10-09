@@ -3,7 +3,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::asset::ImageError;
+use crate::asset::{ImageError, ImageHead};
 
 /// An sRGB color. `a` is the opacity, from 0, transparent, to 255, opaque.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -701,6 +701,14 @@ impl Image {
         crate::asset::fit_image(blob).and_then(Image::new)
     }
 
+    /// [`Image::load`], together with the header of `blob`. The size in the
+    /// header is the one of the original, before the image shrinks, which
+    /// is the size that a front end shows.
+    pub fn load_with_head(blob: Vec<u8>) -> Result<(Image, ImageHead), ImageError> {
+        let head = crate::asset::image_head(&blob)?;
+        Ok((Image::load(blob)?, head))
+    }
+
     /// Read the header of `blob` and hash it. Returns an error if `blob` is
     /// not a PNG, a JPEG, a GIF, a WebP or a BMP, or has more than
     /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS).
@@ -1394,6 +1402,20 @@ mod tests {
         let blob = crate::asset::png_head(2, 3);
         assert_eq!(Image::load(blob.clone()), Image::new(blob));
         assert_eq!(Image::load(b"GIF".to_vec()), Err(ImageError::Unsupported));
+    }
+
+    #[test]
+    fn an_image_loads_with_the_head_of_its_blob() {
+        let blob = crate::asset::png_head(2, 3);
+        let head = crate::asset::image_head(&blob);
+        assert_eq!(
+            Image::load_with_head(blob.clone()),
+            Ok((Image::load(blob).unwrap(), head.unwrap()))
+        );
+        assert_eq!(
+            Image::load_with_head(b"GIF".to_vec()),
+            Err(ImageError::Unsupported)
+        );
     }
 
     #[test]
