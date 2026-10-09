@@ -500,7 +500,15 @@ impl From<RotatedRect> for ClipPath {
     /// The outline of `rect`. A rectangle covers the same area under either
     /// fill rule, so the clip takes the default.
     fn from(rect: RotatedRect) -> Self {
-        let m = rect.affine(1.0, 1.0);
+        ClipPath::from_transform(rect.affine(1.0, 1.0))
+    }
+}
+
+impl ClipPath {
+    /// The outline of the box of `transform`, in the convention of
+    /// [`Bitmap::transform`]. The box is a parallelogram, and it covers the
+    /// same area under either fill rule, so the clip takes the default.
+    pub fn from_transform(m: [f32; 6]) -> Self {
         let p0 = apply_affine(m, -0.5, -0.5);
         let p1 = apply_affine(m, 0.5, -0.5);
         let p2 = apply_affine(m, 0.5, 0.5);
@@ -613,13 +621,27 @@ impl TextSpec {
     /// [`crate::text::measure`] returns `None` or the text measures zero
     /// wide.
     pub fn fit(self, rect: RotatedRect) -> Option<Text> {
+        self.fit_transform(rect.affine(1.0, 1.0))
+    }
+
+    /// Like [`TextSpec::fit`], for the box of `transform` in the convention
+    /// of [`Bitmap::transform`]. The box is a parallelogram, so it can hold
+    /// a text that is skewed.
+    pub fn fit_transform(self, transform: [f32; 6]) -> Option<Text> {
         let metrics =
             crate::text::measure(&self.family, self.weight, self.style, self.size, &self.text)?;
-        if metrics.width() <= 0.0 {
+        let (w, h) = (metrics.width(), metrics.height());
+        if w <= 0.0 {
             return None;
         }
+        let [a, b, c, d, e, f] = transform;
         Some(Text {
-            transform: rect.affine(metrics.width(), metrics.height()),
+            // A text with no height goes to the center at its natural size.
+            transform: if h > 0.0 {
+                [a / w, b / w, c / h, d / h, e, f]
+            } else {
+                translate(e, f)
+            },
             spec: Self {
                 family: metrics.family().into(),
                 ..self
@@ -1687,6 +1709,41 @@ mod tests {
             rect.affine(metrics.width(), metrics.height())
         );
         assert_eq!((text.spec.size, &*text.spec.text), (20.0, "Hi"));
+    }
+
+    #[test]
+    fn fit_transform_puts_the_text_box_on_a_skewed_box() {
+        let spec = TextSpec {
+            size: 20.0,
+            text: "Hi".into(),
+            ..TextSpec::default()
+        };
+        let metrics =
+            crate::text::measure(&spec.family, spec.weight, spec.style, spec.size, &spec.text)
+                .expect("text measures");
+        let (w, h) = (metrics.width(), metrics.height());
+        let skewed = [30.0, 0.0, 10.0, 20.0, 50.0, 40.0];
+        let m = spec.fit_transform(skewed).expect("text fits").transform;
+        let close = |(x, y): (f32, f32), (ex, ey): (f32, f32)| {
+            assert!((x - ex).abs() < 1e-4 && (y - ey).abs() < 1e-4, "{x}, {y}");
+        };
+        close(apply_affine(m, w / 2.0, h / 2.0), (70.0, 50.0));
+        close(apply_affine(m, -w / 2.0, h / 2.0), (40.0, 50.0));
+    }
+
+    #[test]
+    fn a_clip_from_a_transform_is_the_outline_of_its_box() {
+        let clip = ClipPath::from_transform([30.0, 0.0, 10.0, 20.0, 50.0, 40.0]);
+        let segs: Vec<_> = clip.segments().collect();
+        assert_eq!(
+            segs,
+            vec![
+                Segment::Move { x: 30.0, y: 30.0 },
+                Segment::Line { x: 60.0, y: 30.0 },
+                Segment::Line { x: 70.0, y: 50.0 },
+                Segment::Line { x: 40.0, y: 50.0 },
+            ]
+        );
     }
 
     #[test]
