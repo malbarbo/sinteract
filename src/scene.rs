@@ -537,6 +537,10 @@ impl ClipPath {
 pub struct Text {
     pub fill: Paint,
     pub stroke: Paint,
+    /// The width of the stroke in the units of the scene, as the width of a
+    /// [`Path`]. `transform` moves the outline and leaves the width as it
+    /// is, so a text that the transform scales keeps the width of its
+    /// stroke.
     pub stroke_width: f32,
     pub transform: [f32; 6],
     pub spec: TextSpec,
@@ -662,7 +666,7 @@ fn translate(e: f32, f: f32) -> [f32; 6] {
     [1.0, 0.0, 0.0, 1.0, e, f]
 }
 
-fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
+pub(crate) fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 

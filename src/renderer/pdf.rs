@@ -34,7 +34,7 @@ use pdf_writer::writers::{ColorSpace, Resources};
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 
 use crate::asset::{Embed, JpegColor, MAX_IMAGE_PIXELS, embed};
-use crate::outline::PathSink;
+use crate::outline::{Moved, PathSink};
 use crate::renderer::{
     MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, frame_side, missing_box, missing_cross,
     sealed::Canvas,
@@ -353,30 +353,53 @@ impl PdfRenderer {
     ) {
         let (do_fill, do_stroke) = (fill.is_some(), stroke.is_some());
         // A pattern and a soft mask map to the space in effect before the
-        // `cm` of the text below, so a gradient stays in canvas space.
+        // `cm` of the fill below, so a gradient stays in canvas space.
         self.begin_paint(fill, stroke);
         if do_stroke {
             // The default miter limit is TEXT_MITER_LIMIT.
             self.content.set_line_width(node.stroke_width);
         }
-        self.content.transform(node.transform);
-
-        let mut out = PdfOutline::new(&mut self.content);
-        layout.outline(&mut out);
-        // A text of spaces has no outline, and a paint with no path is
-        // an error.
-        if !out.empty {
-            paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
-        }
-
+        self.paint_text_outline(node, do_fill, do_stroke, |out| layout.outline(out));
         if node.underline {
             // The underline paints on its own. In one path, a glyph that winds
             // the other way from the rectangle would cancel it where the two
             // cross.
-            layout.outline_underline(&mut PdfOutline::new(&mut self.content));
-            paint(&mut self.content, do_fill, do_stroke, FillRule::NonZero);
+            self.paint_text_outline(node, do_fill, do_stroke, |out| {
+                layout.outline_underline(out)
+            });
         }
         self.content.restore_state();
+    }
+
+    /// Fills the path of `outline` under the transform of `node`, then
+    /// strokes it. The width of the stroke is in the units of the scene, so
+    /// the stroke draws the path moved by the transform, under no `cm`. An
+    /// outline with no segments paints nothing, because a paint with no path
+    /// is an error.
+    fn paint_text_outline(
+        &mut self,
+        node: &Text,
+        do_fill: bool,
+        do_stroke: bool,
+        outline: impl Fn(&mut dyn PathSink),
+    ) {
+        if do_fill {
+            self.content.save_state();
+            self.content.transform(node.transform);
+            let mut out = PdfOutline::new(&mut self.content);
+            outline(&mut out);
+            if !out.empty {
+                self.content.fill_nonzero();
+            }
+            self.content.restore_state();
+        }
+        if do_stroke {
+            let mut out = Moved::new(PdfOutline::new(&mut self.content), node.transform);
+            outline(&mut out);
+            if !out.out.empty {
+                self.content.stroke();
+            }
+        }
     }
 
     /// Draws the gray box with a red cross that stands for a bitmap of

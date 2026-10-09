@@ -22,7 +22,7 @@ use web_sys::{
     HtmlCanvasElement, ImageBitmap, ImageBitmapOptions, Path2d,
 };
 
-use crate::outline::PathSink;
+use crate::outline::{Moved, PathSink};
 use crate::renderer::{
     MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side,
     missing_box, missing_cross, sealed::Canvas,
@@ -357,69 +357,54 @@ impl Canvas<Infallible> for CanvasRenderer {
         if !fill && !stroke {
             return;
         }
-        let gradient =
-            matches!(node.fill, Paint::Gradient(_)) || matches!(node.stroke, Paint::Gradient(_));
-        if gradient {
-            // The gradient stays in the space of the scene, so the glyphs
-            // go into one path under the transform of the text.
-            let mut moved = Moved {
-                out: Calls::new(),
-                t: node.transform,
-            };
-            layout.outline(&mut moved);
-            if node.underline {
-                layout.outline_underline(&mut moved);
-            }
-            let p = moved.out.path;
-            self.set(IDENTITY);
-            if fill {
-                self.fill_style(&node.fill);
-                self.ctx().fill_with_path_2d(&p);
-            }
-            if stroke {
-                self.stroke_style(&node.stroke);
-                self.text_stroke(node.stroke_width);
-                self.ctx().stroke_with_path(&p);
-            }
-            return;
-        }
-        // Each glyph keeps its path from frame to frame, and draws under the
-        // transform of the text moved to its origin.
-        let placed: Vec<_> = layout
-            .placed_glyphs()
-            .filter_map(|(g, x)| Some((self.glyph(g)?, x)))
-            .collect();
-        let y = layout.baseline_y();
-        let [a, b, c, d, e, f] = node.transform;
-        let at = |x: f32| [a, b, c, d, a * x + c * y + e, b * x + d * y + f];
-        let underline = node.underline.then(|| {
-            let mut sink = Calls::new();
-            layout.outline_underline(&mut sink);
-            sink.path
-        });
+        // An outline moved by the transform of the text, in the space of the
+        // scene.
+        let moved = |outline: &dyn Fn(&mut dyn PathSink)| {
+            let mut moved = Moved::new(Calls::new(), node.transform);
+            outline(&mut moved);
+            moved.out.path
+        };
         if fill {
             self.fill_style(&node.fill);
-            for (p, x) in &placed {
-                self.set(at(*x));
-                self.ctx().fill_with_path_2d(p);
+            if matches!(node.fill, Paint::Gradient(_)) {
+                // The gradient stays in the space of the scene, so the glyphs
+                // go into one path in that space.
+                self.set(IDENTITY);
+                self.ctx()
+                    .fill_with_path_2d(&moved(&|out| layout.outline(out)));
+            } else {
+                // Each glyph keeps its path from frame to frame, and fills
+                // under the transform of the text moved to its origin.
+                let y = layout.baseline_y();
+                let [a, b, c, d, e, f] = node.transform;
+                for (g, x) in layout.placed_glyphs() {
+                    if let Some(p) = self.glyph(g) {
+                        self.set([a, b, c, d, a * x + c * y + e, b * x + d * y + f]);
+                        self.ctx().fill_with_path_2d(&p);
+                    }
+                }
             }
         }
+        // The width of the stroke is in the units of the scene, so the
+        // outline goes in moved, and the stroke draws under no transform of
+        // its own.
         if stroke {
+            self.set(IDENTITY);
             self.stroke_style(&node.stroke);
             self.text_stroke(node.stroke_width);
-            for (p, x) in &placed {
-                self.set(at(*x));
-                self.ctx().stroke_with_path(p);
-            }
+            self.ctx()
+                .stroke_with_path(&moved(&|out| layout.outline(out)));
         }
-        if let Some(u) = underline {
-            self.set(node.transform);
+        if node.underline {
+            let u = moved(&|out| layout.outline_underline(out));
+            self.set(IDENTITY);
             if fill {
                 self.fill_style(&node.fill);
                 self.ctx().fill_with_path_2d(&u);
             }
             if stroke {
                 self.stroke_style(&node.stroke);
+                self.text_stroke(node.stroke_width);
                 self.ctx().stroke_with_path(&u);
             }
         }
@@ -690,43 +675,5 @@ impl PathSink for Calls {
     }
     fn close(&mut self) {
         self.path.close_path();
-    }
-}
-
-/// Passes an outline on to `out` under the affine `t`.
-struct Moved {
-    out: Calls,
-    t: [f32; 6],
-}
-
-impl Moved {
-    fn p(&self, x: f32, y: f32) -> (f32, f32) {
-        let [a, b, c, d, e, f] = self.t;
-        (a * x + c * y + e, b * x + d * y + f)
-    }
-}
-
-impl PathSink for Moved {
-    fn move_to(&mut self, x: f32, y: f32) {
-        let (x, y) = self.p(x, y);
-        self.out.move_to(x, y);
-    }
-    fn line_to(&mut self, x: f32, y: f32) {
-        let (x, y) = self.p(x, y);
-        self.out.line_to(x, y);
-    }
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        let (cx, cy) = self.p(cx, cy);
-        let (x, y) = self.p(x, y);
-        self.out.quad_to(cx, cy, x, y);
-    }
-    fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        let (cx1, cy1) = self.p(cx1, cy1);
-        let (cx2, cy2) = self.p(cx2, cy2);
-        let (x, y) = self.p(x, y);
-        self.out.cubic_to(cx1, cy1, cx2, cy2, x, y);
-    }
-    fn close(&mut self) {
-        self.out.close();
     }
 }

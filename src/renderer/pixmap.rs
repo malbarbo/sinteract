@@ -680,27 +680,27 @@ fn render_text(
     // Transform::from_row.
     let [a, b, c, d, e, f] = node.transform;
     let local = Transform::from_row(a, b, c, d, e, f);
-    // The text transform applies first, then the scale.
-    let transform = local.post_concat(base);
     let paints = TextPaints {
         fill: node
             .draws_fill()
             .then(|| text_paint(&node.fill, local, fade))
             .flatten(),
+        // The stroke draws the outline moved by `local`, so its gradient is
+        // already in the space of the scene.
         stroke: node
             .draws_stroke()
-            .then(|| text_paint(&node.stroke, local, fade))
+            .then(|| text_paint(&node.stroke, Transform::identity(), fade))
             .flatten(),
         width: node.stroke_width,
     };
 
-    paint_text_path(&paints, pixmap, mask, transform, builder, |out| {
+    paint_text_path(&paints, pixmap, mask, local, base, builder, |out| {
         layout.outline(out)
     });
     // The underline paints on its own. In one path, a glyph that winds the
     // other way from the rectangle would cancel it where the two cross.
     if node.underline {
-        paint_text_path(&paints, pixmap, mask, transform, builder, |out| {
+        paint_text_path(&paints, pixmap, mask, local, base, builder, |out| {
             layout.outline_underline(out)
         });
     }
@@ -726,12 +726,15 @@ fn text_paint(paint: &Paint, local: Transform, fade: f32) -> Option<SkPaint<'sta
 }
 
 /// Builds a path of the text with `outline`, then fills and strokes it. The
-/// finished path clears back into `builder`.
+/// fill draws under `local` and then `base`. The width of the stroke is in
+/// the units of the scene, so the stroke draws the path moved by `local`,
+/// under `base` alone. The finished path clears back into `builder`.
 fn paint_text_path(
     paints: &TextPaints,
     pixmap: &mut Pixmap,
     mask: Option<&Mask>,
-    transform: Transform,
+    local: Transform,
+    base: Transform,
     builder: &mut PathBuilder,
     outline: impl FnOnce(&mut PathBuilder),
 ) {
@@ -740,6 +743,8 @@ fn paint_text_path(
     let Some(path) = b.finish() else {
         return;
     };
+    // The text transform applies first, then the scale.
+    let transform = local.post_concat(base);
     if let Some(paint) = &paints.fill
         && within_reach(&path, transform, 0.0)
     {
@@ -753,8 +758,10 @@ fn paint_text_path(
             dash: None,
             ..Stroke::default()
         };
-        if stroke_within_reach(&path, &stroke, transform) {
-            pixmap.stroke_path(&path, paint, &stroke, transform, mask);
+        if let Some(moved) = path.clone().transform(local)
+            && stroke_within_reach(&moved, &stroke, base)
+        {
+            pixmap.stroke_path(&moved, paint, &stroke, base, mask);
         }
     }
     *builder = path.clear();
@@ -1583,6 +1590,35 @@ mod tests {
         let n = count_opaque_pixels(&rasterize(&without));
         let u = count_opaque_pixels(&rasterize(&with));
         assert!(u > n, "underline should add pixels: {} -> {}", n, u);
+    }
+
+    #[test]
+    fn a_scaled_text_strokes_as_the_same_text_at_the_larger_size() {
+        // Only the stroke draws, so a stroke that grew with the text would
+        // cover about four times the pixels.
+        let stroked = |size: f32, scale: f32| {
+            let mut scene = Scene::new(200.0, 80.0);
+            scene.add_text(Text {
+                stroke: Paint::Solid(Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
+                stroke_width: 1.0,
+                transform: [scale, 0.0, 0.0, scale, 10.0, 10.0],
+                spec: TextSpec {
+                    size,
+                    text: "Hi".into(),
+                    ..TextSpec::default()
+                },
+                ..Text::default()
+            });
+            count_opaque_pixels(&rasterize(&scene))
+        };
+        let large = stroked(48.0, 1.0);
+        let scaled = stroked(12.0, 4.0);
+        assert!(large.abs_diff(scaled) <= large / 50, "{large} {scaled}");
     }
 
     #[test]

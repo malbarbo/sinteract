@@ -26,7 +26,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 
 use crate::asset::{Embed, embed};
-use crate::outline::PathSink;
+use crate::outline::{Moved, PathSink};
 use crate::renderer::{
     MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side,
     missing_box, missing_cross, sealed::Canvas,
@@ -220,57 +220,51 @@ impl Canvas<Infallible> for SvgRenderer {
         let Some(layout) = TextLayout::new(&node.spec) else {
             return;
         };
-        let inverse = invert(node.transform);
         let fill = node
             .draws_fill()
-            .then(|| self.text_paint(&node.fill, "fill", "fill-opacity", inverse))
+            .then(|| self.text_paint(&node.fill, "fill", "fill-opacity", invert(node.transform)))
             .flatten();
-        let stroke = node
-            .draws_stroke()
-            .then(|| self.text_paint(&node.stroke, "stroke", "stroke-opacity", inverse))
-            .flatten()
-            .map(|mut attrs| {
-                _ = write!(
-                    attrs,
-                    " stroke-width=\"{}\" stroke-miterlimit=\"{TEXT_MITER_LIMIT}\"",
-                    node.stroke_width
-                );
-                attrs
-            });
-        if fill.is_none() && stroke.is_none() {
+        let stroke = node.draws_stroke();
+        // The underline paints on its own and after the stroke of the glyphs,
+        // as in the other renderers. With no stroke, it fills in the group of
+        // the glyphs.
+        let [a, b, c, d, e, f] = node.transform;
+        if let Some(fill) = &fill {
+            _ = writeln!(
+                self.body,
+                "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">"
+            );
+            if matches!(node.fill, Paint::Gradient(_)) {
+                // A gradient on a <use> starts again at the x of each glyph,
+                // so the glyphs go into one path.
+                self.body.push_str("<path d=\"");
+                layout.outline(&mut PathData::new(&mut self.body));
+                _ = writeln!(self.body, "\"{fill}/>");
+            } else {
+                self.write_glyph_uses(&layout, fill);
+            }
+            if node.underline && !stroke {
+                self.body.push_str("<path d=\"");
+                layout.outline_underline(&mut PathData::new(&mut self.body));
+                _ = writeln!(self.body, "\"{fill}/>");
+            }
+            self.body.push_str("</g>\n");
+        }
+        if !stroke {
             return;
         }
-        let is_gradient = |paint: &Paint, drawn: bool| drawn && matches!(paint, Paint::Gradient(_));
-        let gradient =
-            is_gradient(&node.fill, fill.is_some()) || is_gradient(&node.stroke, stroke.is_some());
-        let (fill, stroke) = (fill.as_deref(), stroke.as_deref());
-        let path_attrs = format!(
-            "{}{}",
-            fill.unwrap_or(" fill=\"none\""),
-            stroke.unwrap_or_default()
-        );
-
-        let [a, b, c, d, e, f] = node.transform;
-        _ = writeln!(
-            self.body,
-            "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">"
-        );
-        if gradient {
-            // A gradient on a <use> starts again at the x of each glyph, so
-            // the glyphs go into one path.
-            self.body.push_str("<path d=\"");
-            layout.outline(&mut PathData::new(&mut self.body));
-            _ = writeln!(self.body, "\"{path_attrs}/>");
-        } else {
-            self.write_glyph_uses(&layout, fill, stroke);
-        }
+        self.write_text_stroke(node, |out| layout.outline(out));
         if node.underline {
-            // The underline paints on its own, as in the other renderers.
-            self.body.push_str("<path d=\"");
-            layout.outline_underline(&mut PathData::new(&mut self.body));
-            _ = writeln!(self.body, "\"{path_attrs}/>");
+            if let Some(fill) = &fill {
+                _ = write!(
+                    self.body,
+                    "<path transform=\"matrix({a} {b} {c} {d} {e} {f})\" d=\""
+                );
+                layout.outline_underline(&mut PathData::new(&mut self.body));
+                _ = writeln!(self.body, "\"{fill}/>");
+            }
+            self.write_text_stroke(node, |out| layout.outline_underline(out));
         }
-        self.body.push_str("</g>\n");
     }
 
     /// An image that does not decode draws a gray box with a red cross in
@@ -417,16 +411,9 @@ impl SvgRenderer {
         Some(attrs)
     }
 
-    /// Writes a `<use>` of each glyph of `layout`, all the fills first and
-    /// then all the strokes, as the other renderers paint the text as one
-    /// path. A <use> that fills and strokes would cover the stroke of the
-    /// glyph before it.
-    fn write_glyph_uses(
-        &mut self,
-        layout: &TextLayout<'_>,
-        fill: Option<&str>,
-        stroke: Option<&str>,
-    ) {
+    /// Writes a `<use>` of each glyph of `layout` into one group that
+    /// fills them with `fill`.
+    fn write_glyph_uses(&mut self, layout: &TextLayout<'_>, fill: &str) {
         let mut uses = std::mem::take(&mut self.uses);
         uses.clear();
         uses.extend(
@@ -435,21 +422,29 @@ impl SvgRenderer {
                 .filter_map(|(glyph, x)| Some((self.glyph_id(glyph)?, x))),
         );
         let y = layout.baseline_y();
-        let body = &mut self.body;
-        // The fills of all the glyphs go down before any stroke, as in the
-        // other renderers, which paint the text as one path. A <use> that
-        // fills and strokes would cover the stroke of the glyph before it.
-        if let Some(fill) = fill {
-            _ = writeln!(body, "<g{fill}>");
-            write_uses(&uses, &self.prefix, y, body);
-            body.push_str("</g>\n");
-        }
-        if let Some(stroke) = stroke {
-            _ = writeln!(body, "<g fill=\"none\"{stroke}>");
-            write_uses(&uses, &self.prefix, y, body);
-            body.push_str("</g>\n");
-        }
+        _ = writeln!(self.body, "<g{fill}>");
+        write_uses(&uses, &self.prefix, y, &mut self.body);
+        self.body.push_str("</g>\n");
         self.uses = uses;
+    }
+
+    /// Writes a path that strokes `outline` of `node`. The width of the
+    /// stroke is in the units of the scene, so the path holds the outline
+    /// moved by the transform of the text, and has no transform of its own.
+    /// An outline with no segments writes nothing.
+    fn write_text_stroke(&mut self, node: &Text, outline: impl Fn(&mut dyn PathSink)) {
+        let mut d = String::new();
+        outline(&mut Moved::new(PathData::new(&mut d), node.transform));
+        if d.is_empty() {
+            return;
+        }
+        _ = write!(self.body, "<path d=\"{d}\" fill=\"none\"");
+        self.write_paint(&node.stroke, "stroke", "stroke-opacity");
+        _ = writeln!(
+            self.body,
+            " stroke-width=\"{}\" stroke-miterlimit=\"{TEXT_MITER_LIMIT}\"/>",
+            node.stroke_width
+        );
     }
 
     /// Writes `g` into `defs` and returns the number of its `pn` id. The
@@ -941,21 +936,24 @@ mod tests {
     }
 
     #[test]
-    fn a_stroked_text_fills_every_glyph_before_any_stroke() {
+    fn a_text_strokes_its_outline_moved_by_its_transform() {
         let mut scene = Scene::new(60.0, 20.0);
         scene.add_text(Text {
             stroke: Paint::Solid(black()),
             stroke_width: 1.0,
+            transform: [4.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             ..text("ab")
         });
         let svg = render_to_svg(&scene);
         let fills = svg.find("<g fill=\"#000000\">").expect("a fill group");
-        let strokes = svg
-            .find("<g fill=\"none\" stroke=\"#000000\"")
-            .expect("a stroke group");
-        assert!(fills < strokes, "{svg}");
-        assert_eq!(svg[fills..strokes].matches("<use ").count(), 2, "{svg}");
-        assert_eq!(svg[strokes..].matches("<use ").count(), 2, "{svg}");
+        let stroke = svg.find("<path d=\"M").expect("a stroke path");
+        assert!(fills < stroke, "{svg}");
+        assert_eq!(svg[fills..stroke].matches("<use ").count(), 2, "{svg}");
+        // The width stays 1 under a transform that scales the text by 4.
+        assert!(
+            svg[stroke..].contains("fill=\"none\" stroke=\"#000000\" stroke-width=\"1\""),
+            "{svg}"
+        );
     }
 
     #[test]

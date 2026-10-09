@@ -1,6 +1,6 @@
 //! The sink that paths, clips and glyphs are outlined into.
 
-use crate::scene::{Path, Segment, Segments};
+use crate::scene::{Path, Segment, Segments, apply_affine};
 
 /// Receives an outline: the segments of a path or of a clip, or the glyphs
 /// and the underline of a text. Each backend implements it once.
@@ -40,6 +40,43 @@ impl Path {
         if open {
             out.close();
         }
+    }
+}
+
+/// Passes an outline on to `out` under the affine `t`.
+pub(crate) struct Moved<S> {
+    pub(crate) out: S,
+    t: [f32; 6],
+}
+
+impl<S> Moved<S> {
+    pub(crate) fn new(out: S, t: [f32; 6]) -> Self {
+        Self { out, t }
+    }
+}
+
+impl<S: PathSink> PathSink for Moved<S> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        let (x, y) = apply_affine(self.t, x, y);
+        self.out.move_to(x, y);
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        let (x, y) = apply_affine(self.t, x, y);
+        self.out.line_to(x, y);
+    }
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        let (cx, cy) = apply_affine(self.t, cx, cy);
+        let (x, y) = apply_affine(self.t, x, y);
+        self.out.quad_to(cx, cy, x, y);
+    }
+    fn cubic_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
+        let (cx1, cy1) = apply_affine(self.t, cx1, cy1);
+        let (cx2, cy2) = apply_affine(self.t, cx2, cy2);
+        let (x, y) = apply_affine(self.t, x, y);
+        self.out.cubic_to(cx1, cy1, cx2, cy2, x, y);
+    }
+    fn close(&mut self) {
+        self.out.close();
     }
 }
 
