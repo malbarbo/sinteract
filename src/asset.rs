@@ -10,6 +10,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
+
 use crate::scene::Image;
 
 /// The most pixels of one image, 2048 by 2048.
@@ -285,6 +288,30 @@ pub fn image_head(blob: &[u8]) -> Result<ImageHead, ImageError> {
         height,
         mime: head.format.mime(),
     })
+}
+
+/// The image in `blob` as a `data:` URI in base64, of the media type in
+/// its header, or an error if it is not a PNG, a JPEG, a GIF, a WebP or a
+/// BMP.
+pub fn data_uri(blob: &[u8]) -> Result<String, ImageError> {
+    let head = head(blob).ok_or(ImageError::Unsupported)?;
+    Ok(encode_data_uri(head.format.mime(), blob))
+}
+
+/// `blob` as a `data:` URI in base64 of the media type `mime`.
+pub(crate) fn encode_data_uri(mime: &str, blob: &[u8]) -> String {
+    let mut uri = format!("data:{mime};base64,");
+    B64.encode_string(blob, &mut uri);
+    uri
+}
+
+/// The bytes of a `data:` URI in base64, or `None` when `uri` is not one.
+/// The media type in the URI does not matter, since the header of an image
+/// says its format.
+pub fn decode_data_uri(uri: &str) -> Option<Vec<u8>> {
+    let (header, payload) = uri.strip_prefix("data:")?.split_once(',')?;
+    header.ends_with(";base64").then_some(())?;
+    B64.decode(payload).ok()
 }
 
 /// The size on the screen of the image in `blob`, after the EXIF
@@ -1083,6 +1110,25 @@ mod tests {
         assert_eq!(image_size(&extended), Some((640, 480)));
         assert_eq!(image_size(&webp(b"VP8 ", &[0, 0, 0, 0, 0, 0])), None);
         assert_eq!(image_size(&webp(b"ALPH", &[0; 10])), None);
+    }
+
+    #[test]
+    fn a_data_uri_names_the_format_of_its_header_and_decodes_back() {
+        let blob = png_head(3, 2);
+        let uri = data_uri(&blob).unwrap();
+        assert!(
+            uri.starts_with("data:image/png;base64,iVBORw0KGgo"),
+            "{uri}"
+        );
+        assert_eq!(decode_data_uri(&uri), Some(blob));
+        assert_eq!(data_uri(b"GIF"), Err(ImageError::Unsupported));
+    }
+
+    #[test]
+    fn decode_data_uri_refuses_a_uri_that_is_not_base64() {
+        assert_eq!(decode_data_uri("data:image/png,abc"), None);
+        assert_eq!(decode_data_uri("image/png;base64,abc"), None);
+        assert_eq!(decode_data_uri("data:image/png;base64,a$c"), None);
     }
 
     #[test]

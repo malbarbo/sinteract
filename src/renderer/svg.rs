@@ -22,10 +22,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt::{self, Write};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as B64;
-
-use crate::asset::{Embed, embed};
+use crate::asset::{Embed, embed, encode_data_uri};
 use crate::outline::{Moved, PathSink};
 use crate::renderer::{
     MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side,
@@ -129,9 +126,7 @@ fn data_url(image: &Image) -> Option<String> {
         Embed::Jpeg { .. } => ("image/jpeg", Cow::Borrowed(blob)),
         Embed::Decode { mime } => as_png(blob, mime)?,
     };
-    let mut url = format!("data:{mime};base64,");
-    B64.encode_string(&blob, &mut url);
-    Some(url)
+    Some(encode_data_uri(mime, &blob))
 }
 
 /// The image in `blob` as a PNG, the way up that the pixmap draws it.
