@@ -316,11 +316,11 @@ impl Canvas<Infallible> for SvgRenderer {
              width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">"
         );
         if !self.defs.is_empty() {
-            self.svg.push_str("<defs>\n");
-            self.svg.push_str(&self.defs);
-            self.svg.push_str("</defs>\n");
+            self.svg.push_str("  <defs>\n");
+            indent(&self.defs, 2, &mut self.svg);
+            self.svg.push_str("  </defs>\n");
         }
-        self.svg.push_str(&self.body);
+        indent(&self.body, 1, &mut self.svg);
         self.svg.push_str("</svg>\n");
     }
 
@@ -554,6 +554,22 @@ fn write_missing(transform: [f32; 6], out: &mut String) {
     write_color(MISSING_FILL, "fill", "fill-opacity", out);
     write_color(MISSING_STROKE, "stroke", "stroke-opacity", out);
     out.push_str("/>\n");
+}
+
+/// Writes the lines of `elements` to `out`, each indented two spaces for each
+/// element around it, starting at `depth`. Every element starts a line of its
+/// own, and an element that holds others opens and closes on lines of their
+/// own.
+fn indent(elements: &str, depth: usize, out: &mut String) {
+    let mut depth = depth;
+    for line in elements.split_inclusive('\n') {
+        let closes = line.starts_with("</");
+        let opens = !closes && !line.contains("</") && !line.trim_end().ends_with("/>");
+        depth -= usize::from(closes);
+        out.extend(std::iter::repeat_n("  ", depth));
+        out.push_str(line);
+        depth += usize::from(opens);
+    }
 }
 
 fn write_list(values: &[f32], out: &mut String) {
@@ -851,16 +867,17 @@ mod tests {
         let svg = render_to_svg(&scene);
         assert!(
             svg.contains(
-                "<clipPath id=\"c0\"><path d=\"M0 0 L10 0 L10 10 L0 10\" \
-                 clip-rule=\"evenodd\"/></clipPath>\n\
-                 <clipPath id=\"c1\"><path d=\"M0 0 L10 0 L10 10 L0 10\"/></clipPath>\n"
+                "  <defs>\n    <clipPath id=\"c0\"><path d=\"M0 0 L10 0 L10 10 L0 10\" \
+                 clip-rule=\"evenodd\"/></clipPath>\n    <clipPath id=\"c1\"><path \
+                 d=\"M0 0 L10 0 L10 10 L0 10\"/></clipPath>\n  </defs>\n"
             ),
             "{svg}"
         );
         assert!(
             svg.contains(
-                "<g clip-path=\"url(#c0)\">\n<g clip-path=\"url(#c1)\">\n<path d=\"M0 0 \
-                 L20 0 L20 20 L0 20\" fill=\"#ff0000\"/>\n</g>\n</g>\n"
+                "  <g clip-path=\"url(#c0)\">\n    <g clip-path=\"url(#c1)\">\n      \
+                 <path d=\"M0 0 L20 0 L20 20 L0 20\" fill=\"#ff0000\"/>\n    </g>\n  </g>\n\
+                 </svg>\n"
             ),
             "{svg}"
         );
@@ -977,7 +994,10 @@ mod tests {
         let svg = render_to_svg(&scene);
         let open = svg.find("<g opacity=\"0.25\">").expect("a layer group");
         let glyph = svg.find("<use ").expect("a glyph");
-        assert!(open < glyph && svg[glyph..].contains("</g>\n</g>"), "{svg}");
+        assert!(
+            open < glyph && svg[glyph..].ends_with("\n  </g>\n</svg>\n"),
+            "{svg}"
+        );
     }
 
     #[test]
