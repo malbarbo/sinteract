@@ -138,7 +138,7 @@ pub(crate) struct Footprint {
 
 impl Footprint {
     /// The footprint of `blob`, or an error if it is not a PNG, a JPEG, a
-    /// GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
+    /// GIF, a WebP or a BMP, or has more than [`MAX_IMAGE_PIXELS`].
     pub fn of(blob: &[u8]) -> Result<Footprint, ImageError> {
         let size = head(blob).ok_or(ImageError::Unsupported)?.size;
         check_pixels(size, MAX_IMAGE_PIXELS)?;
@@ -205,7 +205,7 @@ pub(crate) fn check_room<'a>(images: impl IntoIterator<Item = &'a Image>) -> Res
 /// Why an image cannot be an asset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageError {
-    /// The blob does not start as a PNG, a JPEG, a GIF or a WebP does,
+    /// The blob does not start as a PNG, a JPEG, a GIF, a WebP or a BMP does,
     /// which are the formats that a view decodes.
     Unsupported,
     /// The image has more than [`MAX_IMAGE_PIXELS`].
@@ -216,7 +216,7 @@ impl fmt::Display for ImageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ImageError::Unsupported => {
-                f.write_str("the image is not a PNG, a JPEG, a GIF or a WebP")
+                f.write_str("the image is not a PNG, a JPEG, a GIF, a WebP or a BMP")
             }
             ImageError::TooManyPixels { width, height } => write!(
                 f,
@@ -251,7 +251,7 @@ impl std::error::Error for RoomFull {}
 
 /// `blob`, or a PNG of it shrunk to [`MAX_IMAGE_PIXELS`], for
 /// [`Image::load`](crate::scene::Image::load). It is an error if `blob` is
-/// not a PNG, a JPEG, a GIF or a WebP.
+/// not a PNG, a JPEG, a GIF, a WebP or a BMP.
 pub(crate) fn fit_image(blob: Vec<u8>) -> Result<Vec<u8>, ImageError> {
     let size = head(&blob).ok_or(ImageError::Unsupported)?.size;
     if pixels(size) > MAX_IMAGE_PIXELS {
@@ -273,7 +273,7 @@ pub struct ImageHead {
 }
 
 /// The header of the image in `blob`, or an error if it is not a PNG, a
-/// JPEG, a GIF or a WebP. The size is the one of `blob`, before
+/// JPEG, a GIF, a WebP or a BMP. The size is the one of `blob`, before
 /// [`Image::load`](crate::scene::Image::load) shrinks it, so a front end
 /// shows a shrunk image at the
 /// size of the original.
@@ -288,8 +288,8 @@ pub fn image_head(blob: &[u8]) -> Result<ImageHead, ImageError> {
 }
 
 /// The size on the screen of the image in `blob`, after the EXIF
-/// orientation of a JPEG, or an error if it is not a PNG, a JPEG, a GIF or
-/// a WebP, or has more than [`MAX_IMAGE_PIXELS`].
+/// orientation of a JPEG, or an error if it is not a PNG, a JPEG, a GIF,
+/// a WebP or a BMP, or has more than [`MAX_IMAGE_PIXELS`].
 pub(crate) fn screen_size(blob: &[u8]) -> Result<(u32, u32), ImageError> {
     let head = head(blob).ok_or(ImageError::Unsupported)?;
     check_pixels(head.size, MAX_IMAGE_PIXELS)?;
@@ -305,13 +305,13 @@ pub(crate) enum Embed {
     /// A JPEG that its EXIF does not turn, which a document holds as it is.
     Jpeg { color: JpegColor, size: (u32, u32) },
     /// Any other image, of the media type `mime`. A document holds it
-    /// decoded, since a GIF may move, a WebP does not show everywhere, and a
-    /// document may not turn a JPEG.
+    /// decoded, since a GIF may move, a WebP or a BMP does not show
+    /// everywhere, and a document may not turn a JPEG.
     Decode { mime: &'static str },
 }
 
 /// How a document takes the image in `blob`, or an error if it is not a
-/// PNG, a JPEG, a GIF or a WebP, or has more than [`MAX_IMAGE_PIXELS`].
+/// PNG, a JPEG, a GIF, a WebP or a BMP, or has more than [`MAX_IMAGE_PIXELS`].
 pub(crate) fn embed(blob: &[u8]) -> Result<Embed, ImageError> {
     let head = head(blob).ok_or(ImageError::Unsupported)?;
     check_pixels(head.size, MAX_IMAGE_PIXELS)?;
@@ -324,7 +324,7 @@ pub(crate) fn embed(blob: &[u8]) -> Result<Embed, ImageError> {
             color,
             size: head.size,
         },
-        Format::Jpeg { .. } | Format::Gif | Format::WebP => Embed::Decode {
+        Format::Jpeg { .. } | Format::Gif | Format::WebP | Format::Bmp => Embed::Decode {
             mime: head.format.mime(),
         },
     })
@@ -343,6 +343,7 @@ enum Format {
     },
     Gif,
     WebP,
+    Bmp,
 }
 
 impl Format {
@@ -352,6 +353,7 @@ impl Format {
             Format::Jpeg { .. } => "image/jpeg",
             Format::Gif => "image/gif",
             Format::WebP => "image/webp",
+            Format::Bmp => "image/bmp",
         }
     }
 }
@@ -393,7 +395,7 @@ impl Head {
     fn orientation(self) -> u8 {
         match self.format {
             Format::Jpeg { orientation, .. } => orientation,
-            Format::Png | Format::Gif | Format::WebP => 1,
+            Format::Png | Format::Gif | Format::WebP | Format::Bmp => 1,
         }
     }
 }
@@ -413,7 +415,7 @@ fn pixels((width, height): (u32, u32)) -> u64 {
 }
 
 /// The header of the image in `blob`, or `None` if `blob` is not a PNG, a
-/// JPEG, a GIF or a WebP, or gives a width or a height of 0.
+/// JPEG, a GIF, a WebP or a BMP, or gives a width or a height of 0.
 fn head(blob: &[u8]) -> Option<Head> {
     let (format, size) = if blob.starts_with(PNG_SIGNATURE) {
         (Format::Png, png_size(blob)?)
@@ -424,6 +426,8 @@ fn head(blob: &[u8]) -> Option<Head> {
         (Format::Gif, gif_size(blob)?)
     } else if blob.get(..4) == Some(b"RIFF") && blob.get(8..12) == Some(b"WEBP") {
         (Format::WebP, webp_size(blob)?)
+    } else if blob.starts_with(b"BM") {
+        (Format::Bmp, bmp_size(blob)?)
     } else {
         return None;
     };
@@ -642,6 +646,7 @@ pub(crate) fn decode(
         Format::Jpeg { .. } => ImageFormat::Jpeg,
         Format::Gif => ImageFormat::Gif,
         Format::WebP => ImageFormat::WebP,
+        Format::Bmp => ImageFormat::Bmp,
     };
     let mut reader = ImageReader::with_format(std::io::Cursor::new(blob), format);
     let mut limits = Limits::default();
@@ -672,6 +677,20 @@ pub(crate) fn decode(
         *pixel = [p.red(), p.green(), p.blue(), a];
     }
     Ok(tiny_skia::Pixmap::from_vec(pixels, size).expect("the pixels fill the size"))
+}
+
+/// The size of a BMP, from the header after the file header. The oldest
+/// header, of 12 bytes, holds the width and the height in 16 bits, and the
+/// later ones in 32 bits. A negative height says that the rows go down.
+fn bmp_size(blob: &[u8]) -> Option<(u32, u32)> {
+    if u32::from_le_bytes(array(blob, 14)?) == 12 {
+        let width = u16::from_le_bytes(array(blob, 18)?);
+        let height = u16::from_le_bytes(array(blob, 20)?);
+        return Some((u32::from(width), u32::from(height)));
+    }
+    let width = u32::try_from(i32::from_le_bytes(array(blob, 18)?)).ok()?;
+    let height = i32::from_le_bytes(array(blob, 22)?).unsigned_abs();
+    Some((width, height))
 }
 
 /// The `N` bytes of `blob` from `at`, or `None` past its end.
@@ -1066,6 +1085,32 @@ mod tests {
         assert_eq!(image_size(&webp(b"ALPH", &[0; 10])), None);
     }
 
+    #[test]
+    fn the_size_of_a_bmp_comes_from_the_header_after_the_file_header() {
+        let bmp = |header: &[u8]| {
+            let mut bmp = b"BM".to_vec();
+            bmp.extend_from_slice(&[0; 12]);
+            bmp.extend_from_slice(header);
+            bmp
+        };
+        let mut info = 40u32.to_le_bytes().to_vec();
+        info.extend_from_slice(&640i32.to_le_bytes());
+        info.extend_from_slice(&(-480i32).to_le_bytes());
+        assert_eq!(
+            head(&bmp(&info)).map(|h| (h.format, h.size)),
+            Some((Format::Bmp, (640, 480)))
+        );
+        let mut core = 12u32.to_le_bytes().to_vec();
+        core.extend_from_slice(&640u16.to_le_bytes());
+        core.extend_from_slice(&480u16.to_le_bytes());
+        assert_eq!(image_size(&bmp(&core)), Some((640, 480)));
+        let mut negative = 40u32.to_le_bytes().to_vec();
+        negative.extend_from_slice(&(-640i32).to_le_bytes());
+        negative.extend_from_slice(&480i32.to_le_bytes());
+        assert_eq!(image_size(&bmp(&negative)), None);
+        assert_eq!(image_size(&bmp(&info[..6])), None);
+    }
+
     #[cfg(feature = "render")]
     #[test]
     fn each_format_decodes_to_its_pixels() {
@@ -1074,6 +1119,7 @@ mod tests {
             image::ImageFormat::Jpeg,
             image::ImageFormat::Gif,
             image::ImageFormat::WebP,
+            image::ImageFormat::Bmp,
         ] {
             let pixmap = decode(&red_blue(format), MAX_IMAGE_PIXELS).unwrap();
             assert_eq!((pixmap.width(), pixmap.height()), (16, 8), "{format:?}");

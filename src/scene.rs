@@ -674,7 +674,7 @@ fn all_finite(values: &[f32]) -> bool {
     values.iter().all(|v| v.is_finite())
 }
 
-/// An encoded PNG, JPEG, GIF or WebP of at most
+/// An encoded PNG, JPEG, GIF, WebP or BMP of at most
 /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS), with its size on
 /// the screen. A clone shares the blob. Two images are equal when their
 /// blobs are, so a renderer or a session finds an image again by its
@@ -702,7 +702,7 @@ impl Image {
     }
 
     /// Read the header of `blob` and hash it. Returns an error if `blob` is
-    /// not a PNG, a JPEG, a GIF or a WebP, or has more than
+    /// not a PNG, a JPEG, a GIF, a WebP or a BMP, or has more than
     /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS).
     /// [`Image::load`] shrinks a larger one first. The size is
     /// the one after the EXIF orientation of a JPEG.

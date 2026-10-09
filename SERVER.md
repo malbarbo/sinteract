@@ -238,7 +238,7 @@ Depois do `start`, o core olha o braço de cada mensagem do fd 4, o
 jogador de um frame e os ids das imagens dele, sem decodificar o resto da
 cena:
 
-- Um **`asset`** é uma imagem, PNG, JPEG, GIF ou WebP, que os frames
+- Um **`asset`** é uma imagem, PNG, JPEG, GIF, WebP ou BMP, que os frames
   seguintes desenham pelo `id`. Uma imagem de outro formato ou acima de
   2048×2048 pixels é recusada (`EngineError::Asset`), assim como um `id`
   que já nomeia um asset vivo (`EngineError::LiveId`).

@@ -62,9 +62,9 @@ icy_sixel = { git = "https://github.com/malbarbo/icy_sixel", rev = "b2dcf9a0e2d1
 # terminal reads a PNG fifty times faster than the raw pixels, which arrive
 # in base64.
 png = { version = "0.18", optional = true }
-# Decodes an asset of any of the formats that asset::image_size reads. All
-# four decoders are pure Rust, so they build on wasm too.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"], optional = true }
+# Decodes an asset of any of the formats that asset::image_head reads. The
+# decoders are pure Rust, so they build on wasm too.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"], optional = true }
 
 # The canvas renderer draws with the Canvas 2D API of a browser.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

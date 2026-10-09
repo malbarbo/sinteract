@@ -11,7 +11,7 @@ import * as P from "./capnp/protocol.ts";
 export const SUBPROTOCOL = "sinteract.v1";
 
 export type ServerMessage =
-  // An image, PNG, JPEG, GIF or WebP, that the frames draw by its id.
+  // An image, PNG, JPEG, GIF, WebP or BMP, that the frames draw by its id.
   | { kind: "asset"; id: number; blob: Uint8Array }
   // A whole message whose root is a Scene, for decodeScene.
   | { kind: "frame"; scene: Uint8Array }

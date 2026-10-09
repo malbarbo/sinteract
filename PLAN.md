@@ -103,7 +103,7 @@ Regras da sessão com servidor:
   monta a mesma imagem a cada frame a manda uma vez só. Na view, o
   `view::FrameReader` guarda as imagens dos assets e devolve
   cada frame como uma `Scene` com as imagens;
-- uma imagem é um PNG, um JPEG, um GIF ou um WebP, e o formato vem dos
+- uma imagem é um PNG, um JPEG, um GIF, um WebP ou um BMP, e o formato vem dos
   primeiros bytes. O servidor não decodifica nada. Ele lê o tamanho no
   cabeçalho, que é o tamanho que o decodificador aloca, e o limite de
   pixels barra uma imagem bomba, pequena em bytes e enorme em pixels. No

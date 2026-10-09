@@ -38,7 +38,7 @@ a renderer only sees moves, lines, quadratics and cubics.
 
 A `Printer` prints images where the cursor sits. It fails to open when the
 terminal shows no graphics, so a REPL falls back to the text of the value.
-A bitmap holds its `Image`, a PNG, a JPEG, a GIF or a WebP, so a scene
+A bitmap holds its `Image`, a PNG, a JPEG, a GIF, a WebP or a BMP, so a scene
 draws the same in a `Printer`, a `Display` or a document. The fonts of the
 text are embedded, so a scene measures and draws the same on every
 machine.
