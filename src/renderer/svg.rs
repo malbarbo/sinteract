@@ -63,6 +63,8 @@ pub struct SvgRenderer {
     /// The id of each clip in `defs`, by its path data and whether its rule
     /// is even-odd.
     clips: HashMap<(String, bool), usize>,
+    /// The id of each clip group that is open, the innermost last.
+    open_clips: Vec<usize>,
     /// The number of each image of the frame in `defs`, and `None` for one
     /// that does not go in.
     images: HashMap<Image, Option<usize>>,
@@ -85,6 +87,7 @@ impl SvgRenderer {
             uses: Vec::new(),
             gradients: 0,
             clips: HashMap::new(),
+            open_clips: Vec::new(),
             images: HashMap::new(),
             prefix: String::new(),
             svg: String::new(),
@@ -342,10 +345,18 @@ impl Canvas<Infallible> for SvgRenderer {
             self.defs.push_str("/></clipPath>\n");
             next
         });
+        // A clip intersected with itself is the same clip.
+        if self.open_clips.last() == Some(&id) {
+            return inside(self);
+        }
         _ = writeln!(self.body, "<g clip-path=\"url(#{prefix}c{id})\">");
+        self.open_clips.push(id);
         let guard = RestoreOnDrop {
             canvas: self,
-            restore: |c: &mut Self| c.body.push_str("</g>\n"),
+            restore: |c: &mut Self| {
+                c.open_clips.pop();
+                c.body.push_str("</g>\n");
+            },
         };
         inside(&mut *guard.canvas)
     }
@@ -873,6 +884,26 @@ mod tests {
         assert_eq!(svg.matches("<clipPath ").count(), 2, "{svg}");
         assert_eq!(svg.matches("url(#c0)").count(), 2, "{svg}");
         assert_eq!(svg.matches("url(#c1)").count(), 1, "{svg}");
+    }
+
+    #[test]
+    fn a_clip_inside_the_same_clip_writes_no_group() {
+        let square = || {
+            ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
+                .line_to(10.0, 0.0)
+                .line_to(10.0, 10.0)
+                .build()
+        };
+        let mut scene = Scene::new(20.0, 20.0);
+        scene.clip(square(), |outer| {
+            outer.clip(square(), |inner| {
+                inner.add_path(rect(red_fill(255), 0.0, 0.0, 20.0, 20.0));
+            });
+            outer.add_path(rect(red_fill(255), 0.0, 0.0, 5.0, 5.0));
+        });
+        let svg = render_to_svg(&scene);
+        assert_eq!(svg.matches("<g ").count(), 1, "{svg}");
+        assert_eq!(svg.matches("</g>").count(), 1, "{svg}");
     }
 
     #[test]
