@@ -60,7 +60,9 @@ pub struct SvgRenderer {
     /// capacity.
     uses: Vec<(usize, f32)>,
     gradients: usize,
-    clips: usize,
+    /// The id of each clip in `defs`, by its path data and whether its rule
+    /// is even-odd.
+    clips: HashMap<(String, bool), usize>,
     /// The number of each image of the frame in `defs`, and `None` for one
     /// that does not go in.
     images: HashMap<Image, Option<usize>>,
@@ -82,7 +84,7 @@ impl SvgRenderer {
             glyph_defs: 0,
             uses: Vec::new(),
             gradients: 0,
-            clips: 0,
+            clips: HashMap::new(),
             images: HashMap::new(),
             prefix: String::new(),
             svg: String::new(),
@@ -152,7 +154,7 @@ impl Canvas<Infallible> for SvgRenderer {
         self.glyphs.clear();
         self.glyph_defs = 0;
         self.gradients = 0;
-        self.clips = 0;
+        self.clips.clear();
         self.images.clear();
         Ok(())
     }
@@ -319,21 +321,27 @@ impl Canvas<Infallible> for SvgRenderer {
         self.svg.push_str("</svg>\n");
     }
 
-    /// The clip goes into `defs`, and the elements inside it go into a group
-    /// that references it. A nested group intersects the clips. A clip with
-    /// no segments writes an empty `d`, which covers nothing, so it hides
-    /// what it holds, as in the other backends.
+    /// The clip goes into `defs` once a frame, and the elements inside it go
+    /// into a group that references it. A nested group intersects the clips.
+    /// A clip with no segments writes an empty `d`, which covers nothing, so
+    /// it hides what it holds, as in the other backends.
     fn with_clip<T>(&mut self, clip: &ClipPath, inside: impl FnOnce(&mut Self) -> T) -> T {
-        let id = self.clips;
-        self.clips += 1;
+        let mut d = String::new();
+        clip.segments().outline(&mut PathData::new(&mut d));
+        let key = (d, clip.fill_rule == FillRule::EvenOdd);
         let prefix = &self.prefix;
-        _ = write!(self.defs, "<clipPath id=\"{prefix}c{id}\"><path d=\"");
-        clip.segments().outline(&mut PathData::new(&mut self.defs));
-        self.defs.push('"');
-        if clip.fill_rule == FillRule::EvenOdd {
-            self.defs.push_str(" clip-rule=\"evenodd\"");
-        }
-        self.defs.push_str("/></clipPath>\n");
+        let next = self.clips.len();
+        let id = *self.clips.entry(key).or_insert_with_key(|(d, even_odd)| {
+            _ = write!(
+                self.defs,
+                "<clipPath id=\"{prefix}c{next}\"><path d=\"{d}\""
+            );
+            if *even_odd {
+                self.defs.push_str(" clip-rule=\"evenodd\"");
+            }
+            self.defs.push_str("/></clipPath>\n");
+            next
+        });
         _ = writeln!(self.body, "<g clip-path=\"url(#{prefix}c{id})\">");
         let guard = RestoreOnDrop {
             canvas: self,
@@ -845,6 +853,26 @@ mod tests {
             ),
             "{svg}"
         );
+    }
+
+    #[test]
+    fn a_repeated_clip_goes_into_defs_once() {
+        let square = |x| {
+            ClipPath::builder(FillRule::NonZero, x, 0.0)
+                .line_to(x + 10.0, 0.0)
+                .line_to(x + 10.0, 10.0)
+                .build()
+        };
+        let mut scene = Scene::new(20.0, 20.0);
+        for x in [0.0, 10.0, 0.0] {
+            scene.clip(square(x), |clipped| {
+                clipped.add_path(rect(red_fill(255), 0.0, 0.0, 20.0, 20.0));
+            });
+        }
+        let svg = render_to_svg(&scene);
+        assert_eq!(svg.matches("<clipPath ").count(), 2, "{svg}");
+        assert_eq!(svg.matches("url(#c0)").count(), 2, "{svg}");
+        assert_eq!(svg.matches("url(#c1)").count(), 1, "{svg}");
     }
 
     #[test]
