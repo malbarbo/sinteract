@@ -999,28 +999,22 @@ impl GeometryBuilder {
             return self.line_to(f32::NAN, f32::NAN);
         }
         let (x1, y1) = self.last_point;
-        let svg_arc = kurbo::SvgArc {
-            from: kurbo::Point::new(x1 as f64, y1 as f64),
-            to: kurbo::Point::new(x as f64, y as f64),
-            radii: kurbo::Vec2::new(rx as f64, ry as f64),
-            x_rotation: (rotation_deg as f64).to_radians(),
-            large_arc,
-            sweep,
-        };
-        let Some(arc) = kurbo::Arc::from_svg_arc(&svg_arc) else {
+        let from = kurbo::Point::new(x1 as f64, y1 as f64);
+        let to = kurbo::Point::new(x as f64, y as f64);
+        let radii = kurbo::Vec2::new(rx as f64, ry as f64);
+        let Some(cubics) = arc_cubics(from, radii, rotation_deg as f64, large_arc, sweep, to)
+        else {
             return self.line_to(x, y);
         };
-        for el in arc.append_iter(arc_tolerance(arc.radii.x.max(arc.radii.y))) {
-            if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
-                self.segs.push(Segment::Cubic {
-                    c1x: arc_coord(p1.x),
-                    c1y: arc_coord(p1.y),
-                    c2x: arc_coord(p2.x),
-                    c2y: arc_coord(p2.y),
-                    x: arc_coord(p3.x),
-                    y: arc_coord(p3.y),
-                });
-            }
+        for [c1, c2, end] in cubics {
+            self.segs.push(Segment::Cubic {
+                c1x: c1.x as f32,
+                c1y: c1.y as f32,
+                c2x: c2.x as f32,
+                c2y: c2.y as f32,
+                x: end.x as f32,
+                y: end.y as f32,
+            });
         }
         self.last_point = (x, y);
     }
@@ -1033,11 +1027,36 @@ impl GeometryBuilder {
     }
 }
 
-/// `v` as an `f32`, or 0 when `v` is within 1e-10 of 0. The sine and the
-/// cosine of an arc leave a residue such as 3.6e-15 where a point is 0, and
-/// the svg renderer writes the residue in full.
-fn arc_coord(v: f64) -> f32 {
-    if v.abs() < 1e-10 { 0.0 } else { v as f32 }
+/// The cubics of the SVG endpoint arc from `from` to `to`, each as its two
+/// controls and its end, or `None` when the arc is degenerate and draws as a
+/// line. A coordinate within 1e-10 of 0 is 0, since the sine and the cosine
+/// of an arc leave a residue such as 3.6e-15 where a point is 0, and the svg
+/// renderer writes the residue in full.
+fn arc_cubics(
+    from: kurbo::Point,
+    radii: kurbo::Vec2,
+    rotation_deg: f64,
+    large_arc: bool,
+    sweep: bool,
+    to: kurbo::Point,
+) -> Option<impl Iterator<Item = [kurbo::Point; 3]>> {
+    let arc = kurbo::Arc::from_svg_arc(&kurbo::SvgArc {
+        from,
+        to,
+        radii,
+        x_rotation: rotation_deg.to_radians(),
+        large_arc,
+        sweep,
+    })?;
+    let near_zero = |p: kurbo::Point| {
+        let coord = |v: f64| if v.abs() < 1e-10 { 0.0 } else { v };
+        kurbo::Point::new(coord(p.x), coord(p.y))
+    };
+    let tolerance = arc_tolerance(arc.radii.x.max(arc.radii.y));
+    Some(arc.append_iter(tolerance).filter_map(move |el| match el {
+        kurbo::PathEl::CurveTo(c1, c2, end) => Some([c1, c2, end].map(near_zero)),
+        _ => None,
+    }))
 }
 
 /// The tolerance of the arc to cubic conversion for an arc of `radius`.
