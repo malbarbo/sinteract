@@ -15,7 +15,8 @@
 //! `<defs>` once a frame and a `<use>` for each bitmap. A PNG and an
 //! upright JPEG go in as they are. With the feature `render`, any other
 //! image goes in as a PNG, so a GIF does not move and every viewer shows
-//! it.
+//! it, unless [`SvgRenderer::keep_image_formats`] asks for every image as
+//! it is.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -65,6 +66,9 @@ pub struct SvgRenderer {
     /// The number of each image of the frame in `defs`, and `None` for one
     /// that does not go in.
     images: HashMap<Image, Option<usize>>,
+    /// Whether every image goes in as it is, even one that the feature
+    /// `render` would turn into a PNG.
+    keep_formats: bool,
     /// The start of every id in the document.
     prefix: String,
     /// The document of the last render.
@@ -86,6 +90,7 @@ impl SvgRenderer {
             clips: HashMap::new(),
             open_clips: Vec::new(),
             images: HashMap::new(),
+            keep_formats: false,
             prefix: String::new(),
             svg: String::new(),
         }
@@ -106,6 +111,17 @@ impl SvgRenderer {
         })
     }
 
+    /// The same renderer, but it puts every image in the document as it is,
+    /// with the feature `render` or without it. A program that builds the
+    /// same document on a build with the feature and on one without it
+    /// asks for this.
+    pub fn keep_image_formats(self) -> Self {
+        Self {
+            keep_formats: true,
+            ..self
+        }
+    }
+
     /// The document of the last render.
     pub fn into_string(self) -> String {
         self.svg
@@ -118,12 +134,14 @@ impl Default for SvgRenderer {
     }
 }
 
-/// The blob of `image` as a data URL, or `None` if it does not decode.
-fn data_url(image: &Image) -> Option<String> {
+/// The blob of `image` as a data URL, or `None` if it does not decode. With
+/// `keep_format`, the blob goes in as it is.
+fn data_url(image: &Image, keep_format: bool) -> Option<String> {
     let blob = image.blob();
     let (mime, blob) = match embed(blob).ok()? {
         Embed::Png => ("image/png", Cow::Borrowed(blob)),
         Embed::Jpeg { .. } => ("image/jpeg", Cow::Borrowed(blob)),
+        Embed::Decode { mime } if keep_format => (mime, Cow::Borrowed(blob)),
         Embed::Decode { mime } => as_png(blob, mime)?,
     };
     Some(encode_data_uri(mime, &blob))
@@ -266,9 +284,10 @@ impl Canvas<Infallible> for SvgRenderer {
     /// its place, as in the pixmap.
     fn draw_bitmap(&mut self, bitmap: &Bitmap) {
         let prefix = &self.prefix;
+        let keep_formats = self.keep_formats;
         let next = self.images.len();
         let id = *self.images.entry(bitmap.image.clone()).or_insert_with(|| {
-            let url = data_url(&bitmap.image)?;
+            let url = data_url(&bitmap.image, keep_formats)?;
             _ = writeln!(
                 self.defs,
                 "<image id=\"{prefix}i{next}\" x=\"-0.5\" y=\"-0.5\" width=\"1\" height=\"1\" \
@@ -689,8 +708,26 @@ mod tests {
         image::RgbaImage::new(2, 2)
             .write_to(&mut gif, image::ImageFormat::Gif)
             .unwrap();
-        let url = data_url(&Image::new(gif.into_inner()).unwrap()).unwrap();
+        let url = data_url(&Image::new(gif.into_inner()).unwrap(), false).unwrap();
         assert!(url.starts_with("data:image/png;base64,"));
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn keep_image_formats_puts_a_gif_in_as_a_gif() {
+        let mut gif = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::new(2, 2)
+            .write_to(&mut gif, image::ImageFormat::Gif)
+            .unwrap();
+        let mut scene = Scene::new(20.0, 20.0);
+        scene.add_bitmap(bitmap(
+            Image::new(gif.into_inner()).unwrap(),
+            Sampling::Smooth,
+        ));
+        let mut renderer = SvgRenderer::new().keep_image_formats();
+        let Ok(_) = renderer.render(&scene);
+        let svg = renderer.into_string();
+        assert!(svg.contains("xlink:href=\"data:image/gif;base64,"), "{svg}");
     }
 
     fn black() -> Rgba {
