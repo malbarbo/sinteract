@@ -1013,12 +1013,12 @@ impl GeometryBuilder {
         for el in arc.append_iter(arc_tolerance(arc.radii.x.max(arc.radii.y))) {
             if let kurbo::PathEl::CurveTo(p1, p2, p3) = el {
                 self.segs.push(Segment::Cubic {
-                    c1x: p1.x as f32,
-                    c1y: p1.y as f32,
-                    c2x: p2.x as f32,
-                    c2y: p2.y as f32,
-                    x: p3.x as f32,
-                    y: p3.y as f32,
+                    c1x: arc_coord(p1.x),
+                    c1y: arc_coord(p1.y),
+                    c2x: arc_coord(p2.x),
+                    c2y: arc_coord(p2.y),
+                    x: arc_coord(p3.x),
+                    y: arc_coord(p3.y),
                 });
             }
         }
@@ -1031,6 +1031,13 @@ impl GeometryBuilder {
         end_segments(&mut segs);
         segs
     }
+}
+
+/// `v` as an `f32`, or 0 when `v` is within 1e-10 of 0. The sine and the
+/// cosine of an arc leave a residue such as 3.6e-15 where a point is 0, and
+/// the svg renderer writes the residue in full.
+fn arc_coord(v: f64) -> f32 {
+    if v.abs() < 1e-10 { 0.0 } else { v as f32 }
 }
 
 /// The tolerance of the arc to cubic conversion for an arc of `radius`.
@@ -1517,6 +1524,29 @@ mod tests {
         assert!(arc(1e38) <= ARC_CUBICS_PER_TURN as usize, "{}", arc(1e38));
         // A radius a renderer draws keeps the fixed tolerance.
         assert_eq!(arc_tolerance(2.7e8), ARC_TOLERANCE);
+    }
+
+    #[test]
+    fn an_arc_through_0_puts_its_points_at_0() {
+        let path = Path::builder(PathStyle::default(), 20.0, 10.0)
+            .arc_to(10.0, 10.0, 0.0, false, true, 0.0, 10.0)
+            .arc_to(10.0, 10.0, 0.0, false, true, 20.0, 10.0)
+            .build();
+        for seg in path.segments() {
+            if let Segment::Cubic {
+                c1x,
+                c1y,
+                c2x,
+                c2y,
+                x,
+                y,
+            } = seg
+            {
+                for v in [c1x, c1y, c2x, c2y, x, y] {
+                    assert!(v == 0.0 || v.abs() > 1e-6, "{v}");
+                }
+            }
+        }
     }
 
     #[test]
