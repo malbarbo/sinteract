@@ -3,6 +3,8 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use kurbo::ParamCurveExtrema;
+
 use crate::asset::{ImageError, ImageHead};
 
 /// An sRGB color. `a` is the opacity, from 0, transparent, to 255, opaque.
@@ -1300,6 +1302,93 @@ fn frame_size(size: f32) -> f32 {
     }
 }
 
+/// The bounds of a path in f64, for a caller that measures a path with more
+/// precision than the f32 of a [`Path`]. It takes the commands of a
+/// [`PathBuilder`] and covers the segments that the builder draws, with each
+/// arc as the same cubics, so a move that no segment leaves adds nothing.
+#[derive(Clone, Debug)]
+#[must_use = "PathBounds yields the bounds only when get() is called"]
+pub struct PathBounds {
+    rect: Option<kurbo::Rect>,
+    last_point: kurbo::Point,
+}
+
+impl PathBounds {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self {
+            rect: None,
+            last_point: kurbo::Point::new(x, y),
+        }
+    }
+
+    pub fn move_to(mut self, x: f64, y: f64) -> Self {
+        self.last_point = kurbo::Point::new(x, y);
+        self
+    }
+
+    pub fn line_to(self, x: f64, y: f64) -> Self {
+        let to = kurbo::Point::new(x, y);
+        let rect = kurbo::Rect::from_points(self.last_point, to);
+        self.add(rect, to)
+    }
+
+    pub fn quad_to(self, cx: f64, cy: f64, x: f64, y: f64) -> Self {
+        let to = kurbo::Point::new(x, y);
+        let quad = kurbo::QuadBez::new(self.last_point, kurbo::Point::new(cx, cy), to);
+        self.add(quad.bounding_box(), to)
+    }
+
+    pub fn cubic_to(self, c1x: f64, c1y: f64, c2x: f64, c2y: f64, x: f64, y: f64) -> Self {
+        let to = kurbo::Point::new(x, y);
+        let cubic = kurbo::CubicBez::new(
+            self.last_point,
+            kurbo::Point::new(c1x, c1y),
+            kurbo::Point::new(c2x, c2y),
+            to,
+        );
+        self.add(cubic.bounding_box(), to)
+    }
+
+    /// Add an SVG endpoint arc as the cubics of [`PathBuilder::arc_to`]. A
+    /// degenerate arc is a line.
+    #[allow(clippy::too_many_arguments)]
+    pub fn arc_to(
+        mut self,
+        rx: f64,
+        ry: f64,
+        rotation_deg: f64,
+        large_arc: bool,
+        sweep: bool,
+        x: f64,
+        y: f64,
+    ) -> Self {
+        let to = kurbo::Point::new(x, y);
+        let radii = kurbo::Vec2::new(rx, ry);
+        let Some(cubics) = arc_cubics(self.last_point, radii, rotation_deg, large_arc, sweep, to)
+        else {
+            return self.line_to(x, y);
+        };
+        for [c1, c2, end] in cubics {
+            let cubic = kurbo::CubicBez::new(self.last_point, c1, c2, end);
+            self = self.add(cubic.bounding_box(), end);
+        }
+        self.last_point = to;
+        self
+    }
+
+    /// The least x, the least y, the greatest x and the greatest y of the
+    /// path, or `None` when it draws no segment.
+    pub fn get(&self) -> Option<(f64, f64, f64, f64)> {
+        self.rect.map(|r| (r.x0, r.y0, r.x1, r.y1))
+    }
+
+    fn add(mut self, rect: kurbo::Rect, to: kurbo::Point) -> Self {
+        self.rect = Some(self.rect.map_or(rect, |r| r.union(rect)));
+        self.last_point = to;
+        self
+    }
+}
+
 /// Builds a [`Path`] by value.
 #[must_use = "PathBuilder yields a Path only when build() is called"]
 pub struct PathBuilder {
@@ -1566,6 +1655,88 @@ mod tests {
                 for v in [c1x, c1y, c2x, c2y, x, y] {
                     assert!(v == 0.0 || v.abs() > 1e-6, "{v}");
                 }
+            }
+        }
+    }
+
+    /// The bounds of the f32 segments of `path`.
+    fn segment_bounds(path: &Path) -> Option<(f64, f64, f64, f64)> {
+        let f = f64::from;
+        let mut segs = path.segments();
+        let Some(Segment::Move { x, y }) = segs.next() else {
+            return None;
+        };
+        let mut bounds = PathBounds::new(f(x), f(y));
+        for seg in segs {
+            bounds = match seg {
+                Segment::Move { x, y } => bounds.move_to(f(x), f(y)),
+                Segment::Line { x, y } => bounds.line_to(f(x), f(y)),
+                Segment::Quad { cx, cy, x, y } => bounds.quad_to(f(cx), f(cy), f(x), f(y)),
+                Segment::Cubic {
+                    c1x,
+                    c1y,
+                    c2x,
+                    c2y,
+                    x,
+                    y,
+                } => bounds.cubic_to(f(c1x), f(c1y), f(c2x), f(c2y), f(x), f(y)),
+            };
+        }
+        bounds.get()
+    }
+
+    #[test]
+    fn path_bounds_leave_out_a_move_that_no_segment_leaves() {
+        let bounds = PathBounds::new(-40.0, 0.0)
+            .move_to(0.0, 0.0)
+            .line_to(10.0, 5.0)
+            .move_to(50.0, 50.0);
+        assert_eq!(bounds.get(), Some((0.0, 0.0, 10.0, 5.0)));
+        assert_eq!(PathBounds::new(5.0, 5.0).move_to(9.0, 9.0).get(), None);
+    }
+
+    #[test]
+    fn path_bounds_cover_the_extremes_of_a_curve() {
+        let quad = PathBounds::new(0.0, 0.0).quad_to(5.0, 10.0, 10.0, 0.0);
+        assert_eq!(quad.get(), Some((0.0, 0.0, 10.0, 5.0)));
+        let cubic = PathBounds::new(0.0, 0.0).cubic_to(0.0, -8.0, 10.0, -8.0, 10.0, 0.0);
+        assert_eq!(cubic.get(), Some((0.0, -6.0, 10.0, 0.0)));
+    }
+
+    #[test]
+    fn path_bounds_of_an_arc_fit_the_cubics_that_the_builder_draws() {
+        let arcs = [
+            (10.0, 10.0, 0.0, false, true, 0.0, 10.0),
+            (30.0, 10.0, 30.0, true, false, 5.0, 40.0),
+            (1e9, 1e9, 0.0, false, true, 3.0, 4.0),
+            (0.0, 10.0, 0.0, false, true, 7.0, 7.0),
+        ];
+        for (rx, ry, rotation, large_arc, sweep, x, y) in arcs {
+            let path = Path::builder(PathStyle::default(), 20.0, 10.0)
+                .arc_to(rx, ry, rotation, large_arc, sweep, x, y)
+                .build();
+            let bounds = PathBounds::new(20.0, 10.0)
+                .arc_to(
+                    f64::from(rx),
+                    f64::from(ry),
+                    f64::from(rotation),
+                    large_arc,
+                    sweep,
+                    f64::from(x),
+                    f64::from(y),
+                )
+                .get()
+                .unwrap();
+            let drawn = segment_bounds(&path).unwrap();
+            let (b, d) = (
+                [bounds.0, bounds.1, bounds.2, bounds.3],
+                [drawn.0, drawn.1, drawn.2, drawn.3],
+            );
+            for (b, d) in b.into_iter().zip(d) {
+                assert!(
+                    (b - d).abs() <= 1e-3 * d.abs().max(1.0),
+                    "{bounds:?} {drawn:?}"
+                );
             }
         }
     }
