@@ -706,6 +706,22 @@ pub(crate) fn decode(
     Ok(tiny_skia::Pixmap::from_vec(pixels, size).expect("the pixels fill the size"))
 }
 
+/// The pixels of the PNG in `blob`, premultiplied, or an error if it does
+/// not decode or has more than `max_pixels`. Without the decoders of
+/// `image`, an image of another format does not decode.
+#[cfg(all(feature = "pixmap", not(feature = "render")))]
+pub(crate) fn decode(
+    blob: &[u8],
+    max_pixels: u64,
+) -> Result<tiny_skia::Pixmap, Box<dyn std::error::Error + Send + Sync>> {
+    let head = head(blob).ok_or(ImageError::Unsupported)?;
+    if head.format != Format::Png {
+        return Err(ImageError::Unsupported.into());
+    }
+    check_pixels(head.size, max_pixels)?;
+    Ok(tiny_skia::Pixmap::decode_png(blob)?)
+}
+
 /// The size of a BMP, from the header after the file header. The oldest
 /// header, of 12 bytes, holds the width and the height in 16 bits, and the
 /// later ones in 32 bits. A negative height says that the rows go down.
@@ -813,6 +829,16 @@ pub(crate) fn png_image(width: u32, height: u32) -> crate::scene::Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "pixmap", not(feature = "render")))]
+    #[test]
+    fn without_the_decoders_of_image_only_a_png_decodes() {
+        let png = tiny_skia::Pixmap::new(2, 1).unwrap().encode_png().unwrap();
+        assert_eq!(decode(&png, MAX_IMAGE_PIXELS).unwrap().width(), 2);
+        let gif = b"GIF89a\x01\0\x01\0\0\0\0\x2c\0\0\0\0\x01\0\x01\0";
+        assert!(decode(gif, MAX_IMAGE_PIXELS).is_err());
+        assert!(decode(&png, 1).is_err());
+    }
 
     #[cfg(feature = "render")]
     #[test]

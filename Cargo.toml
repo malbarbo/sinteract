@@ -9,11 +9,14 @@ readme = "README.md"
 
 [features]
 default = ["native-fonts", "render", "terminal", "window"]
+# The pixmap renderer alone, which decodes only a PNG. A program that
+# compares the pixels of two scenes needs no more.
+pixmap = ["dep:tiny-skia"]
 # The pixmap and PDF renderers, and the canvas renderer on wasm32. Without
 # it, a server that only encodes and decodes messages keeps the scene, the
 # text, the SVG renderer and the codec.
 render = [
-    "dep:tiny-skia",
+    "pixmap",
     "dep:png",
     "dep:image",
     "dep:pdf-writer",

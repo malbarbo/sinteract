@@ -21,7 +21,7 @@
 pub mod canvas;
 #[cfg(feature = "render")]
 pub mod pdf;
-#[cfg(feature = "render")]
+#[cfg(feature = "pixmap")]
 pub mod pixmap;
 pub mod svg;
 
