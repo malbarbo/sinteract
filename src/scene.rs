@@ -1045,7 +1045,9 @@ fn arc_coord(v: f64) -> f32 {
 /// a fixed tolerance turns a radius of 1e38 into millions of them. The
 /// tolerance grows so a turn takes at most [`ARC_CUBICS_PER_TURN`] cubics,
 /// which only happens for a radius above 6e9, far past what a renderer draws.
-fn arc_tolerance(radius: f64) -> f64 {
+/// A caller that measures an arc as the cubics of a path takes the same
+/// tolerance.
+pub fn arc_tolerance(radius: f64) -> f64 {
     ARC_TOLERANCE.max(1.1163 * radius / ARC_CUBICS_PER_TURN.powi(6))
 }
 
