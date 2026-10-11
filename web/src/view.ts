@@ -1,7 +1,7 @@
-// A view of a session: it opens the WebSocket to the server, hands each
-// message to a Screen, which draws the newest frame on a canvas, and sends
-// the input of the user. A page that embeds a view needs only this module
-// and the Screen that it picks.
+// A view of a session: it opens the WebSocket to the server, or attaches to
+// a room in the same page, hands each message to a Screen, which draws the
+// newest frame on a canvas, and sends the input of the user. A page that
+// embeds a view needs only this module and the Screen that it picks.
 
 import { listen } from "./input.ts";
 import { encodeInput, SUBPROTOCOL } from "./protocol.ts";
@@ -21,6 +21,23 @@ export interface ViewOptions {
   onError?: (error: unknown) => void;
   // The screen of each connection, a TsScreen when none is given.
   screen?: MakeScreen;
+  // Where the keys come from, the window when none is given. See listen.
+  keys?: EventTarget;
+}
+
+// What carries the messages between a view and its server: a WebSocket, or
+// a room that plays the server in the same page. The view sets the
+// callbacks, and the link calls them in the order of a WebSocket: open
+// once, then the messages, then close once.
+export interface Link {
+  // Sends a ViewToServer. A link that is not open drops it.
+  send(payload: ArrayBuffer): void;
+  // Closes the link with no call to onclose.
+  close(): void;
+  onopen: (() => void) | null;
+  // A ServerToView.
+  onmessage: ((payload: Uint8Array) => void) | null;
+  onclose: ((code: number, reason: string) => void) | null;
 }
 
 export class View {
@@ -40,51 +57,49 @@ export class View {
   }
 
   // Opens the WebSocket at `url`, such as ws://host/play?token=..., and
-  // closes the one before it.
+  // closes the link before it.
   connect(url: string): void {
+    this.attach(socketLink(url));
+  }
+
+  // Shows the session of `link`, and closes the link before it.
+  attach(link: Link): void {
     this.close();
     this.#status({ kind: "connecting" });
-    const socket = new WebSocket(url, SUBPROTOCOL);
-    socket.binaryType = "arraybuffer";
     const make = this.#options.screen ??
       ((canvas, redraw) => new TsScreen(canvas, redraw));
     const conn: Connection = {
-      socket,
+      link,
       stopInput: () => {},
       screen: make(this.#canvas, () => this.#request()),
       queue: [],
     };
-    socket.onopen = () => {
+    link.onopen = () => {
       this.#status({ kind: "open" });
       conn.stopInput = listen(
         this.#canvas,
         (x, y) => this.#toScene(x, y),
-        (e) => {
-          if (socket.readyState === WebSocket.OPEN) socket.send(encodeInput(e));
-        },
+        (e) => link.send(encodeInput(e)),
+        this.#options.keys,
       );
     };
-    socket.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) {
-        this.#receive(conn, new Uint8Array(e.data));
-      }
-    };
+    link.onmessage = (payload) => this.#receive(conn, payload);
     // The last frame stays on the canvas after the server closes.
-    socket.onclose = (e) => {
+    link.onclose = (code, reason) => {
       conn.stopInput();
-      this.#status({ kind: "closed", code: e.code, reason: e.reason });
+      this.#status({ kind: "closed", code, reason });
     };
     this.#conn = conn;
   }
 
-  // Closes the WebSocket, stops the input and clears the canvas.
+  // Closes the link, stops the input and clears the canvas.
   close(): void {
     const conn = this.#conn;
     if (!conn) return;
     this.#conn = null;
     conn.stopInput();
-    conn.socket.onclose = null;
-    conn.socket.close();
+    conn.link.onclose = null;
+    conn.link.close();
     conn.screen.clear();
     conn.screen.free();
   }
@@ -160,10 +175,10 @@ export class View {
   }
 }
 
-// The state of one WebSocket. A late callback of an old connection changes
-// only its own state, which nothing draws any more.
+// The state of one link. A late callback of an old connection changes only
+// its own state, which nothing draws any more.
 interface Connection {
-  socket: WebSocket;
+  link: Link;
   stopInput: () => void;
   screen: Screen;
   // The messages that the screen has not read yet, in order.
@@ -175,3 +190,27 @@ interface Connection {
 // interval of the display both draw, and a frame draws at most one
 // interval late.
 const MAX_QUEUED = 2;
+
+// The link of a WebSocket to `url`.
+function socketLink(url: string): Link {
+  const socket = new WebSocket(url, SUBPROTOCOL);
+  socket.binaryType = "arraybuffer";
+  const link: Link = {
+    send: (payload) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+    },
+    close: () => {
+      socket.onclose = null;
+      socket.close();
+    },
+    onopen: null,
+    onmessage: null,
+    onclose: null,
+  };
+  socket.onopen = () => link.onopen?.();
+  socket.onmessage = (e) => {
+    if (e.data instanceof ArrayBuffer) link.onmessage?.(new Uint8Array(e.data));
+  };
+  socket.onclose = (e) => link.onclose?.(e.code, e.reason);
+  return link;
+}

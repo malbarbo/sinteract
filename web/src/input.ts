@@ -15,11 +15,15 @@ import {
 export type ToScene = (x: number, y: number) => [number, number];
 
 // Listens to the input on `canvas` and on its window, and passes each event
-// to `send`. Returns the function that stops the listening.
+// to `send`. The keys come from `keys`, the window unless the page has other
+// uses for the keyboard, such as an editor beside the canvas, which would
+// lose every key it is typed into. Returns the function that stops the
+// listening.
 export function listen(
   canvas: HTMLCanvasElement,
   toScene: ToScene,
   send: (event: InputEvent) => void,
+  keys: EventTarget = globalThis,
 ): () => void {
   const controller = new AbortController();
   const signal = controller.signal;
@@ -27,7 +31,8 @@ export function listen(
   // that the down named even when a modifier changed in between.
   const held = new Map<string, string>();
 
-  globalThis.addEventListener("keydown", (e) => {
+  keys.addEventListener("keydown", (event) => {
+    const e = event as KeyboardEvent;
     if (!claims(e)) return;
     e.preventDefault();
     const modifiers = modifiersOf(e);
@@ -35,7 +40,8 @@ export function listen(
     send({ kind: "key", type: "down", key: e.key, modifiers });
     send({ kind: "key", type: "press", key: e.key, modifiers });
   }, { signal });
-  globalThis.addEventListener("keyup", (e) => {
+  keys.addEventListener("keyup", (event) => {
+    const e = event as KeyboardEvent;
     const key = held.get(e.code);
     if (key === undefined) return;
     e.preventDefault();
