@@ -1,0 +1,173 @@
+import * as $ from "capnp-es";
+import { assertEquals } from "@std/assert";
+import * as E from "../src/capnp/event.ts";
+import * as P from "../src/capnp/protocol.ts";
+import { encodeInput } from "../src/protocol.ts";
+import { Room } from "../src/room.ts";
+
+// What an engine writes: the envelope of framing.rs around a message.
+function engine(message: $.Message): Uint8Array {
+  const payload = new Uint8Array(message.toArrayBuffer());
+  const bytes = new Uint8Array(8 + payload.length);
+  bytes.set([0x53, 0x49, 0x45, 0x31]);
+  new DataView(bytes.buffer).setUint32(4, payload.length, true);
+  bytes.set(payload, 8);
+  return bytes;
+}
+
+function hello(min: number, max: number): Uint8Array {
+  const m = new $.Message();
+  const h = m.initRoot(P.Hello);
+  h.minPlayers = min;
+  h.maxPlayers = max;
+  return engine(m);
+}
+
+function tickTaken(): Uint8Array {
+  const m = new $.Message();
+  m.initRoot(P.EngineToServer).tickTaken = true;
+  return engine(m);
+}
+
+function frame(scene: Uint8Array): Uint8Array {
+  const m = new $.Message();
+  const f = m.initRoot(P.EngineToServer)._initFrame();
+  f._initScene(scene.length).copyBuffer(scene);
+  return engine(m);
+}
+
+// The payloads of the server, with the envelope checked and taken off.
+function payloads(written: Uint8Array[]): ArrayBuffer[] {
+  return written.map((bytes) => {
+    assertEquals([...bytes.subarray(0, 4)], [0x53, 0x49, 0x53, 0x31]);
+    const len = new DataView(bytes.buffer, bytes.byteOffset).getUint32(4, true);
+    assertEquals(bytes.length, 8 + len);
+    return bytes.slice(8).buffer;
+  });
+}
+
+function setup() {
+  const written: Uint8Array[] = [];
+  const frames: ((now: number) => void)[] = [];
+  const room = new Room({
+    write: (bytes) => written.push(bytes),
+    nickname: "ana",
+    requestFrame: (callback) => frames.push(callback),
+    cancelFrame: () => {},
+  });
+  const next = (now: number) => frames.shift()!(now);
+  return { room, written, next };
+}
+
+Deno.test("the hello of a game of one is answered with a start", () => {
+  const { room, written } = setup();
+  let opened = false;
+  room.link.onopen = () => opened = true;
+  room.receive(hello(1, 4));
+  const [start] = payloads(written);
+  const s = new $.Message(start, false).getRoot(P.Start);
+  assertEquals([s.members.length, s.members.get(0).nickname], [1, "ana"]);
+  assertEquals(s.tickRate, 60000);
+  assertEquals(opened, true);
+});
+
+Deno.test("a game for two players or more ends the room", () => {
+  const { room, written } = setup();
+  let closed = false;
+  room.link.onclose = () => closed = true;
+  room.receive(hello(2, 4));
+  assertEquals([written.length, closed], [0, true]);
+});
+
+Deno.test("a message in pieces is read once it is whole", () => {
+  const { room, written } = setup();
+  const bytes = hello(1, 1);
+  room.receive(bytes.subarray(0, 5));
+  room.receive(bytes.subarray(5, 11));
+  assertEquals(written.length, 0);
+  room.receive(bytes.subarray(11));
+  assertEquals(written.length, 1);
+});
+
+Deno.test("the next tick waits for the engine to take the last one", () => {
+  const { room, written, next } = setup();
+  room.receive(hello(1, 1));
+  next(0);
+  next(17);
+  next(34);
+  assertEquals(written.length, 2);
+  room.receive(tickTaken());
+  next(51);
+  const ticks = payloads(written).slice(1).map((p) =>
+    new $.Message(p, false).getRoot(P.ServerToEngine).which()
+  );
+  assertEquals(ticks, [P.ServerToEngine.TICK, P.ServerToEngine.TICK]);
+});
+
+Deno.test("an engine that keeps up gets a tick at every frame", () => {
+  const { room, written, next } = setup();
+  room.receive(hello(1, 1));
+  for (let i = 0; i < 12; i++) {
+    next(i * 1000 / 120);
+    room.receive(tickTaken());
+  }
+  assertEquals(written.length - 1, 12);
+});
+
+Deno.test("messages in pieces of any size come out whole and in order", () => {
+  const { room } = setup();
+  const got: Uint8Array[] = [];
+  room.link.onmessage = (payload) => got.push(payload);
+  const scenes = [new Uint8Array(24).fill(1), new Uint8Array(40).fill(2)];
+  const stream = [hello(1, 1), ...scenes.map(frame)];
+  const bytes = new Uint8Array(stream.reduce((n, b) => n + b.length, 0));
+  let at = 0;
+  for (const b of stream) {
+    bytes.set(b, at);
+    at += b.length;
+  }
+  for (let i = 0; i < bytes.length; i += 3) {
+    room.receive(bytes.subarray(i, i + 3));
+  }
+  const frames = got.map((p) =>
+    new $.Message(p.buffer as ArrayBuffer, false).getRoot(P.ServerToView)
+      .frame.toUint8Array()
+  );
+  assertEquals(frames, scenes);
+});
+
+Deno.test("a frame goes to the view as a frame of a server", () => {
+  const { room } = setup();
+  const got: Uint8Array[] = [];
+  room.link.onmessage = (payload) => got.push(payload);
+  room.receive(hello(1, 1));
+  room.receive(frame(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])));
+  const m = new $.Message(got[0], false).getRoot(P.ServerToView);
+  assertEquals(m.which(), P.ServerToView.FRAME);
+  assertEquals([...m.frame.toUint8Array()], [1, 2, 3, 4, 5, 6, 7, 8]);
+});
+
+Deno.test("the input of the view goes to the engine as player 1", () => {
+  const { room, written } = setup();
+  room.receive(hello(1, 1));
+  room.link.send(encodeInput({ kind: "resize", width: 320, height: 200 }));
+  const input = new $.Message(payloads(written)[1], false)
+    .getRoot(P.ServerToEngine).input;
+  assertEquals(input.player, 1);
+  assertEquals(input.event.which(), E.InputEvent.RESIZE);
+  assertEquals([input.event.resize.width, input.event.resize.height], [
+    320,
+    200,
+  ]);
+});
+
+Deno.test("a stream of another side ends the room", () => {
+  const errors: unknown[] = [];
+  const room = new Room({ write: () => {}, onError: (e) => errors.push(e) });
+  let closed = false;
+  room.link.onclose = () => closed = true;
+  const bytes = hello(1, 1);
+  bytes[2] = 0x53; // SIS1, the magic of a server
+  room.receive(bytes);
+  assertEquals([errors.length, closed], [1, true]);
+});

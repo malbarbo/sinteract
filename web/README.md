@@ -35,6 +35,14 @@ const view = new View(canvas, { onStatus: (s) => console.log(s.kind) });
 view.connect(`wss://${location.host}/play?token=${token}`);
 ```
 
+A page that runs the engine itself, such as an engine compiled to WebAssembly in
+a worker, has no server to connect to. `src/room.ts` holds `Room`, a room of one
+player that plays the server in the page: it takes the bytes the engine writes
+on fd 4, writes the bytes the engine reads on fd 3, paces the engine with a tick
+an animation frame, and hands the view the messages of a server through
+`room.link`, which `view.attach` takes in place of a URL. The page carries the
+bytes between the room and the engine.
+
 The engine embeds the Sinteract fonts, and `make` copies them as WOFF2 to
 `dist/fonts/`. The TypeScript page loads them as web fonts from `fonts/`, beside
 the page, and a frame waits for the fonts of its text as it waits for its
