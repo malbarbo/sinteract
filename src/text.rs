@@ -520,6 +520,32 @@ pub fn embedded_faces() -> impl Iterator<Item = EmbeddedFace> {
     })
 }
 
+/// Face `i` of [`embedded_faces`] as six words, for the export of an engine
+/// compiled to WebAssembly that hands the faces to its page: the pointer and
+/// the length of the bytes, the pointer and the length of the family name,
+/// the weight, and 1 for italic. `None` past the last face. The words live
+/// as long as the module, so the page can read them through the pointer.
+#[cfg(target_arch = "wasm32")]
+pub fn face_record(i: u32) -> Option<&'static [u32; 6]> {
+    static RECORDS: OnceLock<Vec<[u32; 6]>> = OnceLock::new();
+    RECORDS
+        .get_or_init(|| {
+            embedded_faces()
+                .map(|face| {
+                    [
+                        face.bytes.as_ptr() as u32,
+                        face.bytes.len() as u32,
+                        face.family.as_ptr() as u32,
+                        face.family.len() as u32,
+                        u32::from(face.weight),
+                        u32::from(face.italic),
+                    ]
+                })
+                .collect()
+        })
+        .get(i as usize)
+}
+
 /// A CSS weight at or above this picks the bold face.
 const BOLD_THRESHOLD: u16 = 600;
 
