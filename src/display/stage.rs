@@ -141,8 +141,14 @@ impl Stage {
             file: from_server,
             deadline: Rc::clone(&deadline),
         };
+        // A start that fails drops both files, which is a close of the
+        // stage too: without the release, a wasi instance could open no
+        // stage again.
         let (session, players) = Session::start(players, reader, BufWriter::new(to_server))
-            .map_err(StageError::Start)?;
+            .map_err(|e| {
+                release_session_fds();
+                StageError::Start(e)
+            })?;
         let remote = Remote {
             tick_rate: session.tick_rate(),
             session: Some(session),
