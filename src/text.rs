@@ -489,6 +489,37 @@ static SANS: Family = embed_family!("Sinteract Sans", "SinteractSans");
 static SERIF: Family = embed_family!("Sinteract Serif", "SinteractSerif");
 static MONO: Family = embed_family!("Sinteract Mono", "SinteractMono");
 
+/// One face of the embedded families, for a host that draws with the same
+/// faces, such as a page that registers them for its canvas.
+#[derive(Clone, Copy, Debug)]
+pub struct EmbeddedFace {
+    /// The family name, such as `Sinteract Sans`.
+    pub family: &'static str,
+    /// The CSS weight, 400 or 700.
+    pub weight: u16,
+    pub italic: bool,
+    /// The TrueType file.
+    pub bytes: &'static [u8],
+}
+
+/// Every face of the embedded families, four per family.
+pub fn embedded_faces() -> impl Iterator<Item = EmbeddedFace> {
+    [&SANS, &SERIF, &MONO].into_iter().flat_map(|family| {
+        [
+            (&family.regular, 400, false),
+            (&family.bold, 700, false),
+            (&family.italic, 400, true),
+            (&family.bold_italic, 700, true),
+        ]
+        .map(|(font, weight, italic)| EmbeddedFace {
+            family: font.name,
+            weight,
+            italic,
+            bytes: font.bytes,
+        })
+    })
+}
+
 /// A CSS weight at or above this picks the bold face.
 const BOLD_THRESHOLD: u16 = 600;
 
@@ -521,6 +552,17 @@ mod tests {
     fn outline_spec(spec: &TextSpec, out: &mut dyn PathSink) {
         if let Some(layout) = TextLayout::new(spec) {
             layout.outline(out);
+        }
+    }
+
+    #[test]
+    fn the_embedded_faces_are_the_twelve_files() {
+        let faces: Vec<_> = embedded_faces().collect();
+        assert_eq!(faces.len(), 12);
+        for face in &faces {
+            let parsed = Face::parse(face.bytes, 0).expect("an embedded face parses");
+            assert_eq!(parsed.is_bold(), face.weight == 700, "{face:?}");
+            assert_eq!(parsed.is_italic(), face.italic, "{face:?}");
         }
     }
 
