@@ -72,11 +72,24 @@ Deno.test("the hello of a game of one is answered with a start", () => {
 });
 
 Deno.test("a game for two players or more ends the room", () => {
-  const { room, written } = setup();
+  let gaveUp = false;
+  const written: Uint8Array[] = [];
+  const room = new Room({
+    write: (bytes) => written.push(bytes),
+    onGiveUp: () => gaveUp = true,
+  });
   let closed = false;
   room.link.onclose = () => closed = true;
   room.receive(hello(2, 4));
-  assertEquals([written.length, closed], [0, true]);
+  assertEquals([written.length, closed, gaveUp], [0, true, true]);
+});
+
+Deno.test("a room that the host ends does not give up", () => {
+  let gaveUp = false;
+  const room = new Room({ write: () => {}, onGiveUp: () => gaveUp = true });
+  room.receive(hello(1, 1));
+  room.end();
+  assertEquals(gaveUp, false);
 });
 
 Deno.test("a message in pieces is read once it is whole", () => {
@@ -163,11 +176,16 @@ Deno.test("the input of the view goes to the engine as player 1", () => {
 
 Deno.test("a stream of another side ends the room", () => {
   const errors: unknown[] = [];
-  const room = new Room({ write: () => {}, onError: (e) => errors.push(e) });
+  let gaveUp = false;
+  const room = new Room({
+    write: () => {},
+    onError: (e) => errors.push(e),
+    onGiveUp: () => gaveUp = true,
+  });
   let closed = false;
   room.link.onclose = () => closed = true;
   const bytes = hello(1, 1);
   bytes[2] = 0x53; // SIS1, the magic of a server
   room.receive(bytes);
-  assertEquals([errors.length, closed], [1, true]);
+  assertEquals([errors.length, closed, gaveUp], [1, true, true]);
 });

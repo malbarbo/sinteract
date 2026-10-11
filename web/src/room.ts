@@ -26,6 +26,10 @@ export interface RoomOptions {
   tickRate?: number;
   // A stream of the engine that breaks the protocol. The room ends.
   onError?: (error: unknown) => void;
+  // The room ended on its own, over a hello it refuses or a stream it
+  // cannot read. The engine waits on for a start or a tick that will never
+  // come, so the host tells it that the session is over.
+  onGiveUp?: () => void;
   // The animation frames that pace the ticks. A host that has more to do
   // in a frame, such as reading the stream of the engine before the tick,
   // wraps requestAnimationFrame here.
@@ -92,6 +96,11 @@ export class Room {
     this.link.onclose?.(1000, "");
   }
 
+  #giveUp(): void {
+    this.end();
+    this.#options.onGiveUp?.();
+  }
+
   // The first message of the stream, or null while the stream holds no
   // whole message. A header of another side, or of a length that cannot
   // be, ends the room, since nothing after it can be read.
@@ -108,7 +117,7 @@ export class Room {
       len % 8 !== 0 || len > MAX_MESSAGE_BYTES
     ) {
       this.#options.onError?.(new Error("not a stream of an engine"));
-      this.end();
+      this.#giveUp();
       return null;
     }
     if (pending.length < HEADER_BYTES + len) return null;
@@ -124,7 +133,7 @@ export class Room {
         this.#options.onError?.(
           new Error(`the game takes ${hello.minPlayers} players or more`),
         );
-        this.end();
+        this.#giveUp();
         return;
       }
       this.#start();
