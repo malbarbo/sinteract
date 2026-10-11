@@ -68,15 +68,24 @@ export function listen(
     }
   };
 
-  // A key or a button that comes up while the page has no focus sends no up,
-  // so the engine gets the up of each one when the focus goes.
-  globalThis.addEventListener("blur", () => {
+  const releaseKeys = () => {
     for (const key of held.values()) {
       send({ kind: "key", type: "up", key, modifiers: NO_MODIFIERS });
     }
     held.clear();
+  };
+  // A key or a button that comes up while the page has no focus sends no up,
+  // so the engine gets the up of each one when the focus goes.
+  globalThis.addEventListener("blur", () => {
+    releaseKeys();
     releaseButtons();
   }, { signal });
+  // The same for keys of an element when the focus goes elsewhere on the
+  // page, to an editor beside the canvas: the window keeps the focus, and
+  // the up of a key held then goes to the editor.
+  if (keys !== globalThis) {
+    keys.addEventListener("blur", releaseKeys, { signal });
+  }
   // Sends the down or the up of the button of `e`, from its bit in
   // `e.buttons`.
   const press = (e: PointerEvent) => {
