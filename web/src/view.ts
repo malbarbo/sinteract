@@ -23,6 +23,9 @@ export interface ViewOptions {
   screen?: MakeScreen;
   // Where the keys come from, the window when none is given. See listen.
   keys?: EventTarget;
+  // The size of the scene of a frame that draws, when it differs from the
+  // last one, so a page can size the canvas to the game.
+  onSize?: (width: number, height: number) => void;
 }
 
 // What carries the messages between a view and its server: a WebSocket, or
@@ -72,6 +75,7 @@ export class View {
       link,
       stopInput: () => {},
       screen: make(this.#canvas, () => this.#request()),
+      size: null,
       queue: [],
     };
     link.onopen = () => {
@@ -143,6 +147,14 @@ export class View {
     } catch (e) {
       this.#options.onError?.(e);
     }
+    const size = conn.screen.size;
+    if (
+      size && (size.width !== conn.size?.width ||
+        size.height !== conn.size?.height)
+    ) {
+      conn.size = size;
+      this.#options.onSize?.(size.width, size.height);
+    }
     if (conn.queue.length > 0) this.#request();
   }
 
@@ -181,6 +193,8 @@ interface Connection {
   link: Link;
   stopInput: () => void;
   screen: Screen;
+  // The size of the last scene that onSize gave.
+  size: { width: number; height: number } | null;
   // The messages that the screen has not read yet, in order.
   queue: Uint8Array[];
 }

@@ -20,6 +20,8 @@ export interface Screen {
   readonly scale: number;
   readonly x: number;
   readonly y: number;
+  // The size of the scene on screen, for a screen that knows it.
+  readonly size?: { width: number; height: number } | null;
 }
 
 // Makes the screen of a connection. The screen calls `redraw` when it has
@@ -56,6 +58,11 @@ export class TsScreen implements Screen {
 
   get y(): number {
     return this.#renderer.place.y;
+  }
+
+  get size(): { width: number; height: number } | null {
+    const scene = this.#scene;
+    return scene && { width: scene.width, height: scene.height };
   }
 
   read(payload: Uint8Array): boolean {
