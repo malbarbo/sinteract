@@ -23,7 +23,7 @@
 use std::num::NonZeroU32;
 use std::process::ExitCode;
 
-use sinteract::display::{Stage, StageEvent, TerminalOptions};
+use sinteract::display::{Stage, StageEvent, StageOptions};
 use sinteract::event::{InputEvent, Interrupt, KeyKind, key};
 use sinteract::scene::{Bitmap, Image, Paint, Path, PathStyle, RotatedRect, Scene};
 use sinteract::session::PlayerRange;
@@ -40,7 +40,7 @@ fn main() -> ExitCode {
     let mut game = Game::new(balls, big);
     // The example draws the same scene for every player, so it has no use
     // for the players.
-    let options = TerminalOptions::default();
+    let options = StageOptions::default();
     let mut stage = match Stage::open("engine", WIDTH, HEIGHT, PLAYERS, options) {
         Ok((stage, _players)) => stage,
         Err(e) => {

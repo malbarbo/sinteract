@@ -278,6 +278,17 @@ impl super::Display for Terminal {
         self.clock.millihertz()
     }
 
+    fn footer_rows(&self) -> u16 {
+        self.footer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .rows
+    }
+
+    fn set_footer(&mut self, lines: &[String]) -> Result<(), PresentError> {
+        Terminal::set_footer(self, lines)
+    }
+
     /// Stop the reader thread, wait for the frame that the writer holds,
     /// and leave the alt screen and raw mode.
     fn close(&mut self) {

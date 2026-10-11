@@ -34,7 +34,8 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 use sinteract::display::{
-    Display, Printer, Stage, StageEvent, Terminal, TerminalOptions, Window, open_native,
+    Display, Printer, Stage, StageEvent, StageOptions, Terminal, TerminalOptions, Window,
+    open_native,
 };
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::renderer::Renderer;
@@ -205,7 +206,7 @@ fn stage() -> Result<(), String> {
         WIDTH,
         HEIGHT,
         players,
-        TerminalOptions::default(),
+        StageOptions::default(),
     )
     .map_err(|e| e.to_string())?;
     loop {

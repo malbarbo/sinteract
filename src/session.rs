@@ -314,8 +314,10 @@ impl<R: Read, W: Write> Session<R, W> {
     }
 
     /// The rate of the ticks in thousandths of a hertz, 60000 for 60 Hz,
-    /// the same from the start to the end. A game moves by a step of this
-    /// rate at each tick, so it moves at the same speed at any rate.
+    /// the same from the start to the end. A server with a timer ticks at
+    /// this rate, so a game may move by a step of it at each tick. A page
+    /// that ticks at each refresh of the screen gives a nominal rate, and a
+    /// game that keeps time measures it with its own clock.
     pub fn tick_rate(&self) -> NonZeroU32 {
         self.tick_rate
     }

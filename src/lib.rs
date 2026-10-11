@@ -27,7 +27,8 @@
 //! `display` shows a scene and reads the input back, through the terminal
 //! or a winit window. It needs the feature `terminal` or `window`, and it
 //! does not build on wasm32, because it needs threads, a tty, a window or
-//! platform FFI.
+//! platform FFI. On wasi it builds with neither, for the stage of a
+//! session.
 
 // A test that fails on an unwrap or a panic reports the failure well
 // enough.
@@ -37,9 +38,14 @@
 )]
 
 pub mod asset;
-#[cfg(all(
-    any(feature = "terminal", feature = "window"),
-    not(target_arch = "wasm32")
+// An engine on wasi has no display of its own, and keeps the stage of a
+// session.
+#[cfg(any(
+    all(
+        any(feature = "terminal", feature = "window"),
+        not(target_arch = "wasm32")
+    ),
+    target_os = "wasi"
 ))]
 pub mod display;
 pub mod event;

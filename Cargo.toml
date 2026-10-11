@@ -116,6 +116,10 @@ objc2 = { version = "0.6", optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }
 
+# The stage of a session polls fd 3 with a deadline.
+[target.'cfg(target_os = "wasi")'.dependencies]
+libc = "0.2"
+
 # examples/remote.rs talks to a server over a WebSocket.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tungstenite = "0.30"

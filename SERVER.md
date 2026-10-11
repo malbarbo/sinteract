@@ -203,6 +203,10 @@ engine.
   O `tick` não leva hora, então a engine anda um passo dessa taxa a cada
   `tick`, e o jogo tem a mesma velocidade em qualquer taxa, sem o tremor
   de um relógio medido na chegada. Uma taxa 0 é dano.
+- Uma sala de uma página, como a do `web/src/room.ts`, que roda a engine
+  num worker, manda um `tick` a cada quadro da tela, na taxa que a tela
+  tiver, e põe no `start` uma taxa nominal, 60000. Ali o passo por `tick`
+  não vale, e uma engine que guarda o tempo mede com o próprio relógio.
 - A engine responde a cada `tick` com um `tickTaken`, e o core só manda o
   próximo `tick` depois dele. Uma engine mais lenta que o timer não
   acumula `tick`. A `Session` da engine escreve o `tickTaken` sozinha.
@@ -657,18 +661,19 @@ O esboço deixa de fora:
 
 ## O lado da engine
 
-A engine abre um `Stage`. Com `SINTERACT_SESSION` no ambiente, o `Stage`
-manda o `hello`, espera o `start`, lê o fd 3 e escreve no fd 4. Sem ela,
-ele abre uma janela ou o terminal, e o usuário é o jogador 1, então o
+A engine abre um `Stage`. Com `SINTERACT_SESSION` no ambiente, ou num
+build sem tela própria, como o de wasi, o `Stage` manda o `hello`, espera
+o `start`, lê o fd 3 e escreve no fd 4. Sem ela, ele abre uma janela ou o
+terminal, como o `StageOptions` pede, e o usuário é o jogador 1, então o
 mesmo jogo roda sem servidor:
 
 ```rust
-use sinteract::display::{Stage, StageEvent, TerminalOptions};
+use sinteract::display::{Stage, StageEvent, StageOptions};
 use sinteract::event::Interrupt;
 use sinteract::session::{PlayerRange, Target};
 
 let players = PlayerRange::new(1, 4).expect("1 a 4 é uma faixa");
-let options = TerminalOptions::default();
+let options = StageOptions::default();
 let (mut stage, jogadores) = Stage::open("jogo", 400.0, 300.0, players, options)?;
 mundo.start(&jogadores); // cada Player com o apelido, o jogador 1 primeiro
 loop {
@@ -683,10 +688,10 @@ loop {
         Ok(StageEvent::Error(e)) => eprintln!("{e}"), // mensagem estragada, a sessão segue
         Err(Interrupt::Read(e)) => eprintln!("{e}"),  // o fd 3 quebrou, e o Close vem depois
         Err(Interrupt::Close) => break,               // o fd 3 acabou
-        Err(Interrupt::Wake | Interrupt::Timeout) => {}
+        Err(Interrupt::Wake | Interrupt::Timeout) => {} // o prazo do wait passou
     }
 }
-stage.close(); // fecha o fd 4, e a sala acaba
+stage.close(); // fecha o fd 3 e o fd 4, e a sala acaba
 ```
 
 O `Tick` vem só do `tick` do servidor, e o `Stage` escreve o `tickTaken`
@@ -700,10 +705,21 @@ janela, que muda quando a janela passa para outro monitor. Por isso o
 jogo lê a taxa de novo a cada `Tick`. O `examples/engine.rs` do
 `sinteract` é uma engine completa.
 
-Uma engine sem as features de tela, como uma que roda em wasm, usa a
-`session::Session` direto, com o `Session::start(players, r, w)`, o
-`tick_rate`, o `wait` e o `write_frame`, sobre o `Read` e o `Write` que
-ela tiver.
+O `wait` respeita o prazo também numa sessão. Ele espera o fd 3 até o
+prazo e devolve `Interrupt::Timeout`, e a sessão segue do ponto em que
+estava, então a engine roda o relógio do jogo mesmo sem `tick`, como numa
+aba escondida. Num build de wasi, o host mantém o fd 3 e o fd 4 abertos
+depois do `close`, e outro `Stage` pode abrir a próxima sessão da mesma
+instância. Num processo nativo, a sessão é uma só.
+
+O `display::Frames` é o `Stage` de um mundo de uma linguagem de ensino,
+como o do spython e do sgleam. O mundo guarda o próprio relógio, o
+`show` guarda a cena, que sai no próximo `Tick`, e o `wait_event` devolve
+só as teclas e o fechamento.
+
+Uma engine sem `Stage` usa a `session::Session` direto, com o
+`Session::start(players, r, w)`, o `tick_rate`, o `wait` e o
+`write_frame`, sobre o `Read` e o `Write` que ela tiver.
 
 ## O que o navegador mostra
 

@@ -69,6 +69,17 @@ pub trait Display: sealed::Sealed {
 
     /// End the session. A second call does nothing, and drop calls it.
     fn close(&mut self);
+
+    /// The rows of text under the frame. Only the terminal keeps them, as
+    /// many as [`TerminalOptions::footer_rows`](super::TerminalOptions::footer_rows).
+    fn footer_rows(&self) -> u16 {
+        0
+    }
+
+    /// Show the last [`Display::footer_rows`] of `lines` under the frame.
+    fn set_footer(&mut self, _lines: &[String]) -> Result<(), PresentError> {
+        Ok(())
+    }
 }
 
 pub(super) mod sealed {

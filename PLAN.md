@@ -194,8 +194,9 @@ servidor passa por ela. O `wait` devolve os eventos com o jogador, sempre com no
 máximo um `Tick` na fila, e o `write_frame` manda o frame, com cada imagem
 nova antes.
 O `Stage` junta os dois modos num loop só. Com `SINTERACT_SESSION` no
-ambiente, o `Stage::open` abre a `Session` nos descritores 3 e 4, e senão
-abre a janela ou o terminal, em que o usuário é o jogador 1. O `wait`
+ambiente, ou num build sem tela própria, como o de wasi, o `Stage::open`
+abre a `Session` nos descritores 3 e 4, e senão abre a janela ou o
+terminal que o `StageOptions` pede, em que o usuário é o jogador 1. O `wait`
 devolve cada entrada com o jogador, e o `present` manda o frame a um
 `Target`, então o spython e o sgleam escrevem o jogo uma vez para os dois
 modos.

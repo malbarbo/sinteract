@@ -27,7 +27,7 @@ use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::process::ExitCode;
 
-use sinteract::display::{Stage, StageEvent, TerminalOptions};
+use sinteract::display::{Stage, StageEvent, StageOptions};
 use sinteract::event::{InputEvent, Interrupt, KeyKind, PadButton, PadEvent, key};
 use sinteract::scene::{Paint, Path, PathStyle, Rgba, RotatedRect, Scene, Text, TextSpec};
 use sinteract::session::{Player, PlayerRange, Target};
@@ -37,7 +37,7 @@ const HEIGHT: f32 = 360.0;
 const PLAYERS: PlayerRange = PlayerRange::new(1, 8).expect("1 to 8 is a range");
 
 fn main() -> ExitCode {
-    let options = TerminalOptions::default();
+    let options = StageOptions::default();
     let (mut stage, players) = match Stage::open("players", WIDTH, HEIGHT, PLAYERS, options) {
         Ok(opened) => opened,
         Err(e) => {

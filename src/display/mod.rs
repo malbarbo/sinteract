@@ -11,11 +11,13 @@
 //! win32-input-mode of Windows Terminal, `sixel` encodes a pixmap for the
 //! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
 //! in a winit window. [`Stage`] runs a game on one of them, or in a
-//! [`crate::session::Session`] with a server, with the same loop.
+//! [`crate::session::Session`] with a server, with the same loop, and
+//! [`Frames`] runs the world of a teaching language on a stage.
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the
-//! window, and `open_native` needs both. In a browser the page, which hosts
-//! the engine, implements `wait_event` itself.
+//! window, and `open_native` needs both. An engine on wasi has neither, and
+//! its [`Stage`] runs only in a session, with the page that hosts the
+//! engine as the server.
 
 // Most links above go to items that only a native build with both
 // features has.
@@ -30,10 +32,13 @@ mod sixel;
 #[cfg(all(feature = "window", target_os = "macos"))]
 mod display_link;
 mod driver;
+mod frames;
+// A build with no display of its own keeps only `Sender`, for the type of
+// `Display::sender`.
+#[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
 mod inbox;
 #[cfg(all(feature = "terminal", unix))]
 mod shm;
-#[cfg(all(feature = "terminal", feature = "window"))]
 mod stage;
 #[cfg(feature = "terminal")]
 mod term_input;
@@ -41,6 +46,7 @@ mod term_input;
 mod term_query;
 #[cfg(feature = "terminal")]
 pub mod terminal;
+#[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
 mod tick_clock;
 #[cfg(feature = "window")]
 pub mod window;
@@ -48,9 +54,9 @@ pub mod window;
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub use driver::open_native;
 pub use driver::{Display, NoGraphics, OpenError, PresentError};
+pub use frames::{FrameEvent, Frames, ShowError};
 pub use inbox::{Closed, Sender};
-#[cfg(all(feature = "terminal", feature = "window"))]
-pub use stage::{Stage, StageError, StageEvent};
+pub use stage::{Native, Stage, StageError, StageEvent, StageOptions};
 #[cfg(feature = "terminal")]
 pub use terminal::{Backend, PrintError, Printer, Terminal, TerminalOptions};
 #[cfg(feature = "window")]

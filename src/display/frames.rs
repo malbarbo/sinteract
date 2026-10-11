@@ -1,0 +1,351 @@
+//! [`Frames`], the stage of a world of a teaching language, as spython and
+//! sgleam run it. The world keeps its own clock, shows a scene when its
+//! state changes, and reads only the keys and the close.
+
+use std::collections::VecDeque;
+use std::time::Instant;
+
+use super::{PresentError, Stage, StageError, StageEvent, StageOptions};
+use crate::event::{InputEvent, Interrupt, KeyEvent, KeyKind};
+use crate::scene::Scene;
+use crate::session::{PlayerRange, Target};
+
+/// The frames of the worlds of a program, one world after another. The
+/// first [`Frames::show`] of a world opens the stage, at the size of its
+/// scene, and [`Frames::close`] ends it.
+///
+/// A show keeps the scene and draws nothing. The stage draws the scene of
+/// the last show at its next tick, so a world that changes faster than the
+/// screen draws only what the screen can show, and a session sends one
+/// frame per tick of the server.
+pub struct Frames {
+    title: String,
+    options: Box<dyn FnMut() -> StageOptions>,
+    state: State,
+    /// The lines of [`Frames::print_line`] while a stage keeps rows for
+    /// them, at most as many as the rows.
+    footer: Vec<String>,
+}
+
+/// What [`Frames::wait_event`] returns.
+#[derive(Debug, PartialEq)]
+pub enum FrameEvent {
+    Key(KeyEvent),
+    /// The user closed the display, or the server ended the session. Every
+    /// wait after it returns Close too, until the next world.
+    Close,
+    /// The deadline passed first.
+    Timeout,
+}
+
+/// Why [`Frames::show`] showed nothing.
+#[derive(Debug)]
+pub enum ShowError {
+    /// The stage of the world did not open, and the world goes on without
+    /// one.
+    Open(StageError),
+    /// The stage did not open for an earlier show of the same world.
+    Unavailable,
+}
+
+enum State {
+    /// No world showed a scene yet, or the last world closed.
+    Closed,
+    Open(Open),
+    /// The stage did not open, so the world does not try again at each
+    /// show.
+    Unavailable,
+}
+
+struct Open {
+    stage: Stage,
+    /// The scene of the last show, until a tick draws it.
+    pending: Option<Scene>,
+    /// The keys that a wait took and did not return yet.
+    keys: VecDeque<KeyEvent>,
+    /// Whether the last key was a down.
+    after_down: bool,
+    /// The stage closed or failed.
+    closed: bool,
+}
+
+/// A world has one player, the user or player 1 of the server.
+const PLAYERS: PlayerRange = PlayerRange::new(1, 1).expect("1 to 1 is a range");
+
+impl Frames {
+    /// The frames of a program, with `title` on the window, and the
+    /// options of each stage from `options`.
+    pub fn new(title: impl Into<String>, options: impl FnMut() -> StageOptions + 'static) -> Self {
+        Frames {
+            title: title.into(),
+            options: Box::new(options),
+            state: State::Closed,
+            footer: Vec::new(),
+        }
+    }
+
+    /// Returns `true` if a world has a stage open, `false` otherwise.
+    pub fn is_open(&self) -> bool {
+        matches!(self.state, State::Open(_))
+    }
+
+    /// Keep `scene` for the next tick, and open the stage first if the
+    /// world has none.
+    pub fn show(&mut self, scene: Scene) -> Result<(), ShowError> {
+        if let State::Closed = self.state {
+            let options = (self.options)();
+            match Stage::open(&self.title, scene.width(), scene.height(), PLAYERS, options) {
+                Ok((stage, _players)) => {
+                    self.state = State::Open(Open {
+                        stage,
+                        pending: None,
+                        keys: VecDeque::new(),
+                        after_down: false,
+                        closed: false,
+                    });
+                }
+                Err(e) => {
+                    self.state = State::Unavailable;
+                    return Err(ShowError::Open(e));
+                }
+            }
+        }
+        match &mut self.state {
+            State::Open(open) => {
+                open.pending = Some(scene);
+                Ok(())
+            }
+            State::Closed | State::Unavailable => Err(ShowError::Unavailable),
+        }
+    }
+
+    /// Wait until a key, the close or `deadline`. The scene of the last
+    /// show goes out at each tick on the way. The mouse, a resize and a
+    /// pad never come out. A terminal that sends a press with no down
+    /// before it gives a down and then the press, since a world reads a
+    /// down as the start of a key. With no stage open, it returns
+    /// [`FrameEvent::Timeout`] at once, and the caller sleeps.
+    ///
+    /// A message that the session drops goes to `on_error`, and the wait
+    /// goes on.
+    pub fn wait_event(
+        &mut self,
+        deadline: Instant,
+        mut on_error: impl FnMut(&dyn std::error::Error),
+    ) -> FrameEvent {
+        let State::Open(open) = &mut self.state else {
+            return FrameEvent::Timeout;
+        };
+        loop {
+            if let Some(key) = open.keys.pop_front() {
+                return FrameEvent::Key(key);
+            }
+            if open.closed {
+                return FrameEvent::Close;
+            }
+            match open.stage.wait(Some(deadline)) {
+                Ok(StageEvent::Tick) => {
+                    if let Some(scene) = open.pending.take()
+                        && let Err(e) = open.stage.present(Target::All, scene)
+                    {
+                        on_error(&e);
+                        if let PresentError::Closed | PresentError::Io(_) = e {
+                            open.closed = true;
+                        }
+                    }
+                }
+                Ok(StageEvent::Input {
+                    event: InputEvent::Key(key),
+                    ..
+                }) => open.take_key(key),
+                Ok(StageEvent::Input { .. }) => {}
+                Ok(StageEvent::Error(e)) => on_error(&e),
+                Err(Interrupt::Timeout) => return FrameEvent::Timeout,
+                Err(Interrupt::Wake) => {}
+                Err(Interrupt::Read(e)) => {
+                    on_error(&e);
+                    open.closed = true;
+                }
+                Err(Interrupt::Close) => open.closed = true,
+            }
+        }
+    }
+
+    /// Show `line` under the frame. Returns `true` if the stage keeps rows
+    /// for it, `false` if the caller prints it.
+    pub fn print_line(&mut self, line: &str) -> bool {
+        let State::Open(open) = &mut self.state else {
+            return false;
+        };
+        let rows = usize::from(open.stage.footer_rows());
+        if rows == 0 {
+            return false;
+        }
+        self.footer.extend(line.split('\n').map(String::from));
+        let excess = self.footer.len().saturating_sub(rows);
+        self.footer.drain(..excess);
+        open.stage.set_footer(&self.footer).is_ok()
+    }
+
+    /// Draw the scene of the last show, which no tick drew yet, and end
+    /// the stage of the world. Returns the lines under the frame, which
+    /// the caller prints, since the frame stays on screen above them. The
+    /// next show opens a new stage.
+    pub fn close(&mut self) -> Vec<String> {
+        if let State::Open(open) = &mut self.state {
+            if let Some(scene) = open.pending.take() {
+                // The world is over, and nothing reads the error.
+                let _ = open.stage.present(Target::All, scene);
+            }
+            open.stage.close();
+        }
+        self.state = State::Closed;
+        std::mem::take(&mut self.footer)
+    }
+}
+
+impl Open {
+    fn take_key(&mut self, key: KeyEvent) {
+        if key.kind == KeyKind::Press && !self.after_down {
+            self.keys.push_back(KeyEvent {
+                kind: KeyKind::Down,
+                ..key.clone()
+            });
+        }
+        self.after_down = key.kind == KeyKind::Down;
+        self.keys.push_back(key);
+    }
+}
+
+impl std::fmt::Display for ShowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShowError::Open(e) => e.fmt(f),
+            ShowError::Unavailable => f.write_str("the display did not open"),
+        }
+    }
+}
+
+impl std::error::Error for ShowError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ShowError::Open(e) => Some(e),
+            ShowError::Unavailable => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for Frames {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Frames")
+            .field("title", &self.title)
+            .field("open", &self.is_open())
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::display::stage::tests::{Server, session};
+    use crate::event::Modifiers;
+    use crate::wire::testing::Message;
+
+    /// Frames with the stage of a session open, as after a first show.
+    fn frames() -> (Frames, Server) {
+        let (stage, server) = session();
+        let mut frames = Frames::new("test", StageOptions::default);
+        frames.state = State::Open(Open {
+            stage,
+            pending: None,
+            keys: VecDeque::new(),
+            after_down: false,
+            closed: false,
+        });
+        (frames, server)
+    }
+
+    fn soon() -> Instant {
+        Instant::now() + Duration::from_millis(20)
+    }
+
+    fn wait(frames: &mut Frames) -> FrameEvent {
+        frames.wait_event(soon(), |e| panic!("{e}"))
+    }
+
+    fn key(kind: KeyKind, name: &str) -> KeyEvent {
+        KeyEvent {
+            kind,
+            key: name.into(),
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    fn widths(messages: &[Message]) -> Vec<String> {
+        messages
+            .iter()
+            .map(|m| match m {
+                Message::Frame { scene, .. } => format!("frame {}", scene.width()),
+                Message::TickTaken => "taken".into(),
+                Message::Asset { id, .. } => format!("asset {id}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_show_goes_out_at_the_next_tick_and_only_the_last_one() {
+        let (mut frames, mut server) = frames();
+        frames.show(Scene::new(10.0, 10.0)).unwrap();
+        frames.show(Scene::new(20.0, 10.0)).unwrap();
+        assert_eq!(wait(&mut frames), FrameEvent::Timeout);
+        assert!(server.read().is_empty());
+        server.tick();
+        assert_eq!(wait(&mut frames), FrameEvent::Timeout);
+        assert_eq!(widths(&server.read()), ["taken", "frame 20"]);
+        server.tick();
+        assert_eq!(wait(&mut frames), FrameEvent::Timeout);
+        assert_eq!(widths(&server.read()), ["taken"]);
+    }
+
+    #[test]
+    fn a_press_with_no_down_before_it_gives_a_down_first() {
+        let (mut frames, mut server) = frames();
+        server.key(key(KeyKind::Press, "a"));
+        server.key(key(KeyKind::Down, "b"));
+        server.key(key(KeyKind::Press, "b"));
+        server.key(key(KeyKind::Up, "b"));
+        let kinds: Vec<_> = (0..5)
+            .map(|_| match wait(&mut frames) {
+                FrameEvent::Key(k) => format!("{:?} {}", k.kind, k.key),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(kinds, ["Down a", "Press a", "Down b", "Press b", "Up b"]);
+    }
+
+    #[test]
+    fn the_end_of_the_session_closes_and_close_draws_the_last_show() {
+        let (mut frames, mut server) = frames();
+        frames.show(Scene::new(30.0, 10.0)).unwrap();
+        server.end();
+        assert_eq!(wait(&mut frames), FrameEvent::Close);
+        assert_eq!(wait(&mut frames), FrameEvent::Close);
+        assert!(frames.close().is_empty());
+        assert!(!frames.is_open());
+        assert_eq!(widths(&server.read()), ["frame 30"]);
+    }
+
+    #[test]
+    fn a_wait_with_no_stage_returns_at_once() {
+        let mut frames = Frames::new("test", StageOptions::default);
+        let start = Instant::now();
+        let far = start + Duration::from_secs(10);
+        assert_eq!(
+            frames.wait_event(far, |e| panic!("{e}")),
+            FrameEvent::Timeout
+        );
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+}

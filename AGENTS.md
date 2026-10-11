@@ -33,9 +33,12 @@ sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind
 `wait_event`, `tick_clock.rs` the clock that paces the tick,
 `terminal.rs` and `window.rs` are the two displays, `display_link.rs`
 paces the window on macOS, and
-`sixel.rs` and `term_query.rs` support them. `lib.rs` gates the whole
-directory once, on wasm32 and on the two features, and each submodule that
-needs a given feature has its own `cfg` in `display/mod.rs`.
+`sixel.rs` and `term_query.rs` support them. `stage.rs` runs a game on a
+display or in a session, and `frames.rs` runs the world of a teaching
+language on a stage. `lib.rs` gates the whole directory once, on wasm32
+and on the two features, and lets wasi in for the stage of a session.
+Each submodule that needs a given feature has its own `cfg` in
+`display/mod.rs`.
 
 `web/` is the view for a browser, in TypeScript, which Deno checks and
 bundles into two pages of one HTML file each. `dist/index.html` reads and
