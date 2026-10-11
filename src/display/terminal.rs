@@ -60,6 +60,9 @@ pub struct TerminalOptions {
     /// with the rest of the output of the program. Without it the frame
     /// goes away with the alt screen.
     pub keep_last_frame: bool,
+    /// The rows of text under the frame, which [`Terminal::set_footer`]
+    /// fills. The frame shrinks to leave them free.
+    pub footer_rows: u16,
 }
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
@@ -88,6 +91,8 @@ pub struct Terminal {
     cells: Arc<Mutex<CellMap>>,
     /// [`TerminalOptions::keep_last_frame`].
     keep_last_frame: bool,
+    /// The text under the frame, which the writer of the frames also draws.
+    footer: Arc<Mutex<Footer>>,
 }
 
 /// What a session holds until it closes.
@@ -123,13 +128,21 @@ impl Terminal {
             .and_then(|()| KeyInput::start(stdin_tty));
         let inbox = Inbox::new(None);
         let cell = cell_pixels();
-        if let Some((width, height)) = terminal::size().ok().and_then(|s| scene_size(s, cell)) {
+        let footer_rows = options.footer_rows;
+        let size = terminal::size().ok();
+        if let Some((width, height)) = size.and_then(|s| scene_size(s, cell, footer_rows)) {
             let _ = inbox.sender().send_resize(width, height);
         }
         let cells = Arc::new(Mutex::new(CellMap::before_frames(backend, cell)));
         let reader = keys.and_then(|keys| {
             let cells = Arc::clone(&cells);
-            Reader::spawn(inbox.sender(), cells, keys, options.on_interrupt)
+            Reader::spawn(
+                inbox.sender(),
+                cells,
+                keys,
+                footer_rows,
+                options.on_interrupt,
+            )
         });
         let reader = match reader {
             Ok(reader) => reader,
@@ -143,10 +156,12 @@ impl Terminal {
             bytes,
             painter,
         } = Printer::with_painter(Painter::for_stdout(backend));
+        let footer = Arc::new(Mutex::new(Footer::new(footer_rows)));
         let state = FrameState {
             painter,
             bytes,
             frame_size: None,
+            footer: Arc::clone(&footer),
         };
         let writer = match FrameWriter::spawn(state, FrameState::write_frame) {
             Ok(writer) => writer,
@@ -169,7 +184,32 @@ impl Terminal {
             last: None,
             cells,
             keep_last_frame: options.keep_last_frame,
+            footer,
         })
+    }
+
+    /// Show `lines` in the rows of [`TerminalOptions::footer_rows`] under
+    /// the frame. Only the last lines fit, a line wider than the terminal
+    /// loses its end, and a control character shows as a space. The text
+    /// waits for the first frame, and goes away with the alt screen at
+    /// close.
+    pub fn set_footer<S: AsRef<str>>(&mut self, lines: &[S]) -> Result<(), PresentError> {
+        if self.active.is_none() {
+            return Err(PresentError::Closed);
+        }
+        // The writer of the frames takes the two locks in the same order.
+        let mut stdout = io::stdout().lock();
+        let mut footer = self.footer.lock().unwrap_or_else(PoisonError::into_inner);
+        footer.set(lines);
+        if TTY.load(Ordering::Acquire) == RESTORED {
+            return Ok(());
+        }
+        let Some(top) = footer.top else {
+            return Ok(());
+        };
+        footer.write(&mut stdout, top, screen_cols())?;
+        stdout.flush()?;
+        Ok(())
     }
 
     /// Rasterize `scene` and hand the frame to the writer, which clears the
@@ -179,7 +219,12 @@ impl Terminal {
         let Some(active) = self.active.as_mut() else {
             return Err(PresentError::Closed);
         };
-        let scale = scale_for_backend(self.backend, scene.width(), scene.height());
+        let footer_rows = self
+            .footer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .rows;
+        let scale = scale_for_backend(self.backend, scene.width(), scene.height(), footer_rows);
         self.renderer.set_scale(scale);
         self.renderer.render(scene)?;
         *self.cells.lock().unwrap_or_else(PoisonError::into_inner) =
@@ -385,6 +430,8 @@ struct FrameState {
     /// The size in pixels of the frame on screen, or `None` before the
     /// first one. Kitty keeps a frame after the session.
     frame_size: Option<(u32, u32)>,
+    /// The text under the frame, drawn again after each frame.
+    footer: Arc<Mutex<Footer>>,
 }
 
 impl FrameState {
@@ -414,12 +461,15 @@ impl FrameState {
         }
         // A smaller frame leaves the edges of the one before.
         let size = (pixmap.width(), pixmap.height());
-        if self.frame_size.take() != Some(size) {
-            self.painter.clear_old_frame(out)?;
+        let mut footer = self.footer.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.frame_size.take() != Some(size) && self.painter.clear_old_frame(out)? {
+            footer.top = None;
         }
         queue!(out, cursor::MoveTo(0, 0))?;
         self.painter
             .write_image(out, &mut self.bytes, pixmap, Placement::Frame)?;
+        let top = frame_rows(self.painter.backend(), pixmap.height(), cell_pixels().1);
+        footer.write(out, top, screen_cols())?;
         out.flush()?;
         self.frame_size = Some(size);
         Ok(())
@@ -513,7 +563,7 @@ impl Printer {
     /// A [`Terminal`] prints its last frame at close with it, while it still
     /// holds the tty.
     fn print_unchecked(&mut self, scene: &Scene) -> Result<(), PrintError> {
-        let scale = scale_for_backend(self.painter.backend(), scene.width(), scene.height());
+        let scale = scale_for_backend(self.painter.backend(), scene.width(), scene.height(), 0);
         self.renderer.set_scale(scale);
         let pixmap = self.renderer.render(scene).map_err(PrintError::Alloc)?;
         let mut stdout = io::stdout().lock();
@@ -605,17 +655,21 @@ impl Painter {
     }
 
     /// Remove the frame on screen, unless the next frame replaces it whole.
-    fn clear_old_frame<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
+    /// Returns `true` if the screen cleared, `false` otherwise.
+    fn clear_old_frame<W: Write>(&mut self, out: &mut W) -> io::Result<bool> {
         match self {
             // The same id replaces the whole image in place, and a clear, or
             // a delete before the transmit, shows the cleared cells for one
             // refresh.
-            Painter::Kitty(_) => Ok(()),
-            Painter::Sixel(_) => queue!(out, terminal::Clear(terminal::ClearType::All)),
+            Painter::Kitty(_) => Ok(false),
+            Painter::Sixel(_) => {
+                queue!(out, terminal::Clear(terminal::ClearType::All))?;
+                Ok(true)
+            }
             Painter::HalfBlocks(screen) => {
                 queue!(out, terminal::Clear(terminal::ClearType::All))?;
                 screen.forget();
-                Ok(())
+                Ok(true)
             }
         }
     }
@@ -946,6 +1000,7 @@ impl Reader {
         tx: Sender,
         cells: Arc<Mutex<CellMap>>,
         keys: KeyInput,
+        footer_rows: u16,
         on_interrupt: Option<Box<dyn FnMut() + Send>>,
     ) -> io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
@@ -953,8 +1008,11 @@ impl Reader {
         let thread = thread::Builder::new()
             .name("sinteract-terminal".into())
             .spawn(move || match keys {
-                KeyInput::Bytes { kitty } => read_bytes(&tx, &cells, &flag, kitty, on_interrupt),
-                KeyInput::Off => watch_size(&tx, &flag),
+                KeyInput::Bytes { kitty } => {
+                    let size = SizeWatch::new(footer_rows);
+                    read_bytes(&tx, &cells, &flag, kitty, size, on_interrupt)
+                }
+                KeyInput::Off => watch_size(&tx, &flag, SizeWatch::new(footer_rows)),
             })?;
         Ok(Self { stop, thread })
     }
@@ -975,6 +1033,7 @@ fn read_bytes(
     cells: &Mutex<CellMap>,
     stop: &AtomicBool,
     kitty: bool,
+    mut size: SizeWatch,
     mut on_interrupt: Option<Box<dyn FnMut() + Send>>,
 ) {
     use super::term_input::{Decoder, Input};
@@ -988,7 +1047,6 @@ fn read_bytes(
         }
     };
     let mut keys = Decoder::new(kitty);
-    let mut size = SizeWatch::default();
     let mut bytes = Vec::new();
     let mut inputs = Vec::new();
     while !stop.load(Ordering::Acquire) {
@@ -1036,9 +1094,8 @@ fn read_bytes(
 
 /// Send the resizes until `stop`, for a terminal that has no reader of the
 /// keys.
-fn watch_size(tx: &Sender, stop: &AtomicBool) {
+fn watch_size(tx: &Sender, stop: &AtomicBool, mut size: SizeWatch) {
     let _close = CloseOnExit(tx);
-    let mut size = SizeWatch::default();
     while !stop.load(Ordering::Acquire) {
         if size.check(tx).is_err() {
             return;
@@ -1048,30 +1105,35 @@ fn watch_size(tx: &Sender, stop: &AtomicBool) {
 }
 
 /// The size of the terminal at the last check.
-struct SizeWatch(Option<(u16, u16)>);
-
-impl Default for SizeWatch {
-    fn default() -> Self {
-        Self(terminal::size().ok())
-    }
+struct SizeWatch {
+    size: Option<(u16, u16)>,
+    /// [`TerminalOptions::footer_rows`].
+    footer_rows: u16,
 }
 
 impl SizeWatch {
+    fn new(footer_rows: u16) -> Self {
+        Self {
+            size: terminal::size().ok(),
+            footer_rows,
+        }
+    }
+
     /// Send a resize when the size changed since the last check.
     fn check(&mut self, tx: &Sender) -> Result<(), super::Closed> {
         let now = terminal::size().ok();
-        if now == self.0 {
+        if now == self.size {
             return Ok(());
         }
-        self.0 = now;
-        now.map_or(Ok(()), |now| resized(tx, now))
+        self.size = now;
+        now.map_or(Ok(()), |now| resized(tx, now, self.footer_rows))
     }
 }
 
-/// Send the size of the scene for a terminal of `(cols, rows)`, and draw
-/// the last frame again.
-fn resized(tx: &Sender, size: (u16, u16)) -> Result<(), super::Closed> {
-    if let Some((width, height)) = scene_size(size, cell_pixels()) {
+/// Send the size of the scene for a terminal of `(cols, rows)` with
+/// `footer_rows` under the frame, and draw the last frame again.
+fn resized(tx: &Sender, size: (u16, u16), footer_rows: u16) -> Result<(), super::Closed> {
+    if let Some((width, height)) = scene_size(size, cell_pixels(), footer_rows) {
         let _ = tx.send_resize(width, height);
     }
     tx.request_redraw()
@@ -1083,6 +1145,101 @@ impl Drop for CloseOnExit<'_> {
     fn drop(&mut self) {
         let _ = self.0.send_close();
     }
+}
+
+/// The lines of text under the frame of a [`Terminal`]. The writer of the
+/// frames draws them after each frame, and [`Terminal::set_footer`] draws
+/// them between two frames.
+struct Footer {
+    /// [`TerminalOptions::footer_rows`].
+    rows: u16,
+    /// At most `rows` lines, with no control characters.
+    lines: Vec<String>,
+    /// The first row of the footer on screen, or `None` while no footer is
+    /// on screen.
+    top: Option<u16>,
+}
+
+impl Footer {
+    fn new(rows: u16) -> Self {
+        Self {
+            rows,
+            lines: Vec::new(),
+            top: None,
+        }
+    }
+
+    /// Keep the last `rows` of `lines`.
+    fn set<S: AsRef<str>>(&mut self, lines: &[S]) {
+        let skip = lines.len().saturating_sub(self.rows.into());
+        self.lines = lines
+            .iter()
+            .skip(skip)
+            .map(|line| {
+                let line = line.as_ref();
+                line.chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .collect()
+            })
+            .collect();
+    }
+
+    /// Draw the footer from row `top`, with at most `cols` characters a
+    /// line. A footer on screen at another row goes blank first, since
+    /// Kitty draws a frame of another height without a clear.
+    fn write<W: Write>(&mut self, out: &mut W, top: u16, cols: u16) -> io::Result<()> {
+        if self.rows == 0 {
+            return Ok(());
+        }
+        if let Some(old) = self.top.take().filter(|&old| old != top) {
+            for row in old..old.saturating_add(self.rows) {
+                queue!(
+                    out,
+                    cursor::MoveTo(0, row),
+                    terminal::Clear(terminal::ClearType::UntilNewLine)
+                )?;
+            }
+        }
+        // A wide character takes two columns, so a line of `cols`
+        // characters can still be too wide. Without the wrap, its end stays
+        // in the last column instead of moving the rows below.
+        queue!(out, terminal::DisableLineWrap)?;
+        for (i, row) in (top..top.saturating_add(self.rows)).enumerate() {
+            queue!(
+                out,
+                cursor::MoveTo(0, row),
+                terminal::Clear(terminal::ClearType::UntilNewLine)
+            )?;
+            if let Some(line) = self.lines.get(i) {
+                let end = line
+                    .char_indices()
+                    .nth(cols.into())
+                    .map_or(line.len(), |(i, _)| i);
+                out.write_all(line.get(..end).unwrap_or(line).as_bytes())?;
+            }
+        }
+        queue!(out, terminal::EnableLineWrap)?;
+        self.top = Some(top);
+        Ok(())
+    }
+}
+
+/// The rows of cells that a frame `height` pixels high takes on `backend`,
+/// with cells `cell_height` pixels high.
+fn frame_rows(backend: Backend, height: u32, cell_height: u32) -> u16 {
+    let rows = match backend {
+        Backend::HalfBlocks => height.div_ceil(2),
+        Backend::Kitty => height.div_ceil(cell_height),
+        // Sixel draws six rows of pixels at a time.
+        Backend::Sixel => height.next_multiple_of(6).div_ceil(cell_height),
+    };
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
+/// The columns of the terminal, or as many as a line may have when the
+/// size is unknown.
+fn screen_cols() -> u16 {
+    terminal::size().map_or(u16::MAX, |(cols, _)| cols)
 }
 
 /// Pixel size of one terminal cell, from the cached probe in
@@ -1098,10 +1255,15 @@ fn cell_pixels() -> (u32, u32) {
 // Terminal-aware sizing + half-blocks renderer
 // -----------------------------------------------------------------------------
 
-/// Pixel box available for the image, from the terminal size. `None` when
-/// crossterm cannot read the size, as when stdout is a file.
-fn target_pixels_for_backend(backend: Backend, cell: (u32, u32)) -> Option<(u32, u32)> {
-    let (cols, rows) = image_cells(terminal::size().ok()?)?;
+/// Pixel box available for the image, from the terminal size and the
+/// `footer_rows` under it. `None` when crossterm cannot read the size, as
+/// when stdout is a file.
+fn target_pixels_for_backend(
+    backend: Backend,
+    cell: (u32, u32),
+    footer_rows: u16,
+) -> Option<(u32, u32)> {
+    let (cols, rows) = image_cells(terminal::size().ok()?, footer_rows)?;
     let (pw, ph) = pixmap_per_cell(backend, cell);
     Some((u32::from(cols) * pw, u32::from(rows) * ph))
 }
@@ -1117,21 +1279,26 @@ fn pixmap_per_cell(backend: Backend, cell: (u32, u32)) -> (u32, u32) {
 }
 
 /// The columns and the rows that the image may take in a terminal of
-/// `(cols, rows)`, or `None` for a terminal of no cells.
-fn image_cells((cols, rows): (u16, u16)) -> Option<(u16, u16)> {
+/// `(cols, rows)` with `footer_rows` under it, or `None` for a terminal of
+/// no cells. The image keeps at least one row.
+fn image_cells((cols, rows): (u16, u16), footer_rows: u16) -> Option<(u16, u16)> {
     if cols == 0 || rows == 0 {
         return None;
     }
     // One row stays free. Inline, it holds the prompt that follows the
     // image. In the alt screen, it keeps a Sixel in the last row from
     // scrolling the screen.
-    Some((cols, rows.saturating_sub(1).max(1)))
+    Some((
+        cols,
+        rows.saturating_sub(1).saturating_sub(footer_rows).max(1),
+    ))
 }
 
-/// The largest scene that a terminal of `(cols, rows)` shows at scale 1,
-/// in the pixels of the screen. Half-blocks show it smaller.
-fn scene_size(size: (u16, u16), (cw, ch): (u32, u32)) -> Option<(f32, f32)> {
-    let (cols, rows) = image_cells(size)?;
+/// The largest scene that a terminal of `(cols, rows)` with `footer_rows`
+/// under the frame shows at scale 1, in the pixels of the screen.
+/// Half-blocks show it smaller.
+fn scene_size(size: (u16, u16), (cw, ch): (u32, u32), footer_rows: u16) -> Option<(f32, f32)> {
+    let (cols, rows) = image_cells(size, footer_rows)?;
     Some(((u32::from(cols) * cw) as f32, (u32::from(rows) * ch) as f32))
 }
 
@@ -1186,13 +1353,13 @@ fn pixel_density(ch: u32) -> f32 {
     (ch as f32 / REFERENCE_CELL_H).max(1.0)
 }
 
-/// Scale for a `width` by `height` frame on `backend`. The frame shrinks to
-/// fit the cell grid when the grid size is known, and the cap of the backend
-/// applies either way, because half-blocks pack two rows per cell even
-/// without a known grid.
-fn scale_for_backend(backend: Backend, width: f32, height: f32) -> f32 {
+/// Scale for a `width` by `height` frame on `backend`, with `footer_rows`
+/// under it. The frame shrinks to fit the cell grid when the grid size is
+/// known, and the cap of the backend applies either way, because
+/// half-blocks pack two rows per cell even without a known grid.
+fn scale_for_backend(backend: Backend, width: f32, height: f32, footer_rows: u16) -> f32 {
     let cell = cell_pixels();
-    let target = target_pixels_for_backend(backend, cell);
+    let target = target_pixels_for_backend(backend, cell, footer_rows);
     capped_scale(width, height, target, max_scale_for_backend(backend, cell))
 }
 
@@ -1598,9 +1765,75 @@ mod tests {
 
     #[test]
     fn the_scene_size_leaves_the_last_row_free() {
-        assert_eq!(scene_size((80, 25), (8, 16)), Some((640.0, 384.0)));
-        assert_eq!(scene_size((80, 1), (8, 16)), Some((640.0, 16.0)));
-        assert_eq!(scene_size((0, 25), (8, 16)), None);
+        assert_eq!(scene_size((80, 25), (8, 16), 0), Some((640.0, 384.0)));
+        assert_eq!(scene_size((80, 1), (8, 16), 0), Some((640.0, 16.0)));
+        assert_eq!(scene_size((0, 25), (8, 16), 0), None);
+    }
+
+    #[test]
+    fn the_footer_rows_come_out_of_the_scene_size() {
+        assert_eq!(scene_size((80, 25), (8, 16), 5), Some((640.0, 304.0)));
+        // The frame keeps one row in a terminal too small for the footer.
+        assert_eq!(scene_size((80, 3), (8, 16), 5), Some((640.0, 16.0)));
+    }
+
+    #[test]
+    fn a_frame_takes_the_rows_of_its_backend() {
+        assert_eq!(frame_rows(Backend::HalfBlocks, 5, 16), 3);
+        assert_eq!(frame_rows(Backend::Kitty, 33, 16), 3);
+        // 32 pixels make six bands of six, which reach 36.
+        assert_eq!(frame_rows(Backend::Sixel, 32, 16), 3);
+    }
+
+    #[test]
+    fn a_footer_keeps_its_last_lines_without_control_characters() {
+        let mut footer = Footer::new(2);
+        footer.set(&["one", "two", "a\tb\x1b[2J"]);
+        assert_eq!(footer.lines, ["two", "a b [2J"]);
+    }
+
+    /// What `footer` writes from row `top` with `cols` columns.
+    fn footer_bytes(footer: &mut Footer, top: u16, cols: u16) -> String {
+        let mut out = Vec::new();
+        footer.write(&mut out, top, cols).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn a_footer_cuts_a_line_at_the_width() {
+        let mut footer = Footer::new(1);
+        footer.set(&["abcdef"]);
+        let out = footer_bytes(&mut footer, 0, 4);
+        assert!(out.contains("abcd") && !out.contains("abcde"), "{out:?}");
+    }
+
+    #[test]
+    fn a_footer_at_another_row_blanks_the_old_one() {
+        let mut footer = Footer::new(1);
+        footer.set(&["x"]);
+        let first = footer_bytes(&mut footer, 3, 80);
+        assert!(first.starts_with("\x1b[?7l\x1b[4;1H"), "{first:?}");
+        let same = footer_bytes(&mut footer, 3, 80);
+        assert_eq!(same, first, "the same row");
+        let moved = footer_bytes(&mut footer, 1, 80);
+        assert!(moved.starts_with("\x1b[4;1H\x1b[K"), "{moved:?}");
+        assert!(moved.contains("\x1b[2;1H\x1b[Kx"), "{moved:?}");
+    }
+
+    #[test]
+    fn a_frame_draws_the_footer_under_it() {
+        let mut state = sixel_state();
+        state.footer = Arc::new(Mutex::new(Footer::new(1)));
+        state.footer.lock().unwrap().set(&["log"]);
+        let mut out = Vec::new();
+        state
+            .write_to(&mut out, &solid(4, 32, 0, 0, 255), false)
+            .unwrap();
+        assert_eq!(
+            state.footer.lock().unwrap().top,
+            Some(frame_rows(Backend::Sixel, 32, cell_pixels().1))
+        );
+        assert!(String::from_utf8_lossy(&out).ends_with("log\x1b[?7h"));
     }
 
     #[test]
@@ -1820,6 +2053,7 @@ mod tests {
             painter: Painter::new(Backend::Sixel),
             bytes: Vec::new(),
             frame_size: None,
+            footer: Arc::new(Mutex::new(Footer::new(0))),
         }
     }
 
