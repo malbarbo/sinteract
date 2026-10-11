@@ -363,7 +363,10 @@ impl<R: Read, W: Write> Session<R, W> {
 
     /// Write `scene` to `w` as a frame for `to`. The asset of each image
     /// that it draws goes out before, unless it went out before and the
-    /// server did not lose it. An error of `w` ends the session and closes
+    /// server did not lose it. It flushes `w`, since a frame waiting in a
+    /// buffer reached the server only with the tickTaken of the next tick,
+    /// a tick late, or never while the engine computes or blocks on
+    /// something else. An error of `w` ends the session and closes
     /// `w`, since `w` may hold part of a message. Every frame after it
     /// fails with [`io::ErrorKind::BrokenPipe`], and [`Session::wait`]
     /// returns the end.
@@ -388,8 +391,10 @@ impl<R: Read, W: Write> Session<R, W> {
         };
         let sent = &self.sent;
         let id = |image: &Image| *sent.get(image).expect("every image of the scene went out");
-        let written =
-            writer(&mut self.w).and_then(|w| engine_to_server::write_frame(w, player, scene, &id));
+        let written = writer(&mut self.w).and_then(|w| {
+            engine_to_server::write_frame(w, player, scene, &id)?;
+            w.flush()
+        });
         self.check_write(written)?;
         Ok(())
     }
@@ -1102,6 +1107,20 @@ mod tests {
         assert!(matches!(
             testing::read(&mut &engine.drain()[..]),
             Ok(Some(testing::Message::TickTaken))
+        ));
+    }
+
+    #[test]
+    fn write_frame_flushes_the_frame_through_a_buffered_writer() {
+        let stream = start();
+        let engine = Pipe::default();
+        let (mut session, _) =
+            Session::start(players(), &stream[..], io::BufWriter::new(engine.clone())).unwrap();
+        engine.drain();
+        session.write_frame(Target::All, &drawing(&[])).unwrap();
+        assert!(matches!(
+            testing::read(&mut &engine.drain()[..]),
+            Ok(Some(testing::Message::Frame { .. }))
         ));
     }
 
