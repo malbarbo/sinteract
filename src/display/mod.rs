@@ -52,6 +52,6 @@ pub use inbox::{Closed, Sender};
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub use stage::{Stage, StageError, StageEvent};
 #[cfg(feature = "terminal")]
-pub use terminal::{PrintError, Printer, Terminal, TerminalOptions};
+pub use terminal::{Backend, PrintError, Printer, Terminal, TerminalOptions};
 #[cfg(feature = "window")]
 pub use window::Window;

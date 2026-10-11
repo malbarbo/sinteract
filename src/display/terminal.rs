@@ -63,6 +63,9 @@ pub struct TerminalOptions {
     /// The rows of text under the frame, which [`Terminal::set_footer`]
     /// fills. The frame shrinks to leave them free.
     pub footer_rows: u16,
+    /// The backend of the frames. `None` asks the terminal which one it
+    /// shows.
+    pub backend: Option<Backend>,
 }
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
@@ -119,7 +122,7 @@ impl Terminal {
         let claim = Claim::take()?;
         // The probe reads the replies from stdin, so it runs under the
         // claim, where no reader thread takes them.
-        let backend = pick_backend().ok_or(NoGraphics)?;
+        let backend = options.backend.or_else(pick_backend).ok_or(NoGraphics)?;
         claim.show_through(backend);
         let stdin_tty = io::IsTerminal::is_terminal(&io::stdin());
         enter_raw_mode(stdin_tty).map_err(OpenError::Io)?;
@@ -531,7 +534,12 @@ impl Printer {
     /// prints its values as text then. The probe runs once per process.
     pub fn new() -> Result<Self, NoGraphics> {
         let backend = pick_backend().ok_or(NoGraphics)?;
-        Ok(Self::with_painter(Painter::for_stdout(backend)))
+        Ok(Self::with_backend(backend))
+    }
+
+    /// Prints through `backend`, whatever the terminal shows.
+    pub fn with_backend(backend: Backend) -> Self {
+        Self::with_painter(Painter::for_stdout(backend))
     }
 
     /// Print `scene` at the cursor, and leave the cursor on the line below
@@ -767,13 +775,18 @@ pub(crate) fn sixel_supported() -> bool {
     super::term_query::caps().sixel
 }
 
-/// The discriminants are the values of [`TTY`] while a [`Terminal`] shows
-/// through the backend.
+/// How a [`Terminal`] or a [`Printer`] draws a scene.
+// The discriminants are the values of `TTY` while a `Terminal` shows through
+// the backend.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
-enum Backend {
+pub enum Backend {
+    /// The graphics protocol of Kitty.
     Kitty = 2,
+    /// DEC Sixel.
     Sixel = 3,
+    /// Two pixels per cell, as the foreground and background of `▀`. It
+    /// needs truecolor.
     HalfBlocks = 4,
 }
 
