@@ -80,6 +80,9 @@ pub enum Native {
     Window,
     /// Only the terminal.
     Terminal,
+    /// No display. [`Stage::open`] fails with [`OpenError::Disabled`], so
+    /// a game can run without one, as in a test.
+    None,
 }
 
 /// Whether this build shows a game on a display of its own. A build
@@ -252,6 +255,7 @@ fn open_local(
         Native::Auto => open_native(title, width, height, options.terminal),
         Native::Window => Ok(Box::new(Window::open(title, width, height)?)),
         Native::Terminal => Ok(Box::new(Terminal::open_with(options.terminal)?)),
+        Native::None => Err(OpenError::Disabled),
     }
 }
 
@@ -598,5 +602,17 @@ pub(super) mod tests {
         assert!(matches!(stage.wait(None), Ok(StageEvent::Tick)));
         writer.join().unwrap();
         assert!(matches!(stage.wait(None), Err(Interrupt::Close)));
+    }
+
+    #[cfg(all(feature = "terminal", feature = "window"))]
+    #[test]
+    fn a_stage_with_native_none_opens_no_display() {
+        let players = PlayerRange::new(1, 1).expect("1 to 1 is a range");
+        let options = StageOptions {
+            display: Native::None,
+            ..StageOptions::default()
+        };
+        let result = Stage::open("test", 100.0, 100.0, players, options);
+        assert!(matches!(result, Err(StageError::Open(OpenError::Disabled))));
     }
 }

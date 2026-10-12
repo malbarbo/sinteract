@@ -185,6 +185,8 @@ pub enum OpenError {
     Io(io::Error),
     /// The platform has no window for us.
     Platform(String),
+    /// The options ask for no display.
+    Disabled,
 }
 
 impl fmt::Display for OpenError {
@@ -201,6 +203,7 @@ impl fmt::Display for OpenError {
             OpenError::Timeout => f.write_str("the window did not open in time"),
             OpenError::Io(e) => write!(f, "cannot open the display: {e}"),
             OpenError::Platform(e) => write!(f, "cannot open a window: {e}"),
+            OpenError::Disabled => f.write_str("the options ask for no display"),
         }
     }
 }
@@ -214,7 +217,8 @@ impl std::error::Error for OpenError {
             | OpenError::WrongThread
             | OpenError::LoopEnded
             | OpenError::Timeout
-            | OpenError::Platform(_) => None,
+            | OpenError::Platform(_)
+            | OpenError::Disabled => None,
         }
     }
 }
