@@ -2,6 +2,7 @@
 //! compose, transform and draw on a [`Scene`](crate::scene::Scene).
 
 mod color;
+mod compose;
 mod font;
 mod geometry;
 mod measure;
@@ -11,6 +12,7 @@ mod style;
 mod tree;
 
 pub use color::{Color, NAMED_COLORS};
+pub use compose::{CurveEnd, XPlace, YPlace};
 pub use font::{Font, FontWeight};
 pub use geometry::Point;
 pub use measure::{

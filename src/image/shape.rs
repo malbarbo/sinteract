@@ -362,44 +362,56 @@ impl Image {
     /// right to the radius at `angle` degrees. A positive angle turns
     /// counterclockwise and a negative one clockwise.
     pub fn wedge(radius: Length, angle: WedgeAngle, style: Style) -> Result<Self, Overflow> {
-        let (r, angle) = (radius.get(), angle.get());
-        let sweep = angle < 0.0;
-        let mut commands = vec![
-            PathCmd::move_to(Point::ORIGIN),
-            PathCmd::line_to(Point { x: r, y: 0.0 }),
-        ];
-        if angle.abs() == 360.0 {
-            // An arc that ends where it starts draws nothing, so a full
-            // turn takes two halves.
-            commands.push(PathCmd::arc(
-                r,
-                r,
-                0.0,
-                false,
-                sweep,
-                Point { x: -r, y: 0.0 },
-            ));
-            commands.push(PathCmd::arc(
-                r,
-                r,
-                0.0,
-                false,
-                sweep,
-                Point { x: r, y: 0.0 },
-            ));
-        } else {
-            let end = Point {
-                x: r * cos_deg(angle),
-                y: -r * sin_deg(angle),
-            };
-            commands.push(PathCmd::arc(r, r, 0.0, angle.abs() > 180.0, sweep, end));
-        }
-        Image::path(commands, true, style)
+        Image::path(wedge(radius, angle), true, style)
     }
+}
+
+/// The commands of a wedge with its center at the origin.
+pub(super) fn wedge(radius: Length, angle: WedgeAngle) -> Vec<PathCmd> {
+    let (r, angle) = (radius.get(), angle.get());
+    let sweep = angle < 0.0;
+    let mut commands = vec![
+        PathCmd::move_to(Point::ORIGIN),
+        PathCmd::line_to(Point { x: r, y: 0.0 }),
+    ];
+    if angle.abs() == 360.0 {
+        // An arc that ends where it starts draws nothing, so a full
+        // turn takes two halves.
+        commands.push(PathCmd::arc(
+            r,
+            r,
+            0.0,
+            false,
+            sweep,
+            Point { x: -r, y: 0.0 },
+        ));
+        commands.push(PathCmd::arc(
+            r,
+            r,
+            0.0,
+            false,
+            sweep,
+            Point { x: r, y: 0.0 },
+        ));
+    } else {
+        let end = Point {
+            x: r * cos_deg(angle),
+            y: -r * sin_deg(angle),
+        };
+        commands.push(PathCmd::arc(r, r, 0.0, angle.abs() > 180.0, sweep, end));
+    }
+    commands
 }
 
 /// The path through `points`, closed when there are three or more.
 fn polygon(points: impl IntoIterator<Item = Point>, style: Style) -> Result<Image, Overflow> {
+    let (commands, closed) = polygon_commands(points);
+    Image::path(commands, closed, style)
+}
+
+/// The commands of the path through `points`, and whether the path is
+/// closed.
+pub(super) fn polygon_commands(points: impl IntoIterator<Item = Point>) -> (Box<[PathCmd]>, bool) {
     let commands: Box<[PathCmd]> = points
         .into_iter()
         .enumerate()
@@ -412,7 +424,7 @@ fn polygon(points: impl IntoIterator<Item = Point>, style: Style) -> Result<Imag
         })
         .collect();
     let closed = commands.len() >= 3;
-    Image::path(commands, closed, style)
+    (commands, closed)
 }
 
 /// The star polygon of [`Image::star_polygon`], for counts with no common
@@ -524,11 +536,11 @@ fn gcd(a: u64, b: u64) -> u64 {
     if b == 0 { a } else { gcd(b, a % b) }
 }
 
-fn cos_deg(angle: f64) -> f64 {
+pub(super) fn cos_deg(angle: f64) -> f64 {
     (angle * PI / 180.0).cos()
 }
 
-fn sin_deg(angle: f64) -> f64 {
+pub(super) fn sin_deg(angle: f64) -> f64 {
     (angle * PI / 180.0).sin()
 }
 

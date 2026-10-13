@@ -106,15 +106,7 @@ impl Image {
         closed: bool,
         style: Style,
     ) -> Result<Self, Overflow> {
-        let commands = commands.into();
-        let drawn = path::bounds(&commands);
-        let path = Self::new(Node::Path {
-            drawn,
-            style,
-            commands,
-            closed,
-        })?;
-        Ok(path.settle(Point::ORIGIN)?.0)
+        Ok(Self::path_at(commands, closed, style)?.0)
     }
 
     /// The line from the origin to `(x, y)`. As in 2htdp, a line takes one
@@ -172,12 +164,9 @@ impl Image {
     /// The part of `self` in the rectangle of `w` by `h` with its least
     /// corner at `(x, y)`.
     pub fn crop(&self, x: Finite, y: Finite, w: Length, h: Length) -> Self {
-        let at = Point::new(x, y);
-        Self(Arc::new(Node::Crop {
-            region: ImageBox::of_size(w, h),
-            image: self.clone(),
-            at: Point::ORIGIN.minus(at),
-        }))
+        let at = Point::ORIGIN.minus(Point::new(x, y));
+        self.crop_at(ImageBox::of_size(w, h), at)
+            .expect("the region of a crop of finite measures is finite")
     }
 
     pub fn width(&self) -> Length {
@@ -201,6 +190,34 @@ impl Image {
             x: (b.max.x - b.min.x) / 2.0,
             y: (b.max.y - b.min.y) / 2.0,
         }
+    }
+
+    /// The path of `commands`, with the place of the least corner of its
+    /// bounds.
+    pub(super) fn path_at(
+        commands: impl Into<Box<[PathCmd]>>,
+        closed: bool,
+        style: Style,
+    ) -> Result<(Self, Point), Overflow> {
+        let commands = commands.into();
+        let drawn = path::bounds(&commands);
+        let path = Self::new(Node::Path {
+            drawn,
+            style,
+            commands,
+            closed,
+        })?;
+        path.settle(Point::ORIGIN)
+    }
+
+    /// The part of `self` at `at` that falls in `region`, a region with its
+    /// least corner at the origin.
+    pub(super) fn crop_at(&self, region: ImageBox, at: Point) -> Result<Self, Overflow> {
+        Self::new(Node::Crop {
+            region,
+            image: self.clone(),
+            at,
+        })
     }
 
     /// The image of `node`, or `Overflow` when a number in `node` is not
@@ -317,7 +334,7 @@ impl Image {
     /// `parts` drawn from the first to the last, each at its point, with
     /// the place of the least corner of the whole. A part that is a
     /// combination gives its own parts.
-    fn combination(
+    pub(super) fn combination(
         parts: impl IntoIterator<Item = (Image, Point)>,
     ) -> Result<(Self, Point), Overflow> {
         let mut flat: Vec<(Image, Point)> = Vec::new();
