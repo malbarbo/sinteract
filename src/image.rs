@@ -6,6 +6,7 @@ mod font;
 mod geometry;
 mod measure;
 mod path;
+mod shape;
 mod style;
 mod tree;
 
@@ -18,5 +19,6 @@ pub use measure::{
     WedgeAngleError,
 };
 pub use path::PathCmd;
+pub use shape::{AngleSumError, StarPolygonError, TriangleSidesError};
 pub use style::{Attribute, Style};
-pub use tree::{Image, Overflow};
+pub use tree::{BitmapError, Image, Overflow};

@@ -58,10 +58,23 @@ impl PathCmd {
         sweep: bool,
         end: Point,
     ) -> Self {
+        Self::arc(rx.get(), ry.get(), rotation.get(), large_arc, sweep, end)
+    }
+
+    /// [`PathCmd::arc_to`] for numbers that a shape computes. A number that
+    /// is not finite makes the image an `Overflow`.
+    pub(super) fn arc(
+        rx: f64,
+        ry: f64,
+        rotation: f64,
+        large_arc: bool,
+        sweep: bool,
+        end: Point,
+    ) -> Self {
         Self(Cmd::Arc {
-            rx: rx.get(),
-            ry: ry.get(),
-            rotation: rotation.get(),
+            rx,
+            ry,
+            rotation,
             large_arc,
             sweep,
             end,

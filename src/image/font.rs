@@ -32,3 +32,14 @@ pub enum FontWeight {
     Regular,
     Bold,
 }
+
+impl FontWeight {
+    /// The weight in CSS.
+    pub(super) fn css(self) -> u16 {
+        match self {
+            FontWeight::Light => 300,
+            FontWeight::Regular => 400,
+            FontWeight::Bold => 700,
+        }
+    }
+}

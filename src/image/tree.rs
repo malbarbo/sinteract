@@ -11,7 +11,9 @@ use std::sync::{Arc, LazyLock};
 
 use super::geometry::{Bounds, ImageBox, Point};
 use super::path::{self, PathCmd};
-use super::{Finite, Length, Style};
+use super::{Finite, Font, Length, Style};
+use crate::asset::{ImageError, decode_data_uri};
+use crate::scene;
 
 #[derive(Clone)]
 pub struct Image(Arc<Node>);
@@ -22,6 +24,11 @@ enum Node {
         style: Style,
         commands: Box<[PathCmd]>,
         closed: bool,
+    },
+    Line {
+        style: Style,
+        from: Point,
+        to: Point,
     },
     /// The parts from the bottom to the top, each with the place of its
     /// least corner. No part is a combination.
@@ -34,6 +41,16 @@ enum Node {
         region: ImageBox,
         image: Image,
         at: Point,
+    },
+    Text {
+        style: Style,
+        region: ImageBox,
+        text: Box<str>,
+        font: Font,
+    },
+    Bitmap {
+        region: ImageBox,
+        image: scene::Image,
     },
 }
 
@@ -48,6 +65,24 @@ impl fmt::Display for Overflow {
 }
 
 impl std::error::Error for Overflow {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BitmapError {
+    /// The text is not a `data:` URI in base64.
+    NotDataUri,
+    Image(ImageError),
+}
+
+impl fmt::Display for BitmapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BitmapError::NotDataUri => f.write_str("the text is not a data URI in base64"),
+            BitmapError::Image(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for BitmapError {}
 
 static EMPTY: LazyLock<Image> = LazyLock::new(|| {
     Image(Arc::new(Node::Path {
@@ -80,6 +115,52 @@ impl Image {
             closed,
         })?;
         Ok(path.settle(Point::ORIGIN)?.0)
+    }
+
+    /// The line from the origin to `(x, y)`. As in 2htdp, a line takes one
+    /// more column and one more row than the distance between its ends, so a
+    /// thin line fits on the canvas.
+    pub fn line(x: Finite, y: Finite, style: Style) -> Self {
+        let line = Self::new(Node::Line {
+            style,
+            from: Point::ORIGIN,
+            to: Point::new(x, y),
+        });
+        // A finite number plus one is finite, and so are the bounds.
+        line.and_then(|line| line.settle(Point::ORIGIN))
+            .expect("a line with finite ends has finite bounds")
+            .0
+    }
+
+    /// `text` on one line in `font`. A text that draws nothing, such as the
+    /// empty text, is the empty image.
+    pub fn text(text: &str, font: Font, style: Style) -> Self {
+        let size = font.size.get() as f32;
+        let measure = crate::text::measure(&font.family, font.weight.css(), font.style, size, text);
+        let Some(m) = measure.filter(|m| m.width() > 0.0) else {
+            return Self::empty();
+        };
+        let length = |v: f32| Length::new(f64::from(v)).expect("the measure of a text is finite");
+        Self::new(Node::Text {
+            style,
+            region: ImageBox::of_size(length(m.width()), length(m.height())),
+            text: text.into(),
+            font,
+        })
+        .expect("the measure of a text is finite")
+    }
+
+    /// The image in `uri`, a `data:` URI in base64, at the size of the
+    /// original.
+    pub fn bitmap_data_uri(uri: &str) -> Result<Self, BitmapError> {
+        let blob = decode_data_uri(uri).ok_or(BitmapError::NotDataUri)?;
+        let (image, head) = scene::Image::load_with_head(blob).map_err(BitmapError::Image)?;
+        let length = |v: u32| Length::new(f64::from(v)).expect("a u32 is a length");
+        let bitmap = Self::new(Node::Bitmap {
+            region: ImageBox::of_size(length(head.width), length(head.height)),
+            image,
+        });
+        Ok(bitmap.expect("the size of a bitmap is finite"))
     }
 
     /// `parts` drawn from the first to the last, each with its least corner
@@ -129,10 +210,12 @@ impl Image {
             Node::Path {
                 drawn, commands, ..
             } => drawn.is_none_or(Bounds::is_finite) && commands.iter().all(|c| c.is_finite()),
+            Node::Line { from, to, .. } => from.is_finite() && to.is_finite(),
             Node::Combination { drawn, parts } => {
                 drawn.is_none_or(Bounds::is_finite) && parts.iter().all(|(_, at)| at.is_finite())
             }
             Node::Crop { region, at, .. } => region.is_finite() && at.is_finite(),
+            Node::Text { region, .. } | Node::Bitmap { region, .. } => region.is_finite(),
         };
         if finite {
             Ok(Self(Arc::new(node)))
@@ -145,7 +228,13 @@ impl Image {
     fn drawn(&self) -> Option<Bounds> {
         match &*self.0 {
             Node::Path { drawn, .. } | Node::Combination { drawn, .. } => *drawn,
-            Node::Crop { region, .. } => Some(region.bounds()),
+            Node::Line { from, to, .. } => Some(Bounds {
+                min: from.min(*to).translate(-0.5, -0.5),
+                max: from.max(*to).translate(0.5, 0.5),
+            }),
+            Node::Crop { region, .. } | Node::Text { region, .. } | Node::Bitmap { region, .. } => {
+                Some(region.bounds())
+            }
         }
     }
 
@@ -176,6 +265,11 @@ impl Image {
                 commands: commands.iter().map(|c| c.translate(by)).collect(),
                 closed: *closed,
             },
+            Node::Line { style, from, to } => Node::Line {
+                style: style.clone(),
+                from: from.plus(by),
+                to: to.plus(by),
+            },
             Node::Combination { drawn, parts } => Node::Combination {
                 drawn: moved(drawn),
                 parts: parts
@@ -187,6 +281,21 @@ impl Image {
                 region: region.translate(by),
                 image: image.clone(),
                 at: at.plus(by),
+            },
+            Node::Text {
+                style,
+                region,
+                text,
+                font,
+            } => Node::Text {
+                style: style.clone(),
+                region: region.translate(by),
+                text: text.clone(),
+                font: font.clone(),
+            },
+            Node::Bitmap { region, image } => Node::Bitmap {
+                region: region.translate(by),
+                image: image.clone(),
             },
         })
     }
@@ -260,7 +369,7 @@ impl Node {
     /// Moves the children of `self` to `stack`, and leaves `self` with none.
     fn move_children(&mut self, stack: &mut Vec<Image>) {
         match self {
-            Node::Path { .. } => {}
+            Node::Path { .. } | Node::Line { .. } | Node::Text { .. } | Node::Bitmap { .. } => {}
             Node::Combination { parts, .. } => {
                 stack.extend(std::mem::take(parts).into_iter().map(|(p, _)| p));
             }
@@ -316,6 +425,22 @@ impl PartialEq for Image {
                     }
                 }
                 (
+                    Node::Line {
+                        style: s1,
+                        from: f1,
+                        to: t1,
+                    },
+                    Node::Line {
+                        style: s2,
+                        from: f2,
+                        to: t2,
+                    },
+                ) => {
+                    if s1 != s2 || f1 != f2 || t1 != t2 {
+                        return false;
+                    }
+                }
+                (
                     Node::Combination {
                         drawn: d1,
                         parts: p1,
@@ -351,6 +476,38 @@ impl PartialEq for Image {
                         return false;
                     }
                     pending.push((i1, i2));
+                }
+                (
+                    Node::Text {
+                        style: s1,
+                        region: r1,
+                        text: t1,
+                        font: f1,
+                    },
+                    Node::Text {
+                        style: s2,
+                        region: r2,
+                        text: t2,
+                        font: f2,
+                    },
+                ) => {
+                    if s1 != s2 || r1 != r2 || t1 != t2 || f1 != f2 {
+                        return false;
+                    }
+                }
+                (
+                    Node::Bitmap {
+                        region: r1,
+                        image: i1,
+                    },
+                    Node::Bitmap {
+                        region: r2,
+                        image: i2,
+                    },
+                ) => {
+                    if r1 != r2 || i1 != i2 {
+                        return false;
+                    }
                 }
                 _ => return false,
             }
@@ -452,6 +609,46 @@ mod tests {
         assert_eq!(polyline(&[(-1e308, 0.0), (1e308, 0.0)]), Err(Overflow));
         let far = Image::combine([(square(1.0), p(-1e308, 0.0)), (square(1.0), p(1e308, 0.0))]);
         assert_eq!(far, Err(Overflow));
+    }
+
+    #[test]
+    fn a_line_takes_one_more_column_and_row() {
+        let x = Finite::new(-10.0).unwrap();
+        let line = Image::line(x, Finite::new(0.0).unwrap(), Style::default());
+        assert_eq!(line.dimension(), (length(11.0), length(1.0)));
+        let max = Finite::new(f64::MAX).unwrap();
+        let long = Image::line(max, max, Style::default());
+        assert_eq!(long.width(), length(f64::MAX));
+    }
+
+    #[test]
+    fn a_text_that_draws_nothing_is_empty() {
+        assert_eq!(
+            Image::text("", Font::default(), Style::default()),
+            Image::empty()
+        );
+        let hi = Image::text("hi", Font::default(), Style::default());
+        let (w, h) = hi.dimension();
+        assert!(w.get() > 0.0 && h.get() > 0.0, "{hi:?}");
+    }
+
+    #[test]
+    fn a_bitmap_has_the_size_of_its_image() {
+        let uri = |w, h| crate::asset::encode_data_uri("image/png", &crate::asset::png_head(w, h));
+        let bitmap = Image::bitmap_data_uri(&uri(3, 2)).unwrap();
+        assert_eq!(bitmap.dimension(), (length(3.0), length(2.0)));
+        assert_eq!(
+            Image::bitmap_data_uri(&uri(0, 2)),
+            Err(BitmapError::Image(ImageError::Unsupported))
+        );
+        assert_eq!(
+            Image::bitmap_data_uri("image.png"),
+            Err(BitmapError::NotDataUri)
+        );
+        assert_eq!(
+            Image::bitmap_data_uri("data:text/plain;base64,aGk="),
+            Err(BitmapError::Image(ImageError::Unsupported))
+        );
     }
 
     #[test]
