@@ -155,6 +155,7 @@ impl IsoscelesAngle {
 pub struct Opacity(f64);
 
 impl Opacity {
+    pub const TRANSPARENT: Self = Self(0.0);
     pub const OPAQUE: Self = Self(1.0);
 
     pub fn new(v: f64) -> Result<Self, OutOfRange> {
@@ -304,7 +305,7 @@ mod tests {
 
     #[test]
     fn opacity_keeps_both_ends() {
-        assert_eq!(Opacity::new(0.0).unwrap().get(), 0.0);
+        assert_eq!(Opacity::new(0.0).unwrap(), Opacity::TRANSPARENT);
         assert_eq!(Opacity::new(1.0).unwrap(), Opacity::OPAQUE);
         for v in [-0.1, 1.1, f64::NAN] {
             assert_eq!(Opacity::new(v), Err(OutOfRange), "{v}");
