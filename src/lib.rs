@@ -11,6 +11,9 @@
 //!
 //! [`asset`] holds the limits on the images of a room.
 //!
+//! [`image`], behind the feature `image`, holds the image model of the
+//! teaching languages, which builds the scene of an image.
+//!
 //! [`session`] turns the bytes that a server writes to an engine into the
 //! events of the engine, with the rules of the protocol. It does no I/O of
 //! its own, so it builds on wasm32 too. [`server`] holds the rules of a
@@ -49,6 +52,8 @@ pub mod asset;
 ))]
 pub mod display;
 pub mod event;
+#[cfg(feature = "image")]
+pub mod image;
 mod outline;
 pub mod renderer;
 pub mod scene;

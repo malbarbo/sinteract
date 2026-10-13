@@ -8,7 +8,9 @@ repository = "https://github.com/malbarbo/sinteract"
 readme = "README.md"
 
 [features]
-default = ["native-fonts", "render", "terminal", "window"]
+default = ["image", "native-fonts", "render", "terminal", "window"]
+# The image model of spython and sgleam, in `image`.
+image = []
 # The pixmap renderer alone, which decodes only a PNG. A program that
 # compares the pixels of two scenes needs no more.
 pixmap = ["dep:tiny-skia"]
