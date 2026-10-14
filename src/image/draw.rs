@@ -2,7 +2,6 @@
 
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::geometry::{ImageBox, Point};
 use super::path::{self, RESIDUE, without_residue};
@@ -28,10 +27,6 @@ impl fmt::Display for TooLarge {
 }
 
 impl std::error::Error for TooLarge {}
-
-/// The number in the id prefix of the next svg. A page can put many svgs
-/// into one HTML document, so two svgs must not share an id.
-static NEXT_SVG: AtomicUsize = AtomicUsize::new(0);
 
 impl Image {
     /// The width and the height of the canvas that holds `self`, in whole
@@ -68,13 +63,15 @@ impl Image {
         }
     }
 
-    /// The svg of `self` on a canvas of `width` by `height`. Each svg has ids
-    /// of its own, and keeps each bitmap in the format of its image.
-    pub fn to_svg(&self, width: f32, height: f32) -> String {
+    /// The svg of `self` on a canvas of `width` by `height`, with each id
+    /// after `s{number}-`. Two svgs in one HTML document need different
+    /// numbers, or the clip of one can take the place of the clip of the
+    /// other. The svg keeps each bitmap in the format of its image.
+    pub fn to_svg(&self, width: f32, height: f32, number: usize) -> String {
         let mut scene = Scene::new(width, height);
         self.draw(&mut scene);
-        let prefix = format!("s{}-", NEXT_SVG.fetch_add(1, Ordering::Relaxed));
-        let prefix = IdPrefix::new(&prefix).expect("a letter, digits and a dash make an id prefix");
+        let prefix = format!("s{number}-");
+        let prefix = IdPrefix::new(&prefix).expect("s, digits and a dash make an id prefix");
         let mut renderer = SvgRenderer::with_id_prefix(prefix).keep_image_formats();
         let Ok(_) = renderer.render(&scene);
         renderer.into_string()
@@ -426,7 +423,7 @@ mod tests {
 
     fn svg(image: &Image) -> String {
         let (w, h) = image.canvas_size().unwrap();
-        image.to_svg(w, h)
+        image.to_svg(w, h, 0)
     }
 
     fn scene(image: &Image) -> Scene {
@@ -595,8 +592,11 @@ mod tests {
     }
 
     #[test]
-    fn each_svg_has_ids_of_its_own() {
+    fn each_id_starts_with_the_number() {
         let cropped = solid(10.0, 5.0).crop(finite(2.0), finite(1.0), length(4.0), length(3.0));
-        assert_ne!(svg(&cropped), svg(&cropped));
+        let (w, h) = cropped.canvas_size().unwrap();
+        let cropped = cropped.to_svg(w, h, 7);
+        assert!(cropped.contains(r#"<clipPath id="s7-c0">"#), "{cropped}");
+        assert!(cropped.contains("url(#s7-c0)"), "{cropped}");
     }
 }
