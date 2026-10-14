@@ -80,8 +80,10 @@ impl Image {
         Ok(self.svg(w, h, number))
     }
 
-    /// The canvas of [`Image::to_repl_svg`].
-    pub(super) fn repl_canvas_size(&self) -> Result<(f32, f32), TooLarge> {
+    /// The canvas of [`Image::to_repl_svg`], one pixel wider and taller
+    /// than [`Image::canvas_size`]. A repl that draws `self` on a scene of
+    /// its own uses this size.
+    pub fn repl_canvas_size(&self) -> Result<(f32, f32), TooLarge> {
         let (w, h) = self.canvas_size()?;
         Ok((w + 1.0, h + 1.0))
     }
