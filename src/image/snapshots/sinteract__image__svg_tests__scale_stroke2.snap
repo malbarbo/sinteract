@@ -1,0 +1,8 @@
+---
+source: src/image/svg_tests.rs
+---
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="160" height="60" viewBox="0 0 160 60">
+  <path d="M0 20 L20 20 L20 40 L0 40 Z" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-miterlimit="10" stroke-dasharray="4 2"/>
+  <path d="M20 0 L80 0 L80 60 L20 60 Z" fill="none" stroke="#000000" stroke-width="6" stroke-linecap="round" stroke-miterlimit="10" stroke-dasharray="12 6"/>
+  <path d="M80 20 L160 20 L160 40 L80 40 Z" fill="none" stroke="#000000" stroke-width="5" stroke-linecap="round" stroke-miterlimit="10" stroke-dasharray="10 5"/>
+</svg>

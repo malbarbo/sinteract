@@ -1,0 +1,12 @@
+---
+source: src/image/svg_tests.rs
+---
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="48" height="48" viewBox="0 0 48 48">
+  <defs>
+    <clipPath id="s0-c0"><path d="M0 0 L48 0 L48 48 L0 48"/></clipPath>
+  </defs>
+  <g clip-path="url(#s0-c0)">
+    <path d="M0 0 L48 0 L48 48 L0 48 Z" fill="#d3d3d3"/>
+    <path d="M24 10.143594 L40 37.856407 L8 37.856407 Z" fill="#ff0000"/>
+  </g>
+</svg>

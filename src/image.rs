@@ -11,6 +11,8 @@ mod path;
 mod same;
 mod shape;
 mod style;
+#[cfg(test)]
+mod svg_tests;
 mod transform;
 mod tree;
 

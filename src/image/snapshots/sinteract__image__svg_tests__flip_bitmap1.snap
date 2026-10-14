@@ -1,0 +1,11 @@
+---
+source: src/image/svg_tests.rs
+---
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="6" height="2" viewBox="0 0 6 2">
+  <defs>
+    <image id="s0-i0" x="-0.5" y="-0.5" width="1" height="1" preserveAspectRatio="none" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DA8J+BkYHh////DAAe9gT9Ce00PgAAAABJRU5ErkJggg=="/>
+  </defs>
+  <use xlink:href="#s0-i0" transform="matrix(2 0 0 2 1 1)"/>
+  <use xlink:href="#s0-i0" transform="matrix(-2 0 0 2 3 1)"/>
+  <use xlink:href="#s0-i0" transform="matrix(2 0 0 -2 5 1)"/>
+</svg>
