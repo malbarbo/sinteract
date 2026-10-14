@@ -1471,19 +1471,20 @@ impl PathBounds {
 
     pub fn quad_to(self, cx: f64, cy: f64, x: f64, y: f64) -> Self {
         let to = kurbo::Point::new(x, y);
-        let quad = kurbo::QuadBez::new(self.last_point, kurbo::Point::new(cx, cy), to);
-        self.add(quad.bounding_box(), to)
+        let points = [self.last_point, kurbo::Point::new(cx, cy), to];
+        let bounds = curve_bounds(points, |[p0, p1, p2]| kurbo::QuadBez::new(p0, p1, p2));
+        self.add(bounds, to)
     }
 
     pub fn cubic_to(self, c1x: f64, c1y: f64, c2x: f64, c2y: f64, x: f64, y: f64) -> Self {
         let to = kurbo::Point::new(x, y);
-        let cubic = kurbo::CubicBez::new(
+        let points = [
             self.last_point,
             kurbo::Point::new(c1x, c1y),
             kurbo::Point::new(c2x, c2y),
             to,
-        );
-        self.add(cubic.bounding_box(), to)
+        ];
+        self.add(curve_bounds(points, cubic), to)
     }
 
     /// Add an SVG endpoint arc as the cubics of [`PathBuilder::arc_to`]. A
@@ -1506,8 +1507,8 @@ impl PathBounds {
             return self.line_to(x, y);
         };
         for [c1, c2, end] in cubics {
-            let cubic = kurbo::CubicBez::new(self.last_point, c1, c2, end);
-            self = self.add(cubic.bounding_box(), end);
+            let bounds = curve_bounds([self.last_point, c1, c2, end], cubic);
+            self = self.add(bounds, end);
         }
         self.last_point = to;
         self
@@ -1524,6 +1525,55 @@ impl PathBounds {
         self.last_point = to;
         self
     }
+}
+
+fn cubic([p0, p1, p2, p3]: [kurbo::Point; 4]) -> kurbo::CubicBez {
+    kurbo::CubicBez::new(p0, p1, p2, p3)
+}
+
+/// The bounds of the curve that `curve` makes of `points`. kurbo loses the
+/// extremes when the differences of the points overflow near f64::MAX or
+/// lose their bits among the subnormals. Outside a range far from both, the
+/// points go through a power of two that brings the largest one near 1,
+/// which keeps every bit of it, and the ends join the bounds as they are.
+fn curve_bounds<C: ParamCurveExtrema, const N: usize>(
+    points: [kurbo::Point; N],
+    curve: impl Fn([kurbo::Point; N]) -> C,
+) -> kurbo::Rect {
+    const SAFE: std::ops::RangeInclusive<f64> = pow2(-300)..=pow2(300);
+    let largest = points
+        .iter()
+        .fold(0.0_f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+    if largest == 0.0 || SAFE.contains(&largest) || !largest.is_finite() {
+        return curve(points).bounding_box();
+    }
+    let e = exponent(largest);
+    let ends = curve(points);
+    let ends = kurbo::Rect::from_points(ends.start(), ends.end());
+    let rect = curve(points.map(|p| times_pow2(p, -e))).bounding_box();
+    let (p0, p1) = (rect.origin(), kurbo::Point::new(rect.x1, rect.y1));
+    kurbo::Rect::from_points(times_pow2(p0, e), times_pow2(p1, e)).union(ends)
+}
+
+/// 2 to the power `e`, for `e` from -1022 to 1023.
+const fn pow2(e: i32) -> f64 {
+    f64::from_bits(((e + 1023) as u64) << 52)
+}
+
+/// The exponent of `v` in base 2, for a finite `v` other than 0.
+fn exponent(v: f64) -> i32 {
+    if v.is_normal() {
+        ((v.to_bits() >> 52) & 0x7ff) as i32 - 1023
+    } else {
+        exponent(v * pow2(600)) - 600
+    }
+}
+
+/// `p` times 2 to the power `e`, for `e` from -2044 to 2046. Two factors
+/// cover the range, and each one is exact while the result stays normal.
+fn times_pow2(p: kurbo::Point, e: i32) -> kurbo::Point {
+    let (a, b) = (pow2(e / 2), pow2(e - e / 2));
+    kurbo::Point::new(p.x * a * b, p.y * a * b)
 }
 
 /// Builds a [`Path`] by value.
@@ -1843,6 +1893,39 @@ mod tests {
         let (x0, y0, x1, y1) = arc(true);
         let near = |a: f64, b: f64| (a - b).abs() <= 1e288;
         assert!(near(x0, -1e300) && near(y0, -2e300) && near(x1, 1e300) && near(y1, 0.0));
+    }
+
+    #[test]
+    fn a_curve_far_from_1_keeps_its_extremes() {
+        // Near f64::MAX the differences of the points overflow, and in the
+        // subnormals they lose their bits.
+        let unit = [(0.0, 0.0), (-1.0, 0.3), (1.7, 0.9), (0.4, -0.2)];
+        let [p0, p1, p2, p3] = unit.map(|(x, y)| kurbo::Point::new(x, y));
+        let cubic_rect = kurbo::CubicBez::new(p0, p1, p2, p3).bounding_box();
+        let quad_rect = kurbo::QuadBez::new(p0, p1, p3).bounding_box();
+        for s in [f64::MAX / 2.0, 1e-310] {
+            let [p0, p1, p2, p3] = [p0, p1, p2, p3].map(|p| (p.to_vec2() * s).to_point());
+            let near = |bounds: Option<(f64, f64, f64, f64)>, r: kurbo::Rect| {
+                let (x0, y0, x1, y1) = bounds.unwrap();
+                let near = |a: f64, b: f64| (a - b * s).abs() <= s * 1e-9;
+                near(x0, r.x0) && near(y0, r.y0) && near(x1, r.x1) && near(y1, r.y1)
+            };
+            let cubic = PathBounds::new(p0.x, p0.y).cubic_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+            assert!(near(cubic.get(), cubic_rect));
+            let quad = PathBounds::new(p0.x, p0.y).quad_to(p1.x, p1.y, p3.x, p3.y);
+            assert!(near(quad.get(), quad_rect));
+        }
+    }
+
+    #[test]
+    fn a_curve_near_1_has_the_bounds_of_kurbo() {
+        let [p0, p1, p2, p3] = [(3.0, 7.0), (-40.0, 900.0), (650.0, -0.25), (12.5, 30.0)]
+            .map(|(x, y)| kurbo::Point::new(x, y));
+        let rect = kurbo::CubicBez::new(p0, p1, p2, p3).bounding_box();
+        let bounds = PathBounds::new(p0.x, p0.y)
+            .cubic_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y)
+            .get();
+        assert_eq!(bounds, Some((rect.x0, rect.y0, rect.x1, rect.y1)));
     }
 
     #[test]
