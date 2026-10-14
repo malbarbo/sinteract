@@ -9,7 +9,7 @@ use super::path::{self, RESIDUE, without_residue};
 use super::tree::Node;
 use super::{Attribute, Color, Font, Image, Length, Style};
 use crate::renderer::Renderer;
-use crate::renderer::svg::SvgRenderer;
+use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
     Bitmap, ClipPath, DEFAULT_MITER_LIMIT, Dash, FillRule, LineCap, LineJoin, Paint, Path,
     PathStyle, Sampling, Scene, Text,
@@ -74,9 +74,8 @@ impl Image {
         let mut scene = Scene::new(width, height);
         self.draw(&mut scene);
         let prefix = format!("s{}-", NEXT_SVG.fetch_add(1, Ordering::Relaxed));
-        let mut renderer = SvgRenderer::with_id_prefix(&prefix)
-            .expect("a letter, digits and a dash make an id prefix")
-            .keep_image_formats();
+        let prefix = IdPrefix::new(&prefix).expect("a letter, digits and a dash make an id prefix");
+        let mut renderer = SvgRenderer::with_id_prefix(prefix).keep_image_formats();
         let Ok(_) = renderer.render(&scene);
         renderer.into_string()
     }

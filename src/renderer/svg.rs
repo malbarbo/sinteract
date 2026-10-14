@@ -42,6 +42,43 @@ pub fn render_to_svg(scene: &crate::scene::Scene) -> String {
     renderer.into_string()
 }
 
+/// The start of every id in an SVG document: one or more ASCII letters,
+/// digits, `-` and `_`, and not a digit or `-` first, which cannot start an
+/// XML id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdPrefix<'a>(&'a str);
+
+impl<'a> IdPrefix<'a> {
+    pub const fn new(prefix: &'a str) -> Result<Self, InvalidIdPrefix> {
+        if prefix.is_empty() {
+            return Err(InvalidIdPrefix);
+        }
+        let mut rest = prefix.as_bytes();
+        let mut first = true;
+        while let [b, tail @ ..] = rest {
+            let allowed = b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_';
+            if !allowed || (first && (b.is_ascii_digit() || *b == b'-')) {
+                return Err(InvalidIdPrefix);
+            }
+            rest = tail;
+            first = false;
+        }
+        Ok(Self(prefix))
+    }
+}
+
+/// The text cannot start the ids of an SVG document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidIdPrefix;
+
+impl fmt::Display for InvalidIdPrefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the text cannot start an id of an svg")
+    }
+}
+
+impl std::error::Error for InvalidIdPrefix {}
+
 /// Accumulates the body and the definitions of a frame, then joins them into
 /// one document at the end of the frame.
 pub struct SvgRenderer {
@@ -97,18 +134,12 @@ impl SvgRenderer {
     }
 
     /// An empty renderer whose ids start with `prefix`, so documents with
-    /// different prefixes can share one HTML page. Returns `None` when the
-    /// prefix holds a character other than an ASCII letter, a digit, `-` or
-    /// `_`, or starts with a digit or `-`, which cannot start an XML id.
-    pub fn with_id_prefix(prefix: &str) -> Option<Self> {
-        let chars = prefix
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-        let start = !prefix.starts_with(|c: char| c.is_ascii_digit() || c == '-');
-        (chars && start).then(|| Self {
-            prefix: prefix.to_owned(),
+    /// different prefixes can share one HTML page.
+    pub fn with_id_prefix(prefix: IdPrefix<'_>) -> Self {
+        Self {
+            prefix: prefix.0.to_owned(),
             ..Self::new()
-        })
+        }
     }
 
     /// The same renderer, but it puts every image in the document as it is,
@@ -1063,7 +1094,7 @@ mod tests {
                 clipped.add_text(text("a"));
             });
         }
-        let mut r = SvgRenderer::with_id_prefix("fig1-").expect("a valid prefix");
+        let mut r = SvgRenderer::with_id_prefix(IdPrefix::new("fig1-").unwrap());
         let Ok(svg) = r.render(&scene);
         for part in [
             "id=\"fig1-p0\"",
@@ -1079,10 +1110,10 @@ mod tests {
 
     #[test]
     fn an_id_prefix_that_cannot_start_an_xml_id_is_rejected() {
-        for prefix in ["1a", "-a", "a b", "a\"", "a#"] {
-            assert!(SvgRenderer::with_id_prefix(prefix).is_none(), "{prefix}");
+        for prefix in ["", "1a", "-a", "a b", "a\"", "a#", "aé"] {
+            assert_eq!(IdPrefix::new(prefix), Err(InvalidIdPrefix), "{prefix}");
         }
-        assert!(SvgRenderer::with_id_prefix("_a-1").is_some());
+        assert!(IdPrefix::new("_a-1").is_ok());
     }
 
     #[test]
