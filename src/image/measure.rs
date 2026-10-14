@@ -130,25 +130,6 @@ impl TriangleAngle {
     }
 }
 
-/// The angle between the two equal sides of an isosceles triangle, in
-/// degrees, greater than 0 and less than 360.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-pub struct IsoscelesAngle(f64);
-
-impl IsoscelesAngle {
-    pub fn new(v: f64) -> Result<Self, OutOfRange> {
-        if 0.0 < v && v < 360.0 {
-            Ok(Self(v))
-        } else {
-            Err(OutOfRange)
-        }
-    }
-
-    pub fn get(self) -> f64 {
-        self.0
-    }
-}
-
 /// An opacity, from 0, transparent, to 1, opaque.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct Opacity(f64);
@@ -295,10 +276,6 @@ mod tests {
         assert!(TriangleAngle::new(90.0).is_ok());
         for v in [0.0, 180.0, -30.0, f64::NAN, f64::INFINITY] {
             assert_eq!(TriangleAngle::new(v), Err(OutOfRange), "{v}");
-        }
-        assert!(IsoscelesAngle::new(270.0).is_ok());
-        for v in [0.0, 360.0, f64::NAN] {
-            assert_eq!(IsoscelesAngle::new(v), Err(OutOfRange), "{v}");
         }
     }
 

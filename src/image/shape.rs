@@ -7,10 +7,7 @@ use std::fmt;
 use super::geometry::Point;
 use super::path::PathCmd;
 use super::tree::{Image, Overflow};
-use super::{
-    Finite, IsoscelesAngle, Length, PointCount, SideCount, StepCount, Style, TriangleAngle,
-    WedgeAngle,
-};
+use super::{Finite, Length, PointCount, SideCount, StepCount, Style, TriangleAngle, WedgeAngle};
 
 /// `side * sqrt(3) / 2` is the height of an equilateral triangle.
 const SQRT3_2: f64 = 0.8660254037844386;
@@ -147,14 +144,12 @@ impl Image {
     }
 
     /// The triangle with two sides of `side` and the angle `angle` between
-    /// them.
-    pub fn isosceles_triangle(
-        side: Length,
-        angle: IsoscelesAngle,
-        style: Style,
-    ) -> Result<Self, Overflow> {
+    /// them. The angle goes modulo 360, as in 2htdp/image, and an angle
+    /// above 180 puts the base above the vertex. An angle of 0 gives a line.
+    pub fn isosceles_triangle(side: Length, angle: Finite, style: Style) -> Result<Self, Overflow> {
         let side = side.get();
-        let half = angle.get() / 2.0;
+        // `rem_euclid` is exact.
+        let half = angle.get().rem_euclid(360.0) / 2.0;
         let (x, y) = (side * sin_deg(half), side * cos_deg(half));
         polygon([Point { x, y }, Point::ORIGIN, Point { x: -x, y }], style)
     }
@@ -590,6 +585,16 @@ mod tests {
         assert!(tiny.is_ok(), "{tiny:?}");
         let flat = Image::triangle_sss(length(0.0), length(2.0), length(2.0), style());
         assert_eq!(flat.unwrap().dimension(), (length(2.0), length(0.0)));
+    }
+
+    #[test]
+    fn an_isosceles_triangle_takes_any_finite_angle() {
+        let triangle =
+            |v| Image::isosceles_triangle(length(10.0), Finite::new(v).unwrap(), style()).unwrap();
+        for (v, same) in [(420.0, 60.0), (-60.0, 300.0), (360.0, 0.0)] {
+            assert_eq!(triangle(v), triangle(same), "{v}");
+        }
+        assert_eq!(triangle(0.0).dimension(), (length(0.0), length(10.0)));
     }
 
     #[test]

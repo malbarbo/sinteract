@@ -713,8 +713,7 @@ fn frame2() {
 }
 
 fn isosceles_triangle(side: f64, angle: f64, style: Style) -> Image {
-    let angle = IsoscelesAngle::new(angle).unwrap();
-    Image::isosceles_triangle(len(side), angle, style).unwrap()
+    Image::isosceles_triangle(len(side), fin(angle), style).unwrap()
 }
 
 #[test]
