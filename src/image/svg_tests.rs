@@ -1,5 +1,6 @@
 //! The svg of the image tests of spython, one test for each file in its
-//! `cli/tests/images` that prints an svg, with the same name.
+//! `cli/tests/images` that prints an svg, with the same name. `rhombus3`
+//! comes from the tests of sgleam, since spython refuses its angle.
 
 use super::*;
 use crate::scene::{FontStyle, LineCap, LineJoin};
@@ -1302,6 +1303,11 @@ fn rhombus1() {
 #[test]
 fn rhombus2() {
     assert_snapshot!(svg(&rhombus(80.0, 150.0, fill(c("mediumpurple")))));
+}
+
+#[test]
+fn rhombus3() {
+    assert_snapshot!(svg(&rhombus(40.0, 200.0, fill(c("mediumpurple")))));
 }
 
 #[test]
