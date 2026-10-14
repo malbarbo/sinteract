@@ -1031,7 +1031,8 @@ impl GeometryBuilder {
 
 /// The cubics of the SVG endpoint arc from `from` to `to`, each as its two
 /// controls and its end, or `None` when the arc is degenerate and draws as a
-/// line. A coordinate within 1e-10 of 0 is 0, since the sine and the cosine
+/// line. kurbo converts the arcs it keeps exact, and [`UnitArc`] the rest.
+/// A coordinate within 1e-10 of 0 is 0, since the sine and the cosine
 /// of an arc leave a residue such as 3.6e-15 where a point is 0, and the svg
 /// renderer writes the residue in full.
 fn arc_cubics(
@@ -1041,24 +1042,162 @@ fn arc_cubics(
     large_arc: bool,
     sweep: bool,
     to: kurbo::Point,
-) -> Option<impl Iterator<Item = [kurbo::Point; 3]>> {
-    let arc = kurbo::Arc::from_svg_arc(&kurbo::SvgArc {
+) -> Option<Vec<[kurbo::Point; 3]>> {
+    let arc = kurbo::SvgArc {
         from,
         to,
         radii,
         x_rotation: rotation_deg.to_radians(),
         large_arc,
         sweep,
-    })?;
+    };
+    if arc.is_straight_line() {
+        return None;
+    }
+    let unit = UnitArc::new(&arc);
+    let mut cubics = if unit.kurbo_is_exact(&arc) {
+        let arc = kurbo::Arc::from_svg_arc(&arc)?;
+        let tolerance = arc_tolerance(arc.radii.x.max(arc.radii.y));
+        let cubics = arc.append_iter(tolerance).filter_map(|el| match el {
+            kurbo::PathEl::CurveTo(c1, c2, end) => Some([c1, c2, end]),
+            _ => None,
+        });
+        cubics.collect()
+    } else {
+        unit.cubics_from_start(&arc)?
+    };
     let near_zero = |p: kurbo::Point| {
         let coord = |v: f64| if v.abs() < 1e-10 { 0.0 } else { v };
         kurbo::Point::new(coord(p.x), coord(p.y))
     };
-    let tolerance = arc_tolerance(arc.radii.x.max(arc.radii.y));
-    Some(arc.append_iter(tolerance).filter_map(move |el| match el {
-        kurbo::PathEl::CurveTo(c1, c2, end) => Some([c1, c2, end].map(near_zero)),
-        _ => None,
-    }))
+    for cubic in &mut cubics {
+        *cubic = cubic.map(near_zero);
+    }
+    Some(cubics)
+}
+
+/// An SVG endpoint arc with its rotation and its radii taken out, so the
+/// ellipse is the unit circle and the arc goes from `half_chord` to its
+/// negation around the middle of the chord.
+struct UnitArc {
+    sin: f64,
+    cos: f64,
+    /// The radii, grown to reach both ends as the SVG spec asks.
+    radii: kurbo::Vec2,
+    /// Half the chord from the end to the start, without the rotation.
+    rotated: kurbo::Vec2,
+    half_chord: kurbo::Vec2,
+    /// The length of `half_chord`, exactly 1 when the radii grew, since
+    /// the arc is then half the ellipse.
+    reach: f64,
+}
+
+impl UnitArc {
+    fn new(arc: &kurbo::SvgArc) -> Self {
+        let (sin, cos) = (arc.x_rotation % std::f64::consts::TAU).sin_cos();
+        // Halves first, so two ends near f64::MAX do not overflow.
+        let hd = arc.from.to_vec2() * 0.5 - arc.to.to_vec2() * 0.5;
+        let rotated = kurbo::Vec2::new(cos * hd.x + sin * hd.y, -sin * hd.x + cos * hd.y);
+        let mut radii = kurbo::Vec2::new(arc.radii.x.abs(), arc.radii.y.abs());
+        // f64::hypot, since the squares of kurbo's hypot vanish for a chord
+        // far below the radii.
+        let mut reach = (rotated.x / radii.x).hypot(rotated.y / radii.y);
+        if reach > 1.0 {
+            radii *= reach;
+            reach = 1.0;
+        }
+        let half_chord = kurbo::Vec2::new(rotated.x / radii.x, rotated.y / radii.y);
+        Self {
+            sin,
+            cos,
+            radii,
+            rotated,
+            half_chord,
+            reach,
+        }
+    }
+
+    /// Returns `true` if kurbo converts the arc within the precision of f64,
+    /// `false` otherwise. kurbo takes the points from the center, so a chord
+    /// far below the radii vanishes next to them, and it squares the product
+    /// of the radii, which overflows above about 1e77.
+    fn kurbo_is_exact(&self, arc: &kurbo::SvgArc) -> bool {
+        let size = [self.radii.x, self.radii.y, self.rotated.x, self.rotated.y]
+            .into_iter()
+            .fold(0.0, |size, v| v.abs().max(size));
+        self.reach >= 1e-4 && size < 1e75 && (arc.from + arc.to.to_vec2()).is_finite()
+    }
+
+    /// The cubics of `arc` as [`kurbo::Arc::append_iter`] splits them, with
+    /// each point taken from `arc.from`, so it keeps its precision for any
+    /// chord and radii. `None` when the arc is the chord in f64.
+    fn cubics_from_start(&self, arc: &kurbo::SvgArc) -> Option<Vec<[kurbo::Point; 3]>> {
+        use std::f64::consts::{PI, TAU};
+        // A small arc with a subnormal reach strays from its chord by less
+        // than 1e-307, which near_zero takes to 0 near the origin and which
+        // is below an ulp elsewhere.
+        if !arc.large_arc && self.reach < f64::MIN_POSITIVE {
+            return None;
+        }
+        // The normal is the half chord turned by a right angle and taken
+        // times rx ry, with the chord and the radii scaled near 1, since
+        // the half chord can be 0 next to a huge radius.
+        let scale = self.rotated.x.abs().max(self.rotated.y.abs());
+        if scale == 0.0 {
+            return None;
+        }
+        let (x, y) = (self.rotated.x / scale, self.rotated.y / scale);
+        let largest = self.radii.x.max(self.radii.y);
+        let (rx, ry) = (self.radii.x / largest, self.radii.y / largest);
+        let normal = kurbo::Vec2::new(y * rx, -x * ry);
+        let normal = normal / normal.x.hypot(normal.y);
+        let side = if arc.large_arc == arc.sweep {
+            -1.0
+        } else {
+            1.0
+        };
+        let center = normal * (side * (1.0 - self.reach * self.reach).sqrt());
+        let start = self.half_chord - center;
+        let half = self.reach.asin();
+        let turn = if arc.large_arc {
+            2.0 * (PI - half)
+        } else {
+            2.0 * half
+        };
+        let per_turn = (1.1163 * largest / arc_tolerance(largest))
+            .powf(1.0 / 6.0)
+            .max(3.999_999);
+        let n = (per_turn * turn / TAU).ceil();
+        let step = if arc.sweep { turn / n } else { -turn / n };
+        let arm = 4.0 / 3.0 * (step / 4.0).tan();
+        let turned = |v: kurbo::Vec2, t: f64| {
+            let (sin, cos) = t.sin_cos();
+            kurbo::Vec2::new(cos * v.x - sin * v.y, sin * v.x + cos * v.y)
+        };
+        let ahead = |v: kurbo::Vec2| kurbo::Vec2::new(-v.y, v.x);
+        // The point at angle `t` from the start, and its derivative. The
+        // turned start minus the start is 2 sin(t/2) times the start turned
+        // by t/2 and a right angle, which keeps a small offset exact.
+        let at = |t: f64| {
+            let offset = ahead(turned(start, t / 2.0)) * (2.0 * (t / 2.0).sin());
+            let point = arc.from + self.ellipse(offset);
+            (point, self.ellipse(ahead(turned(start, t))))
+        };
+        let n = n as usize;
+        let cubics = (0..n).map(|i| {
+            let (p0, d0) = at(step * i as f64);
+            let (p1, d1) = at(step * (i + 1) as f64);
+            let end = if i + 1 == n { arc.to } else { p1 };
+            [p0 + d0 * arm, p1 - d1 * arm, end]
+        });
+        Some(cubics.collect())
+    }
+
+    /// The vector on the ellipse for `v` on the unit circle.
+    fn ellipse(&self, v: kurbo::Vec2) -> kurbo::Vec2 {
+        let (x, y) = (self.radii.x * v.x, self.radii.y * v.y);
+        kurbo::Vec2::new(self.cos * x - self.sin * y, self.sin * x + self.cos * y)
+    }
 }
 
 /// The tolerance of the arc to cubic conversion for an arc of `radius`.
@@ -1632,6 +1771,96 @@ mod tests {
         assert!(arc(1e38) <= ARC_CUBICS_PER_TURN as usize, "{}", arc(1e38));
         // A radius a renderer draws keeps the fixed tolerance.
         assert_eq!(arc_tolerance(2.7e8), ARC_TOLERANCE);
+    }
+
+    fn svg_arc(r: (f64, f64), rotation_deg: f64, large_arc: bool, sweep: bool) -> kurbo::SvgArc {
+        kurbo::SvgArc {
+            from: kurbo::Point::new(20.0, 10.0),
+            to: kurbo::Point::new(5.0, 40.0),
+            radii: kurbo::Vec2::new(r.0, r.1),
+            x_rotation: rotation_deg.to_radians(),
+            large_arc,
+            sweep,
+        }
+    }
+
+    #[test]
+    fn the_cubics_from_the_start_are_the_cubics_of_kurbo() {
+        for (r, rotation) in [
+            ((60.0, 20.0), 30.0),
+            ((20.0, 20.0), 0.0),
+            ((40.0, 25.0), 250.0),
+        ] {
+            for (large_arc, sweep) in [(false, false), (false, true), (true, false), (true, true)] {
+                let arc = svg_arc(r, rotation, large_arc, sweep);
+                let unit = UnitArc::new(&arc);
+                assert!(unit.kurbo_is_exact(&arc));
+                let ours = unit.cubics_from_start(&arc).unwrap();
+                let kurbo = kurbo::Arc::from_svg_arc(&arc).unwrap();
+                let tolerance = arc_tolerance(kurbo.radii.x.max(kurbo.radii.y));
+                let theirs: Vec<_> = kurbo
+                    .append_iter(tolerance)
+                    .filter_map(|el| match el {
+                        kurbo::PathEl::CurveTo(c1, c2, end) => Some([c1, c2, end]),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(ours.len(), theirs.len());
+                for (a, b) in ours.iter().flatten().zip(theirs.iter().flatten()) {
+                    assert!((*a - *b).hypot() < 1e-9, "{a:?} {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_arc_of_a_radius_far_above_its_chord_keeps_its_shape() {
+        for r in [1e15, 1e17, 1e20, 1e100, 1e200, 1e300] {
+            let arc = |large_arc| {
+                PathBounds::new(0.0, 0.0)
+                    .arc_to(r, r, 0.0, large_arc, true, 10.0, 0.0)
+                    .get()
+                    .unwrap()
+            };
+            let (x0, y0, x1, y1) = arc(false);
+            let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+            assert!(near(x0, 0.0) && near(y0, 0.0) && near(x1, 10.0) && near(y1, 0.0));
+            let (x0, y0, x1, y1) = arc(true);
+            let near = |a: f64, b: f64| (a - b).abs() <= r * 1e-12;
+            assert!(near(x0, -r) && near(y0, -2.0 * r) && near(x1, r) && near(y1, 0.0));
+        }
+    }
+
+    #[test]
+    fn an_arc_with_a_subnormal_reach_keeps_its_shape() {
+        let arc = |large_arc| {
+            PathBounds::new(0.0, 0.0)
+                .arc_to(1e300, 1e300, 0.0, large_arc, true, 1e-10, 0.0)
+                .get()
+                .unwrap()
+        };
+        assert_eq!(arc(false), (0.0, 0.0, 1e-10, 0.0));
+        let (x0, y0, x1, y1) = arc(true);
+        let near = |a: f64, b: f64| (a - b).abs() <= 1e288;
+        assert!(near(x0, -1e300) && near(y0, -2e300) && near(x1, 1e300) && near(y1, 0.0));
+    }
+
+    #[test]
+    fn an_arc_too_large_for_kurbo_keeps_its_shape() {
+        // The radii squared overflow, and so do the ends added together.
+        let half = PathBounds::new(0.0, 0.0)
+            .arc_to(1e80, 1e80, 0.0, false, true, 2e80, 0.0)
+            .get();
+        let x = f64::MAX * 0.6;
+        let far = PathBounds::new(x, 0.0)
+            .arc_to(10.0, 10.0, 0.0, false, true, x, 20.0)
+            .get();
+        let (x0, y0, x1, y1) = half.unwrap();
+        assert!(x0.abs() < 1e68 && (x1 - 2e80).abs() < 1e68);
+        assert!((y0 + 1e80).abs() < 1e68 && y1.abs() < 1e68);
+        let (x0, y0, x1, y1) = far.unwrap();
+        let near_x = |v: f64| (v - x).abs() <= x * f64::EPSILON;
+        assert!(near_x(x0) && near_x(x1) && y0.abs() < 1e-12 && (y1 - 20.0).abs() < 1e-12);
     }
 
     #[test]
