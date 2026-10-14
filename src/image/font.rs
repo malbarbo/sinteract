@@ -1,7 +1,7 @@
 //! The font of a text.
 
 use super::Length;
-use crate::scene::FontStyle;
+use crate::scene::{FontStyle, TextSpec};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Font {
@@ -25,6 +25,20 @@ impl Default for Font {
     }
 }
 
+impl Font {
+    /// The spec of `text` in `self`. The measure and the drawing of a text
+    /// both read the font here, so they agree on its box.
+    pub(super) fn spec(&self, text: &str) -> TextSpec {
+        TextSpec {
+            size: self.size.get() as f32,
+            family: self.family.clone(),
+            weight: self.weight.into(),
+            style: self.style,
+            text: text.into(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FontWeight {
     Light,
@@ -33,10 +47,10 @@ pub enum FontWeight {
     Bold,
 }
 
-impl FontWeight {
-    /// The weight in CSS.
-    pub(super) fn css(self) -> u16 {
-        match self {
+impl From<FontWeight> for u16 {
+    /// The weight on the CSS scale, from 100 to 900, which a scene takes.
+    fn from(weight: FontWeight) -> Self {
+        match weight {
             FontWeight::Light => 300,
             FontWeight::Regular => 400,
             FontWeight::Bold => 700,

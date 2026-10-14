@@ -18,7 +18,7 @@ use crate::scene;
 #[derive(Clone)]
 pub struct Image(Arc<Node>);
 
-enum Node {
+pub(super) enum Node {
     Path {
         drawn: Option<Bounds>,
         style: Style,
@@ -127,8 +127,9 @@ impl Image {
     /// `text` on one line in `font`. A text that draws nothing, such as the
     /// empty text, is the empty image.
     pub fn text(text: &str, font: Font, style: Style) -> Self {
-        let size = font.size.get() as f32;
-        let measure = crate::text::measure(&font.family, font.weight.css(), font.style, size, text);
+        let spec = font.spec(text);
+        let measure =
+            crate::text::measure(&spec.family, spec.weight, spec.style, spec.size, &spec.text);
         let Some(m) = measure.filter(|m| m.width() > 0.0) else {
             return Self::empty();
         };
@@ -239,6 +240,10 @@ impl Image {
         } else {
             Err(Overflow)
         }
+    }
+
+    pub(super) fn node(&self) -> &Node {
+        &self.0
     }
 
     /// The bounds of what `self` draws, or `None` when it draws nothing.

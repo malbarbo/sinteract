@@ -2,7 +2,7 @@
 
 use super::Finite;
 use super::geometry::{Bounds, Point};
-use crate::scene::PathBounds;
+use crate::scene::{Path, PathBounds, PathStyle};
 
 /// A command of a path, as in SVG.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -219,9 +219,60 @@ pub(super) fn bounds(commands: &[PathCmd]) -> Option<Bounds> {
     })
 }
 
-/// `v`, or 0 when `v` is within 1e-10 of 0. A sine or a cosine leaves a
-/// residue near 0 that differs from one libm to another, and the drawing
+/// The path of `commands` with `style`, with `point` applied to each point,
+/// or `None` when the commands do not start with a move.
+pub(super) fn draw(
+    commands: &[PathCmd],
+    style: PathStyle,
+    point: impl Fn(Point) -> (f32, f32),
+) -> Option<Path> {
+    let Some((PathCmd(Cmd::Move(start)), rest)) = commands.split_first() else {
+        return None;
+    };
+    let (x, y) = point(*start);
+    let mut builder = Path::builder(style, x, y);
+    for cmd in rest {
+        builder = match cmd.0 {
+            Cmd::Move(end) => {
+                let (x, y) = point(end);
+                builder.move_to(x, y)
+            }
+            Cmd::Line(end) => {
+                let (x, y) = point(end);
+                builder.line_to(x, y)
+            }
+            Cmd::Quad { control, end } => {
+                let ((cx, cy), (x, y)) = (point(control), point(end));
+                builder.quad_to(cx, cy, x, y)
+            }
+            Cmd::Cubic { c1, c2, end } => {
+                let ((c1x, c1y), (c2x, c2y), (x, y)) = (point(c1), point(c2), point(end));
+                builder.cubic_to(c1x, c1y, c2x, c2y, x, y)
+            }
+            Cmd::Arc {
+                rx,
+                ry,
+                rotation,
+                large_arc,
+                sweep,
+                end,
+            } => {
+                let (x, y) = point(end);
+                let v = |v: f64| without_residue(v) as f32;
+                builder.arc_to(v(rx), v(ry), v(rotation), large_arc, sweep, x, y)
+            }
+        };
+    }
+    Some(builder.build())
+}
+
+/// How far from 0, or from a whole number, a coordinate may be and still
+/// count as one.
+pub(super) const RESIDUE: f64 = 1e-10;
+
+/// `v`, or 0 when `v` is within [`RESIDUE`] of 0. A sine or a cosine leaves
+/// a residue near 0 that differs from one libm to another, and the drawing
 /// takes the residue as 0.
 pub(super) fn without_residue(v: f64) -> f64 {
-    if v.abs() < 1e-10 { 0.0 } else { v }
+    if v.abs() < RESIDUE { 0.0 } else { v }
 }
