@@ -382,6 +382,127 @@ impl Image {
     }
 }
 
+/// A map of the plane, such as a rotation, that [`Image::transform`]
+/// applies to every leaf of an image. Each node has a parameter of its own,
+/// such as the center of a rotation in the coordinates of the node.
+pub(super) trait Transform {
+    type Param: Copy;
+
+    /// The parameter of a child at `at` in a node with `param`, and how far
+    /// the mapped child moves from the place that the map gives it.
+    fn enter(&self, param: Self::Param, at: Point) -> (Self::Param, Point);
+
+    fn point(&self, p: Point, param: Self::Param) -> Point;
+
+    fn command(&self, c: PathCmd, param: Self::Param) -> PathCmd;
+
+    fn region(&self, r: ImageBox, param: Self::Param) -> ImageBox;
+
+    /// The style of a leaf, which a scale changes and the other maps keep.
+    fn style(&self, s: &Style) -> Result<Style, Overflow> {
+        Ok(s.clone())
+    }
+}
+
+/// A step of [`Image::transform`].
+enum Step<'a, P> {
+    /// Maps `image`, which takes the parameter.
+    Visit(&'a Image, P),
+    /// Combines the last images mapped, one for each shift, each moved by
+    /// its shift.
+    Join(Box<[Point]>),
+    /// Crops the last image mapped, moved by the shift, to the region.
+    Clip(ImageBox, Point),
+}
+
+impl Image {
+    /// `self` with `t` applied to every leaf and to the region of every
+    /// crop, settled, with the place of its least corner. The steps wait on
+    /// a list, so a deep tree does not overflow the stack.
+    pub(super) fn transform<T: Transform>(
+        &self,
+        t: &T,
+        param: T::Param,
+    ) -> Result<(Self, Point), Overflow> {
+        let mut pending = vec![Step::Visit(self, param)];
+        let mut done: Vec<(Image, Point)> = Vec::new();
+        while let Some(step) = pending.pop() {
+            match step {
+                Step::Visit(image, param) => match &*image.0 {
+                    Node::Combination { parts, .. } => {
+                        let (params, shifts): (Vec<_>, Vec<_>) =
+                            parts.iter().map(|(_, at)| t.enter(param, *at)).unzip();
+                        pending.push(Step::Join(shifts.into()));
+                        let parts = parts.iter().zip(params).rev();
+                        pending.extend(parts.map(|((part, _), param)| Step::Visit(part, param)));
+                    }
+                    Node::Crop { region, image, at } => {
+                        let (image_param, shift) = t.enter(param, *at);
+                        pending.push(Step::Clip(t.region(*region, param), shift));
+                        pending.push(Step::Visit(image, image_param));
+                    }
+                    Node::Path {
+                        style,
+                        commands,
+                        closed,
+                        ..
+                    } => {
+                        let commands = commands.iter().map(|c| t.command(*c, param));
+                        let commands: Box<[PathCmd]> = commands.collect();
+                        done.push(Self::path_at(commands, *closed, t.style(style)?)?);
+                    }
+                    Node::Line { style, from, to } => {
+                        let line = Self::new(Node::Line {
+                            style: t.style(style)?,
+                            from: t.point(*from, param),
+                            to: t.point(*to, param),
+                        })?;
+                        done.push(line.settle(Point::ORIGIN)?);
+                    }
+                    Node::Text {
+                        style,
+                        region,
+                        text,
+                        font,
+                    } => {
+                        let text = Self::new(Node::Text {
+                            style: t.style(style)?,
+                            region: t.region(*region, param),
+                            text: text.clone(),
+                            font: font.clone(),
+                        })?;
+                        done.push(text.settle(Point::ORIGIN)?);
+                    }
+                    Node::Bitmap { region, image } => {
+                        let bitmap = Self::new(Node::Bitmap {
+                            region: t.region(*region, param),
+                            image: image.clone(),
+                        })?;
+                        done.push(bitmap.settle(Point::ORIGIN)?);
+                    }
+                },
+                Step::Join(shifts) => {
+                    let parts = done.split_off(done.len() - shifts.len());
+                    let parts = parts.into_iter().zip(shifts.iter());
+                    done.push(Self::combination(
+                        parts.map(|((part, at), shift)| (part, at.plus(*shift))),
+                    )?);
+                }
+                Step::Clip(region, shift) => {
+                    let (image, at) = done.pop().expect("a crop maps its image first");
+                    let crop = Self::new(Node::Crop {
+                        region,
+                        image,
+                        at: at.plus(shift),
+                    })?;
+                    done.push(crop.settle(Point::ORIGIN)?);
+                }
+            }
+        }
+        Ok(done.pop().expect("the steps leave one image"))
+    }
+}
+
 impl Node {
     /// Moves the children of `self` to `stack`, and leaves `self` with none.
     fn move_children(&mut self, stack: &mut Vec<Image>) {

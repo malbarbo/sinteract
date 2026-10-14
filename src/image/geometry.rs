@@ -120,6 +120,20 @@ impl ImageBox {
         }
     }
 
+    /// `self` with `center` applied to the center and `axis` to the two
+    /// axes. The axes are vectors, so a map that moves the plane leaves them.
+    pub(super) fn map(
+        self,
+        center: impl Fn(Point) -> Point,
+        axis: impl Fn(Point) -> Point,
+    ) -> Self {
+        Self {
+            center: center(self.center),
+            x_axis: axis(self.x_axis),
+            y_axis: axis(self.y_axis),
+        }
+    }
+
     /// The bounds of the rectangle, which is the rectangle itself unless a
     /// rotation turned it.
     pub(super) fn bounds(self) -> Bounds {

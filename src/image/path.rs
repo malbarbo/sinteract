@@ -113,6 +113,46 @@ impl PathCmd {
         })
     }
 
+    /// `self` with `point` applied to each point and `arc` to the radii, the
+    /// rotation and the sweep of an arc.
+    pub(super) fn map(
+        self,
+        point: impl Fn(Point) -> Point,
+        arc: impl FnOnce(f64, f64, f64, bool) -> (f64, f64, f64, bool),
+    ) -> Self {
+        Self(match self.0 {
+            Cmd::Move(p) => Cmd::Move(point(p)),
+            Cmd::Line(p) => Cmd::Line(point(p)),
+            Cmd::Quad { control, end } => Cmd::Quad {
+                control: point(control),
+                end: point(end),
+            },
+            Cmd::Cubic { c1, c2, end } => Cmd::Cubic {
+                c1: point(c1),
+                c2: point(c2),
+                end: point(end),
+            },
+            Cmd::Arc {
+                rx,
+                ry,
+                rotation,
+                large_arc,
+                sweep,
+                end,
+            } => {
+                let (rx, ry, rotation, sweep) = arc(rx, ry, rotation, sweep);
+                Cmd::Arc {
+                    rx,
+                    ry,
+                    rotation,
+                    large_arc,
+                    sweep,
+                    end: point(end),
+                }
+            }
+        })
+    }
+
     pub(super) fn is_finite(self) -> bool {
         match self.0 {
             Cmd::Move(p) | Cmd::Line(p) => p.is_finite(),

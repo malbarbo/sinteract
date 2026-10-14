@@ -9,6 +9,7 @@ mod measure;
 mod path;
 mod shape;
 mod style;
+mod transform;
 mod tree;
 
 pub use color::{Color, NAMED_COLORS};
