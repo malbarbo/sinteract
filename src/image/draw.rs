@@ -15,8 +15,9 @@ use crate::scene::{
     PathStyle, Sampling, Scene, Text,
 };
 
-/// The width or the height of the canvas is above the largest `f32`, which
-/// the scene takes.
+/// The canvas of the image is too large. Its width or its height is above
+/// the largest `f32`, which the scene takes, or, for [`Image::same`], the
+/// canvas has more pixels than a pixmap holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TooLarge;
 

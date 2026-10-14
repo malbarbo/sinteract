@@ -8,6 +8,7 @@ mod font;
 mod geometry;
 mod measure;
 mod path;
+mod same;
 mod shape;
 mod style;
 mod transform;
