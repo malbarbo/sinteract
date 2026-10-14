@@ -63,11 +63,30 @@ impl Image {
         }
     }
 
-    /// The svg of `self` on a canvas of `width` by `height`, with each id
-    /// after `s{number}-`. Two svgs in one HTML document need different
-    /// numbers, or the clip of one can take the place of the clip of the
-    /// other. The svg keeps each bitmap in the format of its image.
-    pub fn to_svg(&self, width: f32, height: f32, number: usize) -> String {
+    /// The svg of `self` on its canvas, with each id after `s{number}-`. Two
+    /// svgs in one HTML document need different numbers, or the clip of one
+    /// can take the place of the clip of the other. The svg keeps each
+    /// bitmap in the format of its image.
+    pub fn to_svg(&self, number: usize) -> Result<String, TooLarge> {
+        let (w, h) = self.canvas_size()?;
+        Ok(self.svg(w, h, number))
+    }
+
+    /// [`Image::to_svg`] as a repl shows it, on a canvas with one more
+    /// column and one more row, where an outline on the right or the bottom
+    /// edge draws its line. DrRacket shows an image the same way.
+    pub fn to_repl_svg(&self, number: usize) -> Result<String, TooLarge> {
+        let (w, h) = self.repl_canvas_size()?;
+        Ok(self.svg(w, h, number))
+    }
+
+    /// The canvas of [`Image::to_repl_svg`].
+    pub(super) fn repl_canvas_size(&self) -> Result<(f32, f32), TooLarge> {
+        let (w, h) = self.canvas_size()?;
+        Ok((w + 1.0, h + 1.0))
+    }
+
+    fn svg(&self, width: f32, height: f32, number: usize) -> String {
         let mut scene = Scene::new(width, height);
         self.draw(&mut scene);
         let prefix = format!("s{number}-");
@@ -422,8 +441,7 @@ mod tests {
     }
 
     fn svg(image: &Image) -> String {
-        let (w, h) = image.canvas_size().unwrap();
-        image.to_svg(w, h, 0)
+        image.to_svg(0).unwrap()
     }
 
     fn scene(image: &Image) -> Scene {
@@ -594,9 +612,18 @@ mod tests {
     #[test]
     fn each_id_starts_with_the_number() {
         let cropped = solid(10.0, 5.0).crop(finite(2.0), finite(1.0), length(4.0), length(3.0));
-        let (w, h) = cropped.canvas_size().unwrap();
-        let cropped = cropped.to_svg(w, h, 7);
+        let cropped = cropped.to_svg(7).unwrap();
         assert!(cropped.contains(r#"<clipPath id="s7-c0">"#), "{cropped}");
         assert!(cropped.contains("url(#s7-c0)"), "{cropped}");
+    }
+
+    #[test]
+    fn a_repl_shows_one_more_column_and_row() {
+        let repl = solid(10.5, 4.0).to_repl_svg(0).unwrap();
+        assert!(repl.contains(r#"width="12" height="5""#), "{repl}");
+        let (w, h) = (Length::new(1e300).unwrap(), length(1.0));
+        let huge = Image::rectangle(w, h, Style::default());
+        assert_eq!(huge.to_svg(0), Err(TooLarge));
+        assert_eq!(huge.to_repl_svg(0), Err(TooLarge));
     }
 }

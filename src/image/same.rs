@@ -9,8 +9,8 @@ impl Image {
     /// the same pixels on it, `false` otherwise. Two images that `==` takes
     /// as equal are the same, and two that it takes as different may still
     /// be the same, such as a square and the square turned by 90 degrees.
-    /// The canvas has one more column and one more row, as in a repl, so an
-    /// outline on the right or the bottom edge counts.
+    /// The canvas is the canvas of [`Image::to_repl_svg`], so an outline on
+    /// the right or the bottom edge counts.
     ///
     /// The pixmap decodes only a PNG and draws a mark for any other image,
     /// so the bitmaps of such images also have to show the same images in
@@ -24,7 +24,7 @@ impl Image {
         if size != other.canvas_size()? {
             return Ok(false);
         }
-        let (w, h) = (size.0 + 1.0, size.1 + 1.0);
+        let (w, h) = self.repl_canvas_size()?;
         let (a, b) = (self.scene(w, h), other.scene(w, h));
         if not_png(a.elements()) != not_png(b.elements()) {
             return Ok(false);
