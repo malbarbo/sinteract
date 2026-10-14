@@ -255,9 +255,14 @@ impl Image {
     }
 
     /// The rhombus with sides of `side` and the angle `angle` at the left
-    /// and at the right.
-    pub fn rhombus(side: Length, angle: TriangleAngle, style: Style) -> Result<Self, Overflow> {
-        let (side, angle) = (side.get(), angle.get());
+    /// and at the right. The angle goes modulo 360, and an angle `a` above
+    /// 180 gives the rhombus of `360 - a`, as in 2htdp/image. An angle of 0
+    /// or 180 gives a line.
+    pub fn rhombus(side: Length, angle: Finite, style: Style) -> Result<Self, Overflow> {
+        // `rem_euclid` is exact, and so is `360 - a` for `a` in (180, 360].
+        let angle = angle.get().rem_euclid(360.0);
+        let angle = if angle > 180.0 { 360.0 - angle } else { angle };
+        let side = side.get();
         let h = 2.0 * side * cos_deg(angle / 2.0);
         let w = 2.0 * side * sin_deg(angle / 2.0);
         let corners = [(0.0, h / 2.0), (w / 2.0, 0.0), (w, h / 2.0), (w / 2.0, h)];
@@ -585,6 +590,23 @@ mod tests {
         assert!(tiny.is_ok(), "{tiny:?}");
         let flat = Image::triangle_sss(length(0.0), length(2.0), length(2.0), style());
         assert_eq!(flat.unwrap().dimension(), (length(2.0), length(0.0)));
+    }
+
+    #[test]
+    fn a_rhombus_takes_any_finite_angle() {
+        let rhombus = |v| Image::rhombus(length(40.0), Finite::new(v).unwrap(), style()).unwrap();
+        for (v, same) in [
+            (200.0, 160.0),
+            (-160.0, 160.0),
+            (380.0, 20.0),
+            (340.0, 20.0),
+        ] {
+            assert_eq!(rhombus(v), rhombus(same), "{v}");
+        }
+        assert_eq!(rhombus(360.0), rhombus(0.0));
+        assert_eq!(rhombus(0.0).dimension(), (length(0.0), length(80.0)));
+        assert_eq!(rhombus(180.0).width(), length(80.0));
+        assert!(rhombus(180.0).height().get() < 1e-9);
     }
 
     #[test]

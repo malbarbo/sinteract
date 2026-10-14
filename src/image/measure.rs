@@ -112,8 +112,7 @@ impl fmt::Display for FactorError {
 
 impl std::error::Error for FactorError {}
 
-/// An angle of a triangle or a rhombus, in degrees, greater than 0 and less
-/// than 180.
+/// An angle of a triangle, in degrees, greater than 0 and less than 180.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct TriangleAngle(f64);
 

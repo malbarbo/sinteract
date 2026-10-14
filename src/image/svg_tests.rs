@@ -108,7 +108,7 @@ fn regular_polygon(side: f64, side_count: u32, style: Style) -> Image {
 }
 
 fn rhombus(side: f64, angle: f64, style: Style) -> Image {
-    Image::rhombus(len(side), TriangleAngle::new(angle).unwrap(), style).unwrap()
+    Image::rhombus(len(side), fin(angle), style).unwrap()
 }
 
 fn text(text: &str, style: Style, font: Font) -> Image {
