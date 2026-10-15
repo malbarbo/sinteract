@@ -113,7 +113,7 @@ fn rhombus(side: f64, angle: f64, style: Style) -> Image {
 }
 
 fn text(text: &str, style: Style, font: Font) -> Image {
-    Image::text(text, font, style)
+    Image::text(text, font, style).unwrap()
 }
 
 fn bitmap(uri: &str) -> Image {

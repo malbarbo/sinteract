@@ -605,7 +605,7 @@ mod tests {
             underline: true,
             ..Font::default()
         };
-        let text = Image::text("hi", font, Style::new([Attribute::Fill(red())]));
+        let text = Image::text("hi", font, Style::new([Attribute::Fill(red())])).unwrap();
         let scene = scene(&text);
         let [Element::Text(text)] = scene.elements() else {
             panic!("{:?}", scene.elements());

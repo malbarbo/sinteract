@@ -125,22 +125,27 @@ impl Image {
     }
 
     /// `text` on one line in `font`. A text that draws nothing, such as the
-    /// empty text, is the empty image.
-    pub fn text(text: &str, font: Font, style: Style) -> Self {
+    /// empty text or a text of size 0, is the empty image. Returns
+    /// `Overflow` when the measure of the text does not fit in an `f32`.
+    pub fn text(text: &str, font: Font, style: Style) -> Result<Self, Overflow> {
         let spec = font.spec(text);
         let measure =
             crate::text::measure(&spec.family, spec.weight, spec.style, spec.size, &spec.text);
-        let Some(m) = measure.filter(|m| m.width() > 0.0) else {
-            return Self::empty();
+        let m = match measure {
+            Some(m) if m.width() > 0.0 => m,
+            Some(_) => return Ok(Self::empty()),
+            // The measure refuses a size that is 0 in an f32.
+            None if spec.size == 0.0 => return Ok(Self::empty()),
+            None => return Err(Overflow),
         };
         let length = |v: f32| Length::new(f64::from(v)).expect("the measure of a text is finite");
-        Self::new(Node::Text {
+        Ok(Self::new(Node::Text {
             style,
             region: ImageBox::of_size(length(m.width()), length(m.height())),
             text: text.into(),
             font,
         })
-        .expect("the measure of a text is finite")
+        .expect("the measure of a text is finite"))
     }
 
     /// The image in `uri`, a `data:` URI in base64, at the size of the
@@ -768,11 +773,30 @@ mod tests {
     fn a_text_that_draws_nothing_is_empty() {
         assert_eq!(
             Image::text("", Font::default(), Style::default()),
-            Image::empty()
+            Ok(Image::empty())
         );
-        let hi = Image::text("hi", Font::default(), Style::default());
+        let zero = Font {
+            size: Length::new(0.0).unwrap(),
+            ..Font::default()
+        };
+        assert_eq!(
+            Image::text("hi", zero, Style::default()),
+            Ok(Image::empty())
+        );
+        let hi = Image::text("hi", Font::default(), Style::default()).unwrap();
         let (w, h) = hi.dimension();
         assert!(w.get() > 0.0 && h.get() > 0.0, "{hi:?}");
+    }
+
+    #[test]
+    fn a_text_too_large_for_an_f32_overflows() {
+        let font = |size| Font {
+            size: Length::new(size).unwrap(),
+            ..Font::default()
+        };
+        let text = |size| Image::text("abcdefghijklmnop", font(size), Style::default());
+        assert_eq!(text(1e39), Err(Overflow));
+        assert_eq!(text(5e37), Err(Overflow));
     }
 
     #[test]
