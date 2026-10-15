@@ -1,7 +1,7 @@
 //! How images go together: one above, beside or over another, cropped,
 //! framed, or placed on a scene.
 
-use super::geometry::{ImageBox, Point};
+use super::geometry::{Bounds, ImageBox, Point};
 use super::path::PathCmd;
 use super::shape::{cos_deg, polygon_commands, sin_deg, wedge};
 use super::tree::{Image, Overflow};
@@ -40,13 +40,9 @@ impl Image {
         x_place: XPlace,
         images: impl IntoIterator<Item = Image>,
     ) -> Result<Image, Overflow> {
-        fold(images, |a, b| {
-            let (dxa, dxb) = x_place_dx(x_place, a.width().get(), b.width().get());
-            let below = Point {
-                x: dxb,
-                y: a.height().get(),
-            };
-            Image::combine([(a.clone(), Point { x: dxa, y: 0.0 }), (b.clone(), below)])
+        line_up(images, false, |(wa, ha), (wb, _)| {
+            let (dxa, dxb) = x_place_dx(x_place, wa, wb);
+            (Point { x: dxa, y: 0.0 }, Point { x: dxb, y: ha })
         })
     }
 
@@ -56,13 +52,9 @@ impl Image {
         y_place: YPlace,
         images: impl IntoIterator<Item = Image>,
     ) -> Result<Image, Overflow> {
-        fold(images, |a, b| {
-            let (dya, dyb) = y_place_dy(y_place, a.height().get(), b.height().get());
-            let right = Point {
-                x: a.width().get(),
-                y: dyb,
-            };
-            Image::combine([(a.clone(), Point { x: 0.0, y: dya }), (b.clone(), right)])
+        line_up(images, false, |(wa, ha), (_, hb)| {
+            let (dya, dyb) = y_place_dy(y_place, ha, hb);
+            (Point { x: 0.0, y: dya }, Point { x: wa, y: dyb })
         })
     }
 
@@ -74,8 +66,9 @@ impl Image {
         offset: Point,
         images: impl IntoIterator<Item = Image>,
     ) -> Result<Image, Overflow> {
-        fold(images, |top, bottom| {
-            overlay(x_place, y_place, top, Point::ORIGIN, bottom, offset)
+        line_up(images, true, |top, bottom| {
+            let (top_at, bottom_at) = aligned(x_place, y_place, top, bottom);
+            (top_at, offset.plus(bottom_at))
         })
     }
 
@@ -87,8 +80,9 @@ impl Image {
         offset: Point,
         images: impl IntoIterator<Item = Image>,
     ) -> Result<Image, Overflow> {
-        fold(images, |bottom, top| {
-            overlay(x_place, y_place, top, offset, bottom, Point::ORIGIN)
+        line_up(images, false, |bottom, top| {
+            let (top_at, bottom_at) = aligned(x_place, y_place, top, bottom);
+            (bottom_at, offset.plus(top_at))
         })
     }
 
@@ -289,16 +283,43 @@ impl Image {
     }
 }
 
-/// `images` folded from the first by `pair`. No image is the empty image.
-fn fold(
+/// `images` combined once, each lined up with the ones before it by
+/// `place`. `place` takes the size of the ones before and the size of the
+/// next one, and gives where the least corner of each goes. With `under`,
+/// each image goes under the ones before it. No image is the empty image.
+fn line_up(
     images: impl IntoIterator<Item = Image>,
-    pair: impl Fn(&Image, &Image) -> Result<Image, Overflow>,
+    under: bool,
+    place: impl Fn((f64, f64), (f64, f64)) -> (Point, Point),
 ) -> Result<Image, Overflow> {
-    let mut images = images.into_iter();
-    let Some(first) = images.next() else {
-        return Ok(Image::empty());
-    };
-    images.try_fold(first, |a, b| pair(&a, &b))
+    let size = |b: Option<Bounds>| b.map_or((0.0, 0.0), |b| (b.max.x - b.min.x, b.max.y - b.min.y));
+    let mut parts = Vec::new();
+    // The bounds of the images so far, where the first one sits.
+    let mut drawn: Option<Bounds> = None;
+    for img in images {
+        let next = img.drawn();
+        let (before_at, at) = place(size(drawn), size(next));
+        let Some(b) = next else {
+            parts.push((img, Point::ORIGIN));
+            continue;
+        };
+        let corner = drawn.map_or(Point::ORIGIN, |d| d.min);
+        let by = at.minus(before_at).plus(corner).minus(b.min);
+        let b = b.translate(by);
+        if !b.is_finite() {
+            return Err(Overflow);
+        }
+        drawn = Some(drawn.map_or(b, |d| d.union(b)));
+        parts.push((img, by));
+    }
+    if under {
+        parts.reverse();
+    }
+    match <[_; 1]>::try_from(parts) {
+        Ok([(img, _)]) => Ok(img),
+        Err(parts) if parts.is_empty() => Ok(Image::empty()),
+        Err(parts) => Image::combine(parts),
+    }
 }
 
 /// `top` over `bottom`, lined up by `x_place` and `y_place`, and then moved
@@ -311,7 +332,11 @@ fn overlay(
     bottom: &Image,
     bottom_by: Point,
 ) -> Result<Image, Overflow> {
-    let (top_at, bottom_at) = aligned(x_place, y_place, top, bottom);
+    let size = |img: &Image| {
+        let (w, h) = img.dimension();
+        (w.get(), h.get())
+    };
+    let (top_at, bottom_at) = aligned(x_place, y_place, size(top), size(bottom));
     Image::combine([
         (bottom.clone(), bottom_by.plus(bottom_at)),
         (top.clone(), top_by.plus(top_at)),
@@ -349,12 +374,16 @@ fn curve(
     Image::path_at(commands, closed, style)
 }
 
-/// Where the least corner of `top` and of `bottom` go to line them up.
-fn aligned(x_place: XPlace, y_place: YPlace, top: &Image, bottom: &Image) -> (Point, Point) {
-    let (wt, ht) = top.dimension();
-    let (wb, hb) = bottom.dimension();
-    let (dxa, dxb) = x_place_dx(x_place, wt.get(), wb.get());
-    let (dya, dyb) = y_place_dy(y_place, ht.get(), hb.get());
+/// Where the least corner of a top of size `(wt, ht)` and of a bottom of
+/// size `(wb, hb)` go to line them up.
+fn aligned(
+    x_place: XPlace,
+    y_place: YPlace,
+    (wt, ht): (f64, f64),
+    (wb, hb): (f64, f64),
+) -> (Point, Point) {
+    let (dxa, dxb) = x_place_dx(x_place, wt, wb);
+    let (dya, dyb) = y_place_dy(y_place, ht, hb);
     (Point { x: dxa, y: dya }, Point { x: dxb, y: dyb })
 }
 

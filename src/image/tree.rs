@@ -252,7 +252,7 @@ impl Image {
     }
 
     /// The bounds of what `self` draws, or `None` when it draws nothing.
-    fn drawn(&self) -> Option<Bounds> {
+    pub(super) fn drawn(&self) -> Option<Bounds> {
         match &*self.0 {
             Node::Path { drawn, .. } | Node::Combination { drawn, .. } => *drawn,
             Node::Line { from, to, .. } => Some(Bounds {
