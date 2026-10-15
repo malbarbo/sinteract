@@ -68,16 +68,27 @@ impl Image {
     /// can take the place of the clip of the other. The svg keeps each
     /// bitmap in the format of its image.
     pub fn to_svg(&self, number: usize) -> Result<String, TooLarge> {
-        let (w, h) = self.canvas_size()?;
-        Ok(self.svg(w, h, number))
+        Ok(Self::svg(&self.to_scene()?, number))
     }
 
     /// [`Image::to_svg`] as a repl shows it, on a canvas with one more
     /// column and one more row, where an outline on the right or the bottom
     /// edge draws its line. DrRacket shows an image the same way.
     pub fn to_repl_svg(&self, number: usize) -> Result<String, TooLarge> {
+        Ok(Self::svg(&self.to_repl_scene()?, number))
+    }
+
+    /// A scene of the size of [`Image::canvas_size`] with what `self`
+    /// draws.
+    pub fn to_scene(&self) -> Result<Scene, TooLarge> {
+        let (w, h) = self.canvas_size()?;
+        Ok(self.scene(w, h))
+    }
+
+    /// [`Image::to_scene`] on the canvas of [`Image::to_repl_svg`].
+    pub fn to_repl_scene(&self) -> Result<Scene, TooLarge> {
         let (w, h) = self.repl_canvas_size()?;
-        Ok(self.svg(w, h, number))
+        Ok(self.scene(w, h))
     }
 
     /// The canvas of [`Image::to_repl_svg`], one pixel wider and taller
@@ -88,13 +99,17 @@ impl Image {
         Ok((w + 1.0, h + 1.0))
     }
 
-    fn svg(&self, width: f32, height: f32, number: usize) -> String {
+    fn scene(&self, width: f32, height: f32) -> Scene {
         let mut scene = Scene::new(width, height);
         self.draw(&mut scene);
+        scene
+    }
+
+    fn svg(scene: &Scene, number: usize) -> String {
         let prefix = format!("s{number}-");
         let prefix = IdPrefix::new(&prefix).expect("s, digits and a dash make an id prefix");
         let mut renderer = SvgRenderer::with_id_prefix(prefix).keep_image_formats();
-        let Ok(_) = renderer.render(&scene);
+        let Ok(_) = renderer.render(scene);
         renderer.into_string()
     }
 

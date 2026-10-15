@@ -24,18 +24,11 @@ impl Image {
         if size != other.canvas_size()? {
             return Ok(false);
         }
-        let (w, h) = self.repl_canvas_size()?;
-        let (a, b) = (self.scene(w, h), other.scene(w, h));
+        let (a, b) = (self.to_repl_scene()?, other.to_repl_scene()?);
         if not_png(a.elements()) != not_png(b.elements()) {
             return Ok(false);
         }
         Ok(pixels(&a)? == pixels(&b)?)
-    }
-
-    fn scene(&self, width: f32, height: f32) -> Scene {
-        let mut scene = Scene::new(width, height);
-        self.draw(&mut scene);
-        scene
     }
 }
 
