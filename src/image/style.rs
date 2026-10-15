@@ -1,15 +1,17 @@
 //! How a shape or a text paints its fill and its stroke.
 
+use std::sync::Arc;
+
 use super::{Color, Length, Opacity, Overflow};
 use crate::scene::{FillRule, LineCap, LineJoin};
 
 /// A list of attributes. Of two attributes that set the same thing, the
 /// first one wins.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Style(Box<[Attribute]>);
+pub struct Style(Arc<[Attribute]>);
 
 impl Style {
-    pub fn new(attributes: impl Into<Box<[Attribute]>>) -> Self {
+    pub fn new(attributes: impl Into<Arc<[Attribute]>>) -> Self {
         Self(attributes.into())
     }
 
