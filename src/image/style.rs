@@ -15,11 +15,20 @@ impl Style {
         Self(attributes.into())
     }
 
-    /// The attributes of every style in `styles`, in order.
+    /// The attributes of every style in `styles`, in order. When only one
+    /// style has attributes, the result shares them.
     pub fn join<'a>(styles: impl IntoIterator<Item = &'a Style>) -> Self {
+        let mut styles = styles.into_iter().filter(|s| !s.0.is_empty());
+        let Some(first) = styles.next() else {
+            return Self::default();
+        };
+        let Some(second) = styles.next() else {
+            return first.clone();
+        };
         Self(
-            styles
+            [first, second]
                 .into_iter()
+                .chain(styles)
                 .flat_map(|s| s.0.iter().cloned())
                 .collect(),
         )
@@ -80,6 +89,13 @@ mod tests {
                 Attribute::FillRule(FillRule::EvenOdd),
             ]
         );
+    }
+
+    #[test]
+    fn join_shares_the_attributes_of_a_lone_style() {
+        let red = Style::new([Attribute::Fill(Color::rgb(255, 0, 0))]);
+        let joined = Style::join([&Style::default(), &red, &Style::default()]);
+        assert!(Arc::ptr_eq(&joined.0, &red.0));
     }
 
     #[test]
