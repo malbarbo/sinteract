@@ -45,7 +45,7 @@ pub(super) enum Node {
     Text {
         style: Style,
         region: ImageBox,
-        text: Box<str>,
+        text: Arc<str>,
         font: Font,
     },
     Bitmap {
