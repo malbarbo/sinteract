@@ -42,6 +42,11 @@ impl Style {
     /// becomes infinite. A stroke with no width of its own stays one pixel
     /// wide, as an outline does in 2htdp.
     pub(super) fn scale(&self, factor: f64) -> Result<Self, Overflow> {
+        let scaled =
+            |a: &Attribute| matches!(a, Attribute::StrokeWidth(_) | Attribute::StrokeDashArray(_));
+        if !self.0.iter().any(scaled) {
+            return Ok(self.clone());
+        }
         let scale = |v: Length| Length::new(v.get() * factor).map_err(|_| Overflow);
         let attributes = self.0.iter().map(|a| {
             Ok(match a {
@@ -115,5 +120,11 @@ mod tests {
         ]);
         assert_eq!(style(2.0).scale(3.0), Ok(scaled));
         assert_eq!(style(1e300).scale(1e10), Err(Overflow));
+    }
+
+    #[test]
+    fn scale_shares_a_style_with_no_width_and_no_dash() {
+        let red = Style::new([Attribute::Fill(Color::rgb(255, 0, 0))]);
+        assert!(Arc::ptr_eq(&red.scale(3.0).unwrap().0, &red.0));
     }
 }
