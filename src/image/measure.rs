@@ -205,13 +205,19 @@ impl fmt::Display for WedgeAngleError {
 
 impl std::error::Error for WedgeAngleError {}
 
-/// A count that is at least `MIN`.
+/// A count from `MIN` to `MAX`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AtLeast<const MIN: u32>(u32);
+pub struct Count<const MIN: u32, const MAX: u32>(u32);
 
-impl<const MIN: u32> AtLeast<MIN> {
-    pub fn new(n: u32) -> Result<Self, TooFew> {
-        if n >= MIN { Ok(Self(n)) } else { Err(TooFew) }
+impl<const MIN: u32, const MAX: u32> Count<MIN, MAX> {
+    pub fn new(n: u32) -> Result<Self, CountError> {
+        if n < MIN {
+            Err(CountError::TooFew)
+        } else if n > MAX {
+            Err(CountError::TooMany)
+        } else {
+            Ok(Self(n))
+        }
     }
 
     pub fn get(self) -> u32 {
@@ -219,27 +225,37 @@ impl<const MIN: u32> AtLeast<MIN> {
     }
 }
 
-/// The sides of a polygon, at least 3.
-pub type SideCount = AtLeast<3>;
+/// The most vertices a shape takes. A shape allocates all its vertices at
+/// once, and 10^6 of them already take seconds to draw.
+pub const MAX_VERTICES: u32 = 100_000;
 
-/// The points of a radial star, at least 2.
-pub type PointCount = AtLeast<2>;
+/// The sides of a polygon, from 3 to [`MAX_VERTICES`].
+pub type SideCount = Count<3, MAX_VERTICES>;
+
+/// The points of a radial star, from 2 to [`MAX_VERTICES`].
+pub type PointCount = Count<2, MAX_VERTICES>;
 
 /// How many vertices a star polygon skips from one point to the next, at
 /// least 1.
-pub type StepCount = AtLeast<1>;
+pub type StepCount = Count<1, { u32::MAX }>;
 
-/// The count is less than the minimum of its type.
+/// The count is outside the range of its type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TooFew;
+pub enum CountError {
+    TooFew,
+    TooMany,
+}
 
-impl fmt::Display for TooFew {
+impl fmt::Display for CountError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the count is too small")
+        match self {
+            CountError::TooFew => f.write_str("the count is too small"),
+            CountError::TooMany => f.write_str("the count is too large"),
+        }
     }
 }
 
-impl std::error::Error for TooFew {}
+impl std::error::Error for CountError {}
 
 #[cfg(test)]
 mod tests {
@@ -301,12 +317,15 @@ mod tests {
     }
 
     #[test]
-    fn counts_refuse_less_than_the_minimum() {
+    fn counts_refuse_less_than_the_minimum_and_more_than_the_maximum() {
         assert_eq!(SideCount::new(3).unwrap().get(), 3);
-        assert_eq!(SideCount::new(2), Err(TooFew));
+        assert_eq!(SideCount::new(2), Err(CountError::TooFew));
+        assert_eq!(SideCount::new(MAX_VERTICES).unwrap().get(), MAX_VERTICES);
+        assert_eq!(SideCount::new(MAX_VERTICES + 1), Err(CountError::TooMany));
         assert_eq!(PointCount::new(2).unwrap().get(), 2);
-        assert_eq!(PointCount::new(1), Err(TooFew));
-        assert_eq!(StepCount::new(0), Err(TooFew));
+        assert_eq!(PointCount::new(1), Err(CountError::TooFew));
+        assert_eq!(PointCount::new(MAX_VERTICES + 1), Err(CountError::TooMany));
+        assert_eq!(StepCount::new(0), Err(CountError::TooFew));
         assert_eq!(StepCount::new(u32::MAX).unwrap().get(), u32::MAX);
     }
 }
