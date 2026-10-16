@@ -1,11 +1,13 @@
 //! The font of a text.
 
+use std::sync::Arc;
+
 use super::Length;
 use crate::scene::{FontStyle, TextSpec};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Font {
-    pub family: Box<str>,
+    pub family: Arc<str>,
     pub size: Length,
     pub style: FontStyle,
     pub weight: FontWeight,
@@ -31,7 +33,7 @@ impl Font {
     pub(super) fn spec(&self, text: &str) -> TextSpec {
         TextSpec {
             size: self.size.get() as f32,
-            family: self.family.clone(),
+            family: self.family.as_ref().into(),
             weight: self.weight.into(),
             style: self.style,
             text: text.into(),
