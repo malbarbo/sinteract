@@ -3,6 +3,7 @@
 //! state changes, and reads only the keys and the close.
 
 use std::collections::VecDeque;
+use std::thread;
 use std::time::Instant;
 
 use super::{PresentError, Stage, StageError, StageEvent, StageOptions};
@@ -123,8 +124,8 @@ impl Frames {
     /// show goes out at each tick on the way. The mouse, a resize and a
     /// pad never come out. A terminal that sends a press with no down
     /// before it gives a down and then the press, since a world reads a
-    /// down as the start of a key. With no stage open, it returns
-    /// [`FrameEvent::Timeout`] at once, and the caller sleeps.
+    /// down as the start of a key. With no stage open, it sleeps until
+    /// `deadline` and returns [`FrameEvent::Timeout`].
     ///
     /// A message that the session drops goes to `on_error`, and the wait
     /// goes on.
@@ -134,6 +135,7 @@ impl Frames {
         mut on_error: impl FnMut(&dyn std::error::Error),
     ) -> FrameEvent {
         let State::Open(open) = &mut self.state else {
+            thread::sleep(deadline.saturating_duration_since(Instant::now()));
             return FrameEvent::Timeout;
         };
         loop {
@@ -338,14 +340,13 @@ mod tests {
     }
 
     #[test]
-    fn a_wait_with_no_stage_returns_at_once() {
+    fn a_wait_with_no_stage_sleeps_until_the_deadline() {
         let mut frames = Frames::new("test", StageOptions::default);
-        let start = Instant::now();
-        let far = start + Duration::from_secs(10);
+        let deadline = soon();
         assert_eq!(
-            frames.wait_event(far, |e| panic!("{e}")),
+            frames.wait_event(deadline, |e| panic!("{e}")),
             FrameEvent::Timeout
         );
-        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(Instant::now() >= deadline);
     }
 }
