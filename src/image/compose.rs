@@ -100,18 +100,8 @@ impl Image {
     /// by `x_place` and `y_place`. A rectangle larger than `self` leaves
     /// room around it.
     pub fn crop_align(&self, x_place: XPlace, y_place: YPlace, w: Length, h: Length) -> Image {
-        let dx = self.width().get() - w.get();
-        let dx = match x_place {
-            XPlace::Left => 0.0,
-            XPlace::Center => dx / 2.0,
-            XPlace::Right => dx,
-        };
-        let dy = self.height().get() - h.get();
-        let dy = match y_place {
-            YPlace::Top => 0.0,
-            YPlace::Middle => dy / 2.0,
-            YPlace::Bottom => dy,
-        };
+        let dx = x_share(x_place, self.width().get() - w.get());
+        let dy = y_share(y_place, self.height().get() - h.get());
         let at = Point::ORIGIN.minus(Point { x: dx, y: dy });
         self.crop_at(ImageBox::of_size(w, h), at)
             .expect("the difference of two lengths is finite")
@@ -362,41 +352,38 @@ fn aligned(
 
 fn x_place_dx(x_place: XPlace, wa: f64, wb: f64) -> (f64, f64) {
     let wm = wa.max(wb);
-    match x_place {
-        XPlace::Left => (0.0, 0.0),
-        XPlace::Center => (mid(wm, wa), mid(wm, wb)),
-        XPlace::Right => (wm - wa, wm - wb),
-    }
+    (x_share(x_place, wm - wa), x_share(x_place, wm - wb))
 }
 
 fn y_place_dy(y_place: YPlace, ha: f64, hb: f64) -> (f64, f64) {
     let hm = ha.max(hb);
-    match y_place {
-        YPlace::Top => (0.0, 0.0),
-        YPlace::Middle => (mid(hm, ha), mid(hm, hb)),
-        YPlace::Bottom => (hm - ha, hm - hb),
-    }
-}
-
-fn mid(a: f64, b: f64) -> f64 {
-    (a - b) / 2.0
+    (y_share(y_place, hm - ha), y_share(y_place, hm - hb))
 }
 
 /// How far the least corner of `img` goes from the point that it lines up
 /// with by `x_place` and `y_place`.
 fn place_dx_dy(x_place: XPlace, y_place: YPlace, img: &Image) -> (f64, f64) {
     let (w, h) = img.dimension();
-    let dx = match x_place {
+    (x_share(x_place, -w.get()), y_share(y_place, -h.get()))
+}
+
+/// The part of `room` to the left of an image that `x_place` lines up in
+/// it.
+fn x_share(x_place: XPlace, room: f64) -> f64 {
+    match x_place {
         XPlace::Left => 0.0,
-        XPlace::Center => w.get() / -2.0,
-        XPlace::Right => -w.get(),
-    };
-    let dy = match y_place {
+        XPlace::Center => room / 2.0,
+        XPlace::Right => room,
+    }
+}
+
+/// The part of `room` above an image that `y_place` lines up in it.
+fn y_share(y_place: YPlace, room: f64) -> f64 {
+    match y_place {
         YPlace::Top => 0.0,
-        YPlace::Middle => h.get() / -2.0,
-        YPlace::Bottom => -h.get(),
-    };
-    (dx, dy)
+        YPlace::Middle => room / 2.0,
+        YPlace::Bottom => room,
+    }
 }
 
 #[cfg(test)]
