@@ -80,8 +80,9 @@ pub enum Native {
     Window,
     /// Only the terminal.
     Terminal,
-    /// No display. [`Stage::open`] fails with [`OpenError::Disabled`], so
-    /// a game can run without one, as in a test.
+    /// No display. Outside a session, [`Stage::open`] fails with
+    /// [`OpenError::Disabled`], so a game can run without one, as in a
+    /// test. A session still opens, since the server asks for it.
     None,
 }
 
