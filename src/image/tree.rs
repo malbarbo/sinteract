@@ -31,7 +31,7 @@ pub(super) enum Node {
         to: Point,
     },
     /// The parts from the bottom to the top, each with the place of its
-    /// least corner. No part is a combination.
+    /// least corner.
     Combination {
         drawn: Option<Bounds>,
         parts: Box<[(Image, Point)]>,
@@ -343,11 +343,12 @@ impl Image {
 
     /// `parts` drawn from the first to the last, each at its point, with
     /// the place of the least corner of the whole. A part that is a
-    /// combination gives its own parts.
+    /// combination stays whole, so an image that grows one part at a time
+    /// does not copy the parts before it.
     pub(super) fn combination(
         parts: impl IntoIterator<Item = (Image, Point)>,
     ) -> Result<(Self, Point), Overflow> {
-        let mut flat: Vec<(Image, Point)> = Vec::new();
+        let mut placed: Vec<(Image, Point)> = Vec::new();
         let mut drawn: Option<Bounds> = None;
         for (part, at) in parts {
             let (part, at) = part.settle(at)?;
@@ -355,15 +356,10 @@ impl Image {
                 let b = b.translate(at);
                 drawn = Some(drawn.map_or(b, |d| d.union(b)));
             }
-            match &*part.0 {
-                Node::Combination { parts, .. } => {
-                    flat.extend(parts.iter().map(|(p, p_at)| (p.clone(), at.plus(*p_at))));
-                }
-                _ => flat.push((part, at)),
-            }
+            placed.push((part, at));
         }
         let Some(drawn) = drawn else {
-            let parts = flat.into_iter().map(|(p, _)| (p, Point::ORIGIN));
+            let parts = placed.into_iter().map(|(p, _)| (p, Point::ORIGIN));
             return Ok((
                 Self::new(Node::Combination {
                     drawn: None,
@@ -373,7 +369,7 @@ impl Image {
             ));
         };
         let corner = drawn.min;
-        let parts = flat.into_iter().map(|(p, at)| {
+        let parts = placed.into_iter().map(|(p, at)| {
             let at = if p.drawn().is_some() {
                 at.minus(corner)
             } else {
@@ -546,7 +542,9 @@ impl Drop for Node {
 
 impl PartialEq for Image {
     /// Returns `true` if the two trees are the same, `false` otherwise. Two
-    /// images that draw the same pixels can have different trees.
+    /// images that draw the same pixels can have different trees. A
+    /// combination inside a combination counts as its parts, so the
+    /// grouping of the parts does not matter.
     fn eq(&self, other: &Self) -> bool {
         let mut pending = vec![(self, other)];
         while let Some((a, b)) = pending.pop() {
@@ -598,10 +596,14 @@ impl PartialEq for Image {
                         parts: p2,
                     },
                 ) => {
-                    if d1 != d2 || p1.len() != p2.len() {
+                    if d1 != d2 {
                         return false;
                     }
-                    for ((i1, at1), (i2, at2)) in p1.iter().zip(p2.iter()) {
+                    let (l1, l2) = (leaves(p1), leaves(p2));
+                    if l1.len() != l2.len() {
+                        return false;
+                    }
+                    for ((i1, at1), (i2, at2)) in l1.into_iter().zip(l2) {
                         if at1 != at2 {
                             return false;
                         }
@@ -662,6 +664,24 @@ impl PartialEq for Image {
         }
         true
     }
+}
+
+/// The parts of a combination with each part that is a combination
+/// replaced by its own parts, in drawing order. A part that draws nothing
+/// sits at the origin, as [`Image::combination`] places it.
+fn leaves(parts: &[(Image, Point)]) -> Vec<(&Image, Point)> {
+    let mut leaves = Vec::new();
+    let mut pending: Vec<_> = parts.iter().rev().map(|(p, at)| (p, *at)).collect();
+    while let Some((part, at)) = pending.pop() {
+        match &*part.0 {
+            Node::Combination { parts, .. } => {
+                pending.extend(parts.iter().rev().map(|(p, p_at)| (p, at.plus(*p_at))));
+            }
+            _ if part.drawn().is_none() => leaves.push((part, Point::ORIGIN)),
+            _ => leaves.push((part, at)),
+        }
+    }
+    leaves
 }
 
 impl fmt::Debug for Image {
@@ -727,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn a_combination_gives_the_parts_of_a_part() {
+    fn a_nested_combination_equals_the_flat_one() {
         let (a, b, c) = (square(10.0), square(20.0), square(5.0));
         let ab = Image::combine([(a.clone(), p(0.0, 0.0)), (b.clone(), p(10.0, 0.0))]).unwrap();
         let nested = Image::combine([(ab, p(5.0, 5.0)), (c.clone(), p(0.0, 0.0))]).unwrap();
@@ -827,5 +847,15 @@ mod tests {
             })
         };
         assert_eq!(chain(), chain());
+    }
+
+    #[test]
+    fn a_chain_of_combinations_equals_one_combination() {
+        let n = 100_000;
+        let chain = (1..n).fold(square(1.0), |img, i| {
+            Image::combine([(img, p(0.0, 0.0)), (square(1.0), p(i as f64, 0.0))]).unwrap()
+        });
+        let flat = (0..n).map(|i| (square(1.0), p(i as f64, 0.0)));
+        assert_eq!(chain, Image::combine(flat).unwrap());
     }
 }
