@@ -361,7 +361,8 @@ fn curve(
     let (p1, p2) = (from.point, to.point);
     let dist = (p2.x - p1.x).hypot(p2.y - p1.y);
     let reach = |pull: Finite, c: f64| pull.get() * dist * c;
-    let (a1, a2) = (from.angle.get(), to.angle.get());
+    // A huge angle overflows once it becomes radians. `%` is exact.
+    let (a1, a2) = (from.angle.get() % 360.0, to.angle.get() % 360.0);
     let c1 = Point {
         x: p1.x + reach(from.pull, cos_deg(a1)),
         y: p1.y - reach(from.pull, sin_deg(a1)),
@@ -588,6 +589,19 @@ mod tests {
         assert_eq!(curve.dimension(), (length(20.0), length(10.0)));
         let solid = a.add_solid_curve(end(0.0, 0.0), end(20.0, 10.0), red());
         assert_eq!(solid.unwrap().dimension(), (length(20.0), length(10.0)));
+    }
+
+    #[test]
+    fn a_curve_takes_its_angle_modulo_360() {
+        let end = |x, y, a| CurveEnd {
+            point: p(x, y),
+            angle: finite(a),
+            pull: finite(0.5),
+        };
+        let a = Image::empty();
+        let curve = |angle| a.add_curve(end(0.0, 0.0, angle), end(20.0, 10.0, angle), red());
+        assert_eq!(curve(1e308), curve(1e308 % 360.0));
+        assert!(curve(1e308).is_ok());
     }
 
     #[test]

@@ -346,7 +346,8 @@ impl Image {
                 y: radius * sin_deg(theta),
             }
         };
-        let (pull, angle) = (pull.get(), angle.get());
+        // A huge angle overflows once it becomes radians. `%` is exact.
+        let (pull, angle) = (pull.get(), angle.get() % 360.0);
         let first = vertex(0);
         let edges = (0..n).map(|i| {
             let to = if i + 1 < n { vertex(i + 1) } else { first };
@@ -642,6 +643,22 @@ mod tests {
         assert_eq!(wedge(-90.0).dimension(), (length(10.0), length(10.0)));
         assert_ne!(wedge(90.0), wedge(-90.0));
         assert_eq!(wedge(-360.0).dimension(), (length(20.0), length(20.0)));
+    }
+
+    #[test]
+    fn a_pulled_polygon_takes_its_angle_modulo_360() {
+        let sides = SideCount::new(5).unwrap();
+        let pulled = |a| {
+            Image::pulled_regular_polygon(
+                length(10.0),
+                sides,
+                Finite::new(0.5).unwrap(),
+                Finite::new(a).unwrap(),
+                style(),
+            )
+        };
+        assert_eq!(pulled(1e308), pulled(1e308 % 360.0));
+        assert!(pulled(1e308).is_ok());
     }
 
     #[test]
