@@ -20,9 +20,11 @@ impl Image {
         if self == other {
             return Ok(true);
         }
-        let size = self.canvas_size()?;
-        if size != other.canvas_size()? {
-            return Ok(false);
+        // A canvas too large for a float differs from one that fits.
+        match (self.canvas_size(), other.canvas_size()) {
+            (Ok(a), Ok(b)) if a == b => {}
+            (Err(TooLarge), Err(TooLarge)) => return Err(TooLarge),
+            _ => return Ok(false),
         }
         let (a, b) = (self.to_repl_scene()?, other.to_repl_scene()?);
         if not_png(a.elements()) != not_png(b.elements()) {
@@ -137,5 +139,13 @@ mod tests {
         let (a, b) = (rectangle(1e5, 1e5, red()), rectangle(1e5, 1e5, Color::NONE));
         assert_eq!(a.same(&b), Err(TooLarge));
         assert_eq!(a.same(&a.clone()), Ok(true));
+    }
+
+    #[test]
+    fn a_canvas_too_large_is_not_the_same_as_one_that_fits() {
+        let (small, huge) = (rectangle(10.0, 10.0, red()), rectangle(1e39, 10.0, red()));
+        assert_eq!(huge.canvas_size(), Err(TooLarge));
+        assert_eq!(small.same(&huge), Ok(false));
+        assert_eq!(huge.same(&small), Ok(false));
     }
 }
