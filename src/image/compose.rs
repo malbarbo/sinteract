@@ -121,15 +121,8 @@ impl Image {
     pub fn frame(&self, color: Color) -> Image {
         let (w, h) = self.dimension();
         let outline = Image::rectangle(w, h, outline(color));
-        let framed = overlay(
-            XPlace::Center,
-            YPlace::Middle,
-            &outline,
-            Point::ORIGIN,
-            self,
-            Point::ORIGIN,
-        )
-        .expect("an image and its outline have the same bounds");
+        let framed = Image::combine([(self.clone(), Point::ORIGIN), (outline, Point::ORIGIN)])
+            .expect("an image and its outline have the same bounds");
         framed
             .crop_at(ImageBox::of_size(w, h), Point::ORIGIN)
             .expect("the region of a crop of finite measures is finite")
@@ -320,27 +313,6 @@ fn line_up(
         Err(parts) if parts.is_empty() => Ok(Image::empty()),
         Err(parts) => Image::combine(parts),
     }
-}
-
-/// `top` over `bottom`, lined up by `x_place` and `y_place`, and then moved
-/// by `top_by` and `bottom_by`.
-fn overlay(
-    x_place: XPlace,
-    y_place: YPlace,
-    top: &Image,
-    top_by: Point,
-    bottom: &Image,
-    bottom_by: Point,
-) -> Result<Image, Overflow> {
-    let size = |img: &Image| {
-        let (w, h) = img.dimension();
-        (w.get(), h.get())
-    };
-    let (top_at, bottom_at) = aligned(x_place, y_place, size(top), size(bottom));
-    Image::combine([
-        (bottom.clone(), bottom_by.plus(bottom_at)),
-        (top.clone(), top_by.plus(top_at)),
-    ])
 }
 
 fn outline(color: Color) -> Style {
