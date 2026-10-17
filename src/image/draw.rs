@@ -99,7 +99,7 @@ impl Image {
         Ok((w + 1.0, h + 1.0))
     }
 
-    fn scene(&self, width: f32, height: f32) -> Scene {
+    pub(super) fn scene(&self, width: f32, height: f32) -> Scene {
         let mut scene = Scene::new(width, height);
         self.draw(&mut scene);
         scene

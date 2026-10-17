@@ -21,12 +21,14 @@ impl Image {
             return Ok(true);
         }
         // A canvas too large for a float differs from one that fits.
-        match (self.canvas_size(), other.canvas_size()) {
-            (Ok(a), Ok(b)) if a == b => {}
+        let (w, h) = match (self.canvas_size(), other.canvas_size()) {
+            (Ok(a), Ok(b)) if a == b => a,
             (Err(TooLarge), Err(TooLarge)) => return Err(TooLarge),
             _ => return Ok(false),
-        }
-        let (a, b) = (self.to_repl_scene()?, other.to_repl_scene()?);
+        };
+        // The canvas of to_repl_scene.
+        let (w, h) = (w + 1.0, h + 1.0);
+        let (a, b) = (self.scene(w, h), other.scene(w, h));
         if not_png(a.elements()) != not_png(b.elements()) {
             return Ok(false);
         }
