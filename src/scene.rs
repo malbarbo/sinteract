@@ -1130,7 +1130,8 @@ impl UnitArc {
 
     /// The cubics of `arc` as [`kurbo::Arc::append_iter`] splits them, with
     /// each point taken from `arc.from`, so it keeps its precision for any
-    /// chord and radii. `None` when the arc is the chord in f64.
+    /// chord and radii. `None` when the arc is the chord in f64, or when a
+    /// radius is NaN, which [`PathBounds::arc_to`] lets in.
     fn cubics_from_start(&self, arc: &kurbo::SvgArc) -> Option<Vec<[kurbo::Point; 3]>> {
         use std::f64::consts::{PI, TAU};
         // A small arc with a subnormal reach strays from its chord by less
@@ -1168,6 +1169,9 @@ impl UnitArc {
             .powf(1.0 / 6.0)
             .max(3.999_999);
         let n = (per_turn * turn / TAU).ceil();
+        if n.is_nan() {
+            return None;
+        }
         let step = if arc.sweep { turn / n } else { -turn / n };
         let arm = 4.0 / 3.0 * (step / 4.0).tan();
         let turned = |v: kurbo::Vec2, t: f64| {
@@ -2003,6 +2007,16 @@ mod tests {
             .move_to(50.0, 50.0);
         assert_eq!(bounds.get(), Some((0.0, 0.0, 10.0, 5.0)));
         assert_eq!(PathBounds::new(5.0, 5.0).move_to(9.0, 9.0).get(), None);
+    }
+
+    #[test]
+    fn path_bounds_take_an_arc_with_a_nan_radius_as_a_line() {
+        for large_arc in [false, true] {
+            let bounds = PathBounds::new(0.0, 0.0)
+                .arc_to(f64::NAN, 1.0, 0.0, large_arc, true, 10.0, 0.0)
+                .line_to(10.0, 5.0);
+            assert_eq!(bounds.get(), Some((0.0, 0.0, 10.0, 5.0)));
+        }
     }
 
     #[test]
