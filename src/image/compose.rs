@@ -135,12 +135,11 @@ impl Image {
         y_place: YPlace,
         img: &Image,
     ) -> Result<Image, Overflow> {
-        let (dx, dy) = place_dx_dy(x_place, y_place, img);
         let at = Point {
-            x: x.get() + dx,
-            y: y.get() + dy,
+            x: x.get(),
+            y: y.get(),
         };
-        self.place(img, at)
+        self.place_lined_up(at, x_place, y_place, img)
     }
 
     /// `self` with each image of `items` placed as [`Image::place_image`]
@@ -154,9 +153,7 @@ impl Image {
         items
             .into_iter()
             .try_fold(self.clone(), |scene, (at, img)| {
-                let (x, y) = (Finite::new(at.x), Finite::new(at.y));
-                let (x, y) = (x.expect("a point is finite"), y.expect("a point is finite"));
-                scene.place_image(x, y, x_place, y_place, &img)
+                scene.place_lined_up(at, x_place, y_place, &img)
             })
     }
 
@@ -252,6 +249,19 @@ impl Image {
 
     /// `self` with `img` over it, with the least corner of `img` at `at`,
     /// cropped to the bounds of `self`.
+    /// `self` with `img` lined up with `at` by `x_place` and `y_place`, and
+    /// cropped to the bounds of `self`.
+    fn place_lined_up(
+        &self,
+        at: Point,
+        x_place: XPlace,
+        y_place: YPlace,
+        img: &Image,
+    ) -> Result<Image, Overflow> {
+        let (dx, dy) = place_dx_dy(x_place, y_place, img);
+        self.place(img, at.plus(Point { x: dx, y: dy }))
+    }
+
     fn place(&self, img: &Image, at: Point) -> Result<Image, Overflow> {
         let (w, h) = self.dimension();
         let parts = [(self.clone(), Point::ORIGIN), (img.clone(), at)];
