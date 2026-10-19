@@ -309,12 +309,13 @@ impl super::Display for Terminal {
             if self.keep_last_frame
                 && let Some(scene) = &self.last
             {
+                let footer_rows = self.footer_rows();
                 let mut printer = Printer {
                     renderer: std::mem::take(&mut self.renderer),
                     bytes: state.bytes,
                     painter: state.painter,
                 };
-                let _ = printer.print_unchecked(scene);
+                let _ = printer.print_unchecked(scene, footer_rows);
             }
         }
     }
@@ -559,7 +560,7 @@ impl Printer {
         if TTY.load(Ordering::Acquire) != FREE {
             return Err(PrintError::Busy);
         }
-        self.print_unchecked(scene)
+        self.print_unchecked(scene, 0)
     }
 
     fn with_painter(painter: Painter) -> Self {
@@ -580,9 +581,15 @@ impl Printer {
     /// Print `scene` at the cursor, with every cell of the image, and leave
     /// the cursor on the line below it, even while a session holds the tty.
     /// A [`Terminal`] prints its last frame at close with it, while it still
-    /// holds the tty.
-    fn print_unchecked(&mut self, scene: &Scene) -> Result<(), PrintError> {
-        let scale = scale_for_backend(self.painter.backend(), scene.width(), scene.height(), 0);
+    /// holds the tty, and passes its `footer_rows` so the frame keeps the
+    /// size it had on the alt screen.
+    fn print_unchecked(&mut self, scene: &Scene, footer_rows: u16) -> Result<(), PrintError> {
+        let scale = scale_for_backend(
+            self.painter.backend(),
+            scene.width(),
+            scene.height(),
+            footer_rows,
+        );
         self.renderer.set_scale(scale);
         let pixmap = self.renderer.render(scene).map_err(PrintError::Alloc)?;
         let mut stdout = io::stdout().lock();
