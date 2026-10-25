@@ -715,7 +715,7 @@ instância. Num processo nativo, a sessão é uma só.
 O `display::Frames` é o `Stage` de um mundo de uma linguagem de ensino,
 como o do spython e do sgleam. O mundo guarda o próprio relógio, o
 `show` guarda a cena, que sai no próximo `Tick`, e o `wait_event` devolve
-só as teclas e o fechamento. Com o `Native::None`, fora de uma sessão, o
+só as teclas e os pads, cada um com o seu jogador, e o fechamento. Com o `Native::None`, fora de uma sessão, o
 mundo roda sem tela, como num teste. O primeiro `show` devolve
 `ShowError::Open` com o `OpenError::Disabled`, os seguintes devolvem
 `ShowError::Unavailable`, e o mundo segue sem tela. Sem stage, o

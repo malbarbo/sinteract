@@ -516,8 +516,15 @@ pub(super) mod tests {
         }
 
         pub(in crate::display) fn key(&mut self, key: crate::event::KeyEvent) {
+            self.input(InputEvent::Key(key));
+        }
+
+        pub(in crate::display) fn pad(&mut self, pad: crate::event::PadEvent) {
+            self.input(InputEvent::Pad(pad));
+        }
+
+        fn input(&mut self, event: InputEvent) {
             let player = NonZeroU32::new(1).unwrap();
-            let event = InputEvent::Key(key);
             server_to_engine::write_input(self.writer(), player, &event).unwrap();
         }
 

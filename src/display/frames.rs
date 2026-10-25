@@ -1,15 +1,15 @@
 //! [`Frames`], the stage of a world of a teaching language, as spython and
 //! sgleam run it. The world keeps its own clock, shows a scene when its
-//! state changes, and reads only the keys and the close.
+//! state changes, and reads only the keys, the pads and the close.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::thread;
 use std::time::Instant;
 
 use super::{PresentError, Stage, StageError, StageEvent, StageOptions};
-use crate::event::{InputEvent, Interrupt, KeyEvent, KeyKind};
+use crate::event::{InputEvent, Interrupt, KeyEvent, KeyKind, PadEvent};
 use crate::scene::Scene;
-use crate::session::{PlayerRange, Target};
+use crate::session::{Player, PlayerRange, Target};
 
 /// The frames of the worlds of a program, one world after another. The
 /// first [`Frames::show`] of a world opens the stage, at the size of its
@@ -31,7 +31,8 @@ pub struct Frames {
 /// What [`Frames::wait_event`] returns.
 #[derive(Debug, PartialEq)]
 pub enum FrameEvent {
-    Key(KeyEvent),
+    Key(Player, KeyEvent),
+    Pad(Player, PadEvent),
     /// The user closed the display, or the server ended the session. Every
     /// wait after it returns Close too, until the next world.
     Close,
@@ -62,10 +63,10 @@ struct Open {
     stage: Stage,
     /// The scene of the last show, until a tick draws it.
     pending: Option<Scene>,
-    /// The keys that a wait took and did not return yet.
-    keys: VecDeque<KeyEvent>,
-    /// Whether the last key was a down.
-    after_down: bool,
+    /// The events that a wait took and did not return yet.
+    events: VecDeque<FrameEvent>,
+    /// The players whose last key was a down.
+    after_down: HashMap<Player, bool>,
     /// The stage closed or failed.
     closed: bool,
 }
@@ -100,8 +101,8 @@ impl Frames {
                     self.state = State::Open(Open {
                         stage,
                         pending: None,
-                        keys: VecDeque::new(),
-                        after_down: false,
+                        events: VecDeque::new(),
+                        after_down: HashMap::new(),
                         closed: false,
                     });
                 }
@@ -120,11 +121,11 @@ impl Frames {
         }
     }
 
-    /// Wait until a key, the close or `deadline`. The scene of the last
-    /// show goes out at each tick on the way. The mouse, a resize and a
-    /// pad never come out. A terminal that sends a press with no down
-    /// before it gives a down and then the press, since a world reads a
-    /// down as the start of a key. With no stage open, it sleeps until
+    /// Wait until a key, a pad, the close or `deadline`. The scene of the
+    /// last show goes out at each tick on the way. The mouse and a resize
+    /// never come out. A terminal that sends a press with no down before
+    /// it gives a down and then the press, since a world reads a down as
+    /// the start of a key. With no stage open, it sleeps until
     /// `deadline` and returns [`FrameEvent::Timeout`].
     ///
     /// A message that the session drops goes to `on_error`, and the wait
@@ -139,8 +140,8 @@ impl Frames {
             return FrameEvent::Timeout;
         };
         loop {
-            if let Some(key) = open.keys.pop_front() {
-                return FrameEvent::Key(key);
+            if let Some(event) = open.events.pop_front() {
+                return event;
             }
             if open.closed {
                 return FrameEvent::Close;
@@ -157,9 +158,13 @@ impl Frames {
                     }
                 }
                 Ok(StageEvent::Input {
+                    player,
                     event: InputEvent::Key(key),
-                    ..
-                }) => open.take_key(key),
+                }) => open.take_key(player, key),
+                Ok(StageEvent::Input {
+                    player,
+                    event: InputEvent::Pad(pad),
+                }) => open.events.push_back(FrameEvent::Pad(player, pad)),
                 Ok(StageEvent::Input { .. }) => {}
                 Ok(StageEvent::Error(e)) => on_error(&e),
                 Err(Interrupt::Timeout) => return FrameEvent::Timeout,
@@ -207,15 +212,17 @@ impl Frames {
 }
 
 impl Open {
-    fn take_key(&mut self, key: KeyEvent) {
-        if key.kind == KeyKind::Press && !self.after_down {
-            self.keys.push_back(KeyEvent {
+    fn take_key(&mut self, player: Player, key: KeyEvent) {
+        let after_down = self.after_down.entry(player).or_default();
+        if key.kind == KeyKind::Press && !*after_down {
+            let down = KeyEvent {
                 kind: KeyKind::Down,
                 ..key.clone()
-            });
+            };
+            self.events.push_back(FrameEvent::Key(player, down));
         }
-        self.after_down = key.kind == KeyKind::Down;
-        self.keys.push_back(key);
+        *after_down = key.kind == KeyKind::Down;
+        self.events.push_back(FrameEvent::Key(player, key));
     }
 }
 
@@ -250,9 +257,11 @@ impl std::fmt::Debug for Frames {
 mod tests {
     use std::time::Duration;
 
+    use std::num::NonZeroU32;
+
     use super::*;
     use crate::display::stage::tests::{Server, session};
-    use crate::event::Modifiers;
+    use crate::event::{Modifiers, PadButton};
     use crate::wire::testing::Message;
 
     /// Frames with the stage of a session open, as after a first show.
@@ -262,8 +271,8 @@ mod tests {
         frames.state = State::Open(Open {
             stage,
             pending: None,
-            keys: VecDeque::new(),
-            after_down: false,
+            events: VecDeque::new(),
+            after_down: HashMap::new(),
             closed: false,
         });
         (frames, server)
@@ -320,11 +329,21 @@ mod tests {
         server.key(key(KeyKind::Up, "b"));
         let kinds: Vec<_> = (0..5)
             .map(|_| match wait(&mut frames) {
-                FrameEvent::Key(k) => format!("{:?} {}", k.kind, k.key),
+                FrameEvent::Key(_, k) => format!("{:?} {}", k.kind, k.key),
                 other => format!("{other:?}"),
             })
             .collect();
         assert_eq!(kinds, ["Down a", "Press a", "Down b", "Press b", "Up b"]);
+    }
+
+    #[test]
+    fn a_pad_comes_out_with_its_player() {
+        let (mut frames, mut server) = frames();
+        server.pad(PadEvent::Down(PadButton::A));
+        assert_eq!(
+            wait(&mut frames),
+            FrameEvent::Pad(Player(NonZeroU32::MIN), PadEvent::Down(PadButton::A))
+        );
     }
 
     #[test]
