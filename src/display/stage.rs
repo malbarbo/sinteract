@@ -108,6 +108,12 @@ pub enum StageError {
 }
 
 impl Stage {
+    /// Returns `true` if [`Stage::open`] starts a session, `false` if it
+    /// opens a display of this process.
+    pub fn opens_session() -> bool {
+        !HAS_NATIVE || std::env::var_os(SESSION_VAR).is_some()
+    }
+
     /// Open the stage of a game that takes `players`, with each player and
     /// its nickname. With `SINTERACT_SESSION` in the environment, or in a
     /// build with no display of its own, it starts a session that reads
@@ -123,7 +129,7 @@ impl Stage {
         players: PlayerRange,
         options: StageOptions,
     ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
-        if !HAS_NATIVE || std::env::var_os(SESSION_VAR).is_some() {
+        if Stage::opens_session() {
             return Stage::open_session(players);
         }
         if players.min().get() > 1 {
