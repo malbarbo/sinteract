@@ -11,12 +11,14 @@ use crate::event::{InputEvent, Interrupt, KeyEvent, KeyKind, PadEvent};
 use crate::scene::Scene;
 use crate::session::{Player, PlayerRange, Target};
 
-/// The frames of the worlds of a program, one world after another. The
-/// first [`Frames::show`] of a world opens the stage, at the size of its
-/// scene, and [`Frames::close`] ends it.
+/// The frames of the worlds of a program, one world after another. A world
+/// of one player lets the first [`Frames::show`] open the stage, at the size
+/// of its scene. A world of several players opens it with [`Frames::open`],
+/// which gives the players, and shows each one its scene with
+/// [`Frames::show_to`]. [`Frames::close`] ends the stage.
 ///
 /// A show keeps the scene and draws nothing. The stage draws the scene of
-/// the last show at its next tick, so a world that changes faster than the
+/// the last show of each player at its next tick, so a world that changes faster than the
 /// screen draws only what the screen can show, and a session sends one
 /// frame per tick of the server.
 pub struct Frames {
@@ -61,8 +63,9 @@ enum State {
 
 struct Open {
     stage: Stage,
-    /// The scene of the last show, until a tick draws it.
-    pending: Option<Scene>,
+    players: Vec<Player>,
+    /// The scene of the last show of each target, until a tick draws it.
+    pending: Vec<(Target, Scene)>,
     /// The events that a wait took and did not return yet.
     events: VecDeque<FrameEvent>,
     /// The players whose last key was a down.
@@ -91,34 +94,70 @@ impl Frames {
         matches!(self.state, State::Open(_))
     }
 
-    /// Keep `scene` for the next tick, and open the stage first if the
-    /// world has none.
+    /// The players of the world, from the start of its stage. With no stage
+    /// open, there are none.
+    pub fn players(&self) -> &[Player] {
+        match &self.state {
+            State::Open(open) => &open.players,
+            State::Closed | State::Unavailable => &[],
+        }
+    }
+
+    /// Open the stage of a world that takes `players`, at `width` by
+    /// `height` logical pixels, and return each player with its nickname.
+    /// The caller closes the stage of the last world first. When the stage
+    /// does not open, the world goes on without one, and each show returns
+    /// [`ShowError::Unavailable`].
+    pub fn open(
+        &mut self,
+        width: f32,
+        height: f32,
+        players: PlayerRange,
+    ) -> Result<Vec<(Player, String)>, StageError> {
+        debug_assert!(!self.is_open(), "the stage of the last world is open");
+        let options = (self.options)();
+        match Stage::open(&self.title, width, height, players, options) {
+            Ok((stage, players)) => {
+                self.state = State::Open(Open {
+                    stage,
+                    players: players.iter().map(|(player, _)| *player).collect(),
+                    pending: Vec::new(),
+                    events: VecDeque::new(),
+                    after_down: HashMap::new(),
+                    closed: false,
+                });
+                Ok(players)
+            }
+            Err(e) => {
+                self.state = State::Unavailable;
+                Err(e)
+            }
+        }
+    }
+
+    /// Keep `scene` for every player until the next tick, and open the
+    /// stage of one player first if the world has none.
     pub fn show(&mut self, scene: Scene) -> Result<(), ShowError> {
         if let State::Closed = self.state {
-            let options = (self.options)();
-            match Stage::open(&self.title, scene.width(), scene.height(), PLAYERS, options) {
-                Ok((stage, _players)) => {
-                    self.state = State::Open(Open {
-                        stage,
-                        pending: None,
-                        events: VecDeque::new(),
-                        after_down: HashMap::new(),
-                        closed: false,
-                    });
-                }
-                Err(e) => {
-                    self.state = State::Unavailable;
-                    return Err(ShowError::Open(e));
-                }
-            }
+            self.open(scene.width(), scene.height(), PLAYERS)
+                .map_err(ShowError::Open)?;
         }
-        match &mut self.state {
-            State::Open(open) => {
-                open.pending = Some(scene);
-                Ok(())
-            }
-            State::Closed | State::Unavailable => Err(ShowError::Unavailable),
-        }
+        self.keep(Target::All, scene)
+    }
+
+    /// Keep `scene` for `player` until the next tick. The world opened the
+    /// stage with [`Frames::open`].
+    pub fn show_to(&mut self, player: Player, scene: Scene) -> Result<(), ShowError> {
+        self.keep(Target::Player(player), scene)
+    }
+
+    fn keep(&mut self, target: Target, scene: Scene) -> Result<(), ShowError> {
+        let State::Open(open) = &mut self.state else {
+            return Err(ShowError::Unavailable);
+        };
+        open.pending.retain(|(t, _)| *t != target);
+        open.pending.push((target, scene));
+        Ok(())
     }
 
     /// Wait until a key, a pad, the close or `deadline`. The scene of the
@@ -147,16 +186,7 @@ impl Frames {
                 return FrameEvent::Close;
             }
             match open.stage.wait(Some(deadline)) {
-                Ok(StageEvent::Tick) => {
-                    if let Some(scene) = open.pending.take()
-                        && let Err(e) = open.stage.present(Target::All, scene)
-                    {
-                        on_error(&e);
-                        if let PresentError::Closed | PresentError::Io(_) = e {
-                            open.closed = true;
-                        }
-                    }
-                }
+                Ok(StageEvent::Tick) => open.present(&mut on_error),
                 Ok(StageEvent::Input {
                     player,
                     event: InputEvent::Key(key),
@@ -194,16 +224,14 @@ impl Frames {
         open.stage.set_footer(&self.footer).is_ok()
     }
 
-    /// Draw the scene of the last show, which no tick drew yet, and end
+    /// Draw the scenes of the last shows, which no tick drew yet, and end
     /// the stage of the world. Returns the lines under the frame, which
     /// the caller prints, since the frame stays on screen above them. The
     /// next show opens a new stage.
     pub fn close(&mut self) -> Vec<String> {
         if let State::Open(open) = &mut self.state {
-            if let Some(scene) = open.pending.take() {
-                // The world is over, and nothing reads the error.
-                let _ = open.stage.present(Target::All, scene);
-            }
+            // The world is over, and nothing reads the error.
+            open.present(&mut |_| {});
             open.stage.close();
         }
         self.state = State::Closed;
@@ -212,6 +240,18 @@ impl Frames {
 }
 
 impl Open {
+    fn present(&mut self, on_error: &mut impl FnMut(&dyn std::error::Error)) {
+        for (target, scene) in std::mem::take(&mut self.pending) {
+            if let Err(e) = self.stage.present(target, scene) {
+                on_error(&e);
+                if let PresentError::Closed | PresentError::Io(_) = e {
+                    self.closed = true;
+                    break;
+                }
+            }
+        }
+    }
+
     fn take_key(&mut self, player: Player, key: KeyEvent) {
         let after_down = self.after_down.entry(player).or_default();
         if key.kind == KeyKind::Press && !*after_down {
@@ -270,7 +310,8 @@ mod tests {
         let mut frames = Frames::new("test", StageOptions::default);
         frames.state = State::Open(Open {
             stage,
-            pending: None,
+            players: vec![Player(NonZeroU32::MIN)],
+            pending: Vec::new(),
             events: VecDeque::new(),
             after_down: HashMap::new(),
             closed: false,
@@ -321,6 +362,36 @@ mod tests {
     }
 
     #[test]
+    fn a_show_to_a_player_goes_out_with_the_player() {
+        let (mut frames, mut server) = frames();
+        let ana = Player(NonZeroU32::MIN);
+        frames.show_to(ana, Scene::new(10.0, 10.0)).unwrap();
+        frames.show_to(ana, Scene::new(20.0, 10.0)).unwrap();
+        server.tick();
+        assert_eq!(wait(&mut frames), FrameEvent::Timeout);
+        let players: Vec<_> = server
+            .read()
+            .into_iter()
+            .filter_map(|m| match m {
+                Message::Frame { player, scene } => Some((player, scene.width())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(players, [(Some(NonZeroU32::MIN), 20.0)]);
+    }
+
+    #[test]
+    fn a_show_to_with_no_stage_is_unavailable() {
+        let mut frames = Frames::new("test", StageOptions::default);
+        assert!(frames.players().is_empty());
+        let ana = Player(NonZeroU32::MIN);
+        assert!(matches!(
+            frames.show_to(ana, Scene::new(10.0, 10.0)),
+            Err(ShowError::Unavailable)
+        ));
+    }
+
+    #[test]
     fn a_press_with_no_down_before_it_gives_a_down_first() {
         let (mut frames, mut server) = frames();
         server.key(key(KeyKind::Press, "a"));
@@ -355,6 +426,7 @@ mod tests {
         assert_eq!(wait(&mut frames), FrameEvent::Close);
         assert!(frames.close().is_empty());
         assert!(!frames.is_open());
+        assert!(frames.players().is_empty());
         assert_eq!(widths(&server.read()), ["frame 30"]);
     }
 
