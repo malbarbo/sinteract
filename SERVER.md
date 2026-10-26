@@ -715,8 +715,10 @@ instância. Num processo nativo, a sessão é uma só.
 
 O `display::Frames` é o `Stage` de um mundo de uma linguagem de ensino,
 como o do spython e do sgleam. O mundo guarda o próprio relógio, o
-`show` guarda a cena, que sai no próximo `Tick`, e o `wait_event` devolve
-só as teclas e os pads, cada um com o seu jogador, e o fechamento. Um
+`show` guarda a cena, que sai no próximo `Tick`. O `wait_event` devolve
+as teclas e os pads, cada um com o seu jogador, o fechamento e o `Tick`,
+depois de mandar as cenas guardadas. Um mundo que desenha só no `Tick`
+mostra a cena no tick seguinte, com um quadro de atraso. Um
 mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
 vários jogadores abre o stage com o `open`, que devolve os jogadores com
 os apelidos, e manda a cena de cada um com o `show_to`. O `players` dá os

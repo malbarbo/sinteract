@@ -38,6 +38,9 @@ pub enum FrameEvent {
     /// The user closed the display, or the server ended the session. Every
     /// wait after it returns Close too, until the next world.
     Close,
+    /// The stage ticked, and the scenes of the shows before it went out. A
+    /// scene that the world shows now goes out at the next tick.
+    Tick,
     /// The deadline passed first.
     Timeout,
 }
@@ -160,8 +163,8 @@ impl Frames {
         Ok(())
     }
 
-    /// Wait until a key, a pad, the close or `deadline`. The scene of the
-    /// last show goes out at each tick on the way. The mouse and a resize
+    /// Wait until a key, a pad, a tick, the close or `deadline`. The scene
+    /// of the last show goes out at the tick. The mouse and a resize
     /// never come out. A terminal that sends a press with no down before
     /// it gives a down and then the press, since a world reads a down as
     /// the start of a key. With no stage open, it sleeps until
@@ -186,7 +189,10 @@ impl Frames {
                 return FrameEvent::Close;
             }
             match open.stage.wait(Some(deadline)) {
-                Ok(StageEvent::Tick) => open.present(&mut on_error),
+                Ok(StageEvent::Tick) => {
+                    open.present(&mut on_error);
+                    return FrameEvent::Tick;
+                }
                 Ok(StageEvent::Input {
                     player,
                     event: InputEvent::Key(key),
@@ -354,10 +360,10 @@ mod tests {
         assert_eq!(wait(&mut frames), FrameEvent::Timeout);
         assert!(server.read().is_empty());
         server.tick();
-        assert_eq!(wait(&mut frames), FrameEvent::Timeout);
+        assert_eq!(wait(&mut frames), FrameEvent::Tick);
         assert_eq!(widths(&server.read()), ["taken", "frame 20"]);
         server.tick();
-        assert_eq!(wait(&mut frames), FrameEvent::Timeout);
+        assert_eq!(wait(&mut frames), FrameEvent::Tick);
         assert_eq!(widths(&server.read()), ["taken"]);
     }
 
@@ -368,7 +374,7 @@ mod tests {
         frames.show_to(ana, Scene::new(10.0, 10.0)).unwrap();
         frames.show_to(ana, Scene::new(20.0, 10.0)).unwrap();
         server.tick();
-        assert_eq!(wait(&mut frames), FrameEvent::Timeout);
+        assert_eq!(wait(&mut frames), FrameEvent::Tick);
         let players: Vec<_> = server
             .read()
             .into_iter()
