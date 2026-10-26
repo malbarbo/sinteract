@@ -700,7 +700,10 @@ stage.close(); // fecha o fd 3 e o fd 4, e a sala acaba
 ```
 
 O `Tick` vem só do `tick` do servidor, e o `Stage` escreve o `tickTaken`
-no fd 4 antes de entregar o `Tick`. Um movimento do mouse ou um `resize`
+no fd 4 antes de entregar o `Tick`. O servidor manda `tick` antes de a
+view conectar, então o `resize` de um jogador pode chegar depois de vários
+`Tick`. Numa janela, o `resize` vem antes do primeiro `Tick`, e um jogo que
+conta com isso passa no teste local e quebra no servidor. Um movimento do mouse ou um `resize`
 que ainda não foi lido é substituído pelo mais novo do mesmo jogador, sem
 passar por cima da entrada de outro jogador. A sessão guarda os `lost` do
 servidor e manda de novo a imagem perdida no próximo frame que a desenha.
