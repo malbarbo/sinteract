@@ -25,6 +25,9 @@ use crate::event::{Event, InputEvent, Interrupt, KeyEvent, MouseEvent};
 pub struct Sender {
     tx: mpsc::Sender<Msg>,
     wake: Option<Waker>,
+    /// The seat of the input that this sender queues. A display with one
+    /// seat uses 0.
+    seat: u32,
 }
 
 /// Wakes a display that blocks somewhere other than the channel, as the
@@ -64,16 +67,19 @@ impl Sender {
     }
 
     pub(crate) fn send_key(&self, key: KeyEvent) -> Result<(), Closed> {
-        self.send(Entry::Input(InputEvent::Key(key)))
+        self.send(Entry::Input(self.seat, InputEvent::Key(key)))
     }
 
     pub(crate) fn send_mouse(&self, mouse: MouseEvent) -> Result<(), Closed> {
-        self.send(Entry::Input(InputEvent::Mouse(mouse)))
+        self.send(Entry::Input(self.seat, InputEvent::Mouse(mouse)))
     }
 
     /// Queue a Resize to the scene size `width` by `height`.
     pub(crate) fn send_resize(&self, width: f32, height: f32) -> Result<(), Closed> {
-        self.send(Entry::Input(InputEvent::Resize { width, height }))
+        self.send(Entry::Input(
+            self.seat,
+            InputEvent::Resize { width, height },
+        ))
     }
 
     fn send(&self, entry: Entry) -> Result<(), Closed> {
@@ -123,7 +129,8 @@ enum Msg {
 
 /// What waits in the queue for `wait_event`.
 enum Entry {
-    Input(InputEvent),
+    /// The input of a seat.
+    Input(u32, InputEvent),
     /// Only the clock of the display queues it.
     Tick,
     Wake,
@@ -134,8 +141,8 @@ enum Entry {
 
 /// What [`Inbox::next`] asks of the display.
 pub(crate) enum Next {
-    /// Return this from `wait_event`.
-    Ready(Result<Event, Interrupt>),
+    /// Return this from `wait_event`, with the seat of an input, or 0.
+    Ready(u32, Result<Event, Interrupt>),
     /// Draw the last scene again.
     Redraw,
     /// Wait for a message for at most this long, and ask again.
@@ -162,17 +169,19 @@ impl Inbox {
         Sender {
             tx: self.tx.clone(),
             wake: self.wake.clone(),
+            seat: 0,
         }
     }
 
-    /// A [`Sender`] without the waker, for the callbacks of the loop that
-    /// the waker wakes. A wake from inside the loop only adds a turn with
-    /// nothing to do.
+    /// A [`Sender`] of the input of `seat` without the waker, for the
+    /// callbacks of the loop that the waker wakes. A wake from inside the
+    /// loop only adds a turn with nothing to do.
     #[cfg(feature = "window")]
-    pub(crate) fn sender_without_waker(&self) -> Sender {
+    pub(crate) fn sender_without_waker(&self, seat: u32) -> Sender {
         Sender {
             tx: self.tx.clone(),
             wake: None,
+            seat,
         }
     }
 
@@ -192,8 +201,8 @@ impl Inbox {
     /// far, so the input that waited on a busy engine goes out first.
     pub(crate) fn next(&mut self, clock: &mut TickClock, deadline: Option<Instant>) -> Next {
         let now = Instant::now();
-        if let Some(ready) = self.pop(clock, now) {
-            return Next::Ready(ready);
+        if let Some((seat, ready)) = self.pop(clock, now) {
+            return Next::Ready(seat, ready);
         }
         if self
             .queue
@@ -203,7 +212,7 @@ impl Inbox {
             return Next::Redraw;
         }
         if deadline.is_some_and(|d| now >= d) {
-            return Next::Ready(Err(Interrupt::Timeout));
+            return Next::Ready(0, Err(Interrupt::Timeout));
         }
         let wake_at = deadline.map_or(clock.due(), |d| d.min(clock.due()));
         Next::Block(wake_at.saturating_duration_since(now))
@@ -232,26 +241,30 @@ impl Inbox {
         }
     }
 
-    /// The oldest entry, after the channel drains and a tick goes in at
-    /// the back if `clock` has one due by `now`, or `None` when nothing
-    /// waits. At most one tick waits, so a flood of input delays the
-    /// tick but never drops it.
-    fn pop(&mut self, clock: &mut TickClock, now: Instant) -> Option<Result<Event, Interrupt>> {
+    /// The oldest entry with the seat of an input, or 0, after the channel
+    /// drains and a tick goes in at the back if `clock` has one due by
+    /// `now`, or `None` when nothing waits. At most one tick waits, so a
+    /// flood of input delays the tick but never drops it.
+    fn pop(
+        &mut self,
+        clock: &mut TickClock,
+        now: Instant,
+    ) -> Option<(u32, Result<Event, Interrupt>)> {
         let Some(queue) = &mut self.queue else {
-            return Some(Err(Interrupt::Close));
+            return Some((0, Err(Interrupt::Close)));
         };
         queue.receive_all();
         if !queue.pending.iter().any(|e| matches!(e, Entry::Tick)) && clock.take_due(now) {
             queue.pending.push_back(Entry::Tick);
         }
         Some(match queue.pending.pop_front()? {
-            Entry::Input(ev) => Ok(Event::Input(ev)),
-            Entry::Tick => Ok(Event::Tick),
-            Entry::Wake => Err(Interrupt::Wake),
-            Entry::Read(e) => Err(Interrupt::Read(e)),
+            Entry::Input(seat, ev) => (seat, Ok(Event::Input(ev))),
+            Entry::Tick => (0, Ok(Event::Tick)),
+            Entry::Wake => (0, Err(Interrupt::Wake)),
+            Entry::Read(e) => (0, Err(Interrupt::Read(e))),
             Entry::Close => {
                 self.close();
-                Err(Interrupt::Close)
+                (0, Err(Interrupt::Close))
             }
         })
     }
@@ -272,11 +285,13 @@ impl Queue {
     }
 
     /// Queue `entry`. A move of the mouse or a resize replaces one of its
-    /// kind at the back of the queue, since only the latest one counts. A
-    /// mouse at 1000 Hz would flood an engine that runs at 60 Hz.
+    /// kind and of the same seat at the back of the queue, since only the
+    /// latest one counts. A mouse at 1000 Hz would flood an engine that
+    /// runs at 60 Hz.
     fn push(&mut self, entry: Entry) {
-        if let Entry::Input(new) = &entry
-            && let Some(Entry::Input(old)) = self.pending.back()
+        if let Entry::Input(seat, new) = &entry
+            && let Some(Entry::Input(old_seat, old)) = self.pending.back()
+            && seat == old_seat
             && new.supersedes(old)
         {
             self.pending.pop_back();
@@ -376,7 +391,7 @@ mod tests {
         /// The next event, with no redraw.
         fn wait(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
             loop {
-                if let Next::Ready(ready) = self.next(deadline) {
+                if let Next::Ready(_, ready) = self.next(deadline) {
                     return ready;
                 }
             }
@@ -443,6 +458,29 @@ mod tests {
     }
 
     #[test]
+    fn a_resize_replaces_only_one_of_its_seat() {
+        let mut inbox = past_the_first_tick();
+        inbox
+            .inbox
+            .sender_without_waker(0)
+            .send_resize(1.0, 1.0)
+            .unwrap();
+        inbox
+            .inbox
+            .sender_without_waker(1)
+            .send_resize(2.0, 1.0)
+            .unwrap();
+        assert!(matches!(
+            inbox.next(None),
+            Next::Ready(0, Ok(Event::Input(InputEvent::Resize { width: 1.0, .. })))
+        ));
+        assert!(matches!(
+            inbox.next(None),
+            Next::Ready(1, Ok(Event::Input(InputEvent::Resize { width: 2.0, .. })))
+        ));
+    }
+
+    #[test]
     fn a_move_before_a_wake_stays() {
         let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
@@ -506,11 +544,11 @@ mod tests {
         tx.send_key(key("a")).unwrap();
         tx.request_redraw().unwrap();
         let deadline = soon();
-        assert!(matches!(inbox.next(deadline), Next::Ready(r) if key_name(&r) == Some("a")));
+        assert!(matches!(inbox.next(deadline), Next::Ready(_, r) if key_name(&r) == Some("a")));
         assert!(matches!(inbox.next(deadline), Next::Redraw));
         assert!(matches!(
             inbox.next(deadline),
-            Next::Ready(Err(Interrupt::Timeout))
+            Next::Ready(_, Err(Interrupt::Timeout))
         ));
     }
 
@@ -529,7 +567,7 @@ mod tests {
         assert!(!inbox.inbox.take_redraw());
         assert!(matches!(
             inbox.next(soon()),
-            Next::Ready(Err(Interrupt::Timeout))
+            Next::Ready(_, Err(Interrupt::Timeout))
         ));
     }
 
@@ -566,7 +604,10 @@ mod tests {
     }
 
     fn pop(inbox: &mut TestDisplay, now: Instant) -> Option<Result<Event, Interrupt>> {
-        inbox.inbox.pop(&mut inbox.clock, now)
+        inbox
+            .inbox
+            .pop(&mut inbox.clock, now)
+            .map(|(_, ready)| ready)
     }
 
     #[test]

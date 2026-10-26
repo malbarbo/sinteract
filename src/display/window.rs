@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use softbuffer::{Context, Surface};
 use tiny_skia::Pixmap;
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::error::EventLoopError;
 use winit::event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -43,6 +43,9 @@ use crate::scene::Scene;
 /// [`super::Display::close`]. The size of the window arrives as an
 /// [`InputEvent::Resize`](crate::event::InputEvent::Resize) ahead of the
 /// first tick, and again after each change.
+///
+/// Inside the crate a `Window` can hold several windows, one for each seat
+/// of a [`super::Stage`] of several players, with one clock and one queue.
 pub struct Window {
     inbox: Inbox,
     clock: TickClock,
@@ -52,15 +55,22 @@ pub struct Window {
 
 struct Active {
     lent: Lent,
-    app: App,
-    window: Rc<WinitWindow>,
+    /// The window of each seat, in the order of the seats.
+    seats: Vec<Seat>,
+}
+
+/// The window of one seat. The fields drop in the order of the
+/// declaration, and the display link stops before the window goes.
+struct Seat {
+    #[cfg(target_os = "macos")]
+    display_link: super::display_link::DisplayLink,
     surface: Surface<Rc<WinitWindow>, Rc<WinitWindow>>,
+    window: Rc<WinitWindow>,
+    app: App,
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
     renderer: PixmapRenderer,
     /// The scene of the last present, drawn again when the platform asks.
     last: Option<Last>,
-    #[cfg(target_os = "macos")]
-    display_link: super::display_link::DisplayLink,
 }
 
 impl Window {
@@ -70,96 +80,153 @@ impl Window {
     /// How long [`Window::open`] waits for the platform to create the window.
     const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
+    /// The space between two windows of several seats, in logical pixels.
+    const GAP: f64 = 16.0;
+
     /// Open a window of `width` by `height` logical pixels. Fails with
     /// [`OpenError::Busy`] while another `Window` exists, and with
     /// [`OpenError::Platform`] when the platform has no window for us, or on
     /// a thread other than the one of the first window.
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
+        Self::open_seats(&[title.to_owned()], width, height)
+    }
+
+    /// Open a window of `width` by `height` logical pixels for each title,
+    /// side by side, and fail as [`Window::open`] does. The input of the
+    /// window at index k comes from seat k.
+    pub(crate) fn open_seats(
+        titles: &[String],
+        width: f32,
+        height: f32,
+    ) -> Result<Self, OpenError> {
         let mut lent = Lent::take()?;
         let proxy = lent.proxy.clone();
         let inbox = Inbox::new(Some(Arc::new(move || {
             let _ = proxy.send_event(());
         })));
         let (w, h) = frame_px(width, height);
-        let attrs = WindowAttributes::default()
-            .with_title(title)
-            .with_inner_size(LogicalSize::new(w as f64, h as f64));
-        let (window, mut app) =
-            lent.create_window(inbox.sender_without_waker(), attrs, Self::OPEN_TIMEOUT)?;
-        let surface = match new_surface(&window) {
-            Ok(surface) => surface,
+        let windows = (0..)
+            .zip(titles)
+            .map(|(seat, title)| {
+                let mut attrs = WindowAttributes::default()
+                    .with_title(title)
+                    .with_inner_size(LogicalSize::new(w as f64, h as f64));
+                if titles.len() > 1 {
+                    let x = f64::from(seat) * (w as f64 + Self::GAP);
+                    attrs = attrs.with_position(LogicalPosition::new(x, 0.0));
+                }
+                (attrs, inbox.sender_without_waker(seat))
+            })
+            .collect();
+        let opened = lent.create_windows(windows, Self::OPEN_TIMEOUT)?;
+        let surfaces = opened
+            .iter()
+            .map(|(window, _)| new_surface(window))
+            .collect::<Result<Vec<_>, _>>();
+        let surfaces = match surfaces {
+            Ok(surfaces) => surfaces,
             Err(e) => {
-                drop(window);
-                lent.destroy_dropped(&mut app);
+                drop(opened);
+                lent.destroy_dropped();
                 return Err(e);
             }
         };
-        #[cfg(target_os = "macos")]
-        let display_link = super::display_link::DisplayLink::start(&window, lent.proxy.clone());
+        let seats = opened
+            .into_iter()
+            .zip(surfaces)
+            .map(|((window, app), surface)| Seat {
+                #[cfg(target_os = "macos")]
+                display_link: super::display_link::DisplayLink::start(&window, lent.proxy.clone()),
+                surface,
+                window,
+                app,
+                renderer: PixmapRenderer::default(),
+                last: None,
+            })
+            .collect();
         Ok(Self {
             inbox,
             clock: TickClock::from_millihertz(Self::TICK_RATE),
-            active: Some(Active {
-                lent,
-                app,
-                window,
-                surface,
-                renderer: PixmapRenderer::default(),
-                last: None,
-                #[cfg(target_os = "macos")]
-                display_link,
-            }),
+            active: Some(Active { lent, seats }),
         })
     }
 
-    /// Run the loop of the window for at most `timeout`, pace the ticks
-    /// at the refresh rate of the monitor that shows the window, align the
-    /// ticks to a frame callback of Wayland or a frame of the display link
-    /// of macOS, and draw a scene that waited for the callback.
+    /// Run the loop of the windows for at most `timeout`, pace the ticks
+    /// at the refresh rate of the monitor of the window in focus, or of
+    /// the first window, align the ticks to a frame callback of Wayland
+    /// or a frame of the display link of macOS, and draw each scene that
+    /// waited.
     fn pump(&mut self, timeout: Duration) {
         let Some(s) = self.active.as_mut() else {
             return;
         };
-        if !s.lent.pump(&mut s.app, timeout) {
-            let _ = s.app.tx.send_close();
+        if !s.lent.pump(&mut Seats(&mut s.seats), timeout) {
+            let _ = self.inbox.sender_without_waker(0).send_close();
         }
+        // The window in focus paces the ticks, since the user watches it,
+        // and another window may be hidden behind it.
+        let focused = s.seats.iter().position(|seat| seat.app.focused);
         // Wayland puts the window on a monitor only after its first frame,
         // so the rate stays to read until a monitor shows the window.
-        if s.app.refresh_rate_stale
-            && let Some(monitor) = s.window.current_monitor()
+        if let Some(pace) = s.seats.get_mut(focused.unwrap_or(0))
+            && pace.app.refresh_rate_stale
+            && let Some(monitor) = pace.window.current_monitor()
         {
-            s.app.refresh_rate_stale = false;
+            pace.app.refresh_rate_stale = false;
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
             self.clock.set_millihertz(rate.unwrap_or(Self::TICK_RATE));
         }
-        let shown = s.app.frame_callback.as_mut().and_then(|f| f.shown.take());
-        #[cfg(target_os = "macos")]
-        let shown = shown.or_else(|| s.display_link.take());
+        let mut shown = None;
+        for (index, seat) in s.seats.iter_mut().enumerate() {
+            let at = seat.take_shown();
+            match focused {
+                Some(f) if f == index => shown = at,
+                Some(_) => {}
+                None => shown = shown.or(at),
+            }
+            if seat.last.as_ref().is_some_and(|l| l.unshown) && !seat.app.frame_pending() {
+                // A failure here fails the next present the same way.
+                let _ = seat.show();
+            }
+        }
         if let Some(at) = shown {
             self.clock.align(at);
         }
-        if s.last.as_ref().is_some_and(|l| l.unshown) && !s.app.frame_pending() {
-            // A failure here fails the next present the same way.
-            let _ = s.show();
-        }
     }
-}
 
-impl super::Display for Window {
-    fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
+    /// Show `scene` in the window of `seat`. One window draws it now.
+    /// Several windows draw at the next wait, so a seat that gets a scene
+    /// for every seat and then one of its own in the same tick shows only
+    /// its own.
+    pub(crate) fn present_to(&mut self, seat: usize, scene: Scene) -> Result<(), PresentError> {
         let Some(active) = self.active.as_mut() else {
             return Err(PresentError::Closed);
         };
-        self.inbox.take_redraw();
-        active.last = Some(Last {
+        let several = active.seats.len() > 1;
+        let Some(target) = active.seats.get_mut(seat) else {
+            debug_assert!(false, "no seat {seat}");
+            return Ok(());
+        };
+        target.app.dirty = false;
+        target.last = Some(Last {
             scene,
-            unshown: false,
+            unshown: several,
         });
-        active.show()
+        let drawn = if several { Ok(()) } else { target.show() };
+        // The new scene makes a redraw of this window stale.
+        if !active.seats.iter().any(|seat| seat.app.dirty) {
+            self.inbox.take_redraw();
+        }
+        drawn
     }
 
-    /// Block in the event loop of the window, which the [`Sender`]s wake.
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
+    /// Block until the next event with its seat, as
+    /// [`super::Display::wait_event`] does. A tick and an interrupt have
+    /// seat 0.
+    pub(crate) fn wait_seated(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<(u32, Event), Interrupt> {
         // A frame that draws for longer than the period finds the next tick
         // due, so the wait returns it without a pump, and the platform takes
         // a window that never answers for hung. So every call pumps once.
@@ -168,16 +235,29 @@ impl super::Display for Window {
             // A closed session has a closed inbox, which returns Close
             // before it redraws or blocks.
             match self.inbox.next(&mut self.clock, deadline) {
-                Next::Ready(ready) => return ready,
+                Next::Ready(seat, ready) => return ready.map(|event| (seat, event)),
                 Next::Redraw => {
-                    // A failure here fails the next present the same way.
-                    if let Some(s) = self.active.as_mut() {
-                        let _ = s.show();
+                    let seats = self.active.as_mut().map_or(&mut [][..], |s| &mut s.seats);
+                    for seat in seats.iter_mut().filter(|seat| seat.app.dirty) {
+                        seat.app.dirty = false;
+                        // A failure here fails the next present the same way.
+                        let _ = seat.show();
                     }
                 }
                 Next::Block(timeout) => self.pump(timeout),
             }
         }
+    }
+}
+
+impl super::Display for Window {
+    fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
+        self.present_to(0, scene)
+    }
+
+    /// Block in the event loop of the window, which the [`Sender`]s wake.
+    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
+        self.wait_seated(deadline).map(|(_, event)| event)
     }
 
     fn sender(&self) -> Sender {
@@ -188,26 +268,14 @@ impl super::Display for Window {
         self.clock.millihertz()
     }
 
-    /// Destroy the window and give the event loop back.
+    /// Destroy the windows and give the event loop back.
     fn close(&mut self) {
-        let Some(Active {
-            mut lent,
-            mut app,
-            window,
-            surface,
-            #[cfg(target_os = "macos")]
-            display_link,
-            ..
-        }) = self.active.take()
-        else {
+        let Some(Active { mut lent, seats }) = self.active.take() else {
             return;
         };
         self.inbox.close();
-        #[cfg(target_os = "macos")]
-        drop(display_link);
-        drop(surface);
-        drop(window);
-        lent.destroy_dropped(&mut app);
+        drop(seats);
+        lent.destroy_dropped();
     }
 }
 
@@ -219,7 +287,7 @@ impl Drop for Window {
     }
 }
 
-impl Active {
+impl Seat {
     /// Draw `last` now, or when the frame callback of Wayland for the
     /// frame before arrives. A hidden window gets no callback, so it draws
     /// nothing, and the ticks keep their rate.
@@ -237,6 +305,19 @@ impl Active {
         };
         self.last = Some(last);
         drawn
+    }
+
+    /// When the screen showed a frame of this window, if it did since the
+    /// last call.
+    fn take_shown(&mut self) -> Option<Instant> {
+        #[cfg(target_os = "macos")]
+        if let Some(at) = self.display_link.take() {
+            return Some(at);
+        }
+        self.app
+            .frame_callback
+            .as_mut()
+            .and_then(|f| f.shown.take())
     }
 
     /// Rasterize `scene` at the size of the surface and present it.
@@ -375,24 +456,23 @@ impl Lent {
     /// X11 and Windows destroy it as the loop runs. Wayland queues the
     /// destroy in one pump and sends it in the flush that starts the next
     /// one, so it takes two.
-    fn destroy_dropped(&mut self, app: &mut App) {
+    fn destroy_dropped(&mut self) {
         for _ in 0..2 {
-            self.pump(app, Duration::ZERO);
+            self.pump(&mut Seats(&mut []), Duration::ZERO);
         }
     }
 
-    /// Pump until the window of `attrs` exists, with the [`App`] of its
-    /// events. The window appears in the callbacks, so a failure reaches the
-    /// caller as an error and not as a late Close.
-    fn create_window(
+    /// Pump until a window of each of `windows` exists, with the [`App`]
+    /// of its events, which go out through its sender. The windows appear
+    /// in the callbacks, so a failure reaches the caller as an error and
+    /// not as a late Close.
+    fn create_windows(
         &mut self,
-        tx: Sender,
-        attrs: WindowAttributes,
+        windows: Vec<(WindowAttributes, Sender)>,
         timeout: Duration,
-    ) -> Result<(Rc<WinitWindow>, App), OpenError> {
+    ) -> Result<Opened, OpenError> {
         let mut opener = Opener {
-            tx,
-            attrs,
+            windows,
             opened: None,
         };
         let deadline = Instant::now() + timeout;
@@ -402,7 +482,10 @@ impl Lent {
             }
             match opener.opened.take() {
                 Some(Ok(opened)) => return Ok(opened),
-                Some(Err(e)) => return Err(OpenError::Platform(e)),
+                Some(Err(e)) => {
+                    self.destroy_dropped();
+                    return Err(OpenError::Platform(e));
+                }
                 None if Instant::now() >= deadline => return Err(OpenError::Timeout),
                 None => {}
             }
@@ -477,26 +560,37 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
 // Callbacks of the event loop
 // -----------------------------------------------------------------------------
 
-/// Creates a window in the first callback that can, and passes the events
-/// that follow in the same pump to the [`App`] of the window.
+/// Creates the windows in the first callback that can, and passes the
+/// events that follow in the same pump to the [`App`] of each window.
 struct Opener {
-    tx: Sender,
-    attrs: WindowAttributes,
-    opened: Option<Result<(Rc<WinitWindow>, App), String>>,
+    windows: Vec<(WindowAttributes, Sender)>,
+    opened: Option<Result<Opened, String>>,
 }
 
+/// Each window that opened, with the [`App`] of its events.
+type Opened = Vec<(Rc<WinitWindow>, App)>;
+
 impl Opener {
+    /// Create every window in one callback, so no event of a window is
+    /// lost while the next one opens. A failure drops the windows that
+    /// opened before it.
     fn open(&mut self, event_loop: &ActiveEventLoop) {
         if self.opened.is_some() {
             return;
         }
-        self.opened = Some(match event_loop.create_window(self.attrs.clone()) {
-            Ok(window) => {
-                let app = App::new(self.tx.clone(), &window, is_wayland(event_loop));
-                Ok((Rc::new(window), app))
-            }
-            Err(e) => Err(e.to_string()),
-        });
+        let wayland = is_wayland(event_loop);
+        self.opened = Some(
+            self.windows
+                .iter()
+                .map(|(attrs, tx)| {
+                    let window = event_loop
+                        .create_window(attrs.clone())
+                        .map_err(|e| e.to_string())?;
+                    let app = App::new(tx.clone(), &window, wayland);
+                    Ok((Rc::new(window), app))
+                })
+                .collect(),
+        );
     }
 }
 
@@ -506,24 +600,44 @@ impl ApplicationHandler for Opener {
         self.open(event_loop);
     }
 
-    /// Every pump ends here, on every platform, so the window of a later
-    /// session appears here.
+    /// Every pump ends here, on every platform, so the windows of a later
+    /// session appear here.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.open(event_loop);
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        if let Some(Ok((_, app))) = &mut self.opened {
-            app.window_event(event_loop, id, event);
+    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if let Some(Ok(opened)) = &mut self.opened
+            && let Some((_, app)) = opened.iter_mut().find(|(_, app)| app.id == id)
+        {
+            app.window_event(event);
+        }
+    }
+}
+
+/// Hands each event of the loop to the [`App`] of its window. An event of
+/// a window of an earlier session can still be in the loop, and no seat
+/// takes it.
+struct Seats<'a>(&'a mut [Seat]);
+
+impl ApplicationHandler for Seats<'_> {
+    /// Only the first pump of the loop resumes, and the [`Opener`] takes it.
+    fn resumed(&mut self, _: &ActiveEventLoop) {}
+
+    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if let Some(seat) = self.0.iter_mut().find(|seat| seat.app.id == id) {
+            seat.app.window_event(event);
         }
     }
 }
 
 struct App {
     tx: Sender,
-    /// The window of this session. An event of a window of an earlier
-    /// session can still be in the loop.
     id: WindowId,
+    /// The window has the focus of the keyboard.
+    focused: bool,
+    /// The window asked for a redraw since its last present.
+    dirty: bool,
     modifiers: ModifiersState,
     /// Where the last frame sits in the window, to map the pointer.
     viewport: Viewport,
@@ -564,6 +678,8 @@ impl App {
         Self {
             tx,
             id: window.id(),
+            focused: false,
+            dirty: false,
             modifiers: ModifiersState::empty(),
             // Until the first frame, the pointer maps to logical pixels.
             viewport: Viewport {
@@ -617,6 +733,11 @@ impl App {
         }
     }
 
+    fn request_redraw(&mut self) {
+        self.dirty = true;
+        let _ = self.tx.request_redraw();
+    }
+
     fn report_key(&self, kind: KeyKind, key: String) {
         let _ = self.tx.send_key(crate::event::KeyEvent {
             kind,
@@ -637,14 +758,8 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
-    /// Only the first pump of the loop resumes, and the [`Opener`] takes it.
-    fn resumed(&mut self, _: &ActiveEventLoop) {}
-
-    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        if self.id != id {
-            return;
-        }
+impl App {
+    fn window_event(&mut self, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                 let _ = self.tx.send_close();
@@ -654,12 +769,12 @@ impl ApplicationHandler for App {
                 self.scale_factor = scale_factor;
                 self.refresh_rate_stale = true;
                 self.report_size();
-                let _ = self.tx.request_redraw();
+                self.request_redraw();
             }
             WindowEvent::Resized(size) => {
                 self.size = size;
                 self.report_size();
-                let _ = self.tx.request_redraw();
+                self.request_redraw();
             }
             // The frame callback of Wayland arrives as a RedrawRequested,
             // and Window::pump aligns the tick clock to it and draws a
@@ -673,7 +788,7 @@ impl ApplicationHandler for App {
                     callback.shown = Some(Instant::now());
                 }
                 _ => {
-                    let _ = self.tx.request_redraw();
+                    self.request_redraw();
                 }
             },
             WindowEvent::ModifiersChanged(mods) => {
@@ -719,7 +834,14 @@ impl ApplicationHandler for App {
             // loses focus, and takes them as released. A grab of the
             // pointer, as by the window switcher, can take the release of a
             // button too.
+            // The window in focus paces the ticks, and its monitor may
+            // have another rate.
+            WindowEvent::Focused(true) => {
+                self.focused = true;
+                self.refresh_rate_stale = true;
+            }
             WindowEvent::Focused(false) => {
+                self.focused = false;
                 for key in self.held.release_all() {
                     self.report_key(KeyKind::Up, key);
                 }
