@@ -60,7 +60,7 @@ pub struct Session<R, W> {
 /// A player of the session. Only the session and the server make one, from
 /// the start, so a player that the engine or the server holds is in the
 /// game. On a display of this process, the `Stage` of the displays makes
-/// player 1, the one player there.
+/// player 1, or a player for each window when several play there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Player(pub(crate) NonZeroU32);
 

@@ -665,8 +665,12 @@ A engine abre um `Stage`. Com `SINTERACT_SESSION` no ambiente, ou num
 build sem tela própria, como o de wasi, o `Stage` manda o `hello`, espera
 o `start`, lê o fd 3 e escreve no fd 4. Sem ela, ele abre uma janela ou o
 terminal, como o `StageOptions` pede, e o usuário é o jogador 1, então o
-mesmo jogo roda sem servidor. O `Stage::opens_session` diz antes do `open`
-qual dos dois caminhos ele segue:
+mesmo jogo roda sem servidor. O `StageOptions::players` pede mais
+jogadores, até `MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem
+esse mínimo sem pedir. Cada jogador ganha uma janela, com o número dele no
+título e um apelido vazio, e o usuário testa o jogo trocando o foco. Fechar
+qualquer janela encerra o `Stage`. O `Stage::opens_session` diz antes do
+`open` qual dos dois caminhos ele segue:
 
 ```rust
 use sinteract::display::{Stage, StageEvent, StageOptions};

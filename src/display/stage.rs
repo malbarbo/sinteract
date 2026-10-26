@@ -19,7 +19,8 @@ use crate::session::{PlayerRange, SESSION_VAR};
 
 /// The game of an engine, in a session with a server when the server runs
 /// the engine, and on a window or the terminal otherwise, where the user is
-/// [`Player`] 1. The loop of the game is the same in both:
+/// [`Player`] 1, or in a window for each player, where the user plays every
+/// player. The loop of the game is the same in all of them:
 ///
 /// ```no_run
 /// # use sinteract::display::{Stage, StageEvent, StageOptions};
@@ -65,6 +66,11 @@ pub enum StageEvent {
 #[derive(Default)]
 pub struct StageOptions {
     pub display: Native,
+    /// How many players play on a display of this process, each in a
+    /// window of its own, or the fewest that the game takes when `None`.
+    /// More than one needs a window, so [`Native::Auto`] does not fall
+    /// back to the terminal. A session takes its players from the server.
+    pub players: Option<NonZeroU32>,
     /// What the terminal adds, when the game goes there.
     #[cfg(feature = "terminal")]
     pub terminal: TerminalOptions,
@@ -86,6 +92,10 @@ pub enum Native {
     None,
 }
 
+/// The most players on a display of this process, each in a window of its
+/// own.
+pub const MAX_LOCAL_PLAYERS: u32 = 8;
+
 /// Whether this build shows a game on a display of its own. A build
 /// without one, such as an engine on wasm32, shows a game only in a
 /// session.
@@ -98,9 +108,16 @@ pub enum StageError {
     Open(OpenError),
     /// The session did not start.
     Start(StartError),
-    /// A game on a display of this process has one player, and this game
-    /// takes more.
-    Players(PlayerRange),
+    /// The game takes `range`, and `players` play on a display of this
+    /// process, which is outside the range or above
+    /// [`MAX_LOCAL_PLAYERS`].
+    Players {
+        range: PlayerRange,
+        players: NonZeroU32,
+    },
+    /// Several players play on a display of this process, and the options
+    /// ask for the terminal, which shows one.
+    TerminalPlayers,
     /// `SINTERACT_SESSION` asks for a session, or the build has no display
     /// of its own, and fd 3 or fd 4 is not open, or the platform has no such
     /// descriptors.
@@ -120,8 +137,11 @@ impl Stage {
     /// the server from fd 3 and writes to it on fd 4, and blocks until the
     /// start. Otherwise it opens a window of `width` by `height` logical
     /// pixels with `title`, or the terminal, as `options` asks, with player
-    /// 1 and an empty nickname. A second stage in a session fails with
-    /// [`OpenError::Busy`] while the first one owns fd 3 and fd 4.
+    /// 1 and an empty nickname. With several players in `options`, it opens
+    /// a window for each one, with the number of the player in the title
+    /// and an empty nickname, and closing any of them ends the stage. A
+    /// second stage in a session fails with [`OpenError::Busy`] while the
+    /// first one owns fd 3 and fd 4.
     pub fn open(
         title: &str,
         width: f32,
@@ -132,8 +152,15 @@ impl Stage {
         if Stage::opens_session() {
             return Stage::open_session(players);
         }
-        if players.min().get() > 1 {
-            return Err(StageError::Players(players));
+        let local = options.players.unwrap_or(players.min());
+        if !players.contains(local.get() as usize) || local.get() > MAX_LOCAL_PLAYERS {
+            return Err(StageError::Players {
+                range: players,
+                players: local,
+            });
+        }
+        if local.get() > 1 {
+            return open_players(title, width, height, local, options.display);
         }
         let display = open_local(title, width, height, options).map_err(StageError::Open)?;
         let stage = Stage {
@@ -185,18 +212,38 @@ impl Stage {
                     event,
                 }),
             },
+            #[cfg(feature = "window")]
+            Inner::Players(window, _) => match window.wait_seated(deadline)? {
+                (_, Event::Tick) => Ok(StageEvent::Tick),
+                (seat, Event::Input(event)) => Ok(StageEvent::Input {
+                    player: Player(NonZeroU32::MIN.saturating_add(seat)),
+                    event,
+                }),
+            },
             Inner::Remote(remote) => remote.wait(deadline),
         }
     }
 
-    /// Show `scene` to `to`. A display of this process shows every frame,
-    /// since its one player is player 1. A session writes the frame, with
+    /// Show `scene` to `to`. A display of this process with one player
+    /// shows every frame, since its one player is player 1. A window of
+    /// each player shows the frames to all and to that player. A session
+    /// writes the frame, with
     /// each image that the server does not have, and still writes after
     /// the end of the stream of the server, so the views get the last
     /// frames.
     pub fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
         match &mut self.inner {
             Inner::Local(display) => display.present(scene),
+            #[cfg(feature = "window")]
+            Inner::Players(window, players) => match to {
+                Target::All => {
+                    for seat in 1..players.get() {
+                        window.present_to(seat as usize, scene.clone())?;
+                    }
+                    window.present_to(0, scene)
+                }
+                Target::Player(player) => window.present_to(player.0.get() as usize - 1, scene),
+            },
             Inner::Remote(remote) => {
                 let session = remote.session.as_mut().ok_or(PresentError::Closed)?;
                 session.write_frame(to, &scene).map_err(|e| match e {
@@ -212,6 +259,8 @@ impl Stage {
     pub fn footer_rows(&self) -> u16 {
         match &self.inner {
             Inner::Local(display) => display.footer_rows(),
+            #[cfg(feature = "window")]
+            Inner::Players(..) => 0,
             Inner::Remote(_) => 0,
         }
     }
@@ -220,6 +269,8 @@ impl Stage {
     pub fn set_footer(&mut self, lines: &[String]) -> Result<(), PresentError> {
         match &mut self.inner {
             Inner::Local(display) => display.set_footer(lines),
+            #[cfg(feature = "window")]
+            Inner::Players(..) => Ok(()),
             Inner::Remote(_) => Ok(()),
         }
     }
@@ -235,6 +286,8 @@ impl Stage {
     pub fn tick_rate(&self) -> NonZeroU32 {
         match &self.inner {
             Inner::Local(display) => display.tick_rate(),
+            #[cfg(feature = "window")]
+            Inner::Players(window, _) => window.tick_rate(),
             Inner::Remote(remote) => remote.tick_rate,
         }
     }
@@ -244,6 +297,8 @@ impl Stage {
     pub fn close(&mut self) {
         match &mut self.inner {
             Inner::Local(display) => display.close(),
+            #[cfg(feature = "window")]
+            Inner::Players(window, _) => window.close(),
             Inner::Remote(remote) => remote.close(),
         }
     }
@@ -266,6 +321,48 @@ fn open_local(
     }
 }
 
+/// A window for each of `players`, as `display` asks.
+#[cfg(feature = "window")]
+fn open_players(
+    title: &str,
+    width: f32,
+    height: f32,
+    players: NonZeroU32,
+    display: Native,
+) -> Result<(Stage, Vec<(Player, String)>), StageError> {
+    match display {
+        Native::Auto | Native::Window => {}
+        Native::Terminal => return Err(StageError::TerminalPlayers),
+        Native::None => return Err(StageError::Open(OpenError::Disabled)),
+    }
+    let all: Vec<_> = (1..=players.get())
+        .filter_map(NonZeroU32::new)
+        .map(Player)
+        .collect();
+    let titles: Vec<_> = all
+        .iter()
+        .map(|player| format!("{title} (player {})", player.number()))
+        .collect();
+    let window = super::Window::open_seats(&titles, width, height).map_err(StageError::Open)?;
+    let stage = Stage {
+        inner: Inner::Players(Box::new(window), players),
+    };
+    Ok((stage, all.into_iter().map(|p| (p, String::new())).collect()))
+}
+
+#[cfg(not(feature = "window"))]
+fn open_players(
+    _title: &str,
+    _width: f32,
+    _height: f32,
+    _players: NonZeroU32,
+    _display: Native,
+) -> Result<(Stage, Vec<(Player, String)>), StageError> {
+    Err(StageError::Open(OpenError::Platform(
+        "this build has no window".into(),
+    )))
+}
+
 #[cfg(not(all(feature = "terminal", feature = "window")))]
 fn open_local(
     _title: &str,
@@ -281,11 +378,20 @@ impl fmt::Display for StageError {
         match self {
             StageError::Open(e) => e.fmt(f),
             StageError::Start(e) => e.fmt(f),
-            StageError::Players(range) => write!(
+            StageError::Players { players, .. } if players.get() > MAX_LOCAL_PLAYERS => write!(
                 f,
-                "the game takes at least {} players, and only one plays here",
-                range.min()
+                "{players} players do not fit on this machine, which takes at most \
+                 {MAX_LOCAL_PLAYERS}"
             ),
+            StageError::Players { range, players } => write!(
+                f,
+                "the game takes from {} to {} players, and {players} play here",
+                range.min(),
+                range.max()
+            ),
+            StageError::TerminalPlayers => {
+                f.write_str("the terminal shows one player, and several play here")
+            }
             StageError::NoSession => {
                 write!(f, "{SESSION_VAR} is set, and fd 3 or fd 4 is not open")
             }
@@ -298,7 +404,9 @@ impl std::error::Error for StageError {
         match self {
             StageError::Open(e) => Some(e),
             StageError::Start(e) => Some(e),
-            StageError::Players(_) | StageError::NoSession => None,
+            StageError::Players { .. } | StageError::TerminalPlayers | StageError::NoSession => {
+                None
+            }
         }
     }
 }
@@ -307,6 +415,8 @@ impl fmt::Debug for Stage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match self.inner {
             Inner::Local(_) => "Local",
+            #[cfg(feature = "window")]
+            Inner::Players(..) => "Players",
             Inner::Remote(_) => "Remote",
         };
         f.debug_tuple("Stage").field(&kind).finish()
@@ -315,6 +425,9 @@ impl fmt::Debug for Stage {
 
 enum Inner {
     Local(Box<dyn Display>),
+    /// A window for each of the players.
+    #[cfg(feature = "window")]
+    Players(Box<super::Window>, NonZeroU32),
     // Boxed, since a session holds its buffers inline.
     Remote(Box<Remote>),
 }
@@ -628,5 +741,48 @@ pub(super) mod tests {
         };
         let result = Stage::open("test", 100.0, 100.0, players, options);
         assert!(matches!(result, Err(StageError::Open(OpenError::Disabled))));
+    }
+
+    #[cfg(all(feature = "terminal", feature = "window"))]
+    fn open_with(players: u32, local: Option<u32>, display: Native) -> Result<Stage, StageError> {
+        let range = PlayerRange::new(1, players).expect("a range");
+        let options = StageOptions {
+            display,
+            players: local.and_then(NonZeroU32::new),
+            ..StageOptions::default()
+        };
+        Stage::open("test", 100.0, 100.0, range, options).map(|(stage, _)| stage)
+    }
+
+    #[cfg(all(feature = "terminal", feature = "window"))]
+    #[test]
+    fn local_players_outside_the_range_of_the_game_fail() {
+        for (max, local) in [(1, 2), (16, 9)] {
+            let result = open_with(max, Some(local), Native::None);
+            assert!(
+                matches!(result, Err(StageError::Players { players, .. }) if players.get() == local)
+            );
+        }
+    }
+
+    #[cfg(all(feature = "terminal", feature = "window"))]
+    #[test]
+    fn several_local_players_need_a_window() {
+        let result = open_with(2, Some(2), Native::Terminal);
+        assert!(matches!(result, Err(StageError::TerminalPlayers)));
+        let result = open_with(2, Some(2), Native::None);
+        assert!(matches!(result, Err(StageError::Open(OpenError::Disabled))));
+    }
+
+    #[cfg(all(feature = "terminal", feature = "window"))]
+    #[test]
+    fn no_local_players_means_the_fewest_of_the_game() {
+        let range = PlayerRange::new(2, 4).expect("2 to 4 is a range");
+        let options = StageOptions {
+            display: Native::Terminal,
+            ..StageOptions::default()
+        };
+        let result = Stage::open("test", 100.0, 100.0, range, options);
+        assert!(matches!(result, Err(StageError::TerminalPlayers)));
     }
 }
