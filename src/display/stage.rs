@@ -170,8 +170,7 @@ impl Stage {
 
     /// The players on a display of this process for a game that takes
     /// `players`, from `options` or the fewest of the game. Fails, before
-    /// any display opens, as [`Stage::open`] would for these players, or for
-    /// a window when the session has no display.
+    /// any display opens, as [`Stage::open`] would for these players.
     fn local_players(
         players: PlayerRange,
         options: &StageOptions,
@@ -183,16 +182,8 @@ impl Stage {
                 players: local,
             });
         }
-        #[cfg(feature = "window")]
-        let window = super::window::can_open();
-        #[cfg(not(feature = "window"))]
-        let window = false;
         match options.display {
             Native::Terminal if local.get() > 1 => Err(StageError::TerminalPlayers),
-            Native::Auto | Native::Window if local.get() > 1 && !window => {
-                Err(StageError::NoWindowPlayers)
-            }
-            Native::Window if !window => Err(StageError::Open(OpenError::NoWindow)),
             _ => Ok(local),
         }
     }
@@ -392,9 +383,7 @@ fn open_players(
     _title: &str,
     _players: NonZeroU32,
 ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
-    Err(StageError::Open(OpenError::Platform(
-        "this build has no window".into(),
-    )))
+    Err(StageError::NoWindowPlayers)
 }
 
 #[cfg(not(all(feature = "terminal", feature = "window")))]
