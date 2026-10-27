@@ -480,15 +480,18 @@ impl Players {
 
     /// Draw the scenes that wait, and block until the next event.
     fn wait(&mut self, deadline: Option<Instant>) -> Result<StageEvent, Interrupt> {
-        let players = (1..).map_while(NonZeroU32::new).map(Player);
-        for (player, pending) in players.zip(&mut self.pending) {
-            if let Some(scene) = pending.take()
-                && let Err(e) = self.window.present_to(Target::Player(player), scene)
-            {
-                self.failed.get_or_insert(e);
+        let (pending, failed) = (&mut self.pending, &mut self.failed);
+        let seated = self.window.wait_seated(deadline, |window| {
+            let players = (1..).map_while(NonZeroU32::new).map(Player);
+            for (player, pending) in players.zip(pending) {
+                if let Some(scene) = pending.take()
+                    && let Err(e) = window.present_to(Target::Player(player), scene)
+                {
+                    failed.get_or_insert(e);
+                }
             }
-        }
-        match self.window.wait_seated(deadline)? {
+        });
+        match seated? {
             super::inbox::Seated::Tick => Ok(StageEvent::Tick),
             super::inbox::Seated::Input(seat, event) => Ok(StageEvent::Input {
                 player: Player(NonZeroU32::MIN.saturating_add(seat)),

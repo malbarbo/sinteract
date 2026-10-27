@@ -241,12 +241,18 @@ impl Window {
     }
 
     /// Block until the next event, with the seat of an input, as
-    /// [`super::Display::wait_event`] does.
-    pub(crate) fn wait_seated(&mut self, deadline: Option<Instant>) -> Result<Seated, Interrupt> {
+    /// [`super::Display::wait_event`] does. `draw` runs after the events
+    /// that wait, so a frame callback has its time before the draw.
+    pub(crate) fn wait_seated(
+        &mut self,
+        deadline: Option<Instant>,
+        draw: impl FnOnce(&mut Self),
+    ) -> Result<Seated, Interrupt> {
         // A frame that draws for longer than the period finds the next tick
         // due, so the wait returns it without a pump, and the platform takes
         // a window that never answers for hung. So every call pumps once.
         self.pump(Duration::ZERO);
+        draw(self);
         loop {
             // A closed session has a closed inbox, which returns Close
             // before it redraws or blocks.
@@ -273,7 +279,7 @@ impl super::Display for Window {
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
-        self.wait_seated(deadline).map(Event::from)
+        self.wait_seated(deadline, |_| {}).map(Event::from)
     }
 
     fn sender(&self) -> Sender {
