@@ -167,18 +167,17 @@ pub fn open_native(
     height: f32,
     options: super::TerminalOptions,
 ) -> Result<Box<dyn Display>, OpenError> {
-    window_or_terminal(title, Some((width, height)), options)
+    window_or_terminal(|| super::Window::open(title, width, height), options)
 }
 
-/// A window of `size`, or a hidden one with no size, and the terminal
-/// when no window opens, as [`open_native`] says.
+/// The window of `window`, and the terminal when no window opens, as
+/// [`open_native`] says.
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub(crate) fn window_or_terminal(
-    title: &str,
-    size: Option<(f32, f32)>,
+    window: impl FnOnce() -> Result<super::Window, OpenError>,
     options: super::TerminalOptions,
 ) -> Result<Box<dyn Display>, OpenError> {
-    match super::Window::open_seats(&[title.to_owned()], size) {
+    match window() {
         Ok(window) => Ok(Box::new(window)),
         Err(_) => Ok(Box::new(super::Terminal::open_with(options)?)),
     }

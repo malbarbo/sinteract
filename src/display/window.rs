@@ -94,40 +94,41 @@ impl Window {
     /// and with [`OpenError::Platform`] when the platform has no window for
     /// us, or on a thread other than the one of the first window.
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
-        Self::open_seats(&[title.to_owned()], Some((width, height)))
+        let (w, h) = frame_px(width, height);
+        let attrs = WindowAttributes::default()
+            .with_title(title)
+            .with_inner_size(LogicalSize::new(w as f64, h as f64));
+        Self::open_attrs(vec![attrs])
     }
 
-    /// Open a window for each title, side by side, and fail as
-    /// [`Window::open`] does. With `size`, each window shows at once with
-    /// that size in logical pixels. Without it, each window stays hidden
-    /// until its first present, which gives it the size of its scene. The
-    /// input of the window at index k comes from seat k.
-    pub(crate) fn open_seats(
-        titles: &[String],
-        size: Option<(f32, f32)>,
-    ) -> Result<Self, OpenError> {
+    /// Open a hidden window for each title, and fail as [`Window::open`]
+    /// does. Each window shows at its first present, with the size of its
+    /// scene and side by side with the others. The input of the window at
+    /// index k comes from seat k.
+    pub(crate) fn open_seats(titles: &[String]) -> Result<Self, OpenError> {
+        let attrs = titles
+            .iter()
+            .map(|title| {
+                WindowAttributes::default()
+                    .with_title(title)
+                    .with_visible(false)
+            })
+            .collect();
+        Self::open_attrs(attrs)
+    }
+
+    /// Open a window for each of `attrs`. A window that is not visible
+    /// shows at its first present.
+    fn open_attrs(attrs: Vec<WindowAttributes>) -> Result<Self, OpenError> {
+        let hidden: Vec<_> = attrs.iter().map(|attrs| !attrs.visible).collect();
         let mut lent = Lent::take()?;
         let proxy = lent.proxy.clone();
         let inbox = Inbox::new(Some(Arc::new(move || {
             let _ = proxy.send_event(());
         })));
-        let several = titles.len() > 1;
         let windows = (0..)
-            .zip(titles)
-            .map(|(seat, title)| {
-                let mut attrs = WindowAttributes::default().with_title(title);
-                match size {
-                    Some((width, height)) => {
-                        let (size, position) = layout(seat as usize, several, width, height);
-                        attrs = attrs.with_inner_size(size);
-                        if let Some(position) = position {
-                            attrs = attrs.with_position(position);
-                        }
-                    }
-                    None => attrs = attrs.with_visible(false),
-                }
-                (attrs, inbox.sender_without_waker(seat))
-            })
+            .zip(attrs)
+            .map(|(seat, attrs)| (attrs, inbox.sender_without_waker(seat)))
             .collect();
         let opened = lent.create_windows(windows, Self::OPEN_TIMEOUT)?;
         let surfaces = opened
@@ -145,13 +146,14 @@ impl Window {
         let seats = opened
             .into_iter()
             .zip(surfaces)
-            .map(|((window, app), surface)| Seat {
+            .zip(hidden)
+            .map(|(((window, app), surface), hidden)| Seat {
                 #[cfg(target_os = "macos")]
                 display_link: super::display_link::DisplayLink::start(&window, lent.proxy.clone()),
                 surface,
                 window,
                 app,
-                hidden: size.is_none(),
+                hidden,
                 renderer: PixmapRenderer::default(),
                 last: None,
             })

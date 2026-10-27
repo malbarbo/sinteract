@@ -330,9 +330,10 @@ impl Stage {
 #[cfg(all(feature = "terminal", feature = "window"))]
 fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, OpenError> {
     use super::{Terminal, Window};
+    let window = || Window::open_seats(&[title.to_owned()]);
     match options.display {
-        Native::Auto => super::driver::window_or_terminal(title, None, options.terminal),
-        Native::Window => Ok(Box::new(Window::open_seats(&[title.to_owned()], None)?)),
+        Native::Auto => super::driver::window_or_terminal(window, options.terminal),
+        Native::Window => Ok(Box::new(window()?)),
         Native::Terminal => Ok(Box::new(Terminal::open_with(options.terminal)?)),
         Native::None => Ok(Box::new(super::headless::Headless::new())),
     }
@@ -357,7 +358,7 @@ fn open_players(
         .iter()
         .map(|(player, _)| format!("{title} (player {})", player.number()))
         .collect();
-    let window = super::Window::open_seats(&titles, None).map_err(|e| match e {
+    let window = super::Window::open_seats(&titles).map_err(|e| match e {
         OpenError::NoWindow => StageError::NoWindowPlayers,
         e => StageError::Open(e),
     })?;
