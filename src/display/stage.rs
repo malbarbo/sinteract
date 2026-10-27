@@ -271,12 +271,15 @@ impl Stage {
             #[cfg(feature = "window")]
             Inner::Players(window) => match to {
                 Target::All => {
-                    for seat in 1..self.players.get() {
-                        window.present_to(seat as usize, scene.clone())?;
+                    let scene = Rc::new(scene);
+                    for seat in 0..self.players.get() {
+                        window.present_to(seat as usize, Rc::clone(&scene))?;
                     }
-                    window.present_to(0, scene)
+                    Ok(())
                 }
-                Target::Player(player) => window.present_to(player.0.get() as usize - 1, scene),
+                Target::Player(player) => {
+                    window.present_to(player.0.get() as usize - 1, Rc::new(scene))
+                }
             },
             Inner::Remote(remote) => {
                 let session = remote.session.as_mut().ok_or(PresentError::Closed)?;

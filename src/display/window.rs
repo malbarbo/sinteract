@@ -209,7 +209,7 @@ impl Window {
     /// Several windows draw at the next wait, so a seat that gets a scene
     /// for every seat and then one of its own in the same tick shows only
     /// its own.
-    pub(crate) fn present_to(&mut self, seat: usize, scene: Scene) -> Result<(), PresentError> {
+    pub(crate) fn present_to(&mut self, seat: usize, scene: Rc<Scene>) -> Result<(), PresentError> {
         let Some(active) = self.active.as_mut() else {
             return Err(PresentError::Closed);
         };
@@ -266,7 +266,7 @@ impl Window {
 
 impl super::Display for Window {
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        self.present_to(0, scene)
+        self.present_to(0, Rc::new(scene))
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
@@ -381,7 +381,8 @@ impl Seat {
 }
 
 struct Last {
-    scene: Scene,
+    /// Shared with the other seats of a present to all.
+    scene: Rc<Scene>,
     /// `scene` waits for the frame callback of Wayland.
     unshown: bool,
 }
