@@ -53,6 +53,8 @@ pub struct Window {
     clock: TickClock,
     /// `None` after [`super::Display::close`].
     active: Option<Active>,
+    /// The first draw that failed since the last [`Window::take_failed`].
+    failed: Option<PresentError>,
 }
 
 struct Active {
@@ -162,6 +164,7 @@ impl Window {
             inbox,
             clock: TickClock::from_millihertz(Self::TICK_RATE),
             active: Some(Active { lent, seats }),
+            failed: None,
         })
     }
 
@@ -198,9 +201,11 @@ impl Window {
                 Some(_) => {}
                 None => shown = shown.or(at),
             }
-            if seat.last.as_ref().is_some_and(|l| l.unshown) && !seat.app.frame_pending() {
-                // The next draw of this window fails the same way and reports it.
-                let _ = seat.show();
+            if seat.last.as_ref().is_some_and(|l| l.unshown)
+                && !seat.app.frame_pending()
+                && let Err(e) = seat.show()
+            {
+                self.failed.get_or_insert(e);
             }
         }
         if let Some(at) = shown {
@@ -210,29 +215,44 @@ impl Window {
 
     /// Show `scene` in the window of each player of `to`, where player k
     /// has seat k - 1, and fail with [`PresentError::NoPlayer`] for a
-    /// player with no window.
+    /// player with no window. A draw that fails goes to
+    /// [`Window::take_failed`].
     pub(crate) fn present_to(&mut self, to: Target, scene: Rc<Scene>) -> Result<(), PresentError> {
         let Some(active) = self.active.as_mut() else {
             return Err(PresentError::Closed);
         };
         let several = active.seats.len() > 1;
-        let drawn = match to {
-            Target::All => (0..)
-                .zip(&mut active.seats)
-                .try_for_each(|(seat, target)| target.keep(seat, several, Rc::clone(&scene))),
+        let failed = &mut self.failed;
+        let mut keep = |seat: usize, target: &mut Seat, scene| {
+            if let Err(e) = target.keep(seat, several, scene) {
+                failed.get_or_insert(e);
+            }
+        };
+        match to {
+            Target::All => {
+                for (seat, target) in active.seats.iter_mut().enumerate() {
+                    keep(seat, target, Rc::clone(&scene));
+                }
+            }
             Target::Player(player) => {
                 let seat = player.number().get() as usize - 1;
                 let Some(target) = active.seats.get_mut(seat) else {
                     return Err(PresentError::NoPlayer(player));
                 };
-                target.keep(seat, several, scene)
+                keep(seat, target, scene);
             }
-        };
+        }
         // The new scene makes a redraw of this window stale.
         if !active.seats.iter().any(|seat| seat.app.dirty) {
             self.inbox.take_redraw();
         }
-        drawn
+        Ok(())
+    }
+
+    /// The first draw that failed since the last call, in a present, at a
+    /// frame callback or at a redraw, or `Ok`.
+    pub(crate) fn take_failed(&mut self) -> Result<(), PresentError> {
+        self.failed.take().map_or(Ok(()), Err)
     }
 
     /// Returns `true` if the windows are open, `false` after the close.
@@ -262,8 +282,9 @@ impl Window {
                     let seats = self.active.as_mut().map_or(&mut [][..], |s| &mut s.seats);
                     for seat in seats.iter_mut().filter(|seat| seat.app.dirty) {
                         seat.app.dirty = false;
-                        // The next draw of this window fails the same way and reports it.
-                        let _ = seat.show();
+                        if let Err(e) = seat.show() {
+                            self.failed.get_or_insert(e);
+                        }
                     }
                 }
                 Next::Block(timeout) => self.pump(timeout),
@@ -273,8 +294,11 @@ impl Window {
 }
 
 impl super::Display for Window {
+    /// Draw `scene`. A draw that failed since the last present, at a
+    /// frame callback or at a redraw, fails this one too.
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        self.present_to(Target::All, Rc::new(scene))
+        self.present_to(Target::All, Rc::new(scene))?;
+        self.take_failed()
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
