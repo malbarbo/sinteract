@@ -3,7 +3,6 @@
 //! state changes, and reads only the keys, the pads and the close.
 
 use std::collections::{HashMap, VecDeque};
-use std::num::NonZeroU32;
 use std::thread;
 use std::time::Instant;
 
@@ -84,8 +83,7 @@ const PLAYERS: PlayerRange = PlayerRange::new(1, 1).expect("1 to 1 is a range");
 
 impl Frames {
     /// The frames of a program, with `title` on the window, and the
-    /// options of each stage from `options`. Each open sets the players of
-    /// the options itself.
+    /// options of each stage from `options`, the local players with them.
     pub fn new(title: impl Into<String>, options: impl FnMut() -> StageOptions + 'static) -> Self {
         Frames {
             title: title.into(),
@@ -109,22 +107,15 @@ impl Frames {
         }
     }
 
-    /// Open the stage of a world that takes `players`, with `local`
-    /// players on a display of this process, as [`StageOptions::players`]
-    /// says, and return each player with its nickname. The caller closes
+    /// Open the stage of a world that takes `players`, with the players of
+    /// the options on a display of this process, and return each player
+    /// with its nickname. The caller closes
     /// the stage of the last world first. When the stage does not open, the
     /// world goes on without one, and each show returns
     /// [`ShowError::Unavailable`].
-    pub fn open(
-        &mut self,
-        players: PlayerRange,
-        local: Option<NonZeroU32>,
-    ) -> Result<Vec<(Player, String)>, StageError> {
+    pub fn open(&mut self, players: PlayerRange) -> Result<Vec<(Player, String)>, StageError> {
         debug_assert!(!self.is_open(), "the stage of the last world is open");
-        let options = StageOptions {
-            players: local,
-            ..(self.options)()
-        };
+        let options = (self.options)();
         self.start(Stage::open(&self.title, players, options))
     }
 
@@ -152,13 +143,11 @@ impl Frames {
     }
 
     /// Keep `scene` for every player until the next tick, and open the
-    /// stage of one player first if the world has none.
+    /// stage of one player first if the world has none. Options with more
+    /// than one player fail with [`StageError::Players`].
     pub fn show(&mut self, scene: Scene) -> Result<(), ShowError> {
         if let State::Closed = self.state {
-            let options = StageOptions {
-                players: None,
-                ..(self.options)()
-            };
+            let options = (self.options)();
             let opened = Stage::open(&self.title, PLAYERS, options);
             self.start(opened).map_err(ShowError::Open)?;
         }
@@ -318,6 +307,7 @@ impl std::fmt::Debug for Frames {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::num::NonZeroU32;
     use std::time::Duration;
 
     use super::*;
@@ -404,10 +394,9 @@ mod tests {
 
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
-    fn a_show_opens_one_player_whatever_the_options_say() {
+    fn a_show_opens_one_player() {
         let mut frames = Frames::new("test", || StageOptions {
             display: Native::None,
-            players: NonZeroU32::new(2),
             ..StageOptions::default()
         });
         frames.show(Scene::new(10.0, 10.0)).unwrap();
@@ -417,14 +406,29 @@ mod tests {
 
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
+    fn a_show_with_more_players_in_the_options_fails() {
+        let mut frames = Frames::new("test", || StageOptions {
+            display: Native::None,
+            players: NonZeroU32::new(2),
+            ..StageOptions::default()
+        });
+        assert!(matches!(
+            frames.show(Scene::new(10.0, 10.0)),
+            Err(ShowError::Open(StageError::Players { .. }))
+        ));
+    }
+
+    #[cfg(all(feature = "terminal", feature = "window"))]
+    #[test]
     fn an_open_that_fails_leaves_the_world_with_no_stage() {
         let mut frames = Frames::new("test", || StageOptions {
             display: Native::Terminal,
+            players: NonZeroU32::new(2),
             ..StageOptions::default()
         });
         let range = PlayerRange::new(1, 4).expect("1 to 4 is a range");
         assert!(matches!(
-            frames.open(range, NonZeroU32::new(2)),
+            frames.open(range),
             Err(StageError::TerminalPlayers)
         ));
         assert!(!frames.is_open());

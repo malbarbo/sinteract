@@ -731,7 +731,10 @@ depois de mandar as cenas guardadas. Um mundo que desenha só no `Tick`
 mostra a cena no tick seguinte, com um quadro de atraso. Um
 mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
 vários jogadores abre o stage com o `open`, que devolve cada jogador com
-o apelido, e manda a cena de cada um com o `show_to`. A janela de cada
+o apelido, e manda a cena de cada um com o `show_to`. Os jogadores locais
+vêm só das opções que o `Frames::new` recebe, tanto no `open` quanto no
+`show`, que falha com o `StageError::Players` quando elas pedem mais de
+um. A janela de cada
 jogador ganha o tamanho da cena do primeiro `show_to`. O `players` dá os
 jogadores do mundo. Com o `Native::None`, fora de uma sessão, o stage
 abre sem tela, como num teste. Ele dá um `Tick` a 60 Hz e não desenha
