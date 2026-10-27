@@ -10,7 +10,8 @@
 //! keys, with or without the keyboard protocol of Kitty or the
 //! win32-input-mode of Windows Terminal, `sixel` encodes a pixmap for the
 //! terminals that take Sixel and not Kitty, and [`window`] shows a pixmap
-//! in a winit window. [`Stage`] runs a game on one of them, or in a
+//! in a winit window. `headless` ticks and draws nothing, for a stage with
+//! no display. [`Stage`] runs a game on one of them, or in a
 //! [`crate::session::Session`] with a server, with the same loop, and
 //! [`Frames`] runs the world of a teaching language on a stage.
 //!
@@ -33,6 +34,8 @@ mod sixel;
 mod display_link;
 mod driver;
 mod frames;
+#[cfg(all(feature = "terminal", feature = "window"))]
+mod headless;
 // A build with no display of its own keeps only `Sender`, for the type of
 // `Display::sender`.
 #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]

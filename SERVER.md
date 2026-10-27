@@ -731,11 +731,11 @@ mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
 vários jogadores abre o stage com o `open`, que devolve cada jogador com
 o apelido, e manda a cena de cada um com o `show_to`. A janela de cada
 jogador ganha o tamanho da cena do primeiro `show_to`. O `players` dá os
-jogadores do mundo. Com o `Native::None`, fora de uma sessão, o
-mundo roda sem tela, como num teste. O primeiro `show` devolve
-`ShowError::Open` com o `OpenError::Disabled`, os seguintes devolvem
-`ShowError::Unavailable`, e o mundo segue sem tela. Sem stage, o
-`wait_event` dorme até o prazo.
+jogadores do mundo. Com o `Native::None`, fora de uma sessão, o stage
+abre sem tela, como num teste. Ele dá um `Tick` a 60 Hz e não desenha
+nada, e os jogadores vêm do `StageOptions::players` como numa janela.
+Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
+`ShowError::Unavailable`, e o `wait_event` dorme até o prazo.
 
 Uma engine sem `Stage` usa a `session::Session` direto, com o
 `Session::start(players, r, w)`, o `tick_rate`, o `wait` e o

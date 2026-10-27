@@ -86,9 +86,9 @@ pub enum Native {
     Window,
     /// Only the terminal.
     Terminal,
-    /// No display. Outside a session, [`Stage::open`] fails with
-    /// [`OpenError::Disabled`], so a game can run without one, as in a
-    /// test. A session still opens, since the server asks for it.
+    /// No display. Outside a session, the stage ticks at 60 Hz and draws
+    /// nothing, so a game runs without a screen, as in a test. A session
+    /// still opens, since the server asks for it.
     None,
 }
 
@@ -155,14 +155,14 @@ impl Stage {
             return Stage::open_session(players);
         }
         let local = Stage::local_players(players, &options)?;
-        if local.get() > 1 {
-            return open_players(title, local, options.display);
+        if local.get() > 1 && options.display != Native::None {
+            return open_players(title, local);
         }
         let display = open_local(title, options).map_err(StageError::Open)?;
         let stage = Stage {
             inner: Inner::Local(display),
         };
-        Ok((stage, vec![(Player::LOCAL, String::new())]))
+        Ok((stage, numbered(local)))
     }
 
     /// The players on a display of this process for a game that takes
@@ -185,7 +185,6 @@ impl Stage {
         #[cfg(not(feature = "window"))]
         let window = false;
         match options.display {
-            Native::None => Err(StageError::Open(OpenError::Disabled)),
             Native::Terminal if local.get() > 1 => Err(StageError::TerminalPlayers),
             Native::Auto | Native::Window if local.get() > 1 && !window => {
                 Err(StageError::NoWindowPlayers)
@@ -342,29 +341,28 @@ fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, Op
         },
         Native::Window => Ok(Box::new(window()?)),
         Native::Terminal => Ok(Box::new(Terminal::open_with(options.terminal)?)),
-        Native::None => Err(OpenError::Disabled),
+        Native::None => Ok(Box::new(super::headless::Headless::new())),
     }
 }
 
-/// A window for each of `players`, as `display` asks.
+/// The players 1 to `players`, each with an empty nickname.
+fn numbered(players: NonZeroU32) -> Vec<(Player, String)> {
+    (1..=players.get())
+        .filter_map(NonZeroU32::new)
+        .map(|number| (Player(number), String::new()))
+        .collect()
+}
+
+/// A window for each of `players`.
 #[cfg(feature = "window")]
 fn open_players(
     title: &str,
     players: NonZeroU32,
-    display: Native,
 ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
-    match display {
-        Native::Auto | Native::Window => {}
-        Native::Terminal => return Err(StageError::TerminalPlayers),
-        Native::None => return Err(StageError::Open(OpenError::Disabled)),
-    }
-    let all: Vec<_> = (1..=players.get())
-        .filter_map(NonZeroU32::new)
-        .map(Player)
-        .collect();
+    let all = numbered(players);
     let titles: Vec<_> = all
         .iter()
-        .map(|player| format!("{title} (player {})", player.number()))
+        .map(|(player, _)| format!("{title} (player {})", player.number()))
         .collect();
     let window = super::Window::open_seats(&titles, None).map_err(|e| match e {
         OpenError::NoWindow => StageError::NoWindowPlayers,
@@ -373,14 +371,13 @@ fn open_players(
     let stage = Stage {
         inner: Inner::Players(Box::new(window), players),
     };
-    Ok((stage, all.into_iter().map(|p| (p, String::new())).collect()))
+    Ok((stage, all))
 }
 
 #[cfg(not(feature = "window"))]
 fn open_players(
     _title: &str,
     _players: NonZeroU32,
-    _display: Native,
 ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
     Err(StageError::Open(OpenError::Platform(
         "this build has no window".into(),
@@ -756,14 +753,25 @@ pub(super) mod tests {
 
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
-    fn a_stage_with_native_none_opens_no_display() {
-        let players = PlayerRange::new(1, 1).expect("1 to 1 is a range");
+    fn a_stage_with_native_none_ticks_for_its_players() {
+        let range = PlayerRange::new(1, 4).expect("1 to 4 is a range");
         let options = StageOptions {
             display: Native::None,
+            players: NonZeroU32::new(2),
             ..StageOptions::default()
         };
-        let result = Stage::open("test", players, options);
-        assert!(matches!(result, Err(StageError::Open(OpenError::Disabled))));
+        let (mut stage, players) = Stage::open("test", range, options).unwrap();
+        let numbers: Vec<_> = players.iter().map(|(p, _)| p.number().get()).collect();
+        assert_eq!(numbers, [1, 2]);
+        assert!(matches!(stage.wait(None), Ok(StageEvent::Tick)));
+        let ana = Player(NonZeroU32::MIN);
+        assert!(
+            stage
+                .present(Target::Player(ana), Scene::new(10.0, 10.0))
+                .is_ok()
+        );
+        stage.close();
+        assert!(matches!(stage.wait(None), Err(Interrupt::Close)));
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]
@@ -793,8 +801,6 @@ pub(super) mod tests {
     fn several_local_players_need_a_window() {
         let result = open_with(2, Some(2), Native::Terminal);
         assert!(matches!(result, Err(StageError::TerminalPlayers)));
-        let result = open_with(2, Some(2), Native::None);
-        assert!(matches!(result, Err(StageError::Open(OpenError::Disabled))));
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]

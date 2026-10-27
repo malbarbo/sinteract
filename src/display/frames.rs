@@ -321,8 +321,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::display::Native;
     use crate::display::stage::tests::{Server, session};
-    use crate::display::{Native, OpenError};
     use crate::event::{Modifiers, PadButton};
     use crate::wire::testing::Message;
 
@@ -410,10 +410,9 @@ mod tests {
             players: NonZeroU32::new(2),
             ..StageOptions::default()
         });
-        assert!(matches!(
-            frames.show(Scene::new(10.0, 10.0)),
-            Err(ShowError::Open(StageError::Open(OpenError::Disabled)))
-        ));
+        frames.show(Scene::new(10.0, 10.0)).unwrap();
+        assert_eq!(frames.players(), [Player(NonZeroU32::MIN)]);
+        assert_eq!(wait(&mut frames), FrameEvent::Tick);
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]

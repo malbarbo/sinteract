@@ -187,8 +187,6 @@ pub enum OpenError {
     NoWindow,
     /// The platform has no window for us.
     Platform(String),
-    /// The options ask for no display.
-    Disabled,
 }
 
 impl fmt::Display for OpenError {
@@ -206,7 +204,6 @@ impl fmt::Display for OpenError {
             OpenError::Io(e) => write!(f, "cannot open the display: {e}"),
             OpenError::NoWindow => f.write_str("this session has no graphical display"),
             OpenError::Platform(e) => write!(f, "cannot open a window: {e}"),
-            OpenError::Disabled => f.write_str("the options ask for no display"),
         }
     }
 }
@@ -221,8 +218,7 @@ impl std::error::Error for OpenError {
             | OpenError::LoopEnded
             | OpenError::Timeout
             | OpenError::NoWindow
-            | OpenError::Platform(_)
-            | OpenError::Disabled => None,
+            | OpenError::Platform(_) => None,
         }
     }
 }
