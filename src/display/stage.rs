@@ -336,13 +336,9 @@ impl Stage {
 #[cfg(all(feature = "terminal", feature = "window"))]
 fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, OpenError> {
     use super::{Terminal, Window};
-    let window = || Window::open_seats(&[title.to_owned()], None);
     match options.display {
-        Native::Auto => match window() {
-            Ok(window) => Ok(Box::new(window)),
-            Err(_) => Ok(Box::new(Terminal::open_with(options.terminal)?)),
-        },
-        Native::Window => Ok(Box::new(window()?)),
+        Native::Auto => super::driver::window_or_terminal(title, None, options.terminal),
+        Native::Window => Ok(Box::new(Window::open_seats(&[title.to_owned()], None)?)),
         Native::Terminal => Ok(Box::new(Terminal::open_with(options.terminal)?)),
         Native::None => Ok(Box::new(super::headless::Headless::new())),
     }
