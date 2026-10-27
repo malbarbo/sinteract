@@ -38,7 +38,8 @@ export interface Link {
   // Closes the link with no call to onclose.
   close(): void;
   onopen: (() => void) | null;
-  // A ServerToView.
+  // A ServerToView. The payload is shared with the other links, so the view
+  // reads it and copies it before it changes or transfers it.
   onmessage: ((payload: Uint8Array) => void) | null;
   onclose: ((code: number, reason: string) => void) | null;
 }
