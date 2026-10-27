@@ -183,6 +183,8 @@ pub enum OpenError {
     Timeout,
     /// A read or a write failed, or a thread did not start.
     Io(io::Error),
+    /// The session has no graphical display, as in a terminal over ssh.
+    NoWindow,
     /// The platform has no window for us.
     Platform(String),
     /// The options ask for no display.
@@ -202,6 +204,7 @@ impl fmt::Display for OpenError {
             }
             OpenError::Timeout => f.write_str("the window did not open in time"),
             OpenError::Io(e) => write!(f, "cannot open the display: {e}"),
+            OpenError::NoWindow => f.write_str("this session has no graphical display"),
             OpenError::Platform(e) => write!(f, "cannot open a window: {e}"),
             OpenError::Disabled => f.write_str("the options ask for no display"),
         }
@@ -217,6 +220,7 @@ impl std::error::Error for OpenError {
             | OpenError::WrongThread
             | OpenError::LoopEnded
             | OpenError::Timeout
+            | OpenError::NoWindow
             | OpenError::Platform(_)
             | OpenError::Disabled => None,
         }

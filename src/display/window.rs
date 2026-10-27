@@ -84,9 +84,10 @@ impl Window {
     const GAP: f64 = 16.0;
 
     /// Open a window of `width` by `height` logical pixels. Fails with
-    /// [`OpenError::Busy`] while another `Window` exists, and with
-    /// [`OpenError::Platform`] when the platform has no window for us, or on
-    /// a thread other than the one of the first window.
+    /// [`OpenError::Busy`] while another `Window` exists, with
+    /// [`OpenError::NoWindow`] when the session has no graphical display,
+    /// and with [`OpenError::Platform`] when the platform has no window for
+    /// us, or on a thread other than the one of the first window.
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
         Self::open_seats(&[title.to_owned()], width, height)
     }
@@ -529,6 +530,9 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
     #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
     {
         use winit::platform::x11::EventLoopBuilderExtX11;
+        if !has_display(|name| std::env::var_os(name)) {
+            return Err(OpenError::NoWindow);
+        }
         builder.with_any_thread(true);
     }
     #[cfg(windows)]
@@ -554,6 +558,15 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
     })?;
     event_loop.set_control_flow(ControlFlow::Wait);
     Ok(event_loop)
+}
+
+/// Returns `true` if `var` names a Wayland or X11 display, `false` otherwise.
+/// winit finds the display of a session only through these variables.
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+fn has_display(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    ["WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY"]
+        .into_iter()
+        .any(|name| var(name).is_some_and(|value| !value.is_empty()))
 }
 
 // -----------------------------------------------------------------------------
@@ -1046,6 +1059,19 @@ fn blit_pixmap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+    #[test]
+    fn a_display_needs_a_variable_that_is_not_empty() {
+        let only = |set: &'static str, value: &'static str| {
+            move |name: &str| (name == set).then(|| value.into())
+        };
+        assert!(!has_display(|_| None));
+        assert!(!has_display(only("DISPLAY", "")));
+        assert!(has_display(only("DISPLAY", ":0")));
+        assert!(has_display(only("WAYLAND_DISPLAY", "wayland-0")));
+        assert!(has_display(only("WAYLAND_SOCKET", "3")));
+    }
 
     #[test]
     fn every_key_name_of_the_window_is_in_key_all() {
