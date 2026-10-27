@@ -175,13 +175,14 @@ export class Room {
       // Player 0 is every player. A player that does not play drops the
       // frame.
       case P.EngineToServer.FRAME: {
-        const scene = m.frame.scene.toUint8Array();
-        const out = new $.Message();
-        out.initRoot(P.ServerToView)._initFrame(scene.length).copyBuffer(scene);
         const player = m.frame.player;
         const to = player === 0
           ? this.#links
           : this.#links.slice(player - 1, player);
+        if (to.length === 0) break;
+        const scene = m.frame.scene.toUint8Array();
+        const out = new $.Message();
+        out.initRoot(P.ServerToView)._initFrame(scene.length).copyBuffer(scene);
         this.#send(to, out);
         break;
       }
