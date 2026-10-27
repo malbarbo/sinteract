@@ -46,7 +46,7 @@ pub struct Session<R, W> {
     /// read into `bytes` would zero its room at every read.
     scratch: Vec<u8>,
     /// The number of players, from the start.
-    players: u32,
+    players: NonZeroU32,
     /// The rate of the ticks in thousandths of a hertz, from the start.
     tick_rate: NonZeroU32,
     /// Whether the session still reads the server.
@@ -287,7 +287,7 @@ impl<R: Read, W: Write> Session<R, W> {
             w: Some(w),
             bytes: Vec::new(),
             scratch: Vec::new(),
-            players: 0,
+            players: NonZeroU32::MIN,
             tick_rate: NonZeroU32::MIN,
             reading: Reading::Open,
             events: VecDeque::new(),
@@ -301,7 +301,10 @@ impl<R: Read, W: Write> Session<R, W> {
                 range: players,
             });
         }
-        session.players = u32::try_from(nicknames.len()).expect("a start has at most 1024 players");
+        session.players = u32::try_from(nicknames.len())
+            .ok()
+            .and_then(NonZeroU32::new)
+            .expect("a range has from 1 to 1024 players");
         session.tick_rate = tick_rate;
         let players = (1..)
             .map_while(NonZeroU32::new)
@@ -320,6 +323,12 @@ impl<R: Read, W: Write> Session<R, W> {
     /// game that keeps time measures it with its own clock.
     pub fn tick_rate(&self) -> NonZeroU32 {
         self.tick_rate
+    }
+
+    /// The number of players, from the start. The players are 1 to this
+    /// one until the end.
+    pub fn players(&self) -> NonZeroU32 {
+        self.players
     }
 
     /// The next event, with bytes from `r` when none waits. It blocks for
@@ -482,12 +491,10 @@ impl<R: Read, W: Write> Session<R, W> {
                 self.sent.retain(|_, sent| *sent != id);
                 return;
             }
-            Message::Input { player, event } if player.get() <= self.players => {
-                SessionEvent::Input {
-                    player: Player(player),
-                    event,
-                }
-            }
+            Message::Input { player, event } if player <= self.players => SessionEvent::Input {
+                player: Player(player),
+                event,
+            },
             Message::Input { player, .. } => SessionEvent::Error(SessionError::NoPlayer(player)),
         };
         self.push(event);
@@ -689,6 +696,7 @@ mod tests {
         let (session, players) =
             Session::start(players(), server.clone(), engine.clone()).expect("the session starts");
         assert_eq!(members(&players), ["1 Ana", "2 Beto"]);
+        assert_eq!(session.players().get(), 2);
         assert_eq!(session.tick_rate(), RATE);
         engine.drain();
         (session, server, engine)

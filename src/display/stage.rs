@@ -205,16 +205,16 @@ impl Stage {
                 release_session_fds();
                 StageError::Start(e)
             })?;
+        let count = session.players();
         let remote = Remote {
             tick_rate: session.tick_rate(),
             session: Some(session),
             deadline,
             ended: false,
         };
-        let count = u32::try_from(players.len()).expect("a start has at most 1024 players");
         let stage = Stage {
             inner: Inner::Remote(Box::new(remote)),
-            players: NonZeroU32::new(count).expect("a start has a player"),
+            players: count,
         };
         Ok((stage, players))
     }
@@ -697,6 +697,7 @@ pub(super) mod tests {
         };
         let players = PlayerRange::new(1, 1).unwrap();
         let (session, _) = Session::start(players, reader, BufWriter::new(to_server)).unwrap();
+        let count = session.players();
         let remote = Remote {
             tick_rate: session.tick_rate(),
             session: Some(session),
@@ -705,7 +706,7 @@ pub(super) mod tests {
         };
         let stage = Stage {
             inner: Inner::Remote(Box::new(remote)),
-            players: NonZeroU32::MIN,
+            players: count,
         };
         let mut server = Server {
             to_engine: Some(to_engine),
