@@ -10,9 +10,9 @@ use capnp::message::{Builder, HeapAllocator};
 
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
-    LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment,
-    SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth, Text, TextSpec, TextStroke,
-    end_segments, push_segment,
+    LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathStroke, PathStyle, Rgba, Sampling, Scene,
+    Segment, SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth, Text, TextSpec,
+    TextStroke, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -230,15 +230,24 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
 
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
     write_paint(b.reborrow().init_fill(), &s.fill);
-    write_paint(b.reborrow().init_stroke(), &s.stroke);
-    b.set_stroke_width(s.stroke_width);
-    b.set_line_cap(line_cap_to_wire(s.line_cap));
-    let (join, limit) = line_join_to_wire(s.line_join);
-    b.set_line_join(join);
     b.set_fill_rule(fill_rule_to_wire(s.fill_rule));
     b.set_closed(s.closed);
+    // No stroke writes a transparent paint, a width of 0, the default cap
+    // and join and no dash.
+    let Some(stroke) = &s.stroke else {
+        write_paint(b.reborrow().init_stroke(), &Paint::default());
+        let (join, limit) = line_join_to_wire(LineJoin::default());
+        b.set_line_join(join);
+        b.set_miter_limit(limit);
+        return;
+    };
+    write_paint(b.reborrow().init_stroke(), &stroke.paint);
+    b.set_stroke_width(stroke.width.get());
+    b.set_line_cap(line_cap_to_wire(stroke.cap));
+    let (join, limit) = line_join_to_wire(stroke.join);
+    b.set_line_join(join);
     b.set_miter_limit(limit);
-    if let Some(dash) = &s.dash {
+    if let Some(dash) = &stroke.dash {
         b.set_dash_offset(dash.offset());
         let mut out = b.init_dash_array(dash.array().len() as u32);
         for (i, v) in dash.array().iter().enumerate() {
@@ -254,15 +263,22 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ValueErr
         r.get_dash_array()?.iter().collect::<Vec<_>>(),
         r.get_dash_offset(),
     );
+    // Every field is read first, so a value that skips the path skips it
+    // even with no stroke.
+    let cap = line_cap_from_wire(r.get_line_cap()?);
+    let join = line_join_from_wire(r.get_line_join()?, r.get_miter_limit())?;
+    let stroke = read_stroke(read_paint(r.get_stroke()?)?, r.get_stroke_width())?;
     Ok(PathStyle {
         fill: read_paint(r.get_fill()?)?,
-        stroke: read_paint(r.get_stroke()?)?,
-        stroke_width: r.get_stroke_width(),
-        line_cap: line_cap_from_wire(r.get_line_cap()?),
-        line_join: line_join_from_wire(r.get_line_join()?, r.get_miter_limit())?,
         fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
         closed: r.get_closed(),
-        dash,
+        stroke: stroke.map(|(paint, width)| PathStroke {
+            paint,
+            width,
+            cap,
+            join,
+            dash,
+        }),
     })
 }
 

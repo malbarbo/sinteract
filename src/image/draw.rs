@@ -10,8 +10,8 @@ use super::{Attribute, Color, Font, Image, Join, Length, Style};
 use crate::renderer::Renderer;
 use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
-    Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathStyle,
-    Sampling, Scene, StrokeWidth, Text, TextStroke,
+    Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathStroke,
+    PathStyle, Sampling, Scene, StrokeWidth, Text, TextStroke,
 };
 
 /// The canvas of the image is too large. Its width or its height is above
@@ -336,10 +336,7 @@ fn draw_text(style: &Style, transform: [f32; 6], text: &str, font: &Font) -> Opt
     let mut text = font.spec(text).fit_transform(transform)?;
     let path_style = Resolved::read(style).path_style();
     text.fill = path_style.fill;
-    text.stroke = StrokeWidth::new(path_style.stroke_width).map(|width| TextStroke {
-        paint: path_style.stroke,
-        width,
-    });
+    text.stroke = path_style.stroke.map(TextStroke::from);
     text.underline = font.underline;
     Some(text)
 }
@@ -397,29 +394,26 @@ impl Resolved {
             None if outline => Color::NONE,
             None => Color::rgb(0, 0, 0),
         };
+        let stroke = self.stroke.and_then(|c| {
+            Some(PathStroke {
+                paint: paint(c, self.stroke_opacity),
+                width: StrokeWidth::new(self.stroke_width.unwrap_or(1.0))?,
+                cap: self.line_cap.unwrap_or(LineCap::Round),
+                join: match self.line_join {
+                    // An outline with no join of its own gets a limit of 10.
+                    None => LineJoin::Miter(OUTLINE_MITER_LIMIT),
+                    Some(Join::Miter) => LineJoin::default(),
+                    Some(Join::Round) => LineJoin::Round,
+                    Some(Join::Bevel) => LineJoin::Bevel,
+                },
+                dash: self.dash.clone().and_then(|a| Dash::new(a, 0.0)),
+            })
+        });
         PathStyle {
             fill: paint(fill, self.fill_opacity),
-            stroke: paint(self.stroke.unwrap_or(Color::NONE), self.stroke_opacity),
-            stroke_width: if outline {
-                self.stroke_width.unwrap_or(1.0)
-            } else {
-                0.0
-            },
-            line_cap: self.line_cap.unwrap_or(if outline {
-                LineCap::Round
-            } else {
-                LineCap::Butt
-            }),
-            line_join: match self.line_join {
-                // An outline with no join of its own gets a limit of 10.
-                None if outline => LineJoin::Miter(OUTLINE_MITER_LIMIT),
-                None | Some(Join::Miter) => LineJoin::default(),
-                Some(Join::Round) => LineJoin::Round,
-                Some(Join::Bevel) => LineJoin::Bevel,
-            },
             fill_rule: self.fill_rule.unwrap_or(FillRule::NonZero),
-            dash: self.dash.clone().and_then(|a| Dash::new(a, 0.0)),
             closed: false,
+            stroke,
         }
     }
 }
@@ -587,7 +581,7 @@ mod tests {
         ]);
         let path_style = Resolved::read(&style).path_style();
         assert_eq!(path_style.fill, Paint::rgba(255, 0, 0, 128));
-        assert_eq!(path_style.stroke_width, 0.0);
+        assert_eq!(path_style.stroke, None);
     }
 
     #[test]
@@ -598,10 +592,11 @@ mod tests {
             Attribute::StrokeOpacity(half),
         ]);
         let path_style = Resolved::read(&style).path_style();
-        assert_eq!(path_style.stroke, Paint::rgba(255, 0, 0, 64));
+        let stroke = path_style.stroke.unwrap();
+        assert_eq!(stroke.paint, Paint::rgba(255, 0, 0, 64));
         assert_eq!(path_style.fill, Paint::rgba(0, 0, 0, 0));
-        assert_eq!(path_style.line_cap, LineCap::Round);
-        assert_eq!(path_style.line_join, LineJoin::Miter(OUTLINE_MITER_LIMIT));
+        assert_eq!(stroke.cap, LineCap::Round);
+        assert_eq!(stroke.join, LineJoin::Miter(OUTLINE_MITER_LIMIT));
     }
 
     #[test]

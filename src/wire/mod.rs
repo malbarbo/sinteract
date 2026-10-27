@@ -213,8 +213,8 @@ mod tests {
     use crate::protocol_capnp;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Image, LineCap, LineJoin, Paint,
-        Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment, SegmentKind, SpreadMode,
-        Stop, StrokeWidth, Text, TextSpec, TextStroke,
+        Path, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment, SegmentKind,
+        SpreadMode, Stop, StrokeWidth, Text, TextSpec, TextStroke,
     };
     use crate::scene_capnp::element;
     use capnp::message::Builder as MessageBuilder;
@@ -224,14 +224,17 @@ mod tests {
         scene.add_path(
             Path::builder(
                 PathStyle {
+                    stroke: Some(PathStroke {
+                        cap: LineCap::Round,
+                        join: LineJoin::Bevel,
+                        ..PathStroke::new(
+                            Paint::rgba(200, 0, 0, 255),
+                            StrokeWidth::new(2.5).unwrap(),
+                        )
+                    }),
                     fill: Paint::rgba(10, 20, 30, 128),
-                    stroke: Paint::rgba(200, 0, 0, 255),
-                    stroke_width: 2.5,
-                    line_cap: LineCap::Round,
-                    line_join: LineJoin::Bevel,
                     fill_rule: FillRule::EvenOdd,
                     closed: true,
-                    ..PathStyle::default()
                 },
                 0.0,
                 0.0,
@@ -1408,10 +1411,11 @@ mod tests {
         scene.add_path(
             Path::builder(
                 PathStyle {
-                    stroke: Paint::rgba(0, 0, 0, 255),
-                    stroke_width: 2.0,
-                    line_join: LineJoin::miter(7.5).unwrap(),
-                    dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5),
+                    stroke: Some(PathStroke {
+                        join: LineJoin::miter(7.5).unwrap(),
+                        dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5),
+                        ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
+                    }),
                     ..PathStyle::default()
                 },
                 0.0,
@@ -1427,8 +1431,9 @@ mod tests {
                 let Element::Path(p) = node else {
                     panic!("expected path");
                 };
-                assert_eq!(p.style.line_join, LineJoin::miter(7.5).unwrap());
-                let dash = p.style.dash.as_ref().unwrap();
+                let stroke = p.style.stroke.as_ref().unwrap();
+                assert_eq!(stroke.join, LineJoin::miter(7.5).unwrap());
+                let dash = stroke.dash.as_ref().unwrap();
                 assert_eq!(dash.array(), [4.0, 2.0, 1.0, 4.0, 2.0, 1.0]);
                 assert_eq!(dash.offset(), 1.5);
             }
@@ -1796,9 +1801,7 @@ mod tests {
                     panic!();
                 };
                 assert_eq!(p.style.fill, Paint::Solid(Rgba::default()));
-                assert_eq!(p.style.stroke, Paint::Solid(Rgba::default()));
-                assert!(p.style.dash.is_none());
-                assert_eq!(p.style.line_join, LineJoin::default());
+                assert_eq!(p.style.stroke, None);
             }
             _ => panic!(),
         }
@@ -1823,14 +1826,20 @@ mod tests {
         scene.add_path(line(PathStyle::default(), mark));
         scene.add_path(line(
             PathStyle {
-                stroke_width: mark,
+                stroke: Some(PathStroke::new(
+                    Paint::default(),
+                    StrokeWidth::new(mark).unwrap(),
+                )),
                 ..PathStyle::default()
             },
             1.0,
         ));
         scene.add_path(line(
             PathStyle {
-                line_join: LineJoin::miter(mark).unwrap(),
+                stroke: Some(PathStroke {
+                    join: LineJoin::miter(mark).unwrap(),
+                    ..PathStroke::new(Paint::default(), StrokeWidth::ONE)
+                }),
                 ..PathStyle::default()
             },
             1.0,
@@ -1919,7 +1928,10 @@ mod tests {
         // A LineJoin cannot hold such a limit, so the bytes are patched to
         // hold one, as a writer from elsewhere could send it.
         let style = PathStyle {
-            line_join: LineJoin::miter(8.0).unwrap(),
+            stroke: Some(PathStroke {
+                join: LineJoin::miter(8.0).unwrap(),
+                ..PathStroke::new(Paint::default(), StrokeWidth::ONE)
+            }),
             ..PathStyle::default()
         };
         let mut scene = Scene::new(10.0, 10.0);
@@ -1932,7 +1944,7 @@ mod tests {
         let [Element::Path(p)] = d.elements() else {
             panic!("expected one Path, got {:?}", d.elements());
         };
-        assert_eq!(p.style.line_join, LineJoin::Bevel);
+        assert_eq!(p.style.stroke.as_ref().unwrap().join, LineJoin::Bevel);
     }
 
     #[test]

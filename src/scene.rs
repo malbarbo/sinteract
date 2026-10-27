@@ -315,19 +315,66 @@ impl Dash {
     }
 }
 
+/// The width of a stroke in the units of the scene, finite and above 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StrokeWidth(f32);
+
+// The width is finite, so the equality is total.
+impl Eq for StrokeWidth {}
+
+impl StrokeWidth {
+    /// The SVG default of `stroke-width`.
+    pub const ONE: Self = Self(1.0);
+
+    /// Returns `None` if `width` is not finite or not above 0. A front end
+    /// that takes `None` as no stroke draws the fill of a text with a NaN
+    /// width, while the wire decoder skips such a text.
+    pub const fn new(width: f32) -> Option<Self> {
+        if width.is_finite() && width > 0.0 {
+            Some(Self(width))
+        } else {
+            None
+        }
+    }
+
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+/// The stroke of a [`Path`].
 #[derive(Clone, Debug, PartialEq)]
+pub struct PathStroke {
+    pub paint: Paint,
+    pub width: StrokeWidth,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    /// `None` is a solid stroke.
+    pub dash: Option<Dash>,
+}
+
+impl PathStroke {
+    /// A solid stroke with the default cap and join.
+    pub fn new(paint: Paint, width: StrokeWidth) -> Self {
+        Self {
+            paint,
+            width,
+            cap: LineCap::default(),
+            join: LineJoin::default(),
+            dash: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PathStyle {
     pub fill: Paint,
-    pub stroke: Paint,
-    pub stroke_width: f32,
-    pub line_cap: LineCap,
-    pub line_join: LineJoin,
     pub fill_rule: FillRule,
     /// Closes every sub-path, so the stroke joins at the start of each one.
     /// A fill closes them either way.
     pub closed: bool,
-    /// `None` is a solid stroke.
-    pub dash: Option<Dash>,
+    /// `None` draws no stroke.
+    pub stroke: Option<PathStroke>,
 }
 
 impl PathStyle {
@@ -336,32 +383,9 @@ impl PathStyle {
         self.fill.is_visible()
     }
 
-    /// Returns `true` if the stroke marks the canvas, `false` otherwise. A
-    /// zero width draws nothing, whatever the paint.
-    pub fn draws_stroke(&self) -> bool {
-        self.stroke.is_visible() && self.stroke_width > 0.0
-    }
-
-    /// Returns `true` if every float of the style is finite, `false`
-    /// otherwise. A [`Paint`], a [`LineJoin`] and a [`Dash`] are always
-    /// finite.
-    pub(crate) fn is_finite(&self) -> bool {
-        self.stroke_width.is_finite()
-    }
-}
-
-impl Default for PathStyle {
-    fn default() -> Self {
-        Self {
-            fill: Paint::default(),
-            stroke: Paint::default(),
-            stroke_width: 0.0,
-            line_cap: LineCap::default(),
-            line_join: LineJoin::default(),
-            fill_rule: FillRule::default(),
-            closed: false,
-            dash: None,
-        }
+    /// The stroke, or `None` if it does not mark the canvas.
+    pub fn drawn_stroke(&self) -> Option<&PathStroke> {
+        self.stroke.as_ref().filter(|s| s.paint.is_visible())
     }
 }
 
@@ -530,33 +554,6 @@ impl ClipPath {
     }
 }
 
-/// The width of a stroke in the units of the scene, finite and above 0.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct StrokeWidth(f32);
-
-// The width is finite, so the equality is total.
-impl Eq for StrokeWidth {}
-
-impl StrokeWidth {
-    /// The SVG default of `stroke-width`.
-    pub const ONE: Self = Self(1.0);
-
-    /// Returns `None` if `width` is not finite or not above 0. A front end
-    /// that takes `None` as no stroke draws the fill of a text with a NaN
-    /// width, while the wire decoder skips such a text.
-    pub const fn new(width: f32) -> Option<Self> {
-        if width.is_finite() && width > 0.0 {
-            Some(Self(width))
-        } else {
-            None
-        }
-    }
-
-    pub fn get(self) -> f32 {
-        self.0
-    }
-}
-
 /// The stroke of a [`Text`]. A glyph is a closed smooth contour, so the
 /// stroke takes no cap, join or dash.
 #[derive(Clone, Debug, PartialEq)]
@@ -566,6 +563,16 @@ pub struct TextStroke {
     /// it is, so a text that the transform scales keeps the width of its
     /// stroke.
     pub width: StrokeWidth,
+}
+
+/// The stroke of a text keeps the paint and the width of a path stroke.
+impl From<PathStroke> for TextStroke {
+    fn from(stroke: PathStroke) -> Self {
+        Self {
+            paint: stroke.paint,
+            width: stroke.width,
+        }
+    }
 }
 
 /// A text run. The glyphs are laid out in text space, as [`TextSpec`] says.
@@ -1292,10 +1299,10 @@ impl Path {
         Segments(self.segs.iter())
     }
 
-    /// Returns `true` if every float of the style and of the segments is
-    /// finite, `false` otherwise.
+    /// Returns `true` if every coordinate of the segments is finite, `false`
+    /// otherwise. A [`PathStyle`] is always finite.
     pub(crate) fn is_finite(&self) -> bool {
-        self.style.is_finite() && self.segs.iter().all(|s| s.is_finite())
+        self.segs.iter().all(|s| s.is_finite())
     }
 }
 
@@ -2433,10 +2440,6 @@ mod tests {
     #[test]
     fn an_element_with_a_non_finite_float_is_not_added() {
         let (nan, inf) = (f32::NAN, f32::INFINITY);
-        let styles = [PathStyle {
-            stroke_width: inf,
-            ..PathStyle::default()
-        }];
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(a_line(PathStyle::default(), nan, 5.0));
         scene.add_path(
@@ -2444,14 +2447,6 @@ mod tests {
                 .cubic_to(1.0, 2.0, 3.0, 4.0, 5.0, -inf)
                 .build(),
         );
-        for style in styles {
-            scene.add_path(
-                Path::builder(style.clone(), 0.0, 0.0)
-                    .line_to(5.0, 5.0)
-                    .build(),
-            );
-            scene.add_path(a_line(style, 5.0, 5.0));
-        }
         let text = TextSpec {
             size: 12.0,
             text: "Hi".into(),

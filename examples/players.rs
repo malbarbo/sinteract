@@ -29,7 +29,9 @@ use std::process::ExitCode;
 
 use sinteract::display::{Stage, StageEvent, StageOptions};
 use sinteract::event::{InputEvent, Interrupt, KeyKind, PadButton, PadEvent, key};
-use sinteract::scene::{Paint, Path, PathStyle, Rgba, RotatedRect, Scene, Text, TextSpec};
+use sinteract::scene::{
+    Paint, Path, PathStroke, PathStyle, Rgba, RotatedRect, Scene, StrokeWidth, Text, TextSpec,
+};
 use sinteract::session::{Player, PlayerRange, Target};
 
 const WIDTH: f32 = 480.0;
@@ -194,8 +196,10 @@ impl Game {
         for s in &self.squares {
             let style = if s.player == player {
                 PathStyle {
-                    stroke: Paint::rgba(255, 255, 255, 255),
-                    stroke_width: 3.0,
+                    stroke: Some(PathStroke::new(
+                        Paint::rgba(255, 255, 255, 255),
+                        StrokeWidth::new(3.0).expect("a positive width"),
+                    )),
                     ..fill(s.color)
                 }
             } else {

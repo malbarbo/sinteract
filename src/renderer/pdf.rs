@@ -41,7 +41,7 @@ use crate::renderer::{
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin, Paint, Path,
-    Rgba, Sampling, Stop, Text, TextStroke,
+    PathStroke, Rgba, Sampling, Stop, Text, TextStroke,
 };
 use crate::text::TextLayout;
 
@@ -189,7 +189,7 @@ impl Canvas<Infallible> for PdfRenderer {
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
         let fill = style.draws_fill().then_some(&style.fill);
-        let stroke = style.draws_stroke().then_some(&style.stroke);
+        let stroke = style.drawn_stroke();
         if fill.is_none() && stroke.is_none() {
             return;
         }
@@ -197,8 +197,8 @@ impl Canvas<Infallible> for PdfRenderer {
         if path.segments().next().is_none() {
             return;
         }
-        for (fill, stroke) in passes(fill, stroke) {
-            self.paint_path(path, fill, stroke);
+        for (fill, stroke_paint) in passes(fill, stroke.map(|s| &s.paint)) {
+            self.paint_path(path, fill, stroke_paint.and(stroke));
         }
     }
 
@@ -316,17 +316,16 @@ impl Renderer for PdfRenderer {
 
 impl PdfRenderer {
     /// Draws `path` with each side that is `Some`.
-    fn paint_path(&mut self, path: &Path, fill: Option<&Paint>, stroke: Option<&Paint>) {
-        let style = &path.style;
-        self.begin_paint(fill, stroke);
-        if stroke.is_some() {
-            self.content.set_line_width(style.stroke_width);
-            self.content.set_line_cap(pdf_line_cap(style.line_cap));
-            self.content.set_line_join(pdf_line_join(style.line_join));
-            if let LineJoin::Miter(limit) = style.line_join {
+    fn paint_path(&mut self, path: &Path, fill: Option<&Paint>, stroke: Option<&PathStroke>) {
+        self.begin_paint(fill, stroke.map(|s| &s.paint));
+        if let Some(stroke) = stroke {
+            self.content.set_line_width(stroke.width.get());
+            self.content.set_line_cap(pdf_line_cap(stroke.cap));
+            self.content.set_line_join(pdf_line_join(stroke.join));
+            if let LineJoin::Miter(limit) = stroke.join {
                 self.content.set_miter_limit(limit.get());
             }
-            if let Some(dash) = &style.dash {
+            if let Some(dash) = &stroke.dash {
                 self.content
                     .set_dash_pattern(dash.array().iter().copied(), dash.offset());
             }
@@ -336,7 +335,7 @@ impl PdfRenderer {
             &mut self.content,
             fill.is_some(),
             stroke.is_some(),
-            style.fill_rule,
+            path.style.fill_rule,
         );
         // restore_state also resets the pattern color space.
         self.content.restore_state();
@@ -1102,7 +1101,7 @@ fn rgb_components(c: Rgba) -> [f32; 3] {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, PathStyle, RotatedRect, Scene, TextSpec};
+    use crate::scene::{Dash, PathStyle, RotatedRect, Scene, StrokeWidth, TextSpec};
 
     fn red_fill(a: u8) -> PathStyle {
         PathStyle {
@@ -1224,9 +1223,10 @@ mod tests {
     fn dash_pattern_emits_d_operator() {
         let mut scene = Scene::new(100.0, 50.0);
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 255),
-            stroke_width: 1.0,
-            dash: Dash::new(vec![3.0, 2.0], 1.0),
+            stroke: Some(PathStroke {
+                dash: Dash::new(vec![3.0, 2.0], 1.0),
+                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::ONE)
+            }),
             ..PathStyle::default()
         };
         scene.add_path(rect(style, 0.0, 0.0, 100.0, 50.0));
@@ -1243,9 +1243,10 @@ mod tests {
     fn miter_limit_emits_m_operator() {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 255),
-            stroke_width: 4.0,
-            line_join: LineJoin::miter(12.0).unwrap(),
+            stroke: Some(PathStroke {
+                join: LineJoin::miter(12.0).unwrap(),
+                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(4.0).unwrap())
+            }),
             ..PathStyle::default()
         };
         scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
@@ -1380,8 +1381,10 @@ mod tests {
         };
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, clear)];
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 255),
-            stroke_width: 2.0,
+            stroke: Some(PathStroke::new(
+                Paint::rgba(0, 0, 0, 255),
+                StrokeWidth::new(2.0).unwrap(),
+            )),
             ..gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap())
         };
         scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
@@ -1395,9 +1398,11 @@ mod tests {
     fn a_translucent_fill_and_stroke_draw_apart() {
         let mut scene = Scene::new(100.0, 40.0);
         let style = PathStyle {
+            stroke: Some(PathStroke::new(
+                Paint::rgba(0, 0, 255, 128),
+                StrokeWidth::new(4.0).unwrap(),
+            )),
             fill: Paint::rgba(255, 0, 0, 128),
-            stroke: Paint::rgba(0, 0, 255, 128),
-            stroke_width: 4.0,
             ..PathStyle::default()
         };
         scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));

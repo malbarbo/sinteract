@@ -306,8 +306,8 @@ impl Canvas<Infallible> for CanvasRenderer {
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
         let fill = style.draws_fill();
-        let stroke = style.draws_stroke();
-        if !fill && !stroke {
+        let stroke = style.drawn_stroke();
+        if !fill && stroke.is_none() {
             return;
         }
         let mut sink = Calls::new();
@@ -322,15 +322,15 @@ impl Canvas<Infallible> for CanvasRenderer {
             self.fill_style(&style.fill);
             ctx.fill_with_path_2d_and_winding(&p, winding(style.fill_rule));
         }
-        if stroke {
-            self.stroke_style(&style.stroke);
-            ctx.set_line_width(f64::from(style.stroke_width));
-            ctx.set_line_cap(match style.line_cap {
+        if let Some(stroke) = stroke {
+            self.stroke_style(&stroke.paint);
+            ctx.set_line_width(f64::from(stroke.width.get()));
+            ctx.set_line_cap(match stroke.cap {
                 LineCap::Butt => "butt",
                 LineCap::Round => "round",
                 LineCap::Square => "square",
             });
-            ctx.set_line_join(match style.line_join {
+            ctx.set_line_join(match stroke.join {
                 LineJoin::Miter(limit) => {
                     ctx.set_miter_limit(f64::from(limit.get()));
                     "miter"
@@ -339,7 +339,7 @@ impl Canvas<Infallible> for CanvasRenderer {
                 LineJoin::Bevel => "bevel",
             });
             let dash = js_sys::Array::new();
-            if let Some(d) = &style.dash {
+            if let Some(d) = &stroke.dash {
                 for v in d.array() {
                     dash.push(&JsValue::from_f64(f64::from(*v)));
                 }

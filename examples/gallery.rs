@@ -44,8 +44,8 @@ use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
 use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
     Bitmap, ClipPath, Dash, FillRule, FontStyle, Image, LineCap, LineJoin, MiterLimit, Paint, Path,
-    PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, StrokeWidth, Text, TextSpec,
-    TextStroke,
+    PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, StrokeWidth, Text,
+    TextSpec, TextStroke,
 };
 use sinteract::session::{PlayerRange, Target};
 
@@ -263,8 +263,7 @@ fn gallery(t: f32) -> Scene {
 
 fn fill_and_stroke(s: &mut Scene, x: f32, y: f32, _: f32) {
     let both = PathStyle {
-        stroke: rgb(20, 40, 120),
-        stroke_width: 4.0,
+        stroke: Some(solid_stroke(rgb(20, 40, 120), 4.0)),
         ..fill(rgb(90, 160, 240))
     };
     s.add_path(rect(both, x + 15.0, y + 15.0, 70.0, 70.0));
@@ -330,8 +329,7 @@ fn segments(s: &mut Scene, x: f32, y: f32, _: f32) {
     // A closed shape of every segment kind.
     let shape = PathStyle {
         closed: true,
-        stroke: rgb(120, 40, 140),
-        stroke_width: 2.0,
+        stroke: Some(solid_stroke(rgb(120, 40, 140), 2.0)),
         ..fill(rgb(230, 200, 240))
     };
     s.add_path(
@@ -358,10 +356,10 @@ fn caps(s: &mut Scene, x: f32, y: f32, _: f32) {
         .enumerate()
     {
         let row = y + 25.0 + i as f32 * 35.0;
-        let style = PathStyle {
-            line_cap: cap,
-            ..stroke(rgb(30, 110, 180), 16.0)
-        };
+        let style = stroked(PathStroke {
+            cap,
+            ..solid_stroke(rgb(30, 110, 180), 16.0)
+        });
         s.add_path(
             Path::builder(style, x + 40.0, row)
                 .line_to(x + 160.0, row)
@@ -388,10 +386,10 @@ fn joins(s: &mut Scene, x: f32, y: f32, _: f32) {
         .enumerate()
     {
         let left = x + 15.0 + i as f32 * 62.0;
-        let style = PathStyle {
-            line_join: join,
-            ..stroke(rgb(200, 120, 30), 12.0)
-        };
+        let style = stroked(PathStroke {
+            join,
+            ..solid_stroke(rgb(200, 120, 30), 12.0)
+        });
         chevron(s, style, left, y + 35.0, 50.0, 75.0);
     }
 }
@@ -403,10 +401,10 @@ fn miter_limit(s: &mut Scene, x: f32, y: f32, _: f32) {
         .into_iter()
         .enumerate()
     {
-        let style = PathStyle {
-            line_join: LineJoin::miter(limit).expect("a finite limit"),
-            ..stroke(rgb(60, 140, 60), 8.0)
-        };
+        let style = stroked(PathStroke {
+            join: LineJoin::miter(limit).expect("a finite limit"),
+            ..solid_stroke(rgb(60, 140, 60), 8.0)
+        });
         chevron(s, style, x + 30.0 + i as f32 * 55.0, y + 30.0, 30.0, 85.0);
     }
 }
@@ -419,8 +417,7 @@ fn fill_rules(s: &mut Scene, x: f32, y: f32, _: f32) {
         let style = PathStyle {
             fill_rule: rule,
             closed: true,
-            stroke: rgb(0, 0, 0),
-            stroke_width: 1.5,
+            stroke: Some(solid_stroke(rgb(0, 0, 0), 1.5)),
             ..fill(rgb(240, 180, 40))
         };
         // A star crosses itself.
@@ -452,22 +449,22 @@ fn fill_rules(s: &mut Scene, x: f32, y: f32, _: f32) {
 }
 
 fn dashes(s: &mut Scene, x: f32, y: f32, t: f32) {
-    let ants = PathStyle {
+    let ants = stroked(PathStroke {
         dash: Dash::new([8.0, 4.0], t * 24.0),
-        ..stroke(rgb(20, 20, 20), 2.0)
-    };
+        ..solid_stroke(rgb(20, 20, 20), 2.0)
+    });
     s.add_path(rect(ants, x + 15.0, y + 15.0, 80.0, 90.0));
-    let dots = PathStyle {
+    let dots = stroked(PathStroke {
         dash: Dash::new([0.0, 12.0], -t * 24.0),
-        line_cap: LineCap::Round,
-        ..stroke(rgb(200, 40, 90), 7.0)
-    };
+        cap: LineCap::Round,
+        ..solid_stroke(rgb(200, 40, 90), 7.0)
+    });
     circle(s, dots, x + 145.0, y + 60.0, 38.0);
     // An odd array repeats itself, so this is 12 4 4 12 4 4, and a
     // gradient paints it.
-    let odd = PathStyle {
+    let odd = stroked(PathStroke {
         dash: Dash::new([12.0, 4.0, 4.0], 0.0),
-        ..stroke(
+        ..solid_stroke(
             Paint::linear(
                 x,
                 y,
@@ -478,7 +475,7 @@ fn dashes(s: &mut Scene, x: f32, y: f32, t: f32) {
             .expect("a finite gradient"),
             3.0,
         )
-    };
+    });
     s.add_path(
         Path::builder(odd, x + 15.0, y + 120.0)
             .line_to(x + 185.0, y + 120.0)
@@ -566,11 +563,11 @@ fn gradient_stroke(s: &mut Scene, x: f32, y: f32, _: f32) {
         ]),
     )
     .expect("a finite gradient");
-    let pen = PathStyle {
-        line_cap: LineCap::Round,
-        line_join: LineJoin::Round,
-        ..stroke(rainbow, 12.0)
-    };
+    let pen = stroked(PathStroke {
+        cap: LineCap::Round,
+        join: LineJoin::Round,
+        ..solid_stroke(rainbow, 12.0)
+    });
     s.add_path(
         Path::builder(pen, x + 20.0, y + 100.0)
             .line_to(x + 60.0, y + 25.0)
@@ -995,11 +992,18 @@ fn fill(paint: Paint) -> PathStyle {
 }
 
 fn stroke(paint: Paint, width: f32) -> PathStyle {
+    stroked(solid_stroke(paint, width))
+}
+
+fn stroked(stroke: PathStroke) -> PathStyle {
     PathStyle {
-        stroke: paint,
-        stroke_width: width,
+        stroke: Some(stroke),
         ..PathStyle::default()
     }
+}
+
+fn solid_stroke(paint: Paint, width: f32) -> PathStroke {
+    PathStroke::new(paint, StrokeWidth::new(width).expect("a positive width"))
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> Paint {

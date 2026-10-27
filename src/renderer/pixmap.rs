@@ -245,8 +245,8 @@ impl Canvas<AllocError> for PixmapRenderer {
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
         let do_fill = style.draws_fill();
-        let do_stroke = style.draws_stroke();
-        if !do_fill && !do_stroke {
+        let stroke = style.drawn_stroke();
+        if !do_fill && stroke.is_none() {
             return;
         }
         let mask = match in_effect(&self.clip_stack) {
@@ -271,19 +271,19 @@ impl Canvas<AllocError> for PixmapRenderer {
                 mask,
             );
         }
-        if do_stroke {
-            let paint = sk_paint(paint_to_shader(&style.stroke, self.fade()));
+        if let Some(stroke) = stroke {
+            let paint = sk_paint(paint_to_shader(&stroke.paint, self.fade()));
             // A Dash is even and not empty, holds no negative length, sums
             // above zero and is finite, which is all StrokeDash asks for, so
             // it never refuses. One that did would draw the stroke solid.
-            let dash = style
+            let dash = stroke
                 .dash
                 .as_ref()
                 .and_then(|d| StrokeDash::new(d.array().to_vec(), d.offset()));
-            let (line_join, miter_limit) = sk_line_join(style.line_join);
+            let (line_join, miter_limit) = sk_line_join(stroke.join);
             let stroke = Stroke {
-                width: style.stroke_width,
-                line_cap: sk_line_cap(style.line_cap),
+                width: stroke.width.get(),
+                line_cap: sk_line_cap(stroke.cap),
                 line_join,
                 miter_limit,
                 dash,
@@ -878,8 +878,8 @@ mod tests {
     use super::*;
     use crate::renderer::tests::rect;
     use crate::scene::{
-        Dash, Path, PathStyle, Rgba, RotatedRect, Scene, Stop, StrokeWidth, Text, TextSpec,
-        TextStroke,
+        Dash, Path, PathStroke, PathStyle, Rgba, RotatedRect, Scene, Stop, StrokeWidth, Text,
+        TextSpec, TextStroke,
     };
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -1313,8 +1313,10 @@ mod tests {
         // Two squares, each stroked 6 wide from its top left corner. Only a
         // miter join covers the pixel outside that corner.
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 255, 255),
-            stroke_width: 6.0,
+            stroke: Some(PathStroke::new(
+                Paint::rgba(0, 0, 255, 255),
+                StrokeWidth::new(6.0).unwrap(),
+            )),
             closed: true,
             ..PathStyle::default()
         };
@@ -1340,9 +1342,10 @@ mod tests {
         let line = |array: Vec<f32>| {
             let mut scene = Scene::new(40.0, 10.0);
             let style = PathStyle {
-                stroke: Paint::rgba(0, 0, 0, 255),
-                stroke_width: 2.0,
-                dash: Dash::new(array, 0.0),
+                stroke: Some(PathStroke {
+                    dash: Dash::new(array, 0.0),
+                    ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
+                }),
                 ..PathStyle::default()
             };
             scene.add_path(Path::builder(style, 0.0, 5.0).line_to(40.0, 5.0).build());
@@ -1393,8 +1396,10 @@ mod tests {
         let line = |width: f32| {
             let mut scene = Scene::new(100.0, 100.0);
             let style = PathStyle {
-                stroke: Paint::rgba(0, 0, 255, 255),
-                stroke_width: width,
+                stroke: Some(PathStroke::new(
+                    Paint::rgba(0, 0, 255, 255),
+                    StrokeWidth::new(width).unwrap(),
+                )),
                 ..PathStyle::default()
             };
             scene.add_path(Path::builder(style, 10.0, 50.0).line_to(90.0, 50.0).build());
@@ -1798,9 +1803,13 @@ mod tests {
         scene.add_path(
             Path::builder(
                 PathStyle {
-                    stroke: Paint::rgba(255, 0, 0, 255),
-                    stroke_width: 3.0,
-                    dash: Dash::new(vec![10.0, 10.0], 0.0),
+                    stroke: Some(PathStroke {
+                        dash: Dash::new(vec![10.0, 10.0], 0.0),
+                        ..PathStroke::new(
+                            Paint::rgba(255, 0, 0, 255),
+                            StrokeWidth::new(3.0).unwrap(),
+                        )
+                    }),
                     ..PathStyle::default()
                 },
                 5.0,

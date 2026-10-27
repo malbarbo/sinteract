@@ -209,8 +209,8 @@ impl Canvas<Infallible> for SvgRenderer {
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
         let do_fill = style.draws_fill();
-        let do_stroke = style.draws_stroke();
-        if !do_fill && !do_stroke {
+        let stroke = style.drawn_stroke();
+        if !do_fill && stroke.is_none() {
             return;
         }
         // A path with no segments would write an empty `<path>`.
@@ -231,15 +231,15 @@ impl Canvas<Infallible> for SvgRenderer {
             self.body.push_str(" fill=\"none\"");
         }
 
-        if do_stroke {
-            self.write_paint(&style.stroke, "stroke", "stroke-opacity");
-            _ = write!(self.body, " stroke-width=\"{}\"", style.stroke_width);
-            match style.line_cap {
+        if let Some(stroke) = stroke {
+            self.write_paint(&stroke.paint, "stroke", "stroke-opacity");
+            _ = write!(self.body, " stroke-width=\"{}\"", stroke.width.get());
+            match stroke.cap {
                 LineCap::Butt => {}
                 LineCap::Round => self.body.push_str(" stroke-linecap=\"round\""),
                 LineCap::Square => self.body.push_str(" stroke-linecap=\"square\""),
             }
-            match style.line_join {
+            match stroke.join {
                 LineJoin::Miter(limit) => {
                     if limit != MiterLimit::DEFAULT {
                         _ = write!(self.body, " stroke-miterlimit=\"{}\"", limit.get());
@@ -248,7 +248,7 @@ impl Canvas<Infallible> for SvgRenderer {
                 LineJoin::Round => self.body.push_str(" stroke-linejoin=\"round\""),
                 LineJoin::Bevel => self.body.push_str(" stroke-linejoin=\"bevel\""),
             }
-            if let Some(dash) = &style.dash {
+            if let Some(dash) = &stroke.dash {
                 self.body.push_str(" stroke-dasharray=\"");
                 write_list(dash.array(), &mut self.body);
                 self.body.push('"');
@@ -691,7 +691,7 @@ impl PathSink for PathData<'_> {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, Path, PathStyle, Scene, Stop, StrokeWidth, TextSpec};
+    use crate::scene::{Dash, Path, PathStroke, PathStyle, Scene, Stop, StrokeWidth, TextSpec};
 
     fn red_fill(a: u8) -> PathStyle {
         PathStyle {
@@ -826,11 +826,12 @@ mod tests {
     fn a_stroke_writes_its_width_cap_join_and_dash() {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle {
-            stroke: Paint::rgba(0, 0, 0, 255),
-            stroke_width: 2.0,
-            line_cap: LineCap::Round,
-            line_join: LineJoin::Bevel,
-            dash: Dash::new(vec![3.0, 2.0], 1.0),
+            stroke: Some(PathStroke {
+                cap: LineCap::Round,
+                join: LineJoin::Bevel,
+                dash: Dash::new(vec![3.0, 2.0], 1.0),
+                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
+            }),
             closed: true,
             ..PathStyle::default()
         };
@@ -851,9 +852,10 @@ mod tests {
         let svg = |miter_limit: f32| {
             let mut scene = Scene::new(50.0, 50.0);
             let style = PathStyle {
-                stroke: Paint::rgba(0, 0, 0, 255),
-                stroke_width: 4.0,
-                line_join: LineJoin::miter(miter_limit).unwrap(),
+                stroke: Some(PathStroke {
+                    join: LineJoin::miter(miter_limit).unwrap(),
+                    ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(4.0).unwrap())
+                }),
                 ..PathStyle::default()
             };
             scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
