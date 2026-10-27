@@ -38,6 +38,7 @@ use crate::event::{
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
 use crate::scene::Scene;
+use crate::session::Target;
 
 /// A [`super::Display`] over a winit window. Closing the window arrives
 /// as [`Interrupt::Close`], and the window stays until
@@ -205,28 +206,29 @@ impl Window {
         }
     }
 
-    /// Show `scene` in the window of `seat`. One window draws it now.
-    /// Several windows draw at the next wait, so a seat that gets a scene
-    /// for every seat and then one of its own in the same tick shows only
-    /// its own.
-    pub(crate) fn present_to(&mut self, seat: usize, scene: Rc<Scene>) -> Result<(), PresentError> {
+    /// Show `scene` in the window of each player of `to`, where player k
+    /// has seat k - 1, and fail with [`PresentError::NoPlayer`] for a
+    /// player with no window. One window draws it now. Several windows
+    /// draw at the next wait, so a seat that gets a scene for every seat
+    /// and then one of its own in the same tick shows only its own.
+    pub(crate) fn present_to(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
         let Some(active) = self.active.as_mut() else {
             return Err(PresentError::Closed);
         };
         let several = active.seats.len() > 1;
-        let target = active
-            .seats
-            .get_mut(seat)
-            .expect("Stage::present checks the player of the seat");
-        if target.hidden {
-            target.reveal(seat, several, &scene);
-        }
-        target.app.dirty = false;
-        target.last = Some(Last {
-            scene,
-            unshown: several,
-        });
-        let drawn = if several { Ok(()) } else { target.show() };
+        let scene = Rc::new(scene);
+        let drawn = match to {
+            Target::All => (0..)
+                .zip(&mut active.seats)
+                .try_for_each(|(seat, target)| target.keep(seat, several, Rc::clone(&scene))),
+            Target::Player(player) => {
+                let seat = player.number().get() as usize - 1;
+                let Some(target) = active.seats.get_mut(seat) else {
+                    return Err(PresentError::NoPlayer(player));
+                };
+                target.keep(seat, several, scene)
+            }
+        };
         // The new scene makes a redraw of this window stale.
         if !active.seats.iter().any(|seat| seat.app.dirty) {
             self.inbox.take_redraw();
@@ -262,7 +264,7 @@ impl Window {
 
 impl super::Display for Window {
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        self.present_to(0, Rc::new(scene))
+        self.present_to(Target::All, scene)
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
@@ -298,6 +300,20 @@ impl Drop for Window {
 }
 
 impl Seat {
+    /// Keep `scene` as the last one of the window of `seat`, and draw it
+    /// now unless the window is one of `several`.
+    fn keep(&mut self, seat: usize, several: bool, scene: Rc<Scene>) -> Result<(), PresentError> {
+        if self.hidden {
+            self.reveal(seat, several, &scene);
+        }
+        self.app.dirty = false;
+        self.last = Some(Last {
+            scene,
+            unshown: several,
+        });
+        if several { Ok(()) } else { self.show() }
+    }
+
     /// Give the hidden window of `seat` the size of `scene`, and show it.
     fn reveal(&mut self, seat: usize, several: bool, scene: &Scene) {
         self.hidden = false;

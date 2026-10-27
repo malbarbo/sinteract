@@ -252,27 +252,21 @@ impl Stage {
     /// and still writes after the end of the stream of the server, so the
     /// views get the last frames.
     pub fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
-        if let Target::Player(player) = to
-            && player.number() > self.players
-        {
-            return Err(PresentError::NoPlayer(player));
-        }
+        let has_player = || match to {
+            Target::Player(player) if player.number() > self.players => {
+                Err(PresentError::NoPlayer(player))
+            }
+            _ => Ok(()),
+        };
         match &mut self.inner {
-            Inner::Local(display) => display.present(scene),
+            Inner::Local(display) => {
+                has_player()?;
+                display.present(scene)
+            }
             #[cfg(feature = "window")]
-            Inner::Players(window) => match to {
-                Target::All => {
-                    let scene = Rc::new(scene);
-                    for seat in 0..self.players.get() {
-                        window.present_to(seat as usize, Rc::clone(&scene))?;
-                    }
-                    Ok(())
-                }
-                Target::Player(player) => {
-                    window.present_to(player.0.get() as usize - 1, Rc::new(scene))
-                }
-            },
+            Inner::Players(window) => window.present_to(to, scene),
             Inner::Remote(remote) => {
+                has_player()?;
                 let session = remote.session.as_mut().ok_or(PresentError::Closed)?;
                 session.write_frame(to, &scene).map_err(|e| match e {
                     FrameError::Full(e) => PresentError::Full(e),
