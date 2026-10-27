@@ -3,7 +3,8 @@ import { assertEquals } from "@std/assert";
 import * as E from "../src/capnp/event.ts";
 import * as P from "../src/capnp/protocol.ts";
 import { encodeInput } from "../src/protocol.ts";
-import { Room } from "../src/room.ts";
+import { MAX_PLAYERS, Room } from "../src/room.ts";
+import type { Link } from "../src/view.ts";
 
 // What an engine writes: the envelope of framing.rs around a message.
 function engine(message: $.Message): Uint8Array {
@@ -29,9 +30,10 @@ function tickTaken(): Uint8Array {
   return engine(m);
 }
 
-function frame(scene: Uint8Array): Uint8Array {
+function frame(scene: Uint8Array, player = 0): Uint8Array {
   const m = new $.Message();
   const f = m.initRoot(P.EngineToServer)._initFrame();
+  f.player = player;
   f._initScene(scene.length).copyBuffer(scene);
   return engine(m);
 }
@@ -71,17 +73,101 @@ Deno.test("the hello of a game of one is answered with a start", () => {
   assertEquals(opened, true);
 });
 
-Deno.test("a game for two players or more ends the room", () => {
-  let gaveUp = false;
+Deno.test("a game of two players or more starts with the fewest", () => {
+  const written: Uint8Array[] = [];
+  let links: readonly Link[] = [];
+  let opened = 0;
+  const room = new Room({
+    write: (bytes) => written.push(bytes),
+    onStart: (all) => {
+      links = all;
+      for (const link of all) link.onopen = () => opened++;
+    },
+  });
+  room.receive(hello(2, 4));
+  const s = new $.Message(payloads(written)[0], false).getRoot(P.Start);
+  assertEquals([s.members.length, links.length, opened], [2, 2, 2]);
+  assertEquals(links[0], room.link);
+});
+
+Deno.test("the host picks the players inside the range of the game", () => {
+  const written: Uint8Array[] = [];
+  let range: number[] = [];
+  const room = new Room({
+    write: (bytes) => written.push(bytes),
+    players: (min, max) => {
+      range = [min, max];
+      return 3;
+    },
+  });
+  room.receive(hello(1, 20));
+  const s = new $.Message(payloads(written)[0], false).getRoot(P.Start);
+  assertEquals([range, s.members.length], [[1, MAX_PLAYERS], 3]);
+});
+
+Deno.test("players that the room cannot hold end the room", () => {
+  const cases: [number, number, number | undefined][] = [
+    [1, 2, 3],
+    [9, 10, undefined],
+    [2, 2, 1],
+  ];
+  for (const [min, max, players] of cases) {
+    let gaveUp = false;
+    const errors: unknown[] = [];
+    const written: Uint8Array[] = [];
+    const room = new Room({
+      write: (bytes) => written.push(bytes),
+      players: players === undefined ? undefined : () => players,
+      onError: (e) => errors.push(e),
+      onGiveUp: () => gaveUp = true,
+    });
+    let closed = false;
+    room.link.onclose = () => closed = true;
+    room.receive(hello(min, max));
+    assertEquals([written.length, closed, gaveUp, errors.length], [
+      0,
+      true,
+      true,
+      1,
+    ]);
+  }
+});
+
+Deno.test("a frame goes to its player, and player 0 to all", () => {
+  const got: number[][] = [[], []];
+  const room = new Room({
+    write: () => {},
+    players: () => 2,
+    onStart: (all) =>
+      all.forEach((link, i) =>
+        link.onmessage = (payload) =>
+          got[i].push(
+            new $.Message(payload, false).getRoot(P.ServerToView).frame
+              .toUint8Array()[0],
+          )
+      ),
+  });
+  room.receive(hello(1, 2));
+  room.receive(frame(new Uint8Array(8).fill(1), 2));
+  room.receive(frame(new Uint8Array(8).fill(2), 0));
+  room.receive(frame(new Uint8Array(8).fill(3), 1));
+  room.receive(frame(new Uint8Array(8).fill(4), 3));
+  assertEquals(got, [[2, 3], [1, 2]]);
+});
+
+Deno.test("the input of a view goes to the engine as its player", () => {
+  let links: readonly Link[] = [];
   const written: Uint8Array[] = [];
   const room = new Room({
     write: (bytes) => written.push(bytes),
-    onGiveUp: () => gaveUp = true,
+    players: () => 2,
+    onStart: (all) => links = all,
   });
-  let closed = false;
-  room.link.onclose = () => closed = true;
-  room.receive(hello(2, 4));
-  assertEquals([written.length, closed, gaveUp], [0, true, true]);
+  room.receive(hello(1, 2));
+  links[1].send(encodeInput({ kind: "resize", width: 320, height: 200 }));
+  const input = new $.Message(payloads(written)[1], false)
+    .getRoot(P.ServerToEngine).input;
+  assertEquals(input.player, 2);
 });
 
 Deno.test("a room that the host ends does not give up", () => {
