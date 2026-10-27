@@ -143,7 +143,10 @@ enum Entry {
 #[derive(Debug)]
 pub(crate) enum Seated {
     Tick,
-    Input(u32, InputEvent),
+    Input(
+        #[cfg_attr(not(feature = "window"), allow(dead_code))] u32,
+        InputEvent,
+    ),
 }
 
 /// A display with one seat drops the seat.
@@ -470,6 +473,7 @@ mod tests {
         assert!(is_timeout(&inbox.wait(soon())));
     }
 
+    #[cfg(feature = "window")]
     #[test]
     fn a_resize_replaces_only_one_of_its_seat() {
         let mut inbox = past_the_first_tick();

@@ -301,6 +301,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    #[cfg(all(feature = "terminal", feature = "window"))]
     use crate::display::Native;
     use crate::display::stage::tests::{Server, session};
     use crate::event::{Modifiers, PadButton};
