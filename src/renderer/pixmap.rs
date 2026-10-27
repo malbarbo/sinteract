@@ -280,11 +280,12 @@ impl Canvas<AllocError> for PixmapRenderer {
                 .dash
                 .as_ref()
                 .and_then(|d| StrokeDash::new(d.array().to_vec(), d.offset()));
+            let (line_join, miter_limit) = sk_line_join(style.line_join);
             let stroke = Stroke {
                 width: style.stroke_width,
                 line_cap: sk_line_cap(style.line_cap),
-                line_join: sk_line_join(style.line_join),
-                miter_limit: style.miter_limit,
+                line_join,
+                miter_limit,
                 dash,
             };
             if stroke_within_reach(&sk_path, &stroke, self.base) {
@@ -585,11 +586,14 @@ fn sk_line_cap(c: LineCap) -> SkLineCap {
     }
 }
 
-fn sk_line_join(j: LineJoin) -> SkLineJoin {
+/// The join and the miter limit of `j`. A round or a bevel join takes a
+/// limit of 1, which tiny-skia ignores and which keeps the bound of
+/// [`stroke_within_reach`] tight.
+fn sk_line_join(j: LineJoin) -> (SkLineJoin, f32) {
     match j {
-        LineJoin::Round => SkLineJoin::Round,
-        LineJoin::Bevel => SkLineJoin::Bevel,
-        LineJoin::Miter => SkLineJoin::Miter,
+        LineJoin::Round => (SkLineJoin::Round, 1.0),
+        LineJoin::Bevel => (SkLineJoin::Bevel, 1.0),
+        LineJoin::Miter(limit) => (SkLineJoin::Miter, limit.get()),
     }
 }
 

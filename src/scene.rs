@@ -315,10 +315,6 @@ impl Dash {
     }
 }
 
-/// The SVG default of `stroke-miterlimit`. A join whose miter length, in
-/// stroke widths, is above the limit becomes a bevel.
-pub const DEFAULT_MITER_LIMIT: f32 = 4.0;
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct PathStyle {
     pub fill: Paint,
@@ -330,7 +326,6 @@ pub struct PathStyle {
     /// Closes every sub-path, so the stroke joins at the start of each one.
     /// A fill closes them either way.
     pub closed: bool,
-    pub miter_limit: f32,
     /// `None` is a solid stroke.
     pub dash: Option<Dash>,
 }
@@ -347,19 +342,11 @@ impl PathStyle {
         self.stroke.is_visible() && self.stroke_width > 0.0
     }
 
-    /// Raises a miter limit below 1 to 1. The limit compares a ratio that
-    /// is never below 1, so the two say the same thing, and SVG rejects a
-    /// smaller one and falls back to [`DEFAULT_MITER_LIMIT`] instead. The
-    /// scene and the decoder normalize, so a renderer writes the limit as
-    /// it is.
-    pub(crate) fn normalize(&mut self) {
-        self.miter_limit = self.miter_limit.max(1.0);
-    }
-
     /// Returns `true` if every float of the style is finite, `false`
-    /// otherwise. A [`Paint`] and a [`Dash`] are always finite.
+    /// otherwise. A [`Paint`], a [`LineJoin`] and a [`Dash`] are always
+    /// finite.
     pub(crate) fn is_finite(&self) -> bool {
-        all_finite(&[self.stroke_width, self.miter_limit])
+        self.stroke_width.is_finite()
     }
 }
 
@@ -373,7 +360,6 @@ impl Default for PathStyle {
             line_join: LineJoin::default(),
             fill_rule: FillRule::default(),
             closed: false,
-            miter_limit: DEFAULT_MITER_LIMIT,
             dash: None,
         }
     }
@@ -388,13 +374,57 @@ pub enum LineCap {
     Square = 2,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[repr(u8)]
+/// The limit of a miter join, finite and above 1. A join whose miter
+/// length, in stroke widths, is above the limit becomes a bevel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MiterLimit(f32);
+
+// The limit is finite, so the equality is total.
+impl Eq for MiterLimit {}
+
+impl MiterLimit {
+    /// The SVG default of `stroke-miterlimit`.
+    pub const DEFAULT: Self = Self(4.0);
+
+    /// Returns `None` if `limit` is not finite or not above 1. The miter
+    /// length is never below 1 and is 1 only where a miter and a bevel
+    /// draw the same, so a limit of 1 or less is a bevel, which
+    /// [`LineJoin::miter`] picks.
+    pub const fn new(limit: f32) -> Option<Self> {
+        if limit.is_finite() && limit > 1.0 {
+            Some(Self(limit))
+        } else {
+            None
+        }
+    }
+
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineJoin {
-    #[default]
-    Miter = 0,
-    Round = 1,
-    Bevel = 2,
+    Miter(MiterLimit),
+    Round,
+    Bevel,
+}
+
+impl Default for LineJoin {
+    fn default() -> Self {
+        Self::Miter(MiterLimit::DEFAULT)
+    }
+}
+
+impl LineJoin {
+    /// A miter join with `limit`, or a bevel for a limit of 1 or less,
+    /// which draws the same. Returns `None` if `limit` is not finite.
+    pub fn miter(limit: f32) -> Option<Self> {
+        if !limit.is_finite() {
+            return None;
+        }
+        Some(MiterLimit::new(limit).map_or(Self::Bevel, Self::Miter))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1339,11 +1369,8 @@ impl Scene {
     }
 
     /// Append a [`Path`] from [`Path::builder`].
-    pub fn add_path(&mut self, mut path: Path) {
-        // The finiteness first, so a limit that is not finite still drops
-        // the path instead of becoming 1.
+    pub fn add_path(&mut self, path: Path) {
         if path.is_finite() {
-            path.style.normalize();
             self.elements.push(Element::Path(path));
         }
     }
@@ -2374,16 +2401,10 @@ mod tests {
     #[test]
     fn an_element_with_a_non_finite_float_is_not_added() {
         let (nan, inf) = (f32::NAN, f32::INFINITY);
-        let styles = [
-            PathStyle {
-                stroke_width: inf,
-                ..PathStyle::default()
-            },
-            PathStyle {
-                miter_limit: nan,
-                ..PathStyle::default()
-            },
-        ];
+        let styles = [PathStyle {
+            stroke_width: inf,
+            ..PathStyle::default()
+        }];
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(a_line(PathStyle::default(), nan, 5.0));
         scene.add_path(
@@ -2634,24 +2655,22 @@ mod tests {
     }
 
     #[test]
-    fn a_miter_limit_below_1_rises_to_1() {
-        let style = |miter_limit| PathStyle {
-            miter_limit,
-            ..PathStyle::default()
-        };
-        let mut scene = Scene::new(10.0, 10.0);
-        for limit in [0.25, -2.0, 8.0] {
-            scene.add_path(a_line(style(limit), 5.0, 5.0));
+    fn a_miter_limit_of_1_or_less_is_a_bevel() {
+        for limit in [1.0, 0.25, -2.0] {
+            assert_eq!(LineJoin::miter(limit), Some(LineJoin::Bevel), "{limit}");
+            assert_eq!(MiterLimit::new(limit), None, "{limit}");
         }
-        let limits: Vec<f32> = scene
-            .elements()
-            .iter()
-            .map(|e| match e {
-                Element::Path(p) => p.style.miter_limit,
-                other => panic!("expected a Path, got {other:?}"),
-            })
-            .collect();
-        assert_eq!(limits, [1.0, 1.0, 8.0]);
+        let eight = MiterLimit::new(8.0).unwrap();
+        assert_eq!(eight.get(), 8.0);
+        assert_eq!(LineJoin::miter(8.0), Some(LineJoin::Miter(eight)));
+    }
+
+    #[test]
+    fn a_miter_limit_that_is_not_finite_is_none() {
+        for limit in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(LineJoin::miter(limit), None, "{limit}");
+            assert_eq!(MiterLimit::new(limit), None, "{limit}");
+        }
     }
 
     #[test]

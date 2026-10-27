@@ -331,11 +331,13 @@ impl Canvas<Infallible> for CanvasRenderer {
                 LineCap::Square => "square",
             });
             ctx.set_line_join(match style.line_join {
-                LineJoin::Miter => "miter",
+                LineJoin::Miter(limit) => {
+                    ctx.set_miter_limit(f64::from(limit.get()));
+                    "miter"
+                }
                 LineJoin::Round => "round",
                 LineJoin::Bevel => "bevel",
             });
-            ctx.set_miter_limit(f64::from(style.miter_limit));
             let dash = js_sys::Array::new();
             if let Some(d) = &style.dash {
                 for v in d.array() {

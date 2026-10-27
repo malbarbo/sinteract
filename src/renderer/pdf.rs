@@ -323,8 +323,8 @@ impl PdfRenderer {
             self.content.set_line_width(style.stroke_width);
             self.content.set_line_cap(pdf_line_cap(style.line_cap));
             self.content.set_line_join(pdf_line_join(style.line_join));
-            if style.line_join == LineJoin::Miter {
-                self.content.set_miter_limit(style.miter_limit);
+            if let LineJoin::Miter(limit) = style.line_join {
+                self.content.set_miter_limit(limit.get());
             }
             if let Some(dash) = &style.dash {
                 self.content
@@ -831,7 +831,7 @@ fn pdf_line_join(j: LineJoin) -> LineJoinStyle {
     match j {
         LineJoin::Round => LineJoinStyle::RoundJoin,
         LineJoin::Bevel => LineJoinStyle::BevelJoin,
-        LineJoin::Miter => LineJoinStyle::MiterJoin,
+        LineJoin::Miter(_) => LineJoinStyle::MiterJoin,
     }
 }
 
@@ -1245,8 +1245,7 @@ mod tests {
         let style = PathStyle {
             stroke: Paint::rgba(0, 0, 0, 255),
             stroke_width: 4.0,
-            miter_limit: 12.0,
-            line_join: LineJoin::Miter,
+            line_join: LineJoin::miter(12.0).unwrap(),
             ..PathStyle::default()
         };
         scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));

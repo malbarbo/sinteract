@@ -30,8 +30,8 @@ use crate::renderer::{
     missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, FillRule, Gradient, GradientGeometry, Image, LineCap,
-    LineJoin, Paint, Path, Rgba, Sampling, SpreadMode, Text,
+    Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin, MiterLimit,
+    Paint, Path, Rgba, Sampling, SpreadMode, Text,
 };
 use crate::text::{Glyph, TextLayout};
 
@@ -240,9 +240,9 @@ impl Canvas<Infallible> for SvgRenderer {
                 LineCap::Square => self.body.push_str(" stroke-linecap=\"square\""),
             }
             match style.line_join {
-                LineJoin::Miter => {
-                    if style.miter_limit != DEFAULT_MITER_LIMIT {
-                        _ = write!(self.body, " stroke-miterlimit=\"{}\"", style.miter_limit);
+                LineJoin::Miter(limit) => {
+                    if limit != MiterLimit::DEFAULT {
+                        _ = write!(self.body, " stroke-miterlimit=\"{}\"", limit.get());
                     }
                 }
                 LineJoin::Round => self.body.push_str(" stroke-linejoin=\"round\""),
@@ -848,14 +848,14 @@ mod tests {
             let style = PathStyle {
                 stroke: Paint::rgba(0, 0, 0, 255),
                 stroke_width: 4.0,
-                miter_limit,
+                line_join: LineJoin::miter(miter_limit).unwrap(),
                 ..PathStyle::default()
             };
             scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
             render_to_svg(&scene)
         };
         assert!(svg(12.0).contains(" stroke-miterlimit=\"12\""));
-        assert!(!svg(DEFAULT_MITER_LIMIT).contains("miterlimit"));
+        assert!(!svg(MiterLimit::DEFAULT.get()).contains("miterlimit"));
     }
 
     #[test]

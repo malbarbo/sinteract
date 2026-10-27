@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::{Color, Length, Opacity, Overflow};
-use crate::scene::{FillRule, LineCap, LineJoin};
+use crate::scene::{FillRule, LineCap};
 
 /// A list of attributes. Of two attributes that set the same thing, the
 /// first one wins.
@@ -71,7 +71,16 @@ pub enum Attribute {
     StrokeOpacity(Opacity),
     StrokeDashArray(Box<[Length]>),
     StrokeLineCap(LineCap),
-    StrokeLineJoin(LineJoin),
+    StrokeLineJoin(Join),
+}
+
+/// The join of a stroke. A miter join takes the limit of the style, which
+/// the image does not set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Join {
+    Miter,
+    Round,
+    Bevel,
 }
 
 #[cfg(test)]

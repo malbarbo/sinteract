@@ -3,7 +3,7 @@
 //! comes from the tests of sgleam, since spython refuses its angle.
 
 use super::*;
-use crate::scene::{FontStyle, LineCap, LineJoin};
+use crate::scene::{FontStyle, LineCap};
 use insta::assert_snapshot;
 
 /// The svg of `img`, as `to_svg` of spython prints it. Spython runs each
@@ -64,7 +64,7 @@ fn round_stroke(color: Color, width: f64) -> Style {
         Attribute::Stroke(color),
         Attribute::StrokeWidth(len(width)),
         Attribute::StrokeLineCap(LineCap::Round),
-        Attribute::StrokeLineJoin(LineJoin::Round),
+        Attribute::StrokeLineJoin(Join::Round),
     ])
 }
 
@@ -1194,7 +1194,7 @@ fn polygon3() {
     assert_snapshot!(svg(&polygon(&points, fill(c("plum")))));
 }
 
-fn crossed_polygon(cap: LineCap, join: LineJoin) -> Image {
+fn crossed_polygon(cap: LineCap, join: Join) -> Image {
     let style = Style::new([
         Attribute::Stroke(c("darkslategray")),
         Attribute::StrokeWidth(len(10.0)),
@@ -1215,12 +1215,12 @@ fn crossed_polygon(cap: LineCap, join: LineJoin) -> Image {
 
 #[test]
 fn polygon4() {
-    assert_snapshot!(svg(&crossed_polygon(LineCap::Round, LineJoin::Round)));
+    assert_snapshot!(svg(&crossed_polygon(LineCap::Round, Join::Round)));
 }
 
 #[test]
 fn polygon5() {
-    assert_snapshot!(svg(&crossed_polygon(LineCap::Square, LineJoin::Miter)));
+    assert_snapshot!(svg(&crossed_polygon(LineCap::Square, Join::Miter)));
 }
 
 fn pulled_regular_polygon(side: f64, n: u32, pull: f64, angle: f64, style: Style) -> Image {

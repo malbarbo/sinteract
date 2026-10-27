@@ -43,8 +43,8 @@ use sinteract::renderer::pdf::PdfRenderer;
 use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
 use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
-    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, Dash, FillRule, FontStyle, Image, LineCap, LineJoin,
-    Paint, Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, Text, TextSpec,
+    Bitmap, ClipPath, Dash, FillRule, FontStyle, Image, LineCap, LineJoin, MiterLimit, Paint, Path,
+    PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, Text, TextSpec,
 };
 use sinteract::session::{PlayerRange, Target};
 
@@ -382,7 +382,7 @@ fn caps(s: &mut Scene, x: f32, y: f32, _: f32) {
 }
 
 fn joins(s: &mut Scene, x: f32, y: f32, _: f32) {
-    for (i, join) in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel]
+    for (i, join) in [LineJoin::default(), LineJoin::Round, LineJoin::Bevel]
         .into_iter()
         .enumerate()
     {
@@ -398,9 +398,12 @@ fn joins(s: &mut Scene, x: f32, y: f32, _: f32) {
 fn miter_limit(s: &mut Scene, x: f32, y: f32, _: f32) {
     // The miter of this angle is about 5.8 stroke widths long, so a limit
     // of 1 and the default of 4 bevel it and a limit of 6 keeps the point.
-    for (i, limit) in [1.0, DEFAULT_MITER_LIMIT, 6.0].into_iter().enumerate() {
+    for (i, limit) in [1.0, MiterLimit::DEFAULT.get(), 6.0]
+        .into_iter()
+        .enumerate()
+    {
         let style = PathStyle {
-            miter_limit: limit,
+            line_join: LineJoin::miter(limit).expect("a finite limit"),
             ..stroke(rgb(60, 140, 60), 8.0)
         };
         chevron(s, style, x + 30.0 + i as f32 * 55.0, y + 30.0, 30.0, 85.0);

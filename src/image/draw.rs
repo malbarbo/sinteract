@@ -6,12 +6,12 @@ use std::rc::Rc;
 use super::geometry::{ImageBox, Point};
 use super::path::{self, RESIDUE, without_residue};
 use super::tree::Node;
-use super::{Attribute, Color, Font, Image, Length, Style};
+use super::{Attribute, Color, Font, Image, Join, Length, Style};
 use crate::renderer::Renderer;
 use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
-    Bitmap, ClipPath, DEFAULT_MITER_LIMIT, Dash, FillRule, LineCap, LineJoin, Paint, Path,
-    PathStyle, Sampling, Scene, Text,
+    Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathStyle,
+    Sampling, Scene, Text,
 };
 
 /// The canvas of the image is too large. Its width or its height is above
@@ -353,7 +353,7 @@ struct Resolved {
     stroke_opacity: Option<f32>,
     dash: Option<Vec<f32>>,
     line_cap: Option<LineCap>,
-    line_join: Option<LineJoin>,
+    line_join: Option<Join>,
 }
 
 impl Resolved {
@@ -408,19 +408,22 @@ impl Resolved {
             } else {
                 LineCap::Butt
             }),
-            line_join: self.line_join.unwrap_or(LineJoin::Miter),
-            fill_rule: self.fill_rule.unwrap_or(FillRule::NonZero),
-            // An outline with no join of its own gets a limit of 10.
-            miter_limit: if self.line_join.is_none() && outline {
-                10.0
-            } else {
-                DEFAULT_MITER_LIMIT
+            line_join: match self.line_join {
+                // An outline with no join of its own gets a limit of 10.
+                None if outline => LineJoin::Miter(OUTLINE_MITER_LIMIT),
+                None | Some(Join::Miter) => LineJoin::default(),
+                Some(Join::Round) => LineJoin::Round,
+                Some(Join::Bevel) => LineJoin::Bevel,
             },
+            fill_rule: self.fill_rule.unwrap_or(FillRule::NonZero),
             dash: self.dash.clone().and_then(|a| Dash::new(a, 0.0)),
             closed: false,
         }
     }
 }
+
+/// The miter limit of an outline with no join of its own.
+const OUTLINE_MITER_LIMIT: MiterLimit = MiterLimit::new(10.0).unwrap();
 
 /// `c` with its alpha times `opacity`, rounded once to the byte of the
 /// scene.
@@ -596,7 +599,7 @@ mod tests {
         assert_eq!(path_style.stroke, Paint::rgba(255, 0, 0, 64));
         assert_eq!(path_style.fill, Paint::rgba(0, 0, 0, 0));
         assert_eq!(path_style.line_cap, LineCap::Round);
-        assert_eq!(path_style.miter_limit, 10.0);
+        assert_eq!(path_style.line_join, LineJoin::Miter(OUTLINE_MITER_LIMIT));
     }
 
     #[test]

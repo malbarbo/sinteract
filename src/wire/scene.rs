@@ -10,8 +10,8 @@ use capnp::message::{Builder, HeapAllocator};
 
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
-    LineJoin, MAX_NESTING, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment, SegmentKind,
-    Segments, SpreadMode, Stop, Stops, Text, TextSpec, end_segments, push_segment,
+    LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment,
+    SegmentKind, Segments, SpreadMode, Stop, Stops, Text, TextSpec, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -46,20 +46,26 @@ fn line_cap_from_wire(c: WLineCap) -> LineCap {
     }
 }
 
-fn line_join_to_wire(j: LineJoin) -> WLineJoin {
+/// The join and the miter limit of `j`. A round or a bevel join writes the
+/// default limit, which a reader drops.
+fn line_join_to_wire(j: LineJoin) -> (WLineJoin, f32) {
     match j {
-        LineJoin::Miter => WLineJoin::Miter,
-        LineJoin::Round => WLineJoin::Round,
-        LineJoin::Bevel => WLineJoin::Bevel,
+        LineJoin::Miter(limit) => (WLineJoin::Miter, limit.get()),
+        LineJoin::Round => (WLineJoin::Round, MiterLimit::DEFAULT.get()),
+        LineJoin::Bevel => (WLineJoin::Bevel, MiterLimit::DEFAULT.get()),
     }
 }
 
-fn line_join_from_wire(j: WLineJoin) -> LineJoin {
-    match j {
+/// The join of `j` with `limit`. A limit that is not finite is
+/// [`ValueError::NotFinite`] for every join, the rule of the schema for a
+/// float that does not draw.
+fn line_join_from_wire(j: WLineJoin, limit: f32) -> Result<LineJoin, ValueError> {
+    let miter = LineJoin::miter(limit).ok_or(ValueError::NotFinite)?;
+    Ok(match j {
         WLineJoin::Round => LineJoin::Round,
         WLineJoin::Bevel => LineJoin::Bevel,
-        WLineJoin::Miter => LineJoin::Miter,
-    }
+        WLineJoin::Miter => miter,
+    })
 }
 
 fn fill_rule_to_wire(r: FillRule) -> WFillRule {
@@ -226,10 +232,11 @@ fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
     write_paint(b.reborrow().init_stroke(), &s.stroke);
     b.set_stroke_width(s.stroke_width);
     b.set_line_cap(line_cap_to_wire(s.line_cap));
-    b.set_line_join(line_join_to_wire(s.line_join));
+    let (join, limit) = line_join_to_wire(s.line_join);
+    b.set_line_join(join);
     b.set_fill_rule(fill_rule_to_wire(s.fill_rule));
     b.set_closed(s.closed);
-    b.set_miter_limit(s.miter_limit);
+    b.set_miter_limit(limit);
     if let Some(dash) = &s.dash {
         b.set_dash_offset(dash.offset());
         let mut out = b.init_dash_array(dash.array().len() as u32);
@@ -251,10 +258,9 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ValueErr
         stroke: read_paint(r.get_stroke()?)?,
         stroke_width: r.get_stroke_width(),
         line_cap: line_cap_from_wire(r.get_line_cap()?),
-        line_join: line_join_from_wire(r.get_line_join()?),
+        line_join: line_join_from_wire(r.get_line_join()?, r.get_miter_limit())?,
         fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
         closed: r.get_closed(),
-        miter_limit: r.get_miter_limit(),
         dash,
     })
 }

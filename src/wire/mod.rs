@@ -1408,7 +1408,7 @@ mod tests {
                 PathStyle {
                     stroke: Paint::rgba(0, 0, 0, 255),
                     stroke_width: 2.0,
-                    miter_limit: 7.5,
+                    line_join: LineJoin::miter(7.5).unwrap(),
                     dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5),
                     ..PathStyle::default()
                 },
@@ -1425,7 +1425,7 @@ mod tests {
                 let Element::Path(p) = node else {
                     panic!("expected path");
                 };
-                assert_eq!(p.style.miter_limit, 7.5);
+                assert_eq!(p.style.line_join, LineJoin::miter(7.5).unwrap());
                 let dash = p.style.dash.as_ref().unwrap();
                 assert_eq!(dash.array(), [4.0, 2.0, 1.0, 4.0, 2.0, 1.0]);
                 assert_eq!(dash.offset(), 1.5);
@@ -1796,7 +1796,7 @@ mod tests {
                 assert_eq!(p.style.fill, Paint::Solid(Rgba::default()));
                 assert_eq!(p.style.stroke, Paint::Solid(Rgba::default()));
                 assert!(p.style.dash.is_none());
-                assert_eq!(p.style.miter_limit, crate::scene::DEFAULT_MITER_LIMIT);
+                assert_eq!(p.style.line_join, LineJoin::default());
             }
             _ => panic!(),
         }
@@ -1805,7 +1805,7 @@ mod tests {
     #[test]
     fn an_element_that_holds_a_non_finite_float_is_skipped() {
         // Every element but the last two marks a float that becomes NaN on
-        // the wire: a coordinate, a stroke width, a gradient, a clip, a path
+        // the wire: a coordinate, a stroke width, a miter limit, a gradient, a clip, a path
         // inside a clip, a text and a bitmap. The clip around a good path and the path
         // at (9, 9) are left.
         let mark = 777.0;
@@ -1822,6 +1822,13 @@ mod tests {
         scene.add_path(line(
             PathStyle {
                 stroke_width: mark,
+                ..PathStyle::default()
+            },
+            1.0,
+        ));
+        scene.add_path(line(
+            PathStyle {
+                line_join: LineJoin::miter(mark).unwrap(),
                 ..PathStyle::default()
             },
             1.0,
@@ -1903,11 +1910,11 @@ mod tests {
     }
 
     #[test]
-    fn a_decoded_miter_limit_below_1_rises_to_1() {
-        // The scene raises the limit, so the bytes are patched to hold one
-        // below 1, as a writer from elsewhere could send it.
+    fn a_decoded_miter_limit_below_1_is_a_bevel() {
+        // A LineJoin cannot hold such a limit, so the bytes are patched to
+        // hold one, as a writer from elsewhere could send it.
         let style = PathStyle {
-            miter_limit: 8.0,
+            line_join: LineJoin::miter(8.0).unwrap(),
             ..PathStyle::default()
         };
         let mut scene = Scene::new(10.0, 10.0);
@@ -1920,7 +1927,7 @@ mod tests {
         let [Element::Path(p)] = d.elements() else {
             panic!("expected one Path, got {:?}", d.elements());
         };
-        assert_eq!(p.style.miter_limit, 1.0);
+        assert_eq!(p.style.line_join, LineJoin::Bevel);
     }
 
     #[test]
