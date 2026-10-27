@@ -670,7 +670,9 @@ jogadores, até `MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem
 esse mínimo sem pedir. Cada jogador ganha uma janela, com o número dele no
 título e um apelido vazio, e o usuário testa o jogo trocando o foco. Fechar
 qualquer janela encerra o `Stage`. A janela abre escondida, e o primeiro
-`present` dá a ela o tamanho da cena e a mostra. O `Stage::opens_session`
+`present` dá a ela o tamanho da cena e a mostra. Um `present` para um
+jogador que o `Stage` não tem devolve `PresentError::NoPlayer`, tanto
+aqui quanto numa sessão, e nada sai. O `Stage::opens_session`
 diz antes do `open` qual dos dois caminhos ele segue:
 
 ```rust

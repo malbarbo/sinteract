@@ -48,6 +48,8 @@ use crate::session::{PlayerRange, SESSION_VAR};
 /// ```
 pub struct Stage {
     inner: Inner,
+    /// The players are 1 to this one, here and in a session.
+    players: NonZeroU32,
 }
 
 /// What [`Stage::wait`] delivers.
@@ -161,6 +163,7 @@ impl Stage {
         let display = open_local(title, options).map_err(StageError::Open)?;
         let stage = Stage {
             inner: Inner::Local(display),
+            players: local,
         };
         Ok((stage, numbered(local)))
     }
@@ -217,8 +220,10 @@ impl Stage {
             deadline,
             ended: false,
         };
+        let count = u32::try_from(players.len()).expect("a start has at most 1024 players");
         let stage = Stage {
             inner: Inner::Remote(Box::new(remote)),
+            players: NonZeroU32::new(count).expect("a start has a player"),
         };
         Ok((stage, players))
     }
@@ -238,7 +243,7 @@ impl Stage {
                 }),
             },
             #[cfg(feature = "window")]
-            Inner::Players(window, _) => match window.wait_seated(deadline)? {
+            Inner::Players(window) => match window.wait_seated(deadline)? {
                 (_, Event::Tick) => Ok(StageEvent::Tick),
                 (seat, Event::Input(event)) => Ok(StageEvent::Input {
                     player: Player(NonZeroU32::MIN.saturating_add(seat)),
@@ -249,20 +254,24 @@ impl Stage {
         }
     }
 
-    /// Show `scene` to `to`. A display of this process with one player
-    /// shows every frame, since its one player is player 1. A window of
+    /// Show `scene` to `to`. A player that the stage does not have fails
+    /// with [`PresentError::NoPlayer`], here and in a session. A window of
     /// each player shows the frames to all and to that player. A session
-    /// writes the frame, with
-    /// each image that the server does not have, and still writes after
-    /// the end of the stream of the server, so the views get the last
-    /// frames.
+    /// writes the frame, with each image that the server does not have,
+    /// and still writes after the end of the stream of the server, so the
+    /// views get the last frames.
     pub fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
+        if let Target::Player(player) = to
+            && player.number() > self.players
+        {
+            return Err(PresentError::NoPlayer(player));
+        }
         match &mut self.inner {
             Inner::Local(display) => display.present(scene),
             #[cfg(feature = "window")]
-            Inner::Players(window, players) => match to {
+            Inner::Players(window) => match to {
                 Target::All => {
-                    for seat in 1..players.get() {
+                    for seat in 1..self.players.get() {
                         window.present_to(seat as usize, scene.clone())?;
                     }
                     window.present_to(0, scene)
@@ -312,7 +321,7 @@ impl Stage {
         match &self.inner {
             Inner::Local(display) => display.tick_rate(),
             #[cfg(feature = "window")]
-            Inner::Players(window, _) => window.tick_rate(),
+            Inner::Players(window) => window.tick_rate(),
             Inner::Remote(remote) => remote.tick_rate,
         }
     }
@@ -323,7 +332,7 @@ impl Stage {
         match &mut self.inner {
             Inner::Local(display) => display.close(),
             #[cfg(feature = "window")]
-            Inner::Players(window, _) => window.close(),
+            Inner::Players(window) => window.close(),
             Inner::Remote(remote) => remote.close(),
         }
     }
@@ -369,7 +378,8 @@ fn open_players(
         e => StageError::Open(e),
     })?;
     let stage = Stage {
-        inner: Inner::Players(Box::new(window), players),
+        inner: Inner::Players(Box::new(window)),
+        players,
     };
     Ok((stage, all))
 }
@@ -447,7 +457,7 @@ enum Inner {
     Local(Box<dyn Display>),
     /// A window for each of the players.
     #[cfg(feature = "window")]
-    Players(Box<super::Window>, NonZeroU32),
+    Players(Box<super::Window>),
     // Boxed, since a session holds its buffers inline.
     Remote(Box<Remote>),
 }
@@ -713,6 +723,7 @@ pub(super) mod tests {
         };
         let stage = Stage {
             inner: Inner::Remote(Box::new(remote)),
+            players: NonZeroU32::MIN,
         };
         let mut server = Server {
             to_engine: Some(to_engine),
@@ -736,6 +747,17 @@ pub(super) mod tests {
         server.tick();
         assert!(matches!(stage.wait(Some(deadline)), Ok(StageEvent::Tick)));
         assert!(matches!(server.read()[..], [testing::Message::TickTaken]));
+    }
+
+    #[test]
+    fn a_frame_to_a_player_the_stage_lacks_fails_and_writes_nothing() {
+        let (mut stage, mut server) = session();
+        let other = Player(NonZeroU32::new(2).unwrap());
+        assert!(matches!(
+            stage.present(Target::Player(other), Scene::new(10.0, 10.0)),
+            Err(PresentError::NoPlayer(p)) if p == other
+        ));
+        assert!(server.read().is_empty());
     }
 
     #[test]

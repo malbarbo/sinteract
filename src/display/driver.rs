@@ -11,6 +11,7 @@ use crate::asset::RoomFull;
 use crate::event::{Event, Interrupt};
 use crate::renderer::AllocError;
 use crate::scene::Scene;
+use crate::session::Player;
 
 /// A session that shows scenes and delivers events. Opening is the
 /// constructor of the implementation, and the session ends at
@@ -103,6 +104,9 @@ pub enum PresentError {
     /// a [`super::Stage`] in a session refuses such a frame, and nothing
     /// went out.
     Full(RoomFull),
+    /// The frame goes to a player that the [`super::Stage`] does not have,
+    /// such as a player of an earlier stage, and nothing went out.
+    NoPlayer(Player),
 }
 
 impl fmt::Display for PresentError {
@@ -113,6 +117,9 @@ impl fmt::Display for PresentError {
             PresentError::Io(e) => write!(f, "cannot show the frame: {e}"),
             PresentError::Platform(e) => write!(f, "cannot show the frame: {e}"),
             PresentError::Full(e) => e.fmt(f),
+            PresentError::NoPlayer(player) => {
+                write!(f, "the stage has no player {}", player.number())
+            }
         }
     }
 }
@@ -123,7 +130,7 @@ impl std::error::Error for PresentError {
             PresentError::Alloc(e) => Some(e),
             PresentError::Io(e) => Some(e),
             PresentError::Full(e) => Some(e),
-            PresentError::Closed | PresentError::Platform(_) => None,
+            PresentError::Closed | PresentError::Platform(_) | PresentError::NoPlayer(_) => None,
         }
     }
 }

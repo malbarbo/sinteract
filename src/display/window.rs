@@ -214,10 +214,10 @@ impl Window {
             return Err(PresentError::Closed);
         };
         let several = active.seats.len() > 1;
-        let Some(target) = active.seats.get_mut(seat) else {
-            debug_assert!(false, "no seat {seat}");
-            return Ok(());
-        };
+        let target = active
+            .seats
+            .get_mut(seat)
+            .expect("Stage::present checks the player of the seat");
         if target.hidden {
             target.reveal(seat, several, &scene);
         }
