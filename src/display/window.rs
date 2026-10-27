@@ -199,7 +199,7 @@ impl Window {
                 None => shown = shown.or(at),
             }
             if seat.last.as_ref().is_some_and(|l| l.unshown) && !seat.app.frame_pending() {
-                // A failure here fails the next present the same way.
+                // The next draw of this window fails the same way and reports it.
                 let _ = seat.show();
             }
         }
@@ -262,7 +262,7 @@ impl Window {
                     let seats = self.active.as_mut().map_or(&mut [][..], |s| &mut s.seats);
                     for seat in seats.iter_mut().filter(|seat| seat.app.dirty) {
                         seat.app.dirty = false;
-                        // A failure here fails the next present the same way.
+                        // The next draw of this window fails the same way and reports it.
                         let _ = seat.show();
                     }
                 }
