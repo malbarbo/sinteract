@@ -808,6 +808,18 @@ pub enum Backend {
     HalfBlocks = 4,
 }
 
+impl Backend {
+    /// Returns `true` if the terminal on stdout shows this backend, `false`
+    /// otherwise.
+    pub fn is_supported(self) -> bool {
+        match self {
+            Backend::Kitty => kitty_supported(),
+            Backend::Sixel => sixel_supported(),
+            Backend::HalfBlocks => half_blocks_supported(),
+        }
+    }
+}
+
 fn pick_backend() -> Option<Backend> {
     if kitty_supported() {
         Some(Backend::Kitty)
