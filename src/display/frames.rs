@@ -115,15 +115,7 @@ impl Frames {
     /// [`ShowError::Unavailable`].
     pub fn open(&mut self, players: PlayerRange) -> Result<Vec<(Player, String)>, StageError> {
         debug_assert!(!self.is_open(), "the stage of the last world is open");
-        let options = (self.options)();
-        self.start(Stage::open(&self.title, players, options))
-    }
-
-    fn start(
-        &mut self,
-        opened: Result<(Stage, Vec<(Player, String)>), StageError>,
-    ) -> Result<Vec<(Player, String)>, StageError> {
-        match opened {
+        match Stage::open(&self.title, players, (self.options)()) {
             Ok((stage, players)) => {
                 self.state = State::Open(Open {
                     stage,
@@ -147,9 +139,7 @@ impl Frames {
     /// than one player fail with [`StageError::Players`].
     pub fn show(&mut self, scene: Scene) -> Result<(), ShowError> {
         if let State::Closed = self.state {
-            let options = (self.options)();
-            let opened = Stage::open(&self.title, PLAYERS, options);
-            self.start(opened).map_err(ShowError::Open)?;
+            self.open(PLAYERS).map_err(ShowError::Open)?;
         }
         self.keep(Target::All, scene)
     }
