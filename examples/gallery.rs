@@ -44,7 +44,8 @@ use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
 use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
     Bitmap, ClipPath, Dash, FillRule, FontStyle, Image, LineCap, LineJoin, MiterLimit, Paint, Path,
-    PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, Text, TextSpec,
+    PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, StrokeWidth, Text, TextSpec,
+    TextStroke,
 };
 use sinteract::session::{PlayerRange, Target};
 
@@ -798,8 +799,10 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         let sunset = stops(&[(0.0, (250, 220, 60)), (1.0, (230, 60, 40))]);
         s.add_text(Text {
             fill: Paint::linear(x + 95.0, y, x + 185.0, y, sunset).expect("a finite gradient"),
-            stroke: Paint::Solid(opaque(20, 20, 20)),
-            stroke_width: 1.2,
+            stroke: Some(TextStroke {
+                paint: Paint::Solid(opaque(20, 20, 20)),
+                width: StrokeWidth::new(1.2).expect("a positive width"),
+            }),
             ..node
         });
     }
@@ -812,8 +815,10 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         Rgba::default(),
     ) {
         s.add_text(Text {
-            stroke: Paint::Solid(opaque(20, 20, 20)),
-            stroke_width: 0.8,
+            stroke: Some(TextStroke {
+                paint: Paint::Solid(opaque(20, 20, 20)),
+                width: StrokeWidth::new(0.8).expect("a positive width"),
+            }),
             ..node
         });
     }

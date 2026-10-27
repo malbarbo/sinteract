@@ -355,8 +355,8 @@ impl Canvas<Infallible> for CanvasRenderer {
             return;
         };
         let fill = node.draws_fill();
-        let stroke = node.draws_stroke();
-        if !fill && !stroke {
+        let stroke = node.drawn_stroke();
+        if !fill && stroke.is_none() {
             return;
         }
         // An outline moved by the transform of the text, in the space of the
@@ -390,10 +390,10 @@ impl Canvas<Infallible> for CanvasRenderer {
         // The width of the stroke is in the units of the scene, so the
         // outline goes in moved, and the stroke draws under no transform of
         // its own.
-        if stroke {
+        if let Some(stroke) = stroke {
             self.set(IDENTITY);
-            self.stroke_style(&node.stroke);
-            self.text_stroke(node.stroke_width);
+            self.stroke_style(&stroke.paint);
+            self.text_stroke(stroke.width.get());
             self.ctx()
                 .stroke_with_path(&moved(&|out| layout.outline(out)));
         }
@@ -404,9 +404,9 @@ impl Canvas<Infallible> for CanvasRenderer {
                 self.fill_style(&node.fill);
                 self.ctx().fill_with_path_2d(&u);
             }
-            if stroke {
-                self.stroke_style(&node.stroke);
-                self.text_stroke(node.stroke_width);
+            if let Some(stroke) = stroke {
+                self.stroke_style(&stroke.paint);
+                self.text_stroke(stroke.width.get());
                 self.ctx().stroke_with_path(&u);
             }
         }

@@ -214,7 +214,7 @@ mod tests {
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Image, LineCap, LineJoin, Paint,
         Path, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment, SegmentKind, SpreadMode,
-        Stop, Text, TextSpec,
+        Stop, StrokeWidth, Text, TextSpec, TextStroke,
     };
     use crate::scene_capnp::element;
     use capnp::message::Builder as MessageBuilder;
@@ -272,22 +272,24 @@ mod tests {
                         b: 0,
                         a: 255,
                     }),
-                    stroke: Paint::radial(
-                        60.0,
-                        30.0,
-                        25.0,
-                        vec![Stop {
-                            offset: 0.5,
-                            color: Rgba {
-                                r: 200,
-                                g: 0,
-                                b: 0,
-                                a: 128,
-                            },
-                        }],
-                    )
-                    .unwrap(),
-                    stroke_width: 1.0,
+                    stroke: Some(TextStroke {
+                        paint: Paint::radial(
+                            60.0,
+                            30.0,
+                            25.0,
+                            vec![Stop {
+                                offset: 0.5,
+                                color: Rgba {
+                                    r: 200,
+                                    g: 0,
+                                    b: 0,
+                                    a: 128,
+                                },
+                            }],
+                        )
+                        .unwrap(),
+                        width: StrokeWidth::ONE,
+                    }),
                     underline: true,
                     ..text
                 });
@@ -1849,7 +1851,10 @@ mod tests {
             clip.add_path(line(PathStyle::default(), 1.0));
         });
         scene.add_text(Text {
-            stroke_width: mark,
+            stroke: Some(TextStroke {
+                paint: Paint::default(),
+                width: StrokeWidth::new(mark).unwrap(),
+            }),
             ..Text::default()
         });
         scene.add_bitmap(Bitmap {

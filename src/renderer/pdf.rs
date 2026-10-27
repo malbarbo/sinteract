@@ -41,7 +41,7 @@ use crate::renderer::{
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin, Paint, Path,
-    Rgba, Sampling, Stop, Text,
+    Rgba, Sampling, Stop, Text, TextStroke,
 };
 use crate::text::TextLayout;
 
@@ -204,15 +204,15 @@ impl Canvas<Infallible> for PdfRenderer {
 
     fn draw_text(&mut self, node: &Text) {
         let fill = node.draws_fill().then_some(&node.fill);
-        let stroke = node.draws_stroke().then_some(&node.stroke);
+        let stroke = node.drawn_stroke();
         if fill.is_none() && stroke.is_none() {
             return;
         }
         let Some(layout) = TextLayout::new(&node.spec) else {
             return;
         };
-        for (fill, stroke) in passes(fill, stroke) {
-            self.paint_text(node, &layout, fill, stroke);
+        for (fill, stroke_paint) in passes(fill, stroke.map(|s| &s.paint)) {
+            self.paint_text(node, &layout, fill, stroke_paint.and(stroke));
         }
     }
 
@@ -349,15 +349,15 @@ impl PdfRenderer {
         node: &Text,
         layout: &TextLayout,
         fill: Option<&Paint>,
-        stroke: Option<&Paint>,
+        stroke: Option<&TextStroke>,
     ) {
         let (do_fill, do_stroke) = (fill.is_some(), stroke.is_some());
         // A pattern and a soft mask map to the space in effect before the
         // `cm` of the fill below, so a gradient stays in canvas space.
-        self.begin_paint(fill, stroke);
-        if do_stroke {
+        self.begin_paint(fill, stroke.map(|s| &s.paint));
+        if let Some(stroke) = stroke {
             // The default miter limit is TEXT_MITER_LIMIT.
-            self.content.set_line_width(node.stroke_width);
+            self.content.set_line_width(stroke.width.get());
         }
         self.paint_text_outline(node, do_fill, do_stroke, |out| layout.outline(out));
         if node.underline {

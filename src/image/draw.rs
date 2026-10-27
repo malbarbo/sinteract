@@ -11,7 +11,7 @@ use crate::renderer::Renderer;
 use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
     Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathStyle,
-    Sampling, Scene, Text,
+    Sampling, Scene, StrokeWidth, Text, TextStroke,
 };
 
 /// The canvas of the image is too large. Its width or its height is above
@@ -336,8 +336,10 @@ fn draw_text(style: &Style, transform: [f32; 6], text: &str, font: &Font) -> Opt
     let mut text = font.spec(text).fit_transform(transform)?;
     let path_style = Resolved::read(style).path_style();
     text.fill = path_style.fill;
-    text.stroke = path_style.stroke;
-    text.stroke_width = path_style.stroke_width;
+    text.stroke = StrokeWidth::new(path_style.stroke_width).map(|width| TextStroke {
+        paint: path_style.stroke,
+        width,
+    });
     text.underline = font.underline;
     Some(text)
 }

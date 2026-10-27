@@ -31,7 +31,7 @@ use crate::renderer::{
 };
 use crate::scene::{
     Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin, MiterLimit,
-    Paint, Path, Rgba, Sampling, SpreadMode, Text,
+    Paint, Path, Rgba, Sampling, SpreadMode, Text, TextStroke,
 };
 use crate::text::{Glyph, TextLayout};
 
@@ -268,7 +268,7 @@ impl Canvas<Infallible> for SvgRenderer {
             .draws_fill()
             .then(|| self.text_paint(&node.fill, "fill", "fill-opacity", invert(node.transform)))
             .flatten();
-        let stroke = node.draws_stroke();
+        let stroke = node.drawn_stroke();
         // The underline paints on its own and after the stroke of the glyphs,
         // as in the other renderers. With no stroke, it fills in the group of
         // the glyphs.
@@ -287,17 +287,17 @@ impl Canvas<Infallible> for SvgRenderer {
             } else {
                 self.write_glyph_uses(&layout, fill);
             }
-            if node.underline && !stroke {
+            if node.underline && stroke.is_none() {
                 self.body.push_str("<path d=\"");
                 layout.outline_underline(&mut PathData::new(&mut self.body));
                 _ = writeln!(self.body, "\"{fill}/>");
             }
             self.body.push_str("</g>\n");
         }
-        if !stroke {
+        let Some(stroke) = stroke else {
             return;
-        }
-        self.write_text_stroke(node, |out| layout.outline(out));
+        };
+        self.write_text_stroke(node, stroke, |out| layout.outline(out));
         if node.underline {
             if let Some(fill) = &fill {
                 _ = write!(
@@ -307,7 +307,7 @@ impl Canvas<Infallible> for SvgRenderer {
                 layout.outline_underline(&mut PathData::new(&mut self.body));
                 _ = writeln!(self.body, "\"{fill}/>");
             }
-            self.write_text_stroke(node, |out| layout.outline_underline(out));
+            self.write_text_stroke(node, stroke, |out| layout.outline_underline(out));
         }
     }
 
@@ -473,22 +473,27 @@ impl SvgRenderer {
         self.uses = uses;
     }
 
-    /// Writes a path that strokes `outline` of `node`. The width of the
+    /// Writes a path that strokes `outline` of `node` with `stroke`. The width of the
     /// stroke is in the units of the scene, so the path holds the outline
     /// moved by the transform of the text, and has no transform of its own.
     /// An outline with no segments writes nothing.
-    fn write_text_stroke(&mut self, node: &Text, outline: impl Fn(&mut dyn PathSink)) {
+    fn write_text_stroke(
+        &mut self,
+        node: &Text,
+        stroke: &TextStroke,
+        outline: impl Fn(&mut dyn PathSink),
+    ) {
         let mut d = String::new();
         outline(&mut Moved::new(PathData::new(&mut d), node.transform));
         if d.is_empty() {
             return;
         }
         _ = write!(self.body, "<path d=\"{d}\" fill=\"none\"");
-        self.write_paint(&node.stroke, "stroke", "stroke-opacity");
+        self.write_paint(&stroke.paint, "stroke", "stroke-opacity");
         _ = writeln!(
             self.body,
             " stroke-width=\"{}\" stroke-miterlimit=\"{TEXT_MITER_LIMIT}\"/>",
-            node.stroke_width
+            stroke.width.get()
         );
     }
 
@@ -686,7 +691,7 @@ impl PathSink for PathData<'_> {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, Path, PathStyle, Scene, Stop, TextSpec};
+    use crate::scene::{Dash, Path, PathStyle, Scene, Stop, StrokeWidth, TextSpec};
 
     fn red_fill(a: u8) -> PathStyle {
         PathStyle {
@@ -1003,8 +1008,10 @@ mod tests {
     fn a_text_strokes_its_outline_moved_by_its_transform() {
         let mut scene = Scene::new(60.0, 20.0);
         scene.add_text(Text {
-            stroke: Paint::Solid(black()),
-            stroke_width: 1.0,
+            stroke: Some(TextStroke {
+                paint: Paint::Solid(black()),
+                width: StrokeWidth::ONE,
+            }),
             transform: [4.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             ..text("ab")
         });

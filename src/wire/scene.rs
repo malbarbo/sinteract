@@ -11,7 +11,8 @@ use capnp::message::{Builder, HeapAllocator};
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
     LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathStyle, Rgba, Sampling, Scene, Segment,
-    SegmentKind, Segments, SpreadMode, Stop, Stops, Text, TextSpec, end_segments, push_segment,
+    SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth, Text, TextSpec, TextStroke,
+    end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -318,10 +319,26 @@ fn read_bitmap(
     Ok(bitmap)
 }
 
+/// The paint and the width of a stroke, `None` for a width of 0 or less,
+/// which draws no stroke. A width that is not finite is
+/// [`ValueError::NotFinite`], the rule of the schema for a float that does
+/// not draw.
+fn read_stroke(paint: Paint, width: f32) -> Result<Option<(Paint, StrokeWidth)>, ValueError> {
+    if !width.is_finite() {
+        return Err(ValueError::NotFinite);
+    }
+    Ok(StrokeWidth::new(width).map(|width| (paint, width)))
+}
+
 fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     write_paint(b.reborrow().init_fill(), &n.fill);
-    write_paint(b.reborrow().init_stroke(), &n.stroke);
-    b.set_stroke_width(n.stroke_width);
+    // No stroke writes a transparent paint and a width of 0.
+    if let Some(stroke) = &n.stroke {
+        write_paint(b.reborrow().init_stroke(), &stroke.paint);
+        b.set_stroke_width(stroke.width.get());
+    } else {
+        write_paint(b.reborrow().init_stroke(), &Paint::default());
+    }
     b.set_m0(n.transform[0]);
     b.set_m1(n.transform[1]);
     b.set_m2(n.transform[2]);
@@ -339,8 +356,8 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
 fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
     let text = Text {
         fill: read_paint(r.get_fill()?)?,
-        stroke: read_paint(r.get_stroke()?)?,
-        stroke_width: r.get_stroke_width(),
+        stroke: read_stroke(read_paint(r.get_stroke()?)?, r.get_stroke_width())?
+            .map(|(paint, width)| TextStroke { paint, width }),
         transform: [
             r.get_m0(),
             r.get_m1(),

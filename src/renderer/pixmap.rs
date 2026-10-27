@@ -297,7 +297,7 @@ impl Canvas<AllocError> for PixmapRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        if !node.draws_fill() && !node.draws_stroke() {
+        if !node.draws_fill() && node.drawn_stroke().is_none() {
             return;
         }
         let mask = match in_effect(&self.clip_stack) {
@@ -691,11 +691,9 @@ fn render_text(
             .flatten(),
         // The stroke draws the outline moved by `local`, so its gradient is
         // already in the space of the scene.
-        stroke: node
-            .draws_stroke()
-            .then(|| text_paint(&node.stroke, Transform::identity(), fade))
-            .flatten(),
-        width: node.stroke_width,
+        stroke: node.drawn_stroke().and_then(|s| {
+            text_paint(&s.paint, Transform::identity(), fade).map(|paint| (paint, s.width.get()))
+        }),
     };
 
     paint_text_path(&paints, pixmap, mask, local, base, builder, |out| {
@@ -710,11 +708,11 @@ fn render_text(
     }
 }
 
-/// The paints of a text, `None` for a side that draws nothing.
+/// The paints of a text, `None` for a side that draws nothing. The stroke
+/// holds its width.
 struct TextPaints {
     fill: Option<SkPaint<'static>>,
-    stroke: Option<SkPaint<'static>>,
-    width: f32,
+    stroke: Option<(SkPaint<'static>, f32)>,
 }
 
 /// The paint of one side of a text. tiny-skia moves a shader with the path,
@@ -755,9 +753,9 @@ fn paint_text_path(
         // A TrueType glyph fills with non-zero winding.
         pixmap.fill_path(&path, paint, SkFillRule::Winding, transform, mask);
     }
-    if let Some(paint) = &paints.stroke {
+    if let Some((paint, width)) = &paints.stroke {
         let stroke = Stroke {
-            width: paints.width,
+            width: *width,
             miter_limit: TEXT_MITER_LIMIT,
             dash: None,
             ..Stroke::default()
@@ -879,7 +877,10 @@ impl PathSink for PathBuilder {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, Path, PathStyle, Rgba, RotatedRect, Scene, Stop, Text, TextSpec};
+    use crate::scene::{
+        Dash, Path, PathStyle, Rgba, RotatedRect, Scene, Stop, StrokeWidth, Text, TextSpec,
+        TextStroke,
+    };
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let p = pixmap.pixel(x, y).expect("pixel in range");
@@ -963,8 +964,10 @@ mod tests {
             ..upright(25.0)
         });
         scene.add_text(Text {
-            stroke: ramp(),
-            stroke_width: 4.0,
+            stroke: Some(TextStroke {
+                paint: ramp(),
+                width: StrokeWidth::new(4.0).unwrap(),
+            }),
             ..upright(75.0)
         });
         let pixmap = render_to_pixmap(&scene, 2.0).expect("pixmap");
@@ -1604,13 +1607,10 @@ mod tests {
         let stroked = |size: f32, scale: f32| {
             let mut scene = Scene::new(200.0, 80.0);
             scene.add_text(Text {
-                stroke: Paint::Solid(Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
+                stroke: Some(TextStroke {
+                    paint: Paint::rgba(0, 0, 0, 255),
+                    width: StrokeWidth::ONE,
                 }),
-                stroke_width: 1.0,
                 transform: [scale, 0.0, 0.0, scale, 10.0, 10.0],
                 spec: TextSpec {
                     size,

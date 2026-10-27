@@ -530,6 +530,44 @@ impl ClipPath {
     }
 }
 
+/// The width of a stroke in the units of the scene, finite and above 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StrokeWidth(f32);
+
+// The width is finite, so the equality is total.
+impl Eq for StrokeWidth {}
+
+impl StrokeWidth {
+    /// The SVG default of `stroke-width`.
+    pub const ONE: Self = Self(1.0);
+
+    /// Returns `None` if `width` is not finite or not above 0. A front end
+    /// that takes `None` as no stroke draws the fill of a text with a NaN
+    /// width, while the wire decoder skips such a text.
+    pub const fn new(width: f32) -> Option<Self> {
+        if width.is_finite() && width > 0.0 {
+            Some(Self(width))
+        } else {
+            None
+        }
+    }
+
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+/// The stroke of a [`Text`]. A glyph is a closed smooth contour, so the
+/// stroke takes no cap, join or dash.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextStroke {
+    pub paint: Paint,
+    /// `transform` of the text moves the outline and leaves the width as
+    /// it is, so a text that the transform scales keeps the width of its
+    /// stroke.
+    pub width: StrokeWidth,
+}
+
 /// A text run. The glyphs are laid out in text space, as [`TextSpec`] says.
 /// `transform` maps them to the canvas in the convention of the PDF `cm`
 /// operator:
@@ -545,12 +583,8 @@ impl ClipPath {
 #[derive(Clone, Debug)]
 pub struct Text {
     pub fill: Paint,
-    pub stroke: Paint,
-    /// The width of the stroke in the units of the scene, as the width of a
-    /// [`Path`]. `transform` moves the outline and leaves the width as it
-    /// is, so a text that the transform scales keeps the width of its
-    /// stroke.
-    pub stroke_width: f32,
+    /// `None` draws no stroke.
+    pub stroke: Option<TextStroke>,
     pub transform: [f32; 6],
     pub spec: TextSpec,
     pub underline: bool,
@@ -562,16 +596,15 @@ impl Text {
         self.fill.is_visible()
     }
 
-    /// Returns `true` if the stroke marks the canvas, `false` otherwise. A
-    /// zero width draws nothing, whatever the paint.
-    pub fn draws_stroke(&self) -> bool {
-        self.stroke.is_visible() && self.stroke_width > 0.0
+    /// The stroke, or `None` if it does not mark the canvas.
+    pub fn drawn_stroke(&self) -> Option<&TextStroke> {
+        self.stroke.as_ref().filter(|s| s.paint.is_visible())
     }
 
     /// Returns `true` if every float of the text is finite, `false`
-    /// otherwise. A [`Paint`] is always finite.
+    /// otherwise. A [`Paint`] and a [`StrokeWidth`] are always finite.
     pub(crate) fn is_finite(&self) -> bool {
-        all_finite(&[self.stroke_width, self.spec.size]) && all_finite(&self.transform)
+        self.spec.size.is_finite() && all_finite(&self.transform)
     }
 }
 
@@ -579,8 +612,7 @@ impl Default for Text {
     fn default() -> Self {
         Self {
             fill: Paint::default(),
-            stroke: Paint::default(),
-            stroke_width: 0.0,
+            stroke: None,
             transform: translate(0.0, 0.0),
             spec: TextSpec::default(),
             underline: false,
@@ -2435,10 +2467,6 @@ mod tests {
             ..text.clone()
         });
         scene.add_text(Text {
-            stroke_width: nan,
-            ..text.clone()
-        });
-        scene.add_text(Text {
             transform: [1.0, 0.0, 0.0, 1.0, inf, 0.0],
             ..text
         });
@@ -2663,6 +2691,14 @@ mod tests {
         let eight = MiterLimit::new(8.0).unwrap();
         assert_eq!(eight.get(), 8.0);
         assert_eq!(LineJoin::miter(8.0), Some(LineJoin::Miter(eight)));
+    }
+
+    #[test]
+    fn a_stroke_width_is_finite_and_above_0() {
+        assert_eq!(StrokeWidth::new(0.5).map(StrokeWidth::get), Some(0.5));
+        for width in [0.0, -0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(StrokeWidth::new(width), None, "{width}");
+        }
     }
 
     #[test]
