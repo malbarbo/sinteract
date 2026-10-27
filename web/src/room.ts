@@ -209,12 +209,9 @@ export class Room {
         `the game takes ${min} players, and at most ${MAX_PLAYERS} play here`,
       );
     }
-    const players = this.#options.players?.(min, Math.min(max, MAX_PLAYERS)) ??
-      min;
-    if (
-      !Number.isInteger(players) || players < min || players > max ||
-      players > MAX_PLAYERS
-    ) {
+    const most = Math.min(max, MAX_PLAYERS);
+    const players = this.#options.players?.(min, most) ?? min;
+    if (!Number.isInteger(players) || players < min || players > most) {
       return fail(
         `the game takes from ${min} to ${max} players, and ${players} play here`,
       );
