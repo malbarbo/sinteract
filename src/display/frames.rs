@@ -13,9 +13,10 @@ use crate::scene::Scene;
 use crate::session::{Player, PlayerRange, Target};
 
 /// The frames of the worlds of a program, one world after another. A world
-/// of one player lets the first [`Frames::show`] open the stage, at the size
-/// of its scene. A world of several players takes its players from
+/// of one player lets the first [`Frames::show`] open the stage. A world of
+/// several players opens the stage and takes its players with
 /// [`Frames::open`], and shows each one its scene with [`Frames::show_to`].
+/// A window takes the size of the scene of its first show.
 /// [`Frames::close`] ends the stage.
 ///
 /// A show keeps the scene and draws nothing. The stage draws the scene of
@@ -59,13 +60,6 @@ pub enum ShowError {
 enum State {
     /// No world showed a scene yet, or the last world closed.
     Closed,
-    /// A world of this process has its players, and its first show opens
-    /// the stage at the size of its scene.
-    Ready {
-        range: PlayerRange,
-        options: StageOptions,
-        players: Vec<Player>,
-    },
     Open(Open),
     /// The stage did not open, so the world does not try again at each
     /// show.
@@ -101,30 +95,25 @@ impl Frames {
         }
     }
 
-    /// Returns `true` if a world has its players or a stage open, `false`
-    /// otherwise.
+    /// Returns `true` if a world has a stage open, `false` otherwise.
     pub fn is_open(&self) -> bool {
-        matches!(self.state, State::Ready { .. } | State::Open(_))
+        matches!(self.state, State::Open(_))
     }
 
     /// The players of the world, from the start of its stage. With no stage
     /// open, there are none.
     pub fn players(&self) -> &[Player] {
         match &self.state {
-            State::Ready { players, .. } => players,
             State::Open(open) => &open.players,
             State::Closed | State::Unavailable => &[],
         }
     }
 
-    /// Choose the players of a world that takes `players`, with `local`
+    /// Open the stage of a world that takes `players`, with `local`
     /// players on a display of this process, as [`StageOptions::players`]
-    /// says, and return each player with its nickname. In a session the
-    /// stage opens now, since the server chooses the players. Otherwise the
-    /// first [`Frames::show_to`] opens it at the size of its scene, and
-    /// `open` fails first if the players or the display rule out the stage.
-    /// The caller closes the stage of the last world first. When the stage
-    /// does not open, the world goes on without one, and each show returns
+    /// says, and return each player with its nickname. The caller closes
+    /// the stage of the last world first. When the stage does not open, the
+    /// world goes on without one, and each show returns
     /// [`ShowError::Unavailable`].
     pub fn open(
         &mut self,
@@ -136,28 +125,7 @@ impl Frames {
             players: local,
             ..(self.options)()
         };
-        if Stage::opens_session() {
-            return self.start(Stage::open_session(players));
-        }
-        match Stage::local_players(players, &options) {
-            Ok(count) => {
-                let all: Vec<_> = (1..=count.get())
-                    .filter_map(NonZeroU32::new)
-                    .map(Player)
-                    .collect();
-                let named = all.iter().map(|p| (*p, String::new())).collect();
-                self.state = State::Ready {
-                    range: players,
-                    options,
-                    players: all,
-                };
-                Ok(named)
-            }
-            Err(e) => {
-                self.state = State::Unavailable;
-                Err(e)
-            }
-        }
+        self.start(Stage::open(&self.title, players, options))
     }
 
     fn start(
@@ -191,24 +159,15 @@ impl Frames {
                 players: None,
                 ..(self.options)()
             };
-            let opened = Stage::open(&self.title, scene.width(), scene.height(), PLAYERS, options);
+            let opened = Stage::open(&self.title, PLAYERS, options);
             self.start(opened).map_err(ShowError::Open)?;
         }
         self.keep(Target::All, scene)
     }
 
     /// Keep `scene` for `player` until the next tick. The world took its
-    /// players from [`Frames::open`], and the first show opens the stage of
-    /// a world of this process at the size of `scene`.
+    /// players from [`Frames::open`].
     pub fn show_to(&mut self, player: Player, scene: Scene) -> Result<(), ShowError> {
-        match std::mem::replace(&mut self.state, State::Closed) {
-            State::Ready { range, options, .. } => {
-                let opened =
-                    Stage::open(&self.title, scene.width(), scene.height(), range, options);
-                self.start(opened).map_err(ShowError::Open)?;
-            }
-            state => self.state = state,
-        }
         self.keep(Target::Player(player), scene)
     }
 
@@ -459,22 +418,23 @@ mod tests {
 
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
-    fn open_chooses_the_players_and_opens_no_display() {
+    fn an_open_that_fails_leaves_the_world_with_no_stage() {
         let mut frames = Frames::new("test", || StageOptions {
             display: Native::Terminal,
             ..StageOptions::default()
         });
         let range = PlayerRange::new(1, 4).expect("1 to 4 is a range");
-        let ana = Player(NonZeroU32::MIN);
-        assert_eq!(frames.open(range, None).unwrap(), [(ana, String::new())]);
-        assert!(frames.is_open());
-        assert_eq!(frames.players(), [ana]);
-        frames.close();
         assert!(matches!(
             frames.open(range, NonZeroU32::new(2)),
             Err(StageError::TerminalPlayers)
         ));
+        assert!(!frames.is_open());
         assert!(frames.players().is_empty());
+        let ana = Player(NonZeroU32::MIN);
+        assert!(matches!(
+            frames.show_to(ana, Scene::new(10.0, 10.0)),
+            Err(ShowError::Unavailable)
+        ));
     }
 
     #[test]

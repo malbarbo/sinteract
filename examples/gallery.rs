@@ -201,14 +201,8 @@ fn pdf() -> Result<(), String> {
 /// stage, until the stage closes.
 fn stage() -> Result<(), String> {
     let players = PlayerRange::new(1, 8).expect("1 to 8 is a range");
-    let (mut stage, _players) = Stage::open(
-        "sinteract gallery",
-        WIDTH,
-        HEIGHT,
-        players,
-        StageOptions::default(),
-    )
-    .map_err(|e| e.to_string())?;
+    let (mut stage, _players) = Stage::open("sinteract gallery", players, StageOptions::default())
+        .map_err(|e| e.to_string())?;
     loop {
         match stage.wait(None) {
             Ok(StageEvent::Tick) => stage

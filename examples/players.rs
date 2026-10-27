@@ -38,7 +38,7 @@ const PLAYERS: PlayerRange = PlayerRange::new(1, 8).expect("1 to 8 is a range");
 
 fn main() -> ExitCode {
     let options = StageOptions::default();
-    let (mut stage, players) = match Stage::open("players", WIDTH, HEIGHT, PLAYERS, options) {
+    let (mut stage, players) = match Stage::open("players", PLAYERS, options) {
         Ok(opened) => opened,
         Err(e) => {
             eprintln!("players: {e}");

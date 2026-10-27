@@ -669,8 +669,9 @@ mesmo jogo roda sem servidor. O `StageOptions::players` pede mais
 jogadores, até `MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem
 esse mínimo sem pedir. Cada jogador ganha uma janela, com o número dele no
 título e um apelido vazio, e o usuário testa o jogo trocando o foco. Fechar
-qualquer janela encerra o `Stage`. O `Stage::opens_session` diz antes do
-`open` qual dos dois caminhos ele segue:
+qualquer janela encerra o `Stage`. A janela abre escondida, e o primeiro
+`present` dá a ela o tamanho da cena e a mostra. O `Stage::opens_session`
+diz antes do `open` qual dos dois caminhos ele segue:
 
 ```rust
 use sinteract::display::{Stage, StageEvent, StageOptions};
@@ -679,7 +680,7 @@ use sinteract::session::{PlayerRange, Target};
 
 let players = PlayerRange::new(1, 4).expect("1 a 4 é uma faixa");
 let options = StageOptions::default();
-let (mut stage, jogadores) = Stage::open("jogo", 400.0, 300.0, players, options)?;
+let (mut stage, jogadores) = Stage::open("jogo", players, options)?;
 mundo.start(&jogadores); // cada Player com o apelido, o jogador 1 primeiro
 loop {
     match stage.wait(None) {
@@ -727,12 +728,10 @@ as teclas e os pads, cada um com o seu jogador, o fechamento e o `Tick`,
 depois de mandar as cenas guardadas. Um mundo que desenha só no `Tick`
 mostra a cena no tick seguinte, com um quadro de atraso. Um
 mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
-vários jogadores pega os jogadores com o `open`, que devolve cada um com o
-apelido, e manda a cena de cada um com o `show_to`. Numa sessão o `open`
-já abre o stage, porque o servidor escolhe os jogadores. Fora dela o
-primeiro `show_to` abre o stage no tamanho da sua cena, e o `open` falha
-antes, sem abrir nada, quando os jogadores ou a tela não permitem o stage.
-O `players` dá os jogadores do mundo. Com o `Native::None`, fora de uma sessão, o
+vários jogadores abre o stage com o `open`, que devolve cada jogador com
+o apelido, e manda a cena de cada um com o `show_to`. A janela de cada
+jogador ganha o tamanho da cena do primeiro `show_to`. O `players` dá os
+jogadores do mundo. Com o `Native::None`, fora de uma sessão, o
 mundo roda sem tela, como num teste. O primeiro `show` devolve
 `ShowError::Open` com o `OpenError::Disabled`, os seguintes devolvem
 `ShowError::Unavailable`, e o mundo segue sem tela. Sem stage, o

@@ -41,7 +41,7 @@ fn main() -> ExitCode {
     // The example draws the same scene for every player, so it has no use
     // for the players.
     let options = StageOptions::default();
-    let mut stage = match Stage::open("engine", WIDTH, HEIGHT, PLAYERS, options) {
+    let mut stage = match Stage::open("engine", PLAYERS, options) {
         Ok((stage, _players)) => stage,
         Err(e) => {
             eprintln!("engine: {e}");

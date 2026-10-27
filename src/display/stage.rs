@@ -31,7 +31,7 @@ use crate::session::{PlayerRange, SESSION_VAR};
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let players = PlayerRange::new(1, 1).expect("1 to 1 is a range");
 /// let options = StageOptions::default();
-/// let (mut stage, _players) = Stage::open("My game", 400.0, 300.0, players, options)?;
+/// let (mut stage, _players) = Stage::open("My game", players, options)?;
 /// loop {
 ///     match stage.wait(None) {
 ///         Ok(StageEvent::Tick) => stage.present(Target::All, Scene::new(400.0, 300.0))?,
@@ -138,17 +138,16 @@ impl Stage {
     /// its nickname. With `SINTERACT_SESSION` in the environment, or in a
     /// build with no display of its own, it starts a session that reads
     /// the server from fd 3 and writes to it on fd 4, and blocks until the
-    /// start. Otherwise it opens a window of `width` by `height` logical
-    /// pixels with `title`, or the terminal, as `options` asks, with player
-    /// 1 and an empty nickname. With several players in `options`, it opens
-    /// a window for each one, with the number of the player in the title
-    /// and an empty nickname, and closing any of them ends the stage. A
-    /// second stage in a session fails with [`OpenError::Busy`] while the
-    /// first one owns fd 3 and fd 4.
+    /// start. Otherwise it opens a window with `title`, or the terminal, as
+    /// `options` asks, with player 1 and an empty nickname. With several
+    /// players in `options`, it opens a window for each one, with the
+    /// number of the player in the title and an empty nickname, and closing
+    /// any of them ends the stage. A window stays hidden until its first
+    /// present, which gives it the size of the scene. A second stage in a
+    /// session fails with [`OpenError::Busy`] while the first one owns fd 3
+    /// and fd 4.
     pub fn open(
         title: &str,
-        width: f32,
-        height: f32,
         players: PlayerRange,
         options: StageOptions,
     ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
@@ -157,9 +156,9 @@ impl Stage {
         }
         let local = Stage::local_players(players, &options)?;
         if local.get() > 1 {
-            return open_players(title, width, height, local, options.display);
+            return open_players(title, local, options.display);
         }
-        let display = open_local(title, width, height, options).map_err(StageError::Open)?;
+        let display = open_local(title, options).map_err(StageError::Open)?;
         let stage = Stage {
             inner: Inner::Local(display),
         };
@@ -170,7 +169,7 @@ impl Stage {
     /// `players`, from `options` or the fewest of the game. Fails, before
     /// any display opens, as [`Stage::open`] would for these players, or for
     /// a window when the session has no display.
-    pub(crate) fn local_players(
+    fn local_players(
         players: PlayerRange,
         options: &StageOptions,
     ) -> Result<NonZeroU32, StageError> {
@@ -196,9 +195,7 @@ impl Stage {
         }
     }
 
-    pub(crate) fn open_session(
-        players: PlayerRange,
-    ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
+    fn open_session(players: PlayerRange) -> Result<(Stage, Vec<(Player, String)>), StageError> {
         let (from_server, to_server) = take_session_fds()?;
         // No deadline until the start, since a read that times out there
         // loses the hello.
@@ -335,16 +332,15 @@ impl Stage {
 
 /// The display that `options` asks for.
 #[cfg(all(feature = "terminal", feature = "window"))]
-fn open_local(
-    title: &str,
-    width: f32,
-    height: f32,
-    options: StageOptions,
-) -> Result<Box<dyn Display>, OpenError> {
-    use super::{Terminal, Window, open_native};
+fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, OpenError> {
+    use super::{Terminal, Window};
+    let window = || Window::open_seats(&[title.to_owned()], None);
     match options.display {
-        Native::Auto => open_native(title, width, height, options.terminal),
-        Native::Window => Ok(Box::new(Window::open(title, width, height)?)),
+        Native::Auto => match window() {
+            Ok(window) => Ok(Box::new(window)),
+            Err(_) => Ok(Box::new(Terminal::open_with(options.terminal)?)),
+        },
+        Native::Window => Ok(Box::new(window()?)),
         Native::Terminal => Ok(Box::new(Terminal::open_with(options.terminal)?)),
         Native::None => Err(OpenError::Disabled),
     }
@@ -354,8 +350,6 @@ fn open_local(
 #[cfg(feature = "window")]
 fn open_players(
     title: &str,
-    width: f32,
-    height: f32,
     players: NonZeroU32,
     display: Native,
 ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
@@ -372,11 +366,10 @@ fn open_players(
         .iter()
         .map(|player| format!("{title} (player {})", player.number()))
         .collect();
-    let window =
-        super::Window::open_seats(&titles, Some((width, height))).map_err(|e| match e {
-            OpenError::NoWindow => StageError::NoWindowPlayers,
-            e => StageError::Open(e),
-        })?;
+    let window = super::Window::open_seats(&titles, None).map_err(|e| match e {
+        OpenError::NoWindow => StageError::NoWindowPlayers,
+        e => StageError::Open(e),
+    })?;
     let stage = Stage {
         inner: Inner::Players(Box::new(window), players),
     };
@@ -386,8 +379,6 @@ fn open_players(
 #[cfg(not(feature = "window"))]
 fn open_players(
     _title: &str,
-    _width: f32,
-    _height: f32,
     _players: NonZeroU32,
     _display: Native,
 ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
@@ -397,12 +388,7 @@ fn open_players(
 }
 
 #[cfg(not(all(feature = "terminal", feature = "window")))]
-fn open_local(
-    _title: &str,
-    _width: f32,
-    _height: f32,
-    _options: StageOptions,
-) -> Result<Box<dyn Display>, OpenError> {
+fn open_local(_title: &str, _options: StageOptions) -> Result<Box<dyn Display>, OpenError> {
     Err(OpenError::Platform("this build has no display".into()))
 }
 
@@ -776,7 +762,7 @@ pub(super) mod tests {
             display: Native::None,
             ..StageOptions::default()
         };
-        let result = Stage::open("test", 100.0, 100.0, players, options);
+        let result = Stage::open("test", players, options);
         assert!(matches!(result, Err(StageError::Open(OpenError::Disabled))));
     }
 
@@ -788,7 +774,7 @@ pub(super) mod tests {
             players: local.and_then(NonZeroU32::new),
             ..StageOptions::default()
         };
-        Stage::open("test", 100.0, 100.0, range, options).map(|(stage, _)| stage)
+        Stage::open("test", range, options).map(|(stage, _)| stage)
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]
@@ -819,7 +805,7 @@ pub(super) mod tests {
             display: Native::Terminal,
             ..StageOptions::default()
         };
-        let result = Stage::open("test", 100.0, 100.0, range, options);
+        let result = Stage::open("test", range, options);
         assert!(matches!(result, Err(StageError::TerminalPlayers)));
     }
 }

@@ -56,10 +56,10 @@ A game runs on a `Stage`, which keeps one loop for two cases. When a
 server runs the game, the stage opens a session with the server, reads
 the input of each player and writes the frames for the players. When
 nobody runs it, the stage opens a window or the terminal, and the user is
-player 1:
+player 1. A window takes the size of the scene of its first present:
 
 ```rust,ignore
-let (mut stage, _players) = Stage::open("My game", 400.0, 300.0, players, options)?;
+let (mut stage, _players) = Stage::open("My game", players, options)?;
 loop {
     match stage.wait(None) {
         Ok(StageEvent::Tick) => stage.present(Target::All, draw())?,
