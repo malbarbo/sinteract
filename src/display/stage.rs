@@ -155,13 +155,7 @@ impl Stage {
         if Stage::opens_session() {
             return Stage::open_session(players);
         }
-        let local = options.players.unwrap_or(players.min());
-        if !players.contains(local.get() as usize) || local.get() > MAX_LOCAL_PLAYERS {
-            return Err(StageError::Players {
-                range: players,
-                players: local,
-            });
-        }
+        let local = Stage::local_players(players, &options)?;
         if local.get() > 1 {
             return open_players(title, width, height, local, options.display);
         }
@@ -170,6 +164,36 @@ impl Stage {
             inner: Inner::Local(display),
         };
         Ok((stage, vec![(Player::LOCAL, String::new())]))
+    }
+
+    /// The players on a display of this process for a game that takes
+    /// `players`, from `options` or the fewest of the game. Fails, before
+    /// any display opens, as [`Stage::open`] would for these players, or for
+    /// a window when the session has no display.
+    pub(crate) fn local_players(
+        players: PlayerRange,
+        options: &StageOptions,
+    ) -> Result<NonZeroU32, StageError> {
+        let local = options.players.unwrap_or(players.min());
+        if !players.contains(local.get() as usize) || local.get() > MAX_LOCAL_PLAYERS {
+            return Err(StageError::Players {
+                range: players,
+                players: local,
+            });
+        }
+        #[cfg(feature = "window")]
+        let window = super::window::can_open();
+        #[cfg(not(feature = "window"))]
+        let window = false;
+        match options.display {
+            Native::None => Err(StageError::Open(OpenError::Disabled)),
+            Native::Terminal if local.get() > 1 => Err(StageError::TerminalPlayers),
+            Native::Auto | Native::Window if local.get() > 1 && !window => {
+                Err(StageError::NoWindowPlayers)
+            }
+            Native::Window if !window => Err(StageError::Open(OpenError::NoWindow)),
+            _ => Ok(local),
+        }
     }
 
     fn open_session(players: PlayerRange) -> Result<(Stage, Vec<(Player, String)>), StageError> {

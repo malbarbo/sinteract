@@ -526,13 +526,13 @@ fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
 /// any thread, and macOS, which cannot, gets an error. A second build means
 /// that another thread built the loop.
 fn build_loop() -> Result<EventLoop<()>, OpenError> {
+    if !can_open() {
+        return Err(OpenError::NoWindow);
+    }
     let mut builder = EventLoop::<()>::with_user_event();
     #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
     {
         use winit::platform::x11::EventLoopBuilderExtX11;
-        if !has_display(|name| std::env::var_os(name)) {
-            return Err(OpenError::NoWindow);
-        }
         builder.with_any_thread(true);
     }
     #[cfg(windows)]
@@ -558,6 +558,15 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
     })?;
     event_loop.set_control_flow(ControlFlow::Wait);
     Ok(event_loop)
+}
+
+/// Returns `true` if the session has a display for a window, `false`
+/// otherwise.
+pub(crate) fn can_open() -> bool {
+    #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+    return has_display(|name| std::env::var_os(name));
+    #[cfg(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))))]
+    true
 }
 
 /// Returns `true` if `var` names a Wayland or X11 display, `false` otherwise.
