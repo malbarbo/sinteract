@@ -372,10 +372,11 @@ fn open_players(
         .iter()
         .map(|player| format!("{title} (player {})", player.number()))
         .collect();
-    let window = super::Window::open_seats(&titles, width, height).map_err(|e| match e {
-        OpenError::NoWindow => StageError::NoWindowPlayers,
-        e => StageError::Open(e),
-    })?;
+    let window =
+        super::Window::open_seats(&titles, Some((width, height))).map_err(|e| match e {
+            OpenError::NoWindow => StageError::NoWindowPlayers,
+            e => StageError::Open(e),
+        })?;
     let stage = Stage {
         inner: Inner::Players(Box::new(window), players),
     };

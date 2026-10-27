@@ -1,6 +1,7 @@
 //! Window display of a [`crate::scene::Scene`] through winit and softbuffer.
 //!
-//! The window opens with the logical size of the scene, and every present
+//! The window opens with the logical size of a scene, the one of the open or,
+//! for the windows of a stage, the one of the first present. Every present
 //! rasterizes at the physical size of the surface, letterboxed, so HiDPI and
 //! a resize keep the aspect ratio.
 //!
@@ -67,6 +68,9 @@ struct Seat {
     surface: Surface<Rc<WinitWindow>, Rc<WinitWindow>>,
     window: Rc<WinitWindow>,
     app: App,
+    /// The window waits for its first present, which gives it a size and
+    /// shows it.
+    hidden: bool,
     /// Kept across frames, so a frame reuses the pixmap and the clip masks.
     renderer: PixmapRenderer,
     /// The scene of the last present, drawn again when the platform asks.
@@ -89,32 +93,37 @@ impl Window {
     /// and with [`OpenError::Platform`] when the platform has no window for
     /// us, or on a thread other than the one of the first window.
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
-        Self::open_seats(&[title.to_owned()], width, height)
+        Self::open_seats(&[title.to_owned()], Some((width, height)))
     }
 
-    /// Open a window of `width` by `height` logical pixels for each title,
-    /// side by side, and fail as [`Window::open`] does. The input of the
-    /// window at index k comes from seat k.
+    /// Open a window for each title, side by side, and fail as
+    /// [`Window::open`] does. With `size`, each window shows at once with
+    /// that size in logical pixels. Without it, each window stays hidden
+    /// until its first present, which gives it the size of its scene. The
+    /// input of the window at index k comes from seat k.
     pub(crate) fn open_seats(
         titles: &[String],
-        width: f32,
-        height: f32,
+        size: Option<(f32, f32)>,
     ) -> Result<Self, OpenError> {
         let mut lent = Lent::take()?;
         let proxy = lent.proxy.clone();
         let inbox = Inbox::new(Some(Arc::new(move || {
             let _ = proxy.send_event(());
         })));
-        let (w, h) = frame_px(width, height);
+        let several = titles.len() > 1;
         let windows = (0..)
             .zip(titles)
             .map(|(seat, title)| {
-                let mut attrs = WindowAttributes::default()
-                    .with_title(title)
-                    .with_inner_size(LogicalSize::new(w as f64, h as f64));
-                if titles.len() > 1 {
-                    let x = f64::from(seat) * (w as f64 + Self::GAP);
-                    attrs = attrs.with_position(LogicalPosition::new(x, 0.0));
+                let mut attrs = WindowAttributes::default().with_title(title);
+                match size {
+                    Some((width, height)) => {
+                        let (size, position) = layout(seat as usize, several, width, height);
+                        attrs = attrs.with_inner_size(size);
+                        if let Some(position) = position {
+                            attrs = attrs.with_position(position);
+                        }
+                    }
+                    None => attrs = attrs.with_visible(false),
                 }
                 (attrs, inbox.sender_without_waker(seat))
             })
@@ -141,6 +150,7 @@ impl Window {
                 surface,
                 window,
                 app,
+                hidden: size.is_none(),
                 renderer: PixmapRenderer::default(),
                 last: None,
             })
@@ -208,6 +218,9 @@ impl Window {
             debug_assert!(false, "no seat {seat}");
             return Ok(());
         };
+        if target.hidden {
+            target.reveal(seat, several, &scene);
+        }
         target.app.dirty = false;
         target.last = Some(Last {
             scene,
@@ -289,6 +302,20 @@ impl Drop for Window {
 }
 
 impl Seat {
+    /// Give the hidden window of `seat` the size of `scene`, and show it.
+    fn reveal(&mut self, seat: usize, several: bool, scene: &Scene) {
+        self.hidden = false;
+        let (size, position) = layout(seat, several, scene.width(), scene.height());
+        // A platform that resizes later sends a Resized, which draws again.
+        if let Some(size) = self.window.request_inner_size(size) {
+            self.app.size = size;
+        }
+        if let Some(position) = position {
+            self.window.set_outer_position(position);
+        }
+        self.window.set_visible(true);
+    }
+
     /// Draw `last` now, or when the frame callback of Wayland for the
     /// frame before arrives. A hidden window gets no callback, so it draws
     /// nothing, and the ticks keep their rate.
@@ -357,6 +384,21 @@ struct Last {
     scene: Scene,
     /// `scene` waits for the frame callback of Wayland.
     unshown: bool,
+}
+
+/// The size of the window of `seat` for a scene of `width` by `height`
+/// logical pixels, and its place, side by side with the other seats, when
+/// there are `several`.
+fn layout(
+    seat: usize,
+    several: bool,
+    width: f32,
+    height: f32,
+) -> (LogicalSize<f64>, Option<LogicalPosition<f64>>) {
+    let (w, h) = frame_px(width, height);
+    let x = seat as f64 * (w as f64 + Window::GAP);
+    let position = several.then(|| LogicalPosition::new(x, 0.0));
+    (LogicalSize::new(w as f64, h as f64), position)
 }
 
 fn new_surface(
