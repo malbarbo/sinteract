@@ -3,6 +3,7 @@
 //! state changes, and reads only the keys, the pads and the close.
 
 use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroU32;
 use std::thread;
 use std::time::Instant;
 
@@ -82,7 +83,8 @@ const PLAYERS: PlayerRange = PlayerRange::new(1, 1).expect("1 to 1 is a range");
 
 impl Frames {
     /// The frames of a program, with `title` on the window, and the
-    /// options of each stage from `options`.
+    /// options of each stage from `options`. Each open sets the players of
+    /// the options itself.
     pub fn new(title: impl Into<String>, options: impl FnMut() -> StageOptions + 'static) -> Self {
         Frames {
             title: title.into(),
@@ -107,7 +109,9 @@ impl Frames {
     }
 
     /// Open the stage of a world that takes `players`, at `width` by
-    /// `height` logical pixels, and return each player with its nickname.
+    /// `height` logical pixels, with `local` players on a display of this
+    /// process, as [`StageOptions::players`] says, and return each player
+    /// with its nickname.
     /// The caller closes the stage of the last world first. When the stage
     /// does not open, the world goes on without one, and each show returns
     /// [`ShowError::Unavailable`].
@@ -116,9 +120,13 @@ impl Frames {
         width: f32,
         height: f32,
         players: PlayerRange,
+        local: Option<NonZeroU32>,
     ) -> Result<Vec<(Player, String)>, StageError> {
         debug_assert!(!self.is_open(), "the stage of the last world is open");
-        let options = (self.options)();
+        let options = StageOptions {
+            players: local,
+            ..(self.options)()
+        };
         match Stage::open(&self.title, width, height, players, options) {
             Ok((stage, players)) => {
                 self.state = State::Open(Open {
@@ -142,7 +150,7 @@ impl Frames {
     /// stage of one player first if the world has none.
     pub fn show(&mut self, scene: Scene) -> Result<(), ShowError> {
         if let State::Closed = self.state {
-            self.open(scene.width(), scene.height(), PLAYERS)
+            self.open(scene.width(), scene.height(), PLAYERS, None)
                 .map_err(ShowError::Open)?;
         }
         self.keep(Target::All, scene)
@@ -303,10 +311,9 @@ impl std::fmt::Debug for Frames {
 mod tests {
     use std::time::Duration;
 
-    use std::num::NonZeroU32;
-
     use super::*;
     use crate::display::stage::tests::{Server, session};
+    use crate::display::{Native, OpenError};
     use crate::event::{Modifiers, PadButton};
     use crate::wire::testing::Message;
 
@@ -384,6 +391,20 @@ mod tests {
             })
             .collect();
         assert_eq!(players, [(Some(NonZeroU32::MIN), 20.0)]);
+    }
+
+    #[cfg(all(feature = "terminal", feature = "window"))]
+    #[test]
+    fn a_show_opens_one_player_whatever_the_options_say() {
+        let mut frames = Frames::new("test", || StageOptions {
+            display: Native::None,
+            players: NonZeroU32::new(2),
+            ..StageOptions::default()
+        });
+        assert!(matches!(
+            frames.show(Scene::new(10.0, 10.0)),
+            Err(ShowError::Open(StageError::Open(OpenError::Disabled)))
+        ));
     }
 
     #[test]
