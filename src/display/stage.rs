@@ -242,10 +242,10 @@ impl Stage {
     /// Show `scene` to `to`. A player that the stage does not have fails
     /// with [`PresentError::NoPlayer`], here and in a session. A window of
     /// each player shows the last frame to all or to that player at the
-    /// next wait, and a draw that fails there fails the next present. A
-    /// session writes the frame, with each image that the server does not
-    /// have, and still writes after the end of the stream of the server,
-    /// so the views get the last frames.
+    /// next wait, and a draw that fails there fails the next present,
+    /// which still keeps its scene. A session writes the frame, with each
+    /// image that the server does not have, and still writes after the
+    /// end of the stream of the server, so the views get the last frames.
     pub fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
         let has_player = || match to {
             Target::Player(player) if player.number() > self.players => {
@@ -458,14 +458,11 @@ struct Players {
 #[cfg(feature = "window")]
 impl Players {
     /// Keep `scene` for the seats of `to` until the next wait. A draw
-    /// that failed at the last wait fails this present, which keeps
-    /// nothing.
+    /// that failed at the last wait fails this present, which still keeps
+    /// `scene`.
     fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
         if !self.window.is_open() {
             return Err(PresentError::Closed);
-        }
-        if let Some(e) = self.failed.take() {
-            return Err(e);
         }
         let scene = Rc::new(scene);
         match to {
@@ -478,7 +475,7 @@ impl Players {
                 *pending = Some(scene);
             }
         }
-        Ok(())
+        self.failed.take().map_or(Ok(()), Err)
     }
 
     /// Draw the scenes that wait, and block until the next event.

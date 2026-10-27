@@ -672,11 +672,12 @@ título e um apelido vazio, e o usuário testa o jogo trocando o foco. Fechar
 qualquer janela encerra o `Stage`. A janela abre escondida, e o primeiro
 `present` dá a ela o tamanho da cena e a mostra. Com vários jogadores, a
 última cena de cada janela sai no próximo `wait`, então uma cena para
-todos seguida de uma para um jogador no mesmo tick mostra a dele, e um
-desenho que falha no `wait` faz falhar o `present` seguinte. Um `present` para um
-jogador que o `Stage` não tem devolve `PresentError::NoPlayer`, tanto
-aqui quanto numa sessão, e nada sai. O `Stage::opens_session`
-diz antes do `open` qual dos dois caminhos ele segue:
+todos seguida de uma para um jogador no mesmo tick mostra a dele. Um
+desenho que falha no `wait` faz falhar o `present` seguinte, que guarda
+a cena mesmo assim. Um `present` para um jogador que o `Stage` não tem
+devolve `PresentError::NoPlayer`, tanto aqui quanto numa sessão, e nada
+sai. O `Stage::opens_session` diz antes do `open` qual dos dois caminhos
+ele segue:
 
 ```rust
 use sinteract::display::{Stage, StageEvent, StageOptions};
