@@ -210,15 +210,12 @@ impl Window {
 
     /// Show `scene` in the window of each player of `to`, where player k
     /// has seat k - 1, and fail with [`PresentError::NoPlayer`] for a
-    /// player with no window. One window draws it now. Several windows
-    /// draw at the next wait, so a seat that gets a scene for every seat
-    /// and then one of its own in the same tick shows only its own.
-    pub(crate) fn present_to(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
+    /// player with no window.
+    pub(crate) fn present_to(&mut self, to: Target, scene: Rc<Scene>) -> Result<(), PresentError> {
         let Some(active) = self.active.as_mut() else {
             return Err(PresentError::Closed);
         };
         let several = active.seats.len() > 1;
-        let scene = Rc::new(scene);
         let drawn = match to {
             Target::All => (0..)
                 .zip(&mut active.seats)
@@ -236,6 +233,11 @@ impl Window {
             self.inbox.take_redraw();
         }
         drawn
+    }
+
+    /// Returns `true` if the windows are open, `false` after the close.
+    pub(crate) fn is_open(&self) -> bool {
+        self.active.is_some()
     }
 
     /// Block until the next event, with the seat of an input, as
@@ -266,7 +268,7 @@ impl Window {
 
 impl super::Display for Window {
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        self.present_to(Target::All, scene)
+        self.present_to(Target::All, Rc::new(scene))
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
@@ -302,8 +304,8 @@ impl Drop for Window {
 }
 
 impl Seat {
-    /// Keep `scene` as the last one of the window of `seat`, and draw it
-    /// now unless the window is one of `several`.
+    /// Keep `scene` as the last one of the window of `seat`, one of
+    /// `several` or not, and draw it.
     fn keep(&mut self, seat: usize, several: bool, scene: Rc<Scene>) -> Result<(), PresentError> {
         if self.hidden {
             self.reveal(seat, several, &scene);
@@ -311,9 +313,9 @@ impl Seat {
         self.app.dirty = false;
         self.last = Some(Last {
             scene,
-            unshown: several,
+            unshown: false,
         });
-        if several { Ok(()) } else { self.show() }
+        self.show()
     }
 
     /// Give the hidden window of `seat` the size of `scene`, and show it.

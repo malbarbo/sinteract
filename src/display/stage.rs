@@ -234,23 +234,18 @@ impl Stage {
                 }),
             },
             #[cfg(feature = "window")]
-            Inner::Players(window) => match window.wait_seated(deadline)? {
-                super::inbox::Seated::Tick => Ok(StageEvent::Tick),
-                super::inbox::Seated::Input(seat, event) => Ok(StageEvent::Input {
-                    player: Player(NonZeroU32::MIN.saturating_add(seat)),
-                    event,
-                }),
-            },
+            Inner::Players(players) => players.wait(deadline),
             Inner::Remote(remote) => remote.wait(deadline),
         }
     }
 
     /// Show `scene` to `to`. A player that the stage does not have fails
     /// with [`PresentError::NoPlayer`], here and in a session. A window of
-    /// each player shows the frames to all and to that player. A session
-    /// writes the frame, with each image that the server does not have,
-    /// and still writes after the end of the stream of the server, so the
-    /// views get the last frames.
+    /// each player shows the last frame to all or to that player at the
+    /// next wait, and a draw that fails there fails the next present. A
+    /// session writes the frame, with each image that the server does not
+    /// have, and still writes after the end of the stream of the server,
+    /// so the views get the last frames.
     pub fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
         let has_player = || match to {
             Target::Player(player) if player.number() > self.players => {
@@ -264,7 +259,7 @@ impl Stage {
                 display.present(scene)
             }
             #[cfg(feature = "window")]
-            Inner::Players(window) => window.present_to(to, scene),
+            Inner::Players(players) => players.present(to, scene),
             Inner::Remote(remote) => {
                 has_player()?;
                 let session = remote.session.as_mut().ok_or(PresentError::Closed)?;
@@ -309,7 +304,7 @@ impl Stage {
         match &self.inner {
             Inner::Local(display) => display.tick_rate(),
             #[cfg(feature = "window")]
-            Inner::Players(window) => window.tick_rate(),
+            Inner::Players(players) => players.window.tick_rate(),
             Inner::Remote(remote) => remote.tick_rate,
         }
     }
@@ -320,7 +315,7 @@ impl Stage {
         match &mut self.inner {
             Inner::Local(display) => display.close(),
             #[cfg(feature = "window")]
-            Inner::Players(window) => window.close(),
+            Inner::Players(players) => players.window.close(),
             Inner::Remote(remote) => remote.close(),
         }
     }
@@ -363,7 +358,11 @@ fn open_players(
         e => StageError::Open(e),
     })?;
     let stage = Stage {
-        inner: Inner::Players(Box::new(window)),
+        inner: Inner::Players(Box::new(Players {
+            window,
+            pending: vec![None; players.get() as usize],
+            failed: None,
+        })),
         players,
     };
     Ok((stage, all))
@@ -438,11 +437,68 @@ impl fmt::Debug for Stage {
 
 enum Inner {
     Local(Box<dyn Display>),
-    /// A window for each of the players.
     #[cfg(feature = "window")]
-    Players(Box<super::Window>),
+    Players(Box<Players>),
     // Boxed, since a session holds its buffers inline.
     Remote(Box<Remote>),
+}
+
+/// A window for each of the players.
+#[cfg(feature = "window")]
+struct Players {
+    window: super::Window,
+    /// The last scene of each seat since the last wait, which draws at
+    /// the next wait. A seat that gets a scene for every seat and then
+    /// one of its own in the same tick draws only its own.
+    pending: Vec<Option<Rc<Scene>>>,
+    /// The failure of a draw at the last wait, for the next present.
+    failed: Option<PresentError>,
+}
+
+#[cfg(feature = "window")]
+impl Players {
+    /// Keep `scene` for the seats of `to` until the next wait. A draw
+    /// that failed at the last wait fails this present, which keeps
+    /// nothing.
+    fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
+        if !self.window.is_open() {
+            return Err(PresentError::Closed);
+        }
+        if let Some(e) = self.failed.take() {
+            return Err(e);
+        }
+        let scene = Rc::new(scene);
+        match to {
+            Target::All => self.pending.fill(Some(scene)),
+            Target::Player(player) => {
+                let seat = player.number().get() as usize - 1;
+                let Some(pending) = self.pending.get_mut(seat) else {
+                    return Err(PresentError::NoPlayer(player));
+                };
+                *pending = Some(scene);
+            }
+        }
+        Ok(())
+    }
+
+    /// Draw the scenes that wait, and block until the next event.
+    fn wait(&mut self, deadline: Option<Instant>) -> Result<StageEvent, Interrupt> {
+        let players = (1..).map_while(NonZeroU32::new).map(Player);
+        for (player, pending) in players.zip(&mut self.pending) {
+            if let Some(scene) = pending.take()
+                && let Err(e) = self.window.present_to(Target::Player(player), scene)
+            {
+                self.failed.get_or_insert(e);
+            }
+        }
+        match self.window.wait_seated(deadline)? {
+            super::inbox::Seated::Tick => Ok(StageEvent::Tick),
+            super::inbox::Seated::Input(seat, event) => Ok(StageEvent::Input {
+                player: Player(NonZeroU32::MIN.saturating_add(seat)),
+                event,
+            }),
+        }
+    }
 }
 
 /// A session with a server, on fd 3 and fd 4.
