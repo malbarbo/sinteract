@@ -727,9 +727,12 @@ as teclas e os pads, cada um com o seu jogador, o fechamento e o `Tick`,
 depois de mandar as cenas guardadas. Um mundo que desenha só no `Tick`
 mostra a cena no tick seguinte, com um quadro de atraso. Um
 mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
-vários jogadores abre o stage com o `open`, que devolve os jogadores com
-os apelidos, e manda a cena de cada um com o `show_to`. O `players` dá os
-jogadores do stage aberto. Com o `Native::None`, fora de uma sessão, o
+vários jogadores pega os jogadores com o `open`, que devolve cada um com o
+apelido, e manda a cena de cada um com o `show_to`. Numa sessão o `open`
+já abre o stage, porque o servidor escolhe os jogadores. Fora dela o
+primeiro `show_to` abre o stage no tamanho da sua cena, e o `open` falha
+antes, sem abrir nada, quando os jogadores ou a tela não permitem o stage.
+O `players` dá os jogadores do mundo. Com o `Native::None`, fora de uma sessão, o
 mundo roda sem tela, como num teste. O primeiro `show` devolve
 `ShowError::Open` com o `OpenError::Disabled`, os seguintes devolvem
 `ShowError::Unavailable`, e o mundo segue sem tela. Sem stage, o

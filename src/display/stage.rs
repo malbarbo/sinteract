@@ -196,7 +196,9 @@ impl Stage {
         }
     }
 
-    fn open_session(players: PlayerRange) -> Result<(Stage, Vec<(Player, String)>), StageError> {
+    pub(crate) fn open_session(
+        players: PlayerRange,
+    ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
         let (from_server, to_server) = take_session_fds()?;
         // No deadline until the start, since a read that times out there
         // loses the hello.
