@@ -936,6 +936,7 @@ mod tests {
                 0.0,
                 vec![stop(0.0, 255, 0), stop(1.0, 0, 255)],
             )
+            .unwrap()
         };
         let upright = |cx| {
             let spec = TextSpec {
@@ -1432,7 +1433,7 @@ mod tests {
         };
         let stops = vec![stop(0.0, 10), stop(1.0, 200)];
         let style = PathStyle {
-            fill: Paint::radial(10.0, 10.0, 0.0, stops),
+            fill: Paint::radial(10.0, 10.0, 0.0, stops).unwrap(),
             ..PathStyle::default()
         };
         let mut scene = Scene::new(20.0, 20.0);
@@ -1453,7 +1454,7 @@ mod tests {
             },
         };
         let style = PathStyle {
-            fill: Paint::linear(-3e38, 0.0, 3e38, 0.0, vec![stop(0.0, 0), stop(1.0, 200)]),
+            fill: Paint::linear(-3e38, 0.0, 3e38, 0.0, vec![stop(0.0, 0), stop(1.0, 200)]).unwrap(),
             ..PathStyle::default()
         };
         let mut scene = Scene::new(20.0, 20.0);
@@ -1675,7 +1676,8 @@ mod tests {
                         },
                     },
                 ],
-            ),
+            )
+            .unwrap(),
             ..PathStyle::default()
         };
         scene.add_path(rect(style, 0.0, 0.0, 40.0, 10.0));
@@ -1720,7 +1722,8 @@ mod tests {
                         },
                     },
                 ],
-            ),
+            )
+            .unwrap(),
             ..PathStyle::default()
         };
         scene.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));
@@ -1764,6 +1767,7 @@ mod tests {
                     },
                 ],
             )
+            .unwrap()
             .with_spread(crate::scene::SpreadMode::Reflect),
             ..PathStyle::default()
         };

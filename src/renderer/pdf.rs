@@ -1258,7 +1258,7 @@ mod tests {
     fn linear_gradient_emits_axial_shading() {
         let mut scene = Scene::new(50.0, 50.0);
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
-        let style = gradient_fill(Paint::linear(0.0, 0.0, 50.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 50.0, 0.0, stops).unwrap());
         scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
         let s = pdf_text(&scene);
         // ShadingType 2 is axial.
@@ -1276,7 +1276,7 @@ mod tests {
     fn radial_gradient_emits_radial_shading() {
         let mut scene = Scene::new(50.0, 50.0);
         let stops = vec![stop(0.0, opaque(255, 255, 255)), stop(1.0, opaque(0, 0, 0))];
-        let style = gradient_fill(Paint::radial(25.0, 25.0, 20.0, stops));
+        let style = gradient_fill(Paint::radial(25.0, 25.0, 20.0, stops).unwrap());
         scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
         let s = pdf_text(&scene);
         // ShadingType 3 is radial.
@@ -1291,7 +1291,7 @@ mod tests {
             stop(0.5, opaque(0, 255, 0)),
             stop(1.0, opaque(0, 0, 255)),
         ];
-        let style = gradient_fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops).unwrap());
         scene.add_path(rect(style, 0.0, 0.0, 60.0, 10.0));
         let s = pdf_text(&scene);
         // FunctionType 3 is stitching.
@@ -1306,7 +1306,7 @@ mod tests {
     fn a_gradient_pattern_maps_pixels_to_the_page() {
         let mut scene = Scene::new(100.0, 40.0);
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
-        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap());
         scene.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
         let s = pdf_text(&scene);
         // The base transform of the content stream, for a page 40 pixels tall.
@@ -1318,7 +1318,7 @@ mod tests {
         let mut scene = Scene::new(100.0, 40.0);
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, opaque(0, 0, 255))];
         scene.layer(0.5, |layer| {
-            let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops));
+            let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap());
             layer.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
         });
         let s = pdf_text(&scene);
@@ -1346,7 +1346,7 @@ mod tests {
             ..opaque(0, 0, 255)
         };
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, clear)];
-        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap());
         scene.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
         let s = pdf_text(&scene);
         assert!(s.contains("/Sm0 gs"), "{s}");
@@ -1365,7 +1365,7 @@ mod tests {
             ..opaque(r, g, b)
         };
         let stops = vec![stop(0.0, half(255, 0, 0)), stop(1.0, half(0, 0, 255))];
-        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap());
         scene.add_path(rect(style, 0.0, 0.0, 100.0, 40.0));
         let s = pdf_text(&scene);
         assert!(s.contains("/ca 0.5"), "{s}");
@@ -1383,7 +1383,7 @@ mod tests {
         let style = PathStyle {
             stroke: Paint::rgba(0, 0, 0, 255),
             stroke_width: 2.0,
-            ..gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops))
+            ..gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap())
         };
         scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
         let s = pdf_text(&scene);
@@ -1536,7 +1536,7 @@ mod tests {
             stop(0.8, opaque(0, 255, 0)),
             stop(0.2, opaque(0, 0, 255)),
         ];
-        let style = gradient_fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops));
+        let style = gradient_fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops).unwrap());
         scene.add_path(rect(style, 0.0, 0.0, 60.0, 10.0));
         let s = pdf_text(&scene);
         // The third stop moved up to the second, so both bounds are 0.8.

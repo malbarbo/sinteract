@@ -285,7 +285,8 @@ mod tests {
                                 a: 128,
                             },
                         }],
-                    ),
+                    )
+                    .unwrap(),
                     stroke_width: 1.0,
                     underline: true,
                     ..text
@@ -1470,7 +1471,8 @@ mod tests {
                     },
                 },
             ],
-        );
+        )
+        .unwrap();
         scene.add_path(
             Path::builder(
                 PathStyle {
@@ -1523,7 +1525,8 @@ mod tests {
                     },
                 },
             ],
-        );
+        )
+        .unwrap();
         scene.add_path(
             Path::builder(
                 PathStyle {
@@ -1577,6 +1580,7 @@ mod tests {
                 },
             ],
         )
+        .unwrap()
         .with_spread(SpreadMode::Reflect);
         scene.add_path(
             Path::builder(
@@ -1610,6 +1614,7 @@ mod tests {
                 },
             ],
         )
+        .unwrap()
         .with_spread(SpreadMode::Repeat);
         scene.add_path(
             Path::builder(
@@ -1800,8 +1805,8 @@ mod tests {
     #[test]
     fn an_element_that_holds_a_non_finite_float_is_skipped() {
         // Every element but the last two marks a float that becomes NaN on
-        // the wire: a coordinate, a stroke width, a clip, a path inside a
-        // clip, a text and a bitmap. The clip around a good path and the path
+        // the wire: a coordinate, a stroke width, a gradient, a clip, a path
+        // inside a clip, a text and a bitmap. The clip around a good path and the path
         // at (9, 9) are left.
         let mark = 777.0;
         let line = |style, x| Path::builder(style, 0.0, 0.0).line_to(x, 1.0).build();
@@ -1817,6 +1822,13 @@ mod tests {
         scene.add_path(line(
             PathStyle {
                 stroke_width: mark,
+                ..PathStyle::default()
+            },
+            1.0,
+        ));
+        scene.add_path(line(
+            PathStyle {
+                fill: Paint::radial(0.0, 0.0, mark, vec![Stop::default()]).unwrap(),
                 ..PathStyle::default()
             },
             1.0,
@@ -1868,7 +1880,7 @@ mod tests {
             },
         ];
         let style = PathStyle {
-            fill: Paint::linear(0.0, 0.0, 10.0, 0.0, stops),
+            fill: Paint::linear(0.0, 0.0, 10.0, 0.0, stops).unwrap(),
             ..PathStyle::default()
         };
         let mut scene = Scene::new(10.0, 10.0);

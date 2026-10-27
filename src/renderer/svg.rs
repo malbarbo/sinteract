@@ -887,6 +887,7 @@ mod tests {
                 },
             ],
         )
+        .unwrap()
         .with_spread(SpreadMode::Reflect);
         let style = PathStyle {
             fill: gradient,
@@ -1033,7 +1034,7 @@ mod tests {
             },
         ];
         let node = Text {
-            fill: Paint::linear(0.0, 0.0, 60.0, 0.0, stops),
+            fill: Paint::linear(0.0, 0.0, 60.0, 0.0, stops).unwrap(),
             transform: [2.0, 0.0, 0.0, 2.0, 10.0, 4.0],
             ..text("ab")
         };
@@ -1087,7 +1088,7 @@ mod tests {
                 .build();
             scene.clip(clip, |clipped| {
                 let style = PathStyle {
-                    fill: Paint::radial(20.0, 20.0, 10.0, stops),
+                    fill: Paint::radial(20.0, 20.0, 10.0, stops).unwrap(),
                     ..PathStyle::default()
                 };
                 clipped.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));

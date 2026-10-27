@@ -40,15 +40,10 @@ pub struct Stops {
 impl Stops {
     /// The stops, or `None` if there are none. It raises a stop that is
     /// below the one before it, and clamps every offset to [0, 1], as SVG
-    /// and Skia do.
+    /// and Skia do. The offsets are finite, since `clamp` panics on a NaN.
     fn new(mut stops: Vec<Stop>) -> Option<Self> {
         let mut prev = 0.0;
         for stop in &mut stops {
-            // A NaN offset stays NaN, so `is_finite` fails later, and it does
-            // not become `prev`, because `clamp` panics on a NaN bound.
-            if stop.offset.is_nan() {
-                continue;
-            }
             stop.offset = stop.offset.clamp(prev, 1.0);
             prev = stop.offset;
         }
@@ -138,23 +133,12 @@ impl Gradient {
     pub fn spread(&self) -> SpreadMode {
         self.spread
     }
-
-    /// Returns `true` if every float of the gradient is finite, `false`
-    /// otherwise.
-    fn is_finite(&self) -> bool {
-        let geometry = match self.geometry {
-            GradientGeometry::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
-            GradientGeometry::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
-        };
-        geometry && self.stops.iter().all(|s| s.offset.is_finite())
-    }
 }
 
 /// Scales a linear axis too long for an f32 about the origin. tiny-skia
 /// measures the axis in f32, finds it infinite and paints the first stop,
 /// where the svg and the pdf paint the ramp. The scaling moves the color
-/// under a path by less than a step of an f32. A coordinate that is not
-/// finite passes through, and the scene drops the element.
+/// under a path by less than a step of an f32. The coordinates are finite.
 fn measurable(geometry: GradientGeometry) -> GradientGeometry {
     let GradientGeometry::Linear { x0, y0, x1, y1 } = geometry else {
         return geometry;
@@ -195,8 +179,9 @@ impl Paint {
     }
 
     /// A ramp along the line from `(x0, y0)` to `(x1, y1)`, with
-    /// [`SpreadMode::Pad`] outside it.
-    pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Self {
+    /// [`SpreadMode::Pad`] outside it. Returns `None` if a coordinate or
+    /// an offset is not finite.
+    pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Option<Self> {
         Self::gradient(
             GradientGeometry::Linear { x0, y0, x1, y1 },
             stops,
@@ -205,8 +190,9 @@ impl Paint {
     }
 
     /// A ramp outward from `(cx, cy)` to `radius`, with [`SpreadMode::Pad`]
-    /// outside it.
-    pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Self {
+    /// outside it. Returns `None` if a coordinate, the radius or an offset
+    /// is not finite.
+    pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Option<Self> {
         Self::gradient(
             GradientGeometry::Radial { cx, cy, radius },
             stops,
@@ -228,26 +214,28 @@ impl Paint {
     /// gradient has no extent, a radius or an axis of 2^-15 or less. SVG
     /// paints the last stop in that case, and tiny-skia and the pdf each did
     /// something else. No stops give a transparent color. It shortens an
-    /// axis too long to measure. The wire decoder calls it, because it reads
-    /// the three parts apart.
+    /// axis too long to measure. Returns `None` if a float is not finite.
+    /// The wire decoder calls it, because it reads the three parts apart.
     pub(crate) fn gradient(
         geometry: GradientGeometry,
         stops: Vec<Stop>,
         spread: SpreadMode,
-    ) -> Self {
+    ) -> Option<Self> {
+        let finite = match geometry {
+            GradientGeometry::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
+            GradientGeometry::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
+        };
+        if !finite || !stops.iter().all(|s| s.offset.is_finite()) {
+            return None;
+        }
         let Some(stops) = Stops::new(stops) else {
-            return Self::default();
+            return Some(Self::default());
         };
         let g = Gradient {
             geometry: measurable(geometry),
             stops,
             spread,
         };
-        // A gradient with a float that is not finite stays a gradient, so
-        // `is_finite` drops its element as it drops any other.
-        if !g.is_finite() {
-            return Self::Gradient(Box::new(g));
-        }
         // The threshold of tiny-skia, which cannot tell a gradient below it
         // from one of no extent at all, so the scene decides here and the
         // three backends agree.
@@ -256,11 +244,11 @@ impl Paint {
             GradientGeometry::Linear { x0, y0, x1, y1 } => (x1 - x0).hypot(y1 - y0) <= NO_EXTENT,
             GradientGeometry::Radial { radius, .. } => radius <= NO_EXTENT,
         };
-        if no_extent {
+        Some(if no_extent {
             Self::Solid(g.stops.last().color)
         } else {
             Self::Gradient(Box::new(g))
-        }
+        })
     }
 
     /// Returns `true` if the paint marks at least one pixel, `false`
@@ -278,15 +266,6 @@ impl Paint {
         match self {
             Self::Solid(c) => *c,
             Self::Gradient(g) => g.stops.first().color,
-        }
-    }
-
-    /// Returns `true` if every float of the paint is finite, `false`
-    /// otherwise.
-    pub(crate) fn is_finite(&self) -> bool {
-        match self {
-            Self::Solid(_) => true,
-            Self::Gradient(g) => g.is_finite(),
         }
     }
 }
@@ -378,11 +357,9 @@ impl PathStyle {
     }
 
     /// Returns `true` if every float of the style is finite, `false`
-    /// otherwise. A [`Dash`] is always finite.
+    /// otherwise. A [`Paint`] and a [`Dash`] are always finite.
     pub(crate) fn is_finite(&self) -> bool {
-        self.fill.is_finite()
-            && self.stroke.is_finite()
-            && all_finite(&[self.stroke_width, self.miter_limit])
+        all_finite(&[self.stroke_width, self.miter_limit])
     }
 }
 
@@ -562,12 +539,9 @@ impl Text {
     }
 
     /// Returns `true` if every float of the text is finite, `false`
-    /// otherwise.
+    /// otherwise. A [`Paint`] is always finite.
     pub(crate) fn is_finite(&self) -> bool {
-        self.fill.is_finite()
-            && self.stroke.is_finite()
-            && all_finite(&[self.stroke_width, self.spec.size])
-            && all_finite(&self.transform)
+        all_finite(&[self.stroke_width, self.spec.size]) && all_finite(&self.transform)
     }
 }
 
@@ -2385,10 +2359,6 @@ mod tests {
     #[test]
     fn an_element_with_a_non_finite_float_is_not_added() {
         let (nan, inf) = (f32::NAN, f32::INFINITY);
-        let stop = |offset| Stop {
-            offset,
-            ..Stop::default()
-        };
         let styles = [
             PathStyle {
                 stroke_width: inf,
@@ -2396,14 +2366,6 @@ mod tests {
             },
             PathStyle {
                 miter_limit: nan,
-                ..PathStyle::default()
-            },
-            PathStyle {
-                stroke: Paint::radial(0.0, 0.0, inf, vec![stop(0.0)]),
-                ..PathStyle::default()
-            },
-            PathStyle {
-                fill: Paint::linear(0.0, 0.0, 1.0, 1.0, vec![stop(nan)]),
                 ..PathStyle::default()
             },
         ];
@@ -2574,38 +2536,35 @@ mod tests {
             },
         ] {
             let paint = Paint::gradient(geometry, stops.clone(), SpreadMode::Repeat);
-            assert_eq!(paint, last, "{geometry:?}");
+            assert_eq!(paint, Some(last.clone()), "{geometry:?}");
         }
         assert!(matches!(
             Paint::radial(5.0, 5.0, 1.0, stops),
-            Paint::Gradient(_)
+            Some(Paint::Gradient(_))
         ));
     }
 
     #[test]
-    fn a_gradient_with_a_non_finite_float_does_not_become_solid() {
+    fn a_gradient_with_a_non_finite_float_is_none() {
         let stops = vec![Stop::default()];
+        let stop = |offset| Stop {
+            offset,
+            ..Stop::default()
+        };
         for paint in [
             Paint::radial(5.0, 5.0, f32::NEG_INFINITY, stops.clone()),
             Paint::radial(f32::NAN, 5.0, 0.0, stops.clone()),
-            Paint::linear(
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                vec![Stop {
-                    offset: f32::NAN,
-                    ..Stop::default()
-                }],
-            ),
+            Paint::linear(0.0, 0.0, f32::INFINITY, 0.0, stops),
+            Paint::linear(0.0, 0.0, 5.0, 5.0, vec![stop(f32::NAN), stop(0.5)]),
+            Paint::linear(0.0, 0.0, 5.0, 5.0, vec![stop(0.5), stop(f32::INFINITY)]),
         ] {
-            assert!(!paint.is_finite(), "{paint:?}");
+            assert_eq!(paint, None);
         }
     }
 
     #[test]
     fn a_gradient_with_no_stops_is_transparent() {
-        let paint = Paint::linear(0.0, 0.0, 10.0, 0.0, Vec::new());
+        let paint = Paint::linear(0.0, 0.0, 10.0, 0.0, Vec::new()).unwrap();
         assert_eq!(paint, Paint::default());
         assert!(!paint.is_visible());
     }
@@ -2623,30 +2582,14 @@ mod tests {
         // A length a rasterizer can measure passes through as it is.
         let short = (-1e38, 0.0, 1e38, 0.0);
         assert_eq!(
-            axis(Paint::linear(
-                short.0,
-                short.1,
-                short.2,
-                short.3,
-                stops.clone()
-            )),
+            axis(Paint::linear(short.0, short.1, short.2, short.3, stops.clone()).unwrap()),
             short
         );
-        let (x0, y0, x1, y1) = axis(Paint::linear(-3e38, 0.0, 3e38, 0.0, stops));
+        let (x0, y0, x1, y1) = axis(Paint::linear(-3e38, 0.0, 3e38, 0.0, stops).unwrap());
         assert!((x1 - x0).hypot(y1 - y0).is_finite(), "{x0} to {x1}");
         // The ends keep their direction from the origin, so the color under a
         // path near it stays where it was.
         assert_eq!((y0, y1, x0 / x1), (0.0, 0.0, -1.0));
-    }
-
-    #[test]
-    fn a_stop_with_a_nan_offset_makes_the_paint_not_finite() {
-        let stop = |offset| Stop {
-            offset,
-            color: Rgba::default(),
-        };
-        let paint = Paint::linear(0.0, 0.0, 5.0, 5.0, vec![stop(f32::NAN), stop(0.5)]);
-        assert!(!paint.is_finite());
     }
 
     #[test]
@@ -2661,16 +2604,16 @@ mod tests {
         };
         let out_of_order = vec![stop(0.8), stop(0.2), stop(1.0)];
         assert_eq!(
-            offsets(Paint::radial(0.0, 0.0, 5.0, out_of_order.clone())),
+            offsets(Paint::radial(0.0, 0.0, 5.0, out_of_order.clone()).unwrap()),
             [0.8, 0.8, 1.0]
         );
         assert_eq!(
-            offsets(Paint::linear(0.0, 0.0, 5.0, 5.0, out_of_order)),
+            offsets(Paint::linear(0.0, 0.0, 5.0, 5.0, out_of_order).unwrap()),
             [0.8, 0.8, 1.0]
         );
         let out_of_range = vec![stop(-0.5), stop(0.5), stop(2.0)];
         assert_eq!(
-            offsets(Paint::linear(0.0, 0.0, 5.0, 5.0, out_of_range)),
+            offsets(Paint::linear(0.0, 0.0, 5.0, 5.0, out_of_range).unwrap()),
             [0.0, 0.5, 1.0]
         );
     }

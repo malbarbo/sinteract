@@ -470,7 +470,8 @@ fn dashes(s: &mut Scene, x: f32, y: f32, t: f32) {
                 x + CELL_W,
                 y,
                 stops(&[(0.0, (40, 120, 200)), (1.0, (200, 40, 90))]),
-            ),
+            )
+            .expect("a finite gradient"),
             3.0,
         )
     };
@@ -498,6 +499,7 @@ fn linear_spread(s: &mut Scene, x: f32, y: f32, _: f32) {
                 (1.0, (40, 90, 200)),
             ]),
         )
+        .expect("a finite gradient")
         .with_spread(spread);
         s.add_path(rect(
             fill(paint),
@@ -521,6 +523,7 @@ fn radial_spread(s: &mut Scene, x: f32, y: f32, _: f32) {
             12.0,
             stops(&[(0.0, (255, 255, 255)), (1.0, (120, 40, 160))]),
         )
+        .expect("a finite gradient")
         .with_spread(spread);
         circle(s, fill(paint), cx, cy, 30.0);
     }
@@ -540,7 +543,8 @@ fn radial_spread(s: &mut Scene, x: f32, y: f32, _: f32) {
                 color: Rgba { a: 0, ..green },
             },
         ],
-    );
+    )
+    .expect("a finite gradient");
     s.add_path(rect(fill(fade), x + 10.0, y + 65.0, 180.0, 50.0));
 }
 
@@ -556,7 +560,8 @@ fn gradient_stroke(s: &mut Scene, x: f32, y: f32, _: f32) {
             (0.66, (40, 180, 90)),
             (1.0, (40, 90, 220)),
         ]),
-    );
+    )
+    .expect("a finite gradient");
     let pen = PathStyle {
         line_cap: LineCap::Round,
         line_join: LineJoin::Round,
@@ -620,7 +625,8 @@ fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
             x + 160.0,
             y + 125.0,
             stops(&[(0.0, (250, 120, 40)), (1.0, (120, 30, 160))]),
-        );
+        )
+        .expect("a finite gradient");
         outer.add_path(rect(fill(sweep), x, y, CELL_W, 125.0));
         // The right half of the ring, inside the ring.
         let half = RotatedRect {
@@ -788,7 +794,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         // A gradient on a text is in canvas space, as on a path.
         let sunset = stops(&[(0.0, (250, 220, 60)), (1.0, (230, 60, 40))]);
         s.add_text(Text {
-            fill: Paint::linear(x + 95.0, y, x + 185.0, y, sunset),
+            fill: Paint::linear(x + 95.0, y, x + 185.0, y, sunset).expect("a finite gradient"),
             stroke: Paint::Solid(opaque(20, 20, 20)),
             stroke_width: 1.2,
             ..node

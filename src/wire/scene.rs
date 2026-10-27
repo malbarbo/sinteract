@@ -218,7 +218,7 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
             (geometry, read_stops(g.get_stops()?)?, g.get_spread()?)
         }
     };
-    Ok(Paint::gradient(geometry, stops, spread_from_wire(spread)))
+    Paint::gradient(geometry, stops, spread_from_wire(spread)).ok_or(ValueError::NotFinite)
 }
 
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
