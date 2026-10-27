@@ -35,7 +35,7 @@ impl Font {
             size: self.size.get() as f32,
             family: self.family.as_ref().into(),
             weight: self.weight.into(),
-            style: self.style,
+            font_style: self.style,
             text: text.into(),
         }
     }

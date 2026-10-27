@@ -109,7 +109,7 @@ impl<'a> TextLayout<'a> {
     /// nothing, because the size is not a positive finite number, the text is
     /// empty, or the width or the height measures zero or overflows.
     pub(crate) fn new(spec: &'a TextSpec) -> Option<Self> {
-        let font = ResolvedFont::resolve(&spec.family, spec.weight, spec.style);
+        let font = ResolvedFont::resolve(&spec.family, spec.weight, spec.font_style);
         let metrics = font.measure(spec.size, &spec.text)?;
         if metrics.width <= 0.0 {
             return None;
@@ -784,7 +784,7 @@ mod tests {
         let mut b2 = Recorder::default();
         outline_spec(
             &TextSpec {
-                style: FontStyle::Italic,
+                font_style: FontStyle::Italic,
                 ..text_spec(30.0, "a")
             },
             &mut b2,
@@ -881,7 +881,7 @@ mod tests {
         let m = measure("", 700, FontStyle::Italic, 24.5, "Olá").expect("measures");
         let spec = TextSpec {
             weight: 700,
-            style: FontStyle::Italic,
+            font_style: FontStyle::Italic,
             ..text_spec(24.5, "Olá")
         };
         let l = TextLayout::new(&spec).expect("node draws");

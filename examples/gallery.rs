@@ -686,7 +686,7 @@ fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
         let spec = TextSpec {
             size: 16.0,
             weight,
-            style,
+            font_style: style,
             text: line.into(),
             ..TextSpec::default()
         };
@@ -917,7 +917,13 @@ fn badge(cx: f32, cy: f32, scale: f32, angle_deg: f32) -> Bitmap {
 /// A text at its natural size in `fill`, centred on `(cx, cy)` and rotated
 /// by `angle_deg`.
 fn text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, fill: Rgba) -> Option<Text> {
-    let m = sinteract::text::measure(&spec.family, spec.weight, spec.style, spec.size, &spec.text)?;
+    let m = sinteract::text::measure(
+        &spec.family,
+        spec.weight,
+        spec.font_style,
+        spec.size,
+        &spec.text,
+    )?;
     let node = spec.fit(RotatedRect {
         cx,
         cy,

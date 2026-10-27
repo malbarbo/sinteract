@@ -577,7 +577,7 @@ pub struct TextSpec {
     /// largest variant of [`Element`].
     pub family: Box<str>,
     pub weight: u16,
-    pub style: FontStyle,
+    pub font_style: FontStyle,
     pub text: String,
 }
 
@@ -587,7 +587,7 @@ impl Default for TextSpec {
             size: 0.0,
             family: Box::default(),
             weight: 400,
-            style: FontStyle::Normal,
+            font_style: FontStyle::Normal,
             text: String::new(),
         }
     }
@@ -608,8 +608,13 @@ impl TextSpec {
     /// of [`Bitmap::transform`]. The box is a parallelogram, so it can hold
     /// a text that is skewed.
     pub fn fit_transform(self, transform: [f32; 6]) -> Option<Text> {
-        let metrics =
-            crate::text::measure(&self.family, self.weight, self.style, self.size, &self.text)?;
+        let metrics = crate::text::measure(
+            &self.family,
+            self.weight,
+            self.font_style,
+            self.size,
+            &self.text,
+        )?;
         let (w, h) = (metrics.width(), metrics.height());
         if w <= 0.0 {
             return None;
@@ -2244,9 +2249,14 @@ mod tests {
             h: 40.0,
             angle_deg: 30.0,
         };
-        let metrics =
-            crate::text::measure(&spec.family, spec.weight, spec.style, spec.size, &spec.text)
-                .expect("text measures");
+        let metrics = crate::text::measure(
+            &spec.family,
+            spec.weight,
+            spec.font_style,
+            spec.size,
+            &spec.text,
+        )
+        .expect("text measures");
         let text = spec.fit(rect).expect("text fits");
         assert_ne!(&*text.spec.family, "ZZZ_nope");
         assert_eq!(&*text.spec.family, metrics.family());
@@ -2264,9 +2274,14 @@ mod tests {
             text: "Hi".into(),
             ..TextSpec::default()
         };
-        let metrics =
-            crate::text::measure(&spec.family, spec.weight, spec.style, spec.size, &spec.text)
-                .expect("text measures");
+        let metrics = crate::text::measure(
+            &spec.family,
+            spec.weight,
+            spec.font_style,
+            spec.size,
+            &spec.text,
+        )
+        .expect("text measures");
         let (w, h) = (metrics.width(), metrics.height());
         let skewed = [30.0, 0.0, 10.0, 20.0, 50.0, 40.0];
         let m = spec.fit_transform(skewed).expect("text fits").transform;

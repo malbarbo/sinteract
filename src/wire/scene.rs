@@ -325,7 +325,7 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     b.set_size(n.spec.size);
     b.set_family(&*n.spec.family);
     b.set_weight(n.spec.weight);
-    b.set_style(font_style_to_wire(n.spec.style));
+    b.set_style(font_style_to_wire(n.spec.font_style));
     b.set_underline(n.underline);
     b.set_text(&*n.spec.text);
 }
@@ -347,7 +347,7 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
             size: r.get_size(),
             family: r.get_family()?.to_str()?.into(),
             weight: r.get_weight(),
-            style: font_style_from_wire(r.get_style()?),
+            font_style: font_style_from_wire(r.get_style()?),
             text: r.get_text()?.to_str()?.to_owned(),
         },
         underline: r.get_underline(),

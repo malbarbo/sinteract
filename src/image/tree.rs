@@ -129,8 +129,13 @@ impl Image {
     /// `Overflow` when the measure of the text does not fit in an `f32`.
     pub fn text(text: &str, font: Font, style: Style) -> Result<Self, Overflow> {
         let spec = font.spec(text);
-        let measure =
-            crate::text::measure(&spec.family, spec.weight, spec.style, spec.size, &spec.text);
+        let measure = crate::text::measure(
+            &spec.family,
+            spec.weight,
+            spec.font_style,
+            spec.size,
+            &spec.text,
+        );
         let m = match measure {
             Some(m) if m.width() > 0.0 => m,
             Some(_) => return Ok(Self::empty()),

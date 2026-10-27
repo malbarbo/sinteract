@@ -254,7 +254,7 @@ mod tests {
                     size: 12.0,
                     family: "Sinteract Sans".into(),
                     weight: 700,
-                    style: FontStyle::Italic,
+                    font_style: FontStyle::Italic,
                     text: "Olá".into(),
                 }
                 .fit(RotatedRect {
