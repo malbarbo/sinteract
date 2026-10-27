@@ -41,7 +41,7 @@ impl super::Display for Headless {
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
         loop {
             match self.inbox.next(&mut self.clock, deadline) {
-                Next::Ready(_, ready) => return ready,
+                Next::Ready(ready) => return ready.map(Event::from),
                 Next::Redraw => {}
                 Next::Block(timeout) => self.inbox.wait_for_message(timeout),
             }

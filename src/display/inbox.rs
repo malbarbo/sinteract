@@ -139,10 +139,27 @@ enum Entry {
     Close,
 }
 
+/// An event of [`Inbox::next`], with the seat of an input.
+#[derive(Debug)]
+pub(crate) enum Seated {
+    Tick,
+    Input(u32, InputEvent),
+}
+
+/// A display with one seat drops the seat.
+impl From<Seated> for Event {
+    fn from(seated: Seated) -> Self {
+        match seated {
+            Seated::Tick => Event::Tick,
+            Seated::Input(_, event) => Event::Input(event),
+        }
+    }
+}
+
 /// What [`Inbox::next`] asks of the display.
 pub(crate) enum Next {
-    /// Return this from `wait_event`, with the seat of an input, or 0.
-    Ready(u32, Result<Event, Interrupt>),
+    /// Return this from `wait_event`.
+    Ready(Result<Seated, Interrupt>),
     /// Draw the last scene again.
     Redraw,
     /// Wait for a message for at most this long, and ask again.
@@ -201,8 +218,8 @@ impl Inbox {
     /// far, so the input that waited on a busy engine goes out first.
     pub(crate) fn next(&mut self, clock: &mut TickClock, deadline: Option<Instant>) -> Next {
         let now = Instant::now();
-        if let Some((seat, ready)) = self.pop(clock, now) {
-            return Next::Ready(seat, ready);
+        if let Some(ready) = self.pop(clock, now) {
+            return Next::Ready(ready);
         }
         if self
             .queue
@@ -212,7 +229,7 @@ impl Inbox {
             return Next::Redraw;
         }
         if deadline.is_some_and(|d| now >= d) {
-            return Next::Ready(0, Err(Interrupt::Timeout));
+            return Next::Ready(Err(Interrupt::Timeout));
         }
         let wake_at = deadline.map_or(clock.due(), |d| d.min(clock.due()));
         Next::Block(wake_at.saturating_duration_since(now))
@@ -241,30 +258,26 @@ impl Inbox {
         }
     }
 
-    /// The oldest entry with the seat of an input, or 0, after the channel
+    /// The oldest entry, after the channel
     /// drains and a tick goes in at the back if `clock` has one due by
     /// `now`, or `None` when nothing waits. At most one tick waits, so a
     /// flood of input delays the tick but never drops it.
-    fn pop(
-        &mut self,
-        clock: &mut TickClock,
-        now: Instant,
-    ) -> Option<(u32, Result<Event, Interrupt>)> {
+    fn pop(&mut self, clock: &mut TickClock, now: Instant) -> Option<Result<Seated, Interrupt>> {
         let Some(queue) = &mut self.queue else {
-            return Some((0, Err(Interrupt::Close)));
+            return Some(Err(Interrupt::Close));
         };
         queue.receive_all();
         if !queue.pending.iter().any(|e| matches!(e, Entry::Tick)) && clock.take_due(now) {
             queue.pending.push_back(Entry::Tick);
         }
         Some(match queue.pending.pop_front()? {
-            Entry::Input(seat, ev) => (seat, Ok(Event::Input(ev))),
-            Entry::Tick => (0, Ok(Event::Tick)),
-            Entry::Wake => (0, Err(Interrupt::Wake)),
-            Entry::Read(e) => (0, Err(Interrupt::Read(e))),
+            Entry::Input(seat, ev) => Ok(Seated::Input(seat, ev)),
+            Entry::Tick => Ok(Seated::Tick),
+            Entry::Wake => Err(Interrupt::Wake),
+            Entry::Read(e) => Err(Interrupt::Read(e)),
             Entry::Close => {
                 self.close();
-                (0, Err(Interrupt::Close))
+                Err(Interrupt::Close)
             }
         })
     }
@@ -391,8 +404,8 @@ mod tests {
         /// The next event, with no redraw.
         fn wait(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
             loop {
-                if let Next::Ready(_, ready) = self.next(deadline) {
-                    return ready;
+                if let Next::Ready(ready) = self.next(deadline) {
+                    return ready.map(Event::from);
                 }
             }
         }
@@ -472,11 +485,11 @@ mod tests {
             .unwrap();
         assert!(matches!(
             inbox.next(None),
-            Next::Ready(0, Ok(Event::Input(InputEvent::Resize { width: 1.0, .. })))
+            Next::Ready(Ok(Seated::Input(0, InputEvent::Resize { width: 1.0, .. })))
         ));
         assert!(matches!(
             inbox.next(None),
-            Next::Ready(1, Ok(Event::Input(InputEvent::Resize { width: 2.0, .. })))
+            Next::Ready(Ok(Seated::Input(1, InputEvent::Resize { width: 2.0, .. })))
         ));
     }
 
@@ -544,11 +557,13 @@ mod tests {
         tx.send_key(key("a")).unwrap();
         tx.request_redraw().unwrap();
         let deadline = soon();
-        assert!(matches!(inbox.next(deadline), Next::Ready(_, r) if key_name(&r) == Some("a")));
+        assert!(
+            matches!(inbox.next(deadline), Next::Ready(Ok(Seated::Input(_, InputEvent::Key(k)))) if k.key == "a")
+        );
         assert!(matches!(inbox.next(deadline), Next::Redraw));
         assert!(matches!(
             inbox.next(deadline),
-            Next::Ready(_, Err(Interrupt::Timeout))
+            Next::Ready(Err(Interrupt::Timeout))
         ));
     }
 
@@ -567,7 +582,7 @@ mod tests {
         assert!(!inbox.inbox.take_redraw());
         assert!(matches!(
             inbox.next(soon()),
-            Next::Ready(_, Err(Interrupt::Timeout))
+            Next::Ready(Err(Interrupt::Timeout))
         ));
     }
 
@@ -607,7 +622,7 @@ mod tests {
         inbox
             .inbox
             .pop(&mut inbox.clock, now)
-            .map(|(_, ready)| ready)
+            .map(|ready| ready.map(Event::from))
     }
 
     #[test]

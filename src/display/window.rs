@@ -30,7 +30,7 @@ use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
 use super::driver::{OpenError, PresentError, sealed};
-use super::inbox::{Inbox, Next, Sender};
+use super::inbox::{Inbox, Next, Seated, Sender};
 use super::tick_clock::TickClock;
 use crate::event::{
     Event, Interrupt, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
@@ -234,13 +234,9 @@ impl Window {
         drawn
     }
 
-    /// Block until the next event with its seat, as
-    /// [`super::Display::wait_event`] does. A tick and an interrupt have
-    /// seat 0.
-    pub(crate) fn wait_seated(
-        &mut self,
-        deadline: Option<Instant>,
-    ) -> Result<(u32, Event), Interrupt> {
+    /// Block until the next event, with the seat of an input, as
+    /// [`super::Display::wait_event`] does.
+    pub(crate) fn wait_seated(&mut self, deadline: Option<Instant>) -> Result<Seated, Interrupt> {
         // A frame that draws for longer than the period finds the next tick
         // due, so the wait returns it without a pump, and the platform takes
         // a window that never answers for hung. So every call pumps once.
@@ -249,7 +245,7 @@ impl Window {
             // A closed session has a closed inbox, which returns Close
             // before it redraws or blocks.
             match self.inbox.next(&mut self.clock, deadline) {
-                Next::Ready(seat, ready) => return ready.map(|event| (seat, event)),
+                Next::Ready(ready) => return ready,
                 Next::Redraw => {
                     let seats = self.active.as_mut().map_or(&mut [][..], |s| &mut s.seats);
                     for seat in seats.iter_mut().filter(|seat| seat.app.dirty) {
@@ -271,7 +267,7 @@ impl super::Display for Window {
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
     fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
-        self.wait_seated(deadline).map(|(_, event)| event)
+        self.wait_seated(deadline).map(Event::from)
     }
 
     fn sender(&self) -> Sender {

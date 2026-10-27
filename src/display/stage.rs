@@ -235,8 +235,8 @@ impl Stage {
             },
             #[cfg(feature = "window")]
             Inner::Players(window) => match window.wait_seated(deadline)? {
-                (_, Event::Tick) => Ok(StageEvent::Tick),
-                (seat, Event::Input(event)) => Ok(StageEvent::Input {
+                super::inbox::Seated::Tick => Ok(StageEvent::Tick),
+                super::inbox::Seated::Input(seat, event) => Ok(StageEvent::Input {
                     player: Player(NonZeroU32::MIN.saturating_add(seat)),
                     event,
                 }),
