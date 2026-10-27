@@ -118,6 +118,9 @@ pub enum StageError {
     /// Several players play on a display of this process, and the options
     /// ask for the terminal, which shows one.
     TerminalPlayers,
+    /// Several players play on a display of this process, and the session
+    /// has no graphical display for their windows.
+    NoWindowPlayers,
     /// `SINTERACT_SESSION` asks for a session, or the build has no display
     /// of its own, and fd 3 or fd 4 is not open, or the platform has no such
     /// descriptors.
@@ -343,7 +346,10 @@ fn open_players(
         .iter()
         .map(|player| format!("{title} (player {})", player.number()))
         .collect();
-    let window = super::Window::open_seats(&titles, width, height).map_err(StageError::Open)?;
+    let window = super::Window::open_seats(&titles, width, height).map_err(|e| match e {
+        OpenError::NoWindow => StageError::NoWindowPlayers,
+        e => StageError::Open(e),
+    })?;
     let stage = Stage {
         inner: Inner::Players(Box::new(window), players),
     };
@@ -392,6 +398,9 @@ impl fmt::Display for StageError {
             StageError::TerminalPlayers => {
                 f.write_str("the terminal shows one player, and several play here")
             }
+            StageError::NoWindowPlayers => f.write_str(
+                "several players need a window each, and this session has no graphical display",
+            ),
             StageError::NoSession => {
                 write!(f, "{SESSION_VAR} is set, and fd 3 or fd 4 is not open")
             }
@@ -404,9 +413,10 @@ impl std::error::Error for StageError {
         match self {
             StageError::Open(e) => Some(e),
             StageError::Start(e) => Some(e),
-            StageError::Players { .. } | StageError::TerminalPlayers | StageError::NoSession => {
-                None
-            }
+            StageError::Players { .. }
+            | StageError::TerminalPlayers
+            | StageError::NoWindowPlayers
+            | StageError::NoSession => None,
         }
     }
 }
