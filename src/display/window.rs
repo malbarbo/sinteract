@@ -895,16 +895,16 @@ impl App {
             } if !(is_synthetic && event.state == ElementState::Pressed) => {
                 self.report_key_events(&event);
             }
-            // Wayland sends no release for the keys held when the window
-            // loses focus, and takes them as released. A grab of the
-            // pointer, as by the window switcher, can take the release of a
-            // button too.
             // The window in focus paces the ticks, and its monitor may
             // have another rate.
             WindowEvent::Focused(true) => {
                 self.focused = true;
                 self.refresh_rate_stale = true;
             }
+            // Wayland sends no release for the keys held when the window
+            // loses focus, and takes them as released. A grab of the
+            // pointer, as by the window switcher, can take the release of a
+            // button too.
             WindowEvent::Focused(false) => {
                 self.focused = false;
                 for key in self.held.release_all() {
