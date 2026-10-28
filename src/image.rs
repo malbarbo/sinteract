@@ -30,3 +30,6 @@ pub use path::PathCmd;
 pub use shape::{AngleSumError, StarPolygonError, TriangleSidesError};
 pub use style::{Attribute, Style};
 pub use tree::{BitmapError, Image, Overflow};
+
+/// The types of the scene that a [`Style`] and a [`Font`] take.
+pub use crate::scene::{FillRule, FontStyle, LineCap, LineJoin, MiterLimit};
