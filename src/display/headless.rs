@@ -1,4 +1,4 @@
-//! [`Headless`], the display of a stage under [`super::Native::None`].
+//! [`Headless`], the display of a stage under [`super::Native::Headless`].
 
 use std::num::NonZeroU32;
 use std::time::Instant;

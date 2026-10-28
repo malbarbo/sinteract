@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn a_show_opens_one_player() {
         let mut frames = Frames::new("test", || StageOptions {
-            display: Native::None,
+            display: Native::Headless,
             ..StageOptions::default()
         });
         frames.show(Scene::new(10.0, 10.0)).unwrap();
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn a_show_with_more_players_in_the_options_fails() {
         let mut frames = Frames::new("test", || StageOptions {
-            display: Native::None,
+            display: Native::Headless,
             players: NonZeroU32::new(2),
             ..StageOptions::default()
         });

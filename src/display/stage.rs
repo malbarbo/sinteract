@@ -91,7 +91,7 @@ pub enum Native {
     /// No display. Outside a session, the stage ticks at 60 Hz and draws
     /// nothing, so a game runs without a screen, as in a test. A session
     /// still opens, since the server asks for it.
-    None,
+    Headless,
 }
 
 /// The most players on a display of this process, each in a window of its
@@ -157,7 +157,7 @@ impl Stage {
             return Stage::open_session(players);
         }
         let local = Stage::local_players(players, &options)?;
-        if local.get() > 1 && options.display != Native::None {
+        if local.get() > 1 && options.display != Native::Headless {
             return open_players(title, local);
         }
         let display = open_local(title, options).map_err(StageError::Open)?;
@@ -331,7 +331,7 @@ fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, Op
         Native::Auto => super::driver::window_or_terminal(window, options.terminal),
         Native::Window => Ok(Box::new(window()?)),
         Native::Terminal => Ok(Box::new(Terminal::open_with(options.terminal)?)),
-        Native::None => Ok(Box::new(super::headless::Headless::new())),
+        Native::Headless => Ok(Box::new(super::headless::Headless::new())),
     }
 }
 
@@ -846,7 +846,7 @@ pub(super) mod tests {
     fn a_stage_with_native_none_ticks_for_its_players() {
         let range = PlayerRange::new(1, 4).expect("1 to 4 is a range");
         let options = StageOptions {
-            display: Native::None,
+            display: Native::Headless,
             players: NonZeroU32::new(2),
             ..StageOptions::default()
         };
@@ -879,7 +879,7 @@ pub(super) mod tests {
     #[test]
     fn local_players_outside_the_range_of_the_game_fail() {
         for (max, local) in [(1, 2), (16, 9)] {
-            let result = open_with(max, Some(local), Native::None);
+            let result = open_with(max, Some(local), Native::Headless);
             assert!(
                 matches!(result, Err(StageError::Players { players, .. }) if players.get() == local)
             );

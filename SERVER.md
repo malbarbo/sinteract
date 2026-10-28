@@ -741,7 +741,7 @@ vêm só das opções que o `Frames::new` recebe, tanto no `open` quanto no
 `show`, que falha com o `StageError::Players` quando elas pedem mais de
 um. A janela de cada
 jogador ganha o tamanho da cena do primeiro `show_to`. O `players` dá os
-jogadores do mundo. Com o `Native::None`, fora de uma sessão, o stage
+jogadores do mundo. Com o `Native::Headless`, fora de uma sessão, o stage
 abre sem tela, como num teste. Ele dá um `Tick` a 60 Hz e não desenha
 nada, e os jogadores vêm do `StageOptions::players` como numa janela.
 Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
