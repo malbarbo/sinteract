@@ -6,7 +6,7 @@ use std::collections::{HashMap, VecDeque};
 use std::thread;
 use std::time::Instant;
 
-use super::{PresentError, Stage, StageError, StageEvent, StageOptions};
+use super::{Native, PresentError, Stage, StageError, StageEvent};
 use crate::event::{InputEvent, Interrupt, KeyEvent, KeyKind, PadEvent};
 use crate::scene::Scene;
 use crate::session::{Player, PlayerRange, Target};
@@ -24,7 +24,7 @@ use crate::session::{Player, PlayerRange, Target};
 /// frame per tick of the server.
 pub struct Frames {
     title: String,
-    options: Box<dyn FnMut() -> StageOptions>,
+    display: Box<dyn FnMut() -> Native>,
     state: State,
     /// The lines of [`Frames::print_line`] while a stage keeps rows for
     /// them, at most as many as the rows.
@@ -83,11 +83,14 @@ const PLAYERS: PlayerRange = PlayerRange::new(1, 1).expect("1 to 1 is a range");
 
 impl Frames {
     /// The frames of a program, with `title` on the window, and the
-    /// options of each stage from `options`, the local players with them.
-    pub fn new(title: impl Into<String>, options: impl FnMut() -> StageOptions + 'static) -> Self {
+    /// display of each stage from `display`, with the local players. The
+    /// call comes when a world opens its stage, so a `display` that calls
+    /// [`Native::auto`] checks for a window only in a program that shows
+    /// one.
+    pub fn new(title: impl Into<String>, display: impl FnMut() -> Native + 'static) -> Self {
         Frames {
             title: title.into(),
-            options: Box::new(options),
+            display: Box::new(display),
             state: State::Closed,
             footer: Vec::new(),
         }
@@ -108,14 +111,14 @@ impl Frames {
     }
 
     /// Open the stage of a world that takes `players`, with the players of
-    /// the options on a display of this process, and return each player
+    /// the display of this process, and return each player
     /// with its nickname. The caller closes
     /// the stage of the last world first. When the stage does not open, the
     /// world goes on without one, and each show returns
     /// [`ShowError::Unavailable`].
     pub fn open(&mut self, players: PlayerRange) -> Result<Vec<(Player, String)>, StageError> {
         debug_assert!(!self.is_open(), "the stage of the last world is open");
-        match Stage::open(&self.title, players, (self.options)()) {
+        match Stage::open(&self.title, players, (self.display)()) {
             Ok((stage, players)) => {
                 self.state = State::Open(Open {
                     stage,
@@ -301,16 +304,20 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    #[cfg(all(feature = "terminal", feature = "window"))]
-    use crate::display::Native;
     use crate::display::stage::tests::{Server, session};
     use crate::event::{Modifiers, PadButton};
     use crate::wire::testing::Message;
 
+    /// A display that never opens a screen, so no test opens the tty or
+    /// connects to a window system.
+    fn headless() -> Native {
+        Native::Headless { players: None }
+    }
+
     /// Frames with the stage of a session open, as after a first show.
     fn frames() -> (Frames, Server) {
         let (stage, server) = session();
-        let mut frames = Frames::new("test", StageOptions::default);
+        let mut frames = Frames::new("test", headless);
         frames.state = State::Open(Open {
             stage,
             players: vec![Player(NonZeroU32::MIN)],
@@ -386,10 +393,7 @@ mod tests {
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn a_show_opens_one_player() {
-        let mut frames = Frames::new("test", || StageOptions {
-            display: Native::Headless,
-            ..StageOptions::default()
-        });
+        let mut frames = Frames::new("test", headless);
         frames.show(Scene::new(10.0, 10.0)).unwrap();
         assert_eq!(frames.players(), [Player(NonZeroU32::MIN)]);
         assert_eq!(wait(&mut frames), FrameEvent::Tick);
@@ -398,10 +402,8 @@ mod tests {
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn a_show_with_more_players_in_the_options_fails() {
-        let mut frames = Frames::new("test", || StageOptions {
-            display: Native::Headless,
+        let mut frames = Frames::new("test", || Native::Headless {
             players: NonZeroU32::new(2),
-            ..StageOptions::default()
         });
         assert!(matches!(
             frames.show(Scene::new(10.0, 10.0)),
@@ -412,12 +414,11 @@ mod tests {
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn an_open_that_fails_leaves_the_world_with_no_stage() {
-        let mut frames = Frames::new("test", || StageOptions {
-            display: Native::Terminal { graphics: None },
-            players: NonZeroU32::new(2),
-            ..StageOptions::default()
+        let mut frames = Frames::new("test", || Native::Terminal {
+            options: crate::display::TerminalOptions::default(),
+            graphics: None,
         });
-        let range = PlayerRange::new(1, 4).expect("1 to 4 is a range");
+        let range = PlayerRange::new(2, 4).expect("2 to 4 is a range");
         assert!(matches!(
             frames.open(range),
             Err(StageError::TerminalPlayers)
@@ -433,7 +434,7 @@ mod tests {
 
     #[test]
     fn a_show_to_with_no_stage_is_unavailable() {
-        let mut frames = Frames::new("test", StageOptions::default);
+        let mut frames = Frames::new("test", headless);
         assert!(frames.players().is_empty());
         let ana = Player(NonZeroU32::MIN);
         assert!(matches!(
@@ -483,7 +484,7 @@ mod tests {
 
     #[test]
     fn a_wait_with_no_stage_sleeps_until_the_deadline() {
-        let mut frames = Frames::new("test", StageOptions::default);
+        let mut frames = Frames::new("test", headless);
         let deadline = soon();
         assert_eq!(
             frames.wait_event(deadline, |e| panic!("{e}")),

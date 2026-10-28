@@ -21,15 +21,15 @@ use crate::session::{PlayerRange, SESSION_VAR};
 /// player. The loop of the game is the same in all of them:
 ///
 /// ```no_run
-/// # use sinteract::display::{Stage, StageEvent, StageOptions};
+/// # use sinteract::display::{Native, Stage, StageEvent, TerminalOptions};
 /// # use sinteract::event::Interrupt;
 /// # use sinteract::scene::Scene;
 /// # use sinteract::session::Target;
 /// # use sinteract::session::PlayerRange;
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let players = PlayerRange::new(1, 1).expect("1 to 1 is a range");
-/// let options = StageOptions::default();
-/// let (mut stage, _players) = Stage::open("My game", players, options)?;
+/// let display = Native::auto(None, TerminalOptions::default());
+/// let (mut stage, _players) = Stage::open("My game", players, display)?;
 /// loop {
 ///     match stage.wait(None) {
 ///         Ok(StageEvent::Tick) => stage.present(Target::All, Scene::new(400.0, 300.0))?,
@@ -62,19 +62,6 @@ pub enum StageEvent {
     Error(SessionError),
 }
 
-/// Where [`Stage::open`] shows a game that no server runs.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct StageOptions {
-    pub display: Native,
-    /// How many players play on a display of this process, each in a
-    /// window of its own, or the fewest that the game takes when `None`.
-    /// More than one needs a window, so [`Native::Auto`] does not fall
-    /// back to the terminal. A session takes its players from the server.
-    pub players: Option<NonZeroU32>,
-    /// What the terminal adds, when the game goes there.
-    pub terminal: TerminalOptions,
-}
-
 /// What an engine adds to a terminal display.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TerminalOptions {
@@ -105,25 +92,61 @@ pub enum TerminalGraphics {
     HalfBlocks,
 }
 
-/// The display of this process that shows a game.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The display of this process where [`Stage::open`] shows a game that no
+/// server runs. A session ignores it and takes its players from the server.
+#[derive(Clone, Copy, Debug)]
 pub enum Native {
-    /// A window when the process has a window system, and the terminal
-    /// otherwise, as over ssh.
-    #[default]
-    Auto,
-    /// Only a window.
-    Window,
-    /// Only the terminal.
+    /// A window for each player.
+    Window {
+        /// How many players play, each in a window of its own, or the
+        /// fewest that the game takes when `None`.
+        players: Option<NonZeroU32>,
+    },
+    /// The terminal, which shows one player.
     Terminal {
+        options: TerminalOptions,
         /// The graphics of the frames. `None` asks the terminal which ones
         /// it shows.
         graphics: Option<TerminalGraphics>,
     },
     /// No display. Outside a session, the stage ticks at 60 Hz and draws
-    /// nothing, so a game runs without a screen, as in a test. A session
-    /// still opens, since the server asks for it.
-    Headless,
+    /// nothing, so a game runs without a screen, as in a test.
+    Headless {
+        /// How many players play, or the fewest that the game takes when
+        /// `None`.
+        players: Option<NonZeroU32>,
+    },
+}
+
+impl Native {
+    /// A window for `players` when the process has a window system, and
+    /// the terminal with `options` otherwise, as over ssh. More than one
+    /// player always gets windows, since the terminal shows one. Outside
+    /// macOS the check builds the event loop of the windows, so it runs on
+    /// the thread that opens the stage. In a session it checks nothing.
+    pub fn auto(players: Option<NonZeroU32>, options: TerminalOptions) -> Native {
+        if Stage::opens_session() {
+            return Native::Window { players };
+        }
+        Native::choose(players, options, has_window_system)
+    }
+
+    /// The display of [`Native::auto`], with `has_window_system` for the
+    /// check, which runs only for one player.
+    fn choose(
+        players: Option<NonZeroU32>,
+        options: TerminalOptions,
+        has_window_system: impl FnOnce() -> bool,
+    ) -> Native {
+        if players.is_some_and(|players| players.get() > 1) || has_window_system() {
+            Native::Window { players }
+        } else {
+            Native::Terminal {
+                options,
+                graphics: None,
+            }
+        }
+    }
 }
 
 /// The most players on a display of this process, each in a window of its
@@ -149,8 +172,8 @@ pub enum StageError {
         range: PlayerRange,
         players: NonZeroU32,
     },
-    /// Several players play on a display of this process, and the options
-    /// ask for the terminal, which shows one.
+    /// The game takes several players, and the display is the terminal,
+    /// which shows one.
     TerminalPlayers,
     /// Several players play on a display of this process, and the session
     /// has no graphical display for their windows.
@@ -173,8 +196,8 @@ impl Stage {
     /// build with no display of its own, it starts a session that reads
     /// the server from fd 3 and writes to it on fd 4, and blocks until the
     /// start. Otherwise it opens a window with `title`, or the terminal, as
-    /// `options` asks, with player 1 and an empty nickname. With several
-    /// players in `options`, it opens a window for each one, with the
+    /// `display` asks, with player 1 and an empty nickname. With several
+    /// players in `display`, it opens a window for each one, with the
     /// number of the player in the title and an empty nickname, and closing
     /// any of them ends the stage. A window stays hidden until its first
     /// present, which gives it the size of the scene. A second stage in a
@@ -183,16 +206,16 @@ impl Stage {
     pub fn open(
         title: &str,
         players: PlayerRange,
-        options: StageOptions,
+        display: Native,
     ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
         if Stage::opens_session() {
             return Stage::open_session(players);
         }
-        let local = Stage::local_players(players, &options)?;
-        if local.get() > 1 && options.display != Native::Headless {
+        let local = Stage::local_players(players, display)?;
+        if local.get() > 1 && matches!(display, Native::Window { .. }) {
             return open_players(title, local);
         }
-        let display = open_local(title, options).map_err(StageError::Open)?;
+        let display = open_local(title, display).map_err(StageError::Open)?;
         let stage = Stage {
             inner: Inner::Local(display),
             players: local,
@@ -200,24 +223,26 @@ impl Stage {
         Ok((stage, numbered(local)))
     }
 
-    /// The players on a display of this process for a game that takes
-    /// `players`, from `options` or the fewest of the game. Fails, before
-    /// any display opens, as [`Stage::open`] would for these players.
-    fn local_players(
-        players: PlayerRange,
-        options: &StageOptions,
-    ) -> Result<NonZeroU32, StageError> {
-        let local = options.players.unwrap_or(players.min());
+    /// The players on `display` for a game that takes `players`, from
+    /// `display` or the fewest of the game. Fails, before any display
+    /// opens, as [`Stage::open`] would for these players.
+    fn local_players(players: PlayerRange, display: Native) -> Result<NonZeroU32, StageError> {
+        let local = match display {
+            Native::Terminal { .. } if players.min().get() > 1 => {
+                return Err(StageError::TerminalPlayers);
+            }
+            Native::Terminal { .. } => NonZeroU32::MIN,
+            Native::Window { players: local } | Native::Headless { players: local } => {
+                local.unwrap_or(players.min())
+            }
+        };
         if !players.contains(local.get() as usize) || local.get() > MAX_LOCAL_PLAYERS {
             return Err(StageError::Players {
                 range: players,
                 players: local,
             });
         }
-        match options.display {
-            Native::Terminal { .. } if local.get() > 1 => Err(StageError::TerminalPlayers),
-            _ => Ok(local),
-        }
+        Ok(local)
     }
 
     fn open_session(players: PlayerRange) -> Result<(Stage, Vec<(Player, String)>), StageError> {
@@ -354,18 +379,27 @@ impl Stage {
     }
 }
 
-/// The display that `options` asks for.
+/// The display of one player that `display` asks for.
 #[cfg(all(feature = "terminal", feature = "window"))]
-fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, OpenError> {
+fn open_local(title: &str, display: Native) -> Result<Box<dyn Display>, OpenError> {
     use super::{Terminal, Window};
-    let window = || Window::open_seats(&[title.to_owned()]);
-    match options.display {
-        Native::Auto if super::window::has_window_system() => Ok(Box::new(window()?)),
-        Native::Auto => Ok(Box::new(Terminal::open(options.terminal, None)?)),
-        Native::Window => Ok(Box::new(window()?)),
-        Native::Terminal { graphics } => Ok(Box::new(Terminal::open(options.terminal, graphics)?)),
-        Native::Headless => Ok(Box::new(super::headless::Headless::new())),
+    match display {
+        Native::Window { .. } => Ok(Box::new(Window::open_seats(&[title.to_owned()])?)),
+        Native::Terminal { options, graphics } => Ok(Box::new(Terminal::open(options, graphics)?)),
+        Native::Headless { .. } => Ok(Box::new(super::headless::Headless::new())),
     }
+}
+
+#[cfg(all(feature = "terminal", feature = "window"))]
+fn has_window_system() -> bool {
+    super::window::has_window_system()
+}
+
+/// A build without both displays opens only a session, so
+/// [`Native::auto`] never asks.
+#[cfg(not(all(feature = "terminal", feature = "window")))]
+fn has_window_system() -> bool {
+    false
 }
 
 /// The players 1 to `players`, each with an empty nickname.
@@ -410,7 +444,7 @@ fn open_players(
 }
 
 #[cfg(not(all(feature = "terminal", feature = "window")))]
-fn open_local(_title: &str, _options: StageOptions) -> Result<Box<dyn Display>, OpenError> {
+fn open_local(_title: &str, _display: Native) -> Result<Box<dyn Display>, OpenError> {
     Err(OpenError::Platform("this build has no display".into()))
 }
 
@@ -878,12 +912,10 @@ pub(super) mod tests {
     #[test]
     fn a_stage_with_native_none_ticks_for_its_players() {
         let range = PlayerRange::new(1, 4).expect("1 to 4 is a range");
-        let options = StageOptions {
-            display: Native::Headless,
+        let display = Native::Headless {
             players: NonZeroU32::new(2),
-            ..StageOptions::default()
         };
-        let (mut stage, players) = Stage::open("test", range, options).unwrap();
+        let (mut stage, players) = Stage::open("test", range, display).unwrap();
         let numbers: Vec<_> = players.iter().map(|(p, _)| p.number().get()).collect();
         assert_eq!(numbers, [1, 2]);
         assert!(matches!(stage.wait(None), Ok(StageEvent::Tick)));
@@ -898,21 +930,19 @@ pub(super) mod tests {
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]
-    fn open_with(players: u32, local: Option<u32>, display: Native) -> Result<Stage, StageError> {
+    fn open_with(players: u32, display: Native) -> Result<Stage, StageError> {
         let range = PlayerRange::new(1, players).expect("a range");
-        let options = StageOptions {
-            display,
-            players: local.and_then(NonZeroU32::new),
-            ..StageOptions::default()
-        };
-        Stage::open("test", range, options).map(|(stage, _)| stage)
+        Stage::open("test", range, display).map(|(stage, _)| stage)
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn local_players_outside_the_range_of_the_game_fail() {
         for (max, local) in [(1, 2), (16, 9)] {
-            let result = open_with(max, Some(local), Native::Headless);
+            let display = Native::Headless {
+                players: NonZeroU32::new(local),
+            };
+            let result = open_with(max, display);
             assert!(
                 matches!(result, Err(StageError::Players { players, .. }) if players.get() == local)
             );
@@ -921,21 +951,34 @@ pub(super) mod tests {
 
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
-    fn several_local_players_need_a_window() {
-        let result = open_with(2, Some(2), Native::Terminal { graphics: None });
+    fn no_local_players_means_the_fewest_of_the_game() {
+        let range = PlayerRange::new(2, 4).expect("2 to 4 is a range");
+        let display = Native::Terminal {
+            options: TerminalOptions::default(),
+            graphics: None,
+        };
+        let result = Stage::open("test", range, display);
         assert!(matches!(result, Err(StageError::TerminalPlayers)));
     }
 
-    #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
-    fn no_local_players_means_the_fewest_of_the_game() {
-        let range = PlayerRange::new(2, 4).expect("2 to 4 is a range");
-        let options = StageOptions {
-            display: Native::Terminal { graphics: None },
-            ..StageOptions::default()
-        };
-        let result = Stage::open("test", range, options);
-        assert!(matches!(result, Err(StageError::TerminalPlayers)));
+    fn auto_gives_one_player_a_window_when_there_is_a_window_system() {
+        let options = TerminalOptions::default();
+        assert!(matches!(
+            Native::choose(None, options, || true),
+            Native::Window { players: None }
+        ));
+        assert!(matches!(
+            Native::choose(NonZeroU32::new(1), options, || false),
+            Native::Terminal { graphics: None, .. }
+        ));
+    }
+
+    #[test]
+    fn auto_gives_several_players_windows_without_a_check() {
+        let two = NonZeroU32::new(2);
+        let display = Native::choose(two, TerminalOptions::default(), || panic!("checked"));
+        assert!(matches!(display, Native::Window { players } if players == two));
     }
 
     /// Two players with nothing to draw.
