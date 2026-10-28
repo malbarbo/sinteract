@@ -1,7 +1,6 @@
 //! The drawing of an image on a scene.
 
 use std::fmt;
-use std::rc::Rc;
 
 use super::geometry::{ImageBox, Point};
 use super::path::{self, RESIDUE, without_residue};
@@ -10,7 +9,7 @@ use super::{Attribute, Color, Font, Image, Length, Style};
 use crate::renderer::Renderer;
 use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
-    Affine, Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathFill,
+    Affine, Bitmap, Crop, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathFill,
     PathStroke, PathStyle, Rgba, Sampling, Scene, StrokeWidth, Text,
 };
 
@@ -43,23 +42,66 @@ impl Image {
     /// Adds what `self` draws to `scene`, with the least corner of `self` at
     /// the origin. A crop inside another becomes one clip of the two regions
     /// together, so no clip of the scene holds another, and the nesting
-    /// limit of the scene drops nothing.
+    /// limit of the scene drops nothing. The nodes wait on a stack of their
+    /// own, so a deep tree does not overflow the stack of the thread.
     pub fn draw(&self, scene: &mut Scene) {
-        for (region, leaves) in self.runs() {
-            let Some(region) = region else {
-                leaves.into_iter().for_each(|leaf| leaf.add_to(scene));
-                continue;
-            };
-            let Some((&(x, y), rest)) = region.split_first() else {
-                continue;
-            };
-            let mut clip = ClipPath::builder(FillRule::default(), x as f32, y as f32);
-            for &(x, y) in rest {
-                clip = clip.line_to(x as f32, y as f32);
+        let mut pending = vec![(self, Point::ORIGIN, Crop::default())];
+        while let Some((image, at, crop)) = pending.pop() {
+            match image.node() {
+                Node::Combination { parts, .. } => {
+                    // The stack gives back the last part first, and the
+                    // first part draws first.
+                    let parts = parts.iter().rev();
+                    pending.extend(parts.map(|(part, p)| (part, at.plus(*p), crop.clone())));
+                }
+                Node::Crop {
+                    region,
+                    image,
+                    at: inner,
+                } => {
+                    let inside = crop.intersect(affine(*region, at));
+                    pending.push((image, at.plus(*inner), inside));
+                }
+                Node::Path { drawn: None, .. } => {}
+                Node::Path {
+                    style,
+                    commands,
+                    closed,
+                    ..
+                } => {
+                    let style = Resolved::read(style);
+                    let path = style
+                        .path_style(*closed)
+                        .and_then(|s| path::draw(commands, s, pixel_point(&style, at)));
+                    if let Some(path) = path {
+                        scene.cropped(&crop).add_path(path);
+                    }
+                }
+                Node::Line { style, from, to } => {
+                    let style = Resolved::read(style);
+                    let point = pixel_point(&style, at);
+                    let ((x, y), (to_x, to_y)) = (point(*from), point(*to));
+                    if let Some(s) = style.path_style(false) {
+                        let path = Path::builder(s, x, y).line_to(to_x, to_y).build();
+                        scene.cropped(&crop).add_path(path);
+                    }
+                }
+                Node::Text {
+                    style,
+                    region,
+                    text,
+                    font,
+                } => {
+                    if let Some(text) = draw_text(style, affine(*region, at), text, font) {
+                        scene.cropped(&crop).add_text(text);
+                    }
+                }
+                Node::Bitmap { region, image } => scene.cropped(&crop).add_bitmap(Bitmap {
+                    image: image.clone(),
+                    transform: affine(*region, at),
+                    sampling: Sampling::Smooth,
+                }),
             }
-            scene.clip(clip.build(), |inner| {
-                leaves.into_iter().for_each(|leaf| leaf.add_to(inner));
-            });
         }
     }
 
@@ -112,77 +154,6 @@ impl Image {
         let Ok(_) = renderer.render(scene);
         renderer.into_string()
     }
-
-    /// The leaves of `self`, in runs that share a region, in drawing order.
-    /// The nodes wait on a stack of their own, so a deep tree does not
-    /// overflow the stack of the thread.
-    fn runs(&self) -> Vec<Run> {
-        let mut runs: Vec<Run> = Vec::new();
-        let mut pending = vec![(self, Point::ORIGIN, Rc::new(None))];
-        while let Some((image, at, region)) = pending.pop() {
-            let leaf = match image.node() {
-                Node::Combination { parts, .. } => {
-                    // The stack gives back the last part first, and the
-                    // first part draws first.
-                    let parts = parts.iter().rev();
-                    pending.extend(parts.map(|(part, p)| (part, at.plus(*p), Rc::clone(&region))));
-                    None
-                }
-                Node::Crop {
-                    region: r,
-                    image,
-                    at: inner,
-                } => {
-                    let inside = intersect(&region, &corners(affine(*r, at)));
-                    pending.push((image, at.plus(*inner), Rc::new(inside)));
-                    None
-                }
-                Node::Path { drawn: None, .. } => None,
-                Node::Path {
-                    style,
-                    commands,
-                    closed,
-                    ..
-                } => {
-                    let style = Resolved::read(style);
-                    style
-                        .path_style(*closed)
-                        .and_then(|s| path::draw(commands, s, pixel_point(&style, at)))
-                        .map(Leaf::Path)
-                }
-                Node::Line { style, from, to } => {
-                    let style = Resolved::read(style);
-                    let point = pixel_point(&style, at);
-                    let ((x, y), (to_x, to_y)) = (point(*from), point(*to));
-                    style
-                        .path_style(false)
-                        .map(|s| Leaf::Path(Path::builder(s, x, y).line_to(to_x, to_y).build()))
-                }
-                Node::Text {
-                    style,
-                    region,
-                    text,
-                    font,
-                } => draw_text(style, affine(*region, at), text, font).map(Leaf::Text),
-                Node::Bitmap { region, image } => Some(Leaf::Bitmap(Bitmap {
-                    image: image.clone(),
-                    transform: affine(*region, at),
-                    sampling: Sampling::Smooth,
-                })),
-            };
-            let Some(leaf) = leaf else {
-                continue;
-            };
-            if region.as_ref().as_ref().is_some_and(Vec::is_empty) {
-                continue;
-            }
-            match runs.last_mut() {
-                Some((last, leaves)) if last == region.as_ref() => leaves.push(leaf),
-                _ => runs.push((region.as_ref().clone(), vec![leaf])),
-            }
-        }
-        runs
-    }
 }
 
 /// `v` in whole pixels, as `ceil(round(v, 6))` in Python, so a width that
@@ -203,31 +174,6 @@ fn whole_pixels(v: f64) -> f64 {
     rounded.ceil()
 }
 
-/// The area that the crops around a leaf leave visible, as the corners of a
-/// convex polygon. `None` is no crop, and no corners is an area with nothing
-/// in it.
-type Region = Option<Vec<(f64, f64)>>;
-
-/// Leaves in a row that share a region.
-type Run = (Region, Vec<Leaf>);
-
-/// An element of the scene, before it goes into a clip.
-enum Leaf {
-    Path(Path),
-    Text(Text),
-    Bitmap(Bitmap),
-}
-
-impl Leaf {
-    fn add_to(self, scene: &mut Scene) {
-        match self {
-            Leaf::Path(path) => scene.add_path(path),
-            Leaf::Text(text) => scene.add_text(text),
-            Leaf::Bitmap(bitmap) => scene.add_bitmap(bitmap),
-        }
-    }
-}
-
 /// The affine that takes the unit square centred on the origin to `region`
 /// moved by `at`.
 fn affine(region: ImageBox, at: Point) -> Affine {
@@ -237,85 +183,6 @@ fn affine(region: ImageBox, at: Point) -> Affine {
         y_axis: v(region.y_axis),
         origin: v(region.center.plus(at)),
     }
-}
-
-/// The corners of the box of `m`, as [`ClipPath`] takes them from an
-/// [`Affine`].
-fn corners(m: Affine) -> [(f64, f64); 4] {
-    let [a, b, c, d, e, f] = m.coefficients().map(f64::from);
-    [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
-        .map(|(u, v)| (a * u + c * v + e, b * u + d * v + f))
-}
-
-/// How far a point may be outside a box and still count as inside, so a box
-/// that matches the region up to rounding does not cut it.
-const INSIDE_TOLERANCE: f64 = 1.0e-3;
-
-/// The part of `region` inside the box with `corners`. A box with no area, or
-/// one that is not finite, leaves nothing.
-fn intersect(region: &Region, corners: &[(f64, f64); 4]) -> Region {
-    let finite = corners.iter().all(|&(x, y)| x.is_finite() && y.is_finite());
-    let area = cross(corners[0], corners[1], corners[2]);
-    if !finite || area == 0.0 {
-        return Some(Vec::new());
-    }
-    // The sign makes the distance to an edge positive inside the box,
-    // whichever way its corners turn.
-    let sign = area.signum();
-    let edges = || {
-        corners
-            .iter()
-            .copied()
-            .zip(corners.iter().copied().cycle().skip(1))
-    };
-    let distance = |(p, q): ((f64, f64), (f64, f64)), r: (f64, f64)| {
-        sign * cross(p, q, r) / (q.0 - p.0).hypot(q.1 - p.1)
-    };
-    let Some(region) = region else {
-        return Some(corners.to_vec());
-    };
-    let contains = |r: (f64, f64)| edges().all(|e| distance(e, r) >= -INSIDE_TOLERANCE);
-    if region.iter().all(|&r| contains(r)) {
-        return Some(region.clone());
-    }
-    // Sutherland-Hodgman. The box is convex, so each of its edges cuts away
-    // what lies outside it.
-    let mut out = region.clone();
-    for edge in edges() {
-        let points = std::mem::take(&mut out);
-        let sides = points
-            .iter()
-            .copied()
-            .zip(points.iter().copied().cycle().skip(1));
-        for (p, q) in sides {
-            let (dp, dq) = (distance(edge, p), distance(edge, q));
-            if dp >= 0.0 {
-                out.push(p);
-            }
-            if (dp >= 0.0) != (dq >= 0.0) {
-                let t = dp / (dp - dq);
-                out.push((p.0 + t * (q.0 - p.0), p.1 + t * (q.1 - p.1)));
-            }
-        }
-        // A corner on the edge comes back as itself and as the point where
-        // the edge cuts the side.
-        let same = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1) < INSIDE_TOLERANCE;
-        out.dedup_by(|p, q| same(*p, *q));
-        while let [first, .., last] = out[..]
-            && same(first, last)
-        {
-            out.pop();
-        }
-    }
-    if out.len() < 3 {
-        out.clear();
-    }
-    Some(out)
-}
-
-/// Twice the signed area of the triangle `p`, `q`, `r`.
-fn cross(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
-    (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
 }
 
 /// A point of a path with `style`, moved by `at`, for the scene. A thin
