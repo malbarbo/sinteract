@@ -14,8 +14,7 @@ use crate::scene::Scene;
 use crate::session::Player;
 
 /// A session that shows scenes and delivers events. Opening is the
-/// constructor of the implementation, and the session ends at
-/// [`Display::close`] or at drop:
+/// constructor of the implementation, and the session ends at drop:
 ///
 /// ```no_run
 /// # use sinteract::display::Display;
@@ -36,7 +35,6 @@ use crate::session::Player;
 ///         Err(Interrupt::Close) => break,
 ///     }
 /// }
-/// display.close();
 /// # Ok(())
 /// # }
 /// ```
@@ -49,7 +47,7 @@ pub trait Display: sealed::Sealed {
     /// Show `scene`. The display takes it, because a resize draws it
     /// again at the new scale. A failure leaves the session open, and the
     /// caller decides whether to show the error, to try another scene or to
-    /// [`close`](Display::close).
+    /// drop the display.
     fn present(&mut self, scene: Scene) -> Result<(), PresentError>;
 
     /// Block until the next event, or until `deadline` and then return
@@ -67,9 +65,6 @@ pub trait Display: sealed::Sealed {
     /// window moves to another monitor, so a game reads it again at each
     /// tick.
     fn tick_rate(&self) -> NonZeroU32;
-
-    /// End the session. A second call does nothing, and drop calls it.
-    fn close(&mut self);
 
     /// The rows of text under the frame. Only the terminal keeps them, as
     /// many as [`TerminalOptions::footer_rows`](super::TerminalOptions::footer_rows).
@@ -90,8 +85,8 @@ pub(super) mod sealed {
 /// Why a frame did not reach the display.
 #[derive(Debug)]
 pub enum PresentError {
-    /// The session ended at [`Display::close`]. [`Display::wait_event`]
-    /// also reports it, as [`Interrupt::Close`].
+    /// The session ended. [`Display::wait_event`] also reports it, as
+    /// [`Interrupt::Close`].
     Closed,
     /// Rasterizing the scene failed.
     Alloc(AllocError),
@@ -157,7 +152,7 @@ impl From<io::Error> for PresentError {
 /// # use sinteract::display::{Display, TerminalOptions, open_native};
 /// let options = TerminalOptions::default();
 /// let mut display = open_native("My game", 400.0, 300.0, options)?;
-/// display.close();
+/// # drop(display);
 /// # Ok::<(), sinteract::display::OpenError>(())
 /// ```
 #[cfg(all(feature = "terminal", feature = "window"))]

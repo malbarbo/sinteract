@@ -45,8 +45,8 @@ pub enum Interrupt {
     Timeout,
     /// A read from the tty failed, and a `Close` comes right after.
     Read(std::io::Error),
-    /// The user or the platform ended the session, or the display closed.
-    /// Every wait from now on returns it.
+    /// The user or the platform ended the session, or the server ended
+    /// it. Every wait from now on returns it.
     Close,
 }
 

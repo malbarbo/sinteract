@@ -237,12 +237,11 @@ impl Frames {
     /// the caller prints, since the frame stays on screen above them. The
     /// next show opens a new stage.
     pub fn close(&mut self) -> Vec<String> {
-        if let State::Open(open) = &mut self.state {
+        if let State::Open(mut open) = std::mem::replace(&mut self.state, State::Closed) {
             // The world is over, and nothing reads the error.
             open.present(&mut |_| {});
             open.stage.close();
         }
-        self.state = State::Closed;
         std::mem::take(&mut self.footer)
     }
 }

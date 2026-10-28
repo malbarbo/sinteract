@@ -66,7 +66,7 @@ pub struct Terminal {
     /// bitmaps.
     renderer: PixmapRenderer,
     graphics: TerminalGraphics,
-    /// `None` after [`super::Display::close`].
+    /// `None` during the drop.
     active: Option<Active>,
     /// The scene of the last present, drawn again after a resize.
     last: Option<Scene>,
@@ -268,10 +268,14 @@ impl super::Display for Terminal {
     fn set_footer(&mut self, lines: &[String]) -> Result<(), PresentError> {
         Terminal::set_footer(self, lines)
     }
+}
 
+impl sealed::Sealed for Terminal {}
+
+impl Drop for Terminal {
     /// Stop the reader thread, wait for the frame that the writer holds,
     /// and leave the alt screen and raw mode.
-    fn close(&mut self) {
+    fn drop(&mut self) {
         let Some(active) = self.active.take() else {
             return;
         };
@@ -284,12 +288,12 @@ impl super::Display for Terminal {
         };
         if !active.claim.restored() {
             leave(self.graphics, state.frame_size.is_some());
-            // The session is over, and close has no way to report that
+            // The session is over, and drop has no way to report that
             // the frame did not print.
             if self.keep_last_frame
                 && let Some(scene) = &self.last
             {
-                let footer_rows = self.footer_rows();
+                let footer_rows = super::Display::footer_rows(self);
                 let mut printer = Printer {
                     renderer: std::mem::take(&mut self.renderer),
                     bytes: state.bytes,
@@ -298,14 +302,6 @@ impl super::Display for Terminal {
                 let _ = printer.print_unchecked(scene, footer_rows);
             }
         }
-    }
-}
-
-impl sealed::Sealed for Terminal {}
-
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        super::Display::close(self);
     }
 }
 

@@ -41,8 +41,8 @@ use crate::scene::Scene;
 use crate::session::Target;
 
 /// A [`super::Display`] over a winit window. Closing the window arrives
-/// as [`Interrupt::Close`], and the window stays until
-/// [`super::Display::close`]. The size of the window arrives as an
+/// as [`Interrupt::Close`], and the window stays until the drop of the
+/// `Window`. The size of the window arrives as an
 /// [`InputEvent::Resize`](crate::event::InputEvent::Resize) ahead of the
 /// first tick, and again after each change.
 ///
@@ -51,7 +51,7 @@ use crate::session::Target;
 pub struct Window {
     inbox: Inbox,
     clock: TickClock,
-    /// `None` after [`super::Display::close`].
+    /// `None` during the drop.
     active: Option<Active>,
     /// The first draw that failed since the last [`Window::take_failed`].
     failed: Option<PresentError>,
@@ -313,23 +313,19 @@ impl super::Display for Window {
     fn tick_rate(&self) -> NonZeroU32 {
         self.clock.millihertz()
     }
+}
 
+impl sealed::Sealed for Window {}
+
+impl Drop for Window {
     /// Destroy the windows and give the event loop back.
-    fn close(&mut self) {
+    fn drop(&mut self) {
         let Some(Active { mut lent, seats }) = self.active.take() else {
             return;
         };
         self.inbox.close();
         drop(seats);
         lent.destroy_dropped();
-    }
-}
-
-impl sealed::Sealed for Window {}
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        super::Display::close(self);
     }
 }
 

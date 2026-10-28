@@ -158,8 +158,8 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
             Err(Interrupt::Close) => break,
         }
     }
-    display.close();
-    // After the close, so the line goes to the main screen of a terminal.
+    drop(display);
+    // After the drop, so the line goes to the main screen of a terminal.
     let seconds = start.elapsed().as_secs_f64();
     eprintln!(
         "{frames} frames in {seconds:.1} s, {:.1} fps, {:.1} ms per present",

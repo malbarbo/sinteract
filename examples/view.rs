@@ -128,7 +128,6 @@ fn main() -> ExitCode {
     // its send fails and it lets go of the pipe, so an engine that still
     // writes gets an error instead of blocking, and `child.wait` returns.
     drop(from_reader);
-    display.close();
     drop(display);
     let _ = child.wait();
     stats.report();

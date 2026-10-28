@@ -55,11 +55,6 @@ impl super::Display for Headless {
     fn tick_rate(&self) -> NonZeroU32 {
         self.clock.millihertz()
     }
-
-    fn close(&mut self) {
-        self.closed = true;
-        self.inbox.close();
-    }
 }
 
 impl sealed::Sealed for Headless {}
@@ -72,7 +67,7 @@ mod tests {
     use crate::display::Display;
 
     #[test]
-    fn ticks_until_the_close() {
+    fn ticks_and_takes_a_scene() {
         let mut display = Headless::new();
         let deadline = Instant::now() + Duration::from_secs(1);
         assert!(matches!(
@@ -84,12 +79,6 @@ mod tests {
             Ok(Event::Tick)
         ));
         assert!(display.present(Scene::new(10.0, 10.0)).is_ok());
-        display.close();
-        assert!(matches!(display.wait_event(None), Err(Interrupt::Close)));
-        assert!(matches!(
-            display.present(Scene::new(10.0, 10.0)),
-            Err(PresentError::Closed)
-        ));
     }
 
     #[test]

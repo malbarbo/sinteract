@@ -737,7 +737,8 @@ jogo lê a taxa de novo a cada `Tick`. O `examples/engine.rs` do
 O `wait` respeita o prazo também numa sessão. Ele espera o fd 3 até o
 prazo e devolve `Interrupt::Timeout`, e a sessão segue do ponto em que
 estava, então a engine roda o relógio do jogo mesmo sem `tick`, como numa
-aba escondida. Num build de wasi, o host mantém o fd 3 e o fd 4 abertos
+aba escondida. O `close` consome o `Stage`, e o drop do `Stage` também
+fecha o fd 3 e o fd 4. Num build de wasi, o host mantém o fd 3 e o fd 4 abertos
 depois do `close`, e outro `Stage` pode abrir a próxima sessão da mesma
 instância. Num processo nativo, a sessão é uma só.
 

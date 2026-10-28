@@ -375,15 +375,10 @@ impl Stage {
         }
     }
 
-    /// End the stage. A session closes fd 3 and fd 4, which ends the room
-    /// for the server. A second call does nothing, and drop calls it.
-    pub fn close(&mut self) {
-        match &mut self.inner {
-            Inner::Local(display) => display.close(),
-            #[cfg(feature = "window")]
-            Inner::Players(players) => players.window.close(),
-            Inner::Remote(remote) => remote.close(),
-        }
+    /// End the stage, as its drop does. A session closes fd 3 and fd 4,
+    /// which ends the room for the server.
+    pub fn close(self) {
+        drop(self);
     }
 }
 
@@ -1020,7 +1015,6 @@ pub(super) mod tests {
                 .is_ok()
         );
         stage.close();
-        assert!(matches!(stage.wait(None), Err(Interrupt::Close)));
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]

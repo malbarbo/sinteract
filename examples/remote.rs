@@ -91,7 +91,6 @@ fn main() -> ExitCode {
     // closes the socket.
     drop(to_net);
     drop(from_net);
-    display.close();
     drop(display);
     let _ = net.join();
     stats.report();
