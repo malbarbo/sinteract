@@ -6,7 +6,7 @@ use std::rc::Rc;
 use super::geometry::{ImageBox, Point};
 use super::path::{self, RESIDUE, without_residue};
 use super::tree::Node;
-use super::{Attribute, Color, Font, Image, Join, Length, Style};
+use super::{Attribute, Color, Font, Image, Length, Style};
 use crate::renderer::Renderer;
 use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
@@ -352,7 +352,7 @@ struct Resolved {
     stroke_opacity: Option<f32>,
     dash: Option<Vec<f32>>,
     line_cap: Option<LineCap>,
-    line_join: Option<Join>,
+    line_join: Option<LineJoin>,
 }
 
 impl Resolved {
@@ -399,13 +399,10 @@ impl Resolved {
                 paint: paint(c, self.stroke_opacity),
                 width: StrokeWidth::new(self.stroke_width.unwrap_or(1.0))?,
                 cap: self.line_cap.unwrap_or(LineCap::Round),
-                join: match self.line_join {
-                    // An outline with no join of its own gets a limit of 10.
-                    None => LineJoin::Miter(OUTLINE_MITER_LIMIT),
-                    Some(Join::Miter) => LineJoin::default(),
-                    Some(Join::Round) => LineJoin::Round,
-                    Some(Join::Bevel) => LineJoin::Bevel,
-                },
+                // An outline with no join of its own gets a limit of 10.
+                join: self
+                    .line_join
+                    .unwrap_or(LineJoin::Miter(OUTLINE_MITER_LIMIT)),
                 dash: self.dash.clone().and_then(|a| Dash::new(a, 0.0)),
             })
         });

@@ -28,5 +28,5 @@ pub use measure::{
 };
 pub use path::PathCmd;
 pub use shape::{AngleSumError, StarPolygonError, TriangleSidesError};
-pub use style::{Attribute, Join, Style};
+pub use style::{Attribute, Style};
 pub use tree::{BitmapError, Image, Overflow};
