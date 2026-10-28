@@ -670,9 +670,9 @@ janelas e escolhe o terminal quando o loop não monta, como num ssh sem
 servidor gráfico. O `players` do `Native::Window` pede mais jogadores,
 até `MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem esse mínimo
 sem pedir. O `Native::Terminal` mostra um jogador só, e um jogo com
-mínimo acima de 1 falha nele com o `StageError::TerminalPlayers`. Cada
-jogador ganha uma janela, com o número dele no título e um apelido vazio,
-e o usuário testa o jogo trocando o foco. Fechar
+mínimo acima de 1 falha nele com o `StageError::TerminalPlayers`, que
+traz a faixa do jogo. Cada jogador ganha uma janela, com o número dele no
+título e um apelido vazio, e o usuário testa o jogo trocando o foco. Fechar
 qualquer janela encerra o `Stage`. A janela abre escondida, e o primeiro
 `present` dá a ela o tamanho da cena e a mostra. Com vários jogadores, a
 última cena de cada janela sai no próximo `wait`, então uma cena para

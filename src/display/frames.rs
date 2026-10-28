@@ -421,7 +421,7 @@ mod tests {
         let range = PlayerRange::new(2, 4).expect("2 to 4 is a range");
         assert!(matches!(
             frames.open(range),
-            Err(StageError::TerminalPlayers)
+            Err(StageError::TerminalPlayers { .. })
         ));
         assert!(!frames.is_open());
         assert!(frames.players().is_empty());

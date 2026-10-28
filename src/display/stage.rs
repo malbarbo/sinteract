@@ -172,9 +172,9 @@ pub enum StageError {
         range: PlayerRange,
         players: NonZeroU32,
     },
-    /// The game takes several players, and the display is the terminal,
-    /// which shows one.
-    TerminalPlayers,
+    /// The game takes `range`, at least two players, and the display is
+    /// the terminal, which shows one.
+    TerminalPlayers { range: PlayerRange },
     /// Several players play on a display of this process, and the session
     /// has no graphical display for their windows.
     NoWindowPlayers,
@@ -229,7 +229,7 @@ impl Stage {
     fn local_players(players: PlayerRange, display: Native) -> Result<NonZeroU32, StageError> {
         let local = match display {
             Native::Terminal { .. } if players.min().get() > 1 => {
-                return Err(StageError::TerminalPlayers);
+                return Err(StageError::TerminalPlayers { range: players });
             }
             Native::Terminal { .. } => NonZeroU32::MIN,
             Native::Window { players: local } | Native::Headless { players: local } => {
@@ -464,9 +464,12 @@ impl fmt::Display for StageError {
                 range.min(),
                 range.max()
             ),
-            StageError::TerminalPlayers => {
-                f.write_str("the terminal shows one player, and several play here")
-            }
+            StageError::TerminalPlayers { range } => write!(
+                f,
+                "the game takes at least {} players, and the terminal shows one, so \
+                 they need a window each",
+                range.min()
+            ),
             StageError::NoWindowPlayers => f.write_str(
                 "several players need a window each, and this session has no graphical display",
             ),
@@ -483,7 +486,7 @@ impl std::error::Error for StageError {
             StageError::Open(e) => Some(e),
             StageError::Start(e) => Some(e),
             StageError::Players { .. }
-            | StageError::TerminalPlayers
+            | StageError::TerminalPlayers { .. }
             | StageError::NoWindowPlayers
             | StageError::NoSession => None,
         }
@@ -957,8 +960,15 @@ pub(super) mod tests {
             options: TerminalOptions::default(),
             graphics: None,
         };
-        let result = Stage::open("test", range, display);
-        assert!(matches!(result, Err(StageError::TerminalPlayers)));
+        let Err(e) = Stage::open("test", range, display) else {
+            panic!("a terminal opened for two players");
+        };
+        assert!(matches!(e, StageError::TerminalPlayers { range: r } if r == range));
+        assert_eq!(
+            e.to_string(),
+            "the game takes at least 2 players, and the terminal shows one, so they need a \
+             window each"
+        );
     }
 
     #[test]
