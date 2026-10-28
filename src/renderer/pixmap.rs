@@ -989,9 +989,13 @@ mod tests {
         // the TrueType faces that the crate embeds. A machine without it has
         // nothing to check.
         let family = "URW Gothic";
-        let installed =
-            crate::text::measure(family, 400, crate::scene::FontStyle::Normal, 96.0, "gyp")
-                .is_some_and(|m| m.family() == family);
+        let spec = TextSpec {
+            size: 96.0,
+            family: family.into(),
+            text: "gyp".into(),
+            ..TextSpec::default()
+        };
+        let installed = crate::text::measure(&spec).is_some_and(|m| m.family() == family);
         if !installed {
             return;
         }
@@ -1006,12 +1010,7 @@ mod tests {
                 .unwrap(),
             ),
             [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
-            TextSpec {
-                size: 96.0,
-                family: family.into(),
-                text: "gyp".into(),
-                ..TextSpec::default()
-            },
+            spec,
             true,
         );
         let layout = crate::text::TextLayout::new(node.spec()).expect("node draws");

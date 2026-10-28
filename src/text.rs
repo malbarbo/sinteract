@@ -31,7 +31,8 @@ use crate::scene::{FontStyle, TextSpec};
 // Text metrics, the public API
 // ---------------------------------------------------------------------------
 
-/// Measure a text in the face that `family`, `weight` and `style` pick.
+/// Measure the text of `spec` in the face that its family, weight and
+/// style pick.
 ///
 /// The family loses its surrounding space first. An empty family is
 /// Sinteract Sans, and an alias (`sans-serif`, `sans`, `serif`, `monospace`,
@@ -44,14 +45,8 @@ use crate::scene::{FontStyle, TextSpec};
 /// An empty text measures zero wide, with the height of the face. Returns
 /// `None` when the size is not a positive finite number, when the
 /// measurement overflows, or when the height does not come out positive.
-pub fn measure(
-    family: &str,
-    weight: u16,
-    style: FontStyle,
-    size: f32,
-    text: &str,
-) -> Option<TextMetrics> {
-    ResolvedFont::resolve(family, weight, style).measure(size, text)
+pub fn measure(spec: &TextSpec) -> Option<TextMetrics> {
+    ResolvedFont::resolve(&spec.family, spec.weight, spec.font_style).measure(spec.size, &spec.text)
 }
 
 /// The size of a measured text and the family it measured in, for a producer
@@ -562,7 +557,12 @@ mod tests {
 
     /// The metrics of `text` in `family` at `weight`, in the normal style.
     fn metrics(family: &str, weight: u16, size: f32, text: &str) -> TextMetrics {
-        measure(family, weight, FontStyle::Normal, size, text).expect("text measures")
+        measure(&TextSpec {
+            family: family.into(),
+            weight,
+            ..text_spec(size, text)
+        })
+        .expect("text measures")
     }
 
     /// A spec of `text` at `size`, in the default family, weight and style.
@@ -846,10 +846,10 @@ mod tests {
 
     #[test]
     fn measure_gives_the_height_and_the_family_of_an_empty_text() {
-        let m = measure("", 400, FontStyle::Normal, 20.0, "").expect("measures");
+        let m = measure(&text_spec(20.0, "")).expect("measures");
         let drawn_spec = text_spec(20.0, "Hi");
         let drawn = TextLayout::new(&drawn_spec).expect("node draws");
-        let hi = measure("", 400, FontStyle::Normal, 20.0, "Hi").expect("measures");
+        let hi = measure(&drawn_spec).expect("measures");
         assert_eq!(m.width(), 0.0);
         assert_eq!(m.height(), hi.height());
         assert_eq!(m.baseline_y(), drawn.baseline_y);
@@ -858,7 +858,13 @@ mod tests {
 
     #[test]
     fn measure_gives_the_family_after_fallback() {
-        let family = |name| measure(name, 400, FontStyle::Normal, 20.0, "Hi").map(|m| m.family());
+        let family = |name: &str| {
+            let spec = TextSpec {
+                family: name.into(),
+                ..text_spec(20.0, "Hi")
+            };
+            measure(&spec).map(|m| m.family())
+        };
         assert_eq!(family("serif"), Some("Sinteract Serif"));
         assert_eq!(
             family("ZZZ_NonexistentFontXyzzy_ZZZ"),
@@ -869,21 +875,18 @@ mod tests {
     #[test]
     fn measure_returns_none_for_a_size_that_cannot_draw() {
         for size in [0.0, -4.0, f32::NAN, f32::INFINITY, f32::MAX] {
-            assert!(
-                measure("", 400, FontStyle::Normal, size, "").is_none(),
-                "size {size}"
-            );
+            assert!(measure(&text_spec(size, "")).is_none(), "size {size}");
         }
     }
 
     #[test]
     fn measure_agrees_with_text_layout() {
-        let m = measure("", 700, FontStyle::Italic, 24.5, "Olá").expect("measures");
         let spec = TextSpec {
             weight: 700,
             font_style: FontStyle::Italic,
             ..text_spec(24.5, "Olá")
         };
+        let m = measure(&spec).expect("measures");
         let l = TextLayout::new(&spec).expect("node draws");
         assert_eq!((m.width(), m.baseline_y()), (l.width, l.baseline_y));
     }

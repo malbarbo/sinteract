@@ -267,13 +267,7 @@ fn label(text: &str, cx: f32, cy: f32) -> Option<Text> {
         text: text.into(),
         ..TextSpec::default()
     };
-    let m = sinteract::text::measure(
-        &spec.family,
-        spec.weight,
-        spec.font_style,
-        spec.size,
-        &spec.text,
-    )?;
+    let m = sinteract::text::measure(&spec)?;
     spec.fit(
         RotatedRect {
             cx,

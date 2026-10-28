@@ -979,13 +979,7 @@ fn text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, fill: Rgba) -> Option<
 /// A text at its natural size in `style`, centred on `(cx, cy)` and rotated
 /// by `angle_deg`.
 fn styled_text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, style: TextStyle) -> Option<Text> {
-    let m = sinteract::text::measure(
-        &spec.family,
-        spec.weight,
-        spec.font_style,
-        spec.size,
-        &spec.text,
-    )?;
+    let m = sinteract::text::measure(&spec)?;
     spec.fit(
         RotatedRect {
             cx,
