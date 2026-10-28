@@ -657,8 +657,6 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
 /// built or that ended still counts, and the open of the window gives the
 /// error. On macOS it only checks for the main thread, since a build there
 /// registers the process with the dock.
-// Only the stage, which needs the terminal too, asks.
-#[cfg_attr(not(feature = "terminal"), allow(dead_code))]
 pub(crate) fn has_window_system() -> bool {
     #[cfg(target_os = "macos")]
     return unsafe { libc::pthread_main_np() } == 1;

@@ -180,6 +180,9 @@ pub enum StageError {
     /// so no server opened it for the session, as with a `3>file` in a
     /// shell.
     NotSessionFd { fd: i32 },
+    /// The mode asks for a window or the terminal, and the build leaves
+    /// out its feature. [`StageMode::Headless`] needs either one.
+    NoDisplay,
 }
 
 impl Stage {
@@ -206,17 +209,17 @@ impl Stage {
                 if local.get() > 1 {
                     return open_players(title, local);
                 }
-                Stage::open_local(local, open_window(title))
+                Stage::open_local(local, open_window(title)?)
             }
             StageMode::Terminal { options, graphics } => {
                 if players.min().get() > 1 {
                     return Err(StageError::TerminalPlayers { range: players });
                 }
-                Stage::open_local(NonZeroU32::MIN, open_terminal(options, graphics))
+                Stage::open_local(NonZeroU32::MIN, open_terminal(options, graphics)?)
             }
             StageMode::Headless { players: local } => {
                 let local = Stage::local_players(players, local)?;
-                Stage::open_local(local, open_headless())
+                Stage::open_local(local, open_headless()?)
             }
         }
     }
@@ -224,10 +227,10 @@ impl Stage {
     /// The stage of `players` on `display`, which shows them all.
     fn open_local(
         players: NonZeroU32,
-        display: Result<Box<dyn Display>, OpenError>,
+        display: Box<dyn Display>,
     ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
         let stage = Stage {
-            inner: Inner::Local(display.map_err(StageError::Open)?),
+            inner: Inner::Local(display),
             players,
         };
         Ok((stage, numbered(players)))
@@ -385,32 +388,52 @@ impl Stage {
 }
 
 /// A window for one player, with `title`.
-#[cfg(all(feature = "terminal", feature = "window"))]
-fn open_window(title: &str) -> Result<Box<dyn Display>, OpenError> {
-    Ok(Box::new(super::Window::open_seats(&[title.to_owned()])?))
+#[cfg(feature = "window")]
+fn open_window(title: &str) -> Result<Box<dyn Display>, StageError> {
+    let window = super::Window::open_seats(&[title.to_owned()]).map_err(StageError::Open)?;
+    Ok(Box::new(window))
 }
 
-#[cfg(all(feature = "terminal", feature = "window"))]
+#[cfg(not(feature = "window"))]
+fn open_window(_title: &str) -> Result<Box<dyn Display>, StageError> {
+    Err(StageError::NoDisplay)
+}
+
+#[cfg(feature = "terminal")]
 fn open_terminal(
     options: TerminalOptions,
     graphics: Option<TerminalGraphics>,
-) -> Result<Box<dyn Display>, OpenError> {
-    Ok(Box::new(super::Terminal::open(options, graphics)?))
+) -> Result<Box<dyn Display>, StageError> {
+    let terminal = super::Terminal::open(options, graphics).map_err(StageError::Open)?;
+    Ok(Box::new(terminal))
 }
 
-#[cfg(all(feature = "terminal", feature = "window"))]
-fn open_headless() -> Result<Box<dyn Display>, OpenError> {
+#[cfg(not(feature = "terminal"))]
+fn open_terminal(
+    _options: TerminalOptions,
+    _graphics: Option<TerminalGraphics>,
+) -> Result<Box<dyn Display>, StageError> {
+    Err(StageError::NoDisplay)
+}
+
+#[cfg(any(feature = "terminal", feature = "window"))]
+fn open_headless() -> Result<Box<dyn Display>, StageError> {
     Ok(Box::new(super::headless::Headless::new()))
 }
 
-#[cfg(all(feature = "terminal", feature = "window"))]
+#[cfg(not(any(feature = "terminal", feature = "window")))]
+fn open_headless() -> Result<Box<dyn Display>, StageError> {
+    Err(StageError::NoDisplay)
+}
+
+#[cfg(feature = "window")]
 fn has_window_system() -> bool {
     super::window::has_window_system()
 }
 
-/// A build without both displays opens no window, so [`StageMode::auto`]
-/// picks the terminal.
-#[cfg(not(all(feature = "terminal", feature = "window")))]
+/// A build without the window opens none, so [`StageMode::auto`] picks
+/// the terminal.
+#[cfg(not(feature = "window"))]
 fn has_window_system() -> bool {
     false
 }
@@ -453,25 +476,7 @@ fn open_players(
     _title: &str,
     _players: NonZeroU32,
 ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
-    Err(StageError::NoWindowPlayers)
-}
-
-#[cfg(not(all(feature = "terminal", feature = "window")))]
-fn open_window(_title: &str) -> Result<Box<dyn Display>, OpenError> {
-    Err(OpenError::Platform("this build has no display".into()))
-}
-
-#[cfg(not(all(feature = "terminal", feature = "window")))]
-fn open_terminal(
-    _options: TerminalOptions,
-    _graphics: Option<TerminalGraphics>,
-) -> Result<Box<dyn Display>, OpenError> {
-    Err(OpenError::Platform("this build has no display".into()))
-}
-
-#[cfg(not(all(feature = "terminal", feature = "window")))]
-fn open_headless() -> Result<Box<dyn Display>, OpenError> {
-    Err(OpenError::Platform("this build has no display".into()))
+    Err(StageError::NoDisplay)
 }
 
 impl fmt::Display for StageError {
@@ -508,6 +513,7 @@ impl fmt::Display for StageError {
                     "fd {fd} is not a pipe or a socket, so no server opened it"
                 )
             }
+            StageError::NoDisplay => f.write_str("this build has no display for the mode"),
         }
     }
 }
@@ -521,7 +527,8 @@ impl std::error::Error for StageError {
             | StageError::TerminalPlayers { .. }
             | StageError::NoWindowPlayers
             | StageError::NoSession
-            | StageError::NotSessionFd { .. } => None,
+            | StageError::NotSessionFd { .. }
+            | StageError::NoDisplay => None,
         }
     }
 }
@@ -1053,6 +1060,17 @@ pub(super) mod tests {
             "the game takes at least 2 players, and the terminal shows one, so they need a \
              window each"
         );
+    }
+
+    #[cfg(not(feature = "window"))]
+    #[test]
+    fn a_build_without_the_window_opens_no_window() {
+        let range = PlayerRange::new(1, 1).expect("1 to 1 is a range");
+        let mode = StageMode::Window { players: None };
+        assert!(matches!(
+            Stage::open("test", range, mode),
+            Err(StageError::NoDisplay)
+        ));
     }
 
     #[test]

@@ -34,7 +34,7 @@ mod sixel;
 mod display_link;
 mod driver;
 mod frames;
-#[cfg(all(feature = "terminal", feature = "window"))]
+#[cfg(any(feature = "terminal", feature = "window"))]
 mod headless;
 // A build with no display of its own keeps only `Sender`, for the type of
 // `Display::sender`.

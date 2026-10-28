@@ -667,11 +667,14 @@ A engine abre um `Stage` com um `StageMode`. Com o `StageMode::Session`,
 que o subcomando `server` e o build de wasi pedem, o `Stage` manda o
 `hello`, espera o `start`, lê o fd 3 e escreve no fd 4. Com os outros
 modos, ele abre uma janela ou o terminal, e o usuário é o jogador 1,
-então o mesmo jogo roda sem servidor. O `StageMode::auto` monta o event
-loop das janelas e escolhe o terminal quando o loop não monta, como num
-ssh sem servidor gráfico. O `players` do `StageMode::Window` pede mais jogadores,
-até `MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem esse mínimo
-sem pedir. O `StageMode::Terminal` mostra um jogador só, e um jogo com
+então o mesmo jogo roda sem servidor. Um modo cuja feature o build deixa
+de fora, como o `StageMode::Window` num build só com a `terminal`, falha
+com o `StageError::NoDisplay`, e o `StageMode::Headless` precisa de uma
+das duas. O `StageMode::auto` monta o event loop das janelas e escolhe o
+terminal quando o loop não monta, como num ssh sem servidor gráfico. O
+`players` do `StageMode::Window` pede mais jogadores, até
+`MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem esse mínimo sem
+pedir. O `StageMode::Terminal` mostra um jogador só, e um jogo com
 mínimo acima de 1 falha nele com o `StageError::TerminalPlayers`, que
 traz a faixa do jogo. Cada jogador ganha uma janela, com o número dele no
 título e um apelido vazio, e o usuário testa o jogo trocando o foco. Fechar
