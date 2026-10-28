@@ -361,9 +361,7 @@ fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, Op
     match options.display {
         Native::Auto => super::driver::window_or_terminal(window, options.terminal),
         Native::Window => Ok(Box::new(window()?)),
-        Native::Terminal { graphics } => {
-            Ok(Box::new(Terminal::open_with(options.terminal, graphics)?))
-        }
+        Native::Terminal { graphics } => Ok(Box::new(Terminal::open(options.terminal, graphics)?)),
         Native::Headless => Ok(Box::new(super::headless::Headless::new())),
     }
 }

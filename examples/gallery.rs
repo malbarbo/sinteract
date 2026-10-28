@@ -110,7 +110,7 @@ fn main() -> ExitCode {
         Some("window") => Window::open("sinteract gallery", WIDTH, HEIGHT)
             .map_err(|e| e.to_string())
             .and_then(|window| run(Box::new(window))),
-        Some("terminal") => Terminal::open()
+        Some("terminal") => Terminal::open(TerminalOptions::default(), None)
             .map_err(|e| e.to_string())
             .and_then(|terminal| run(Box::new(terminal))),
         Some("print") => print(),

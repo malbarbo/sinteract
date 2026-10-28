@@ -90,17 +90,12 @@ impl Terminal {
     /// half-block animation and does not flood the pty with escape codes.
     const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
-    /// Enter the alt screen and raw mode, with [`TerminalOptions::default`].
-    pub fn open() -> Result<Self, OpenError> {
-        Self::open_with(TerminalOptions::default(), None)
-    }
-
     /// Enter the alt screen and raw mode, and show the frames through
     /// `graphics`, or through the graphics that the terminal shows when
     /// `None`. Fails with [`OpenError::Busy`] while another `Terminal`
     /// exists, and with [`OpenError::NoGraphics`] when `graphics` is
     /// `None` and the terminal shows neither Kitty, Sixel nor truecolor.
-    pub fn open_with(
+    pub fn open(
         options: TerminalOptions,
         graphics: Option<TerminalGraphics>,
     ) -> Result<Self, OpenError> {

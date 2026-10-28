@@ -179,7 +179,7 @@ pub(crate) fn window_or_terminal(
 ) -> Result<Box<dyn Display>, OpenError> {
     match window() {
         Ok(window) => Ok(Box::new(window)),
-        Err(_) => Ok(Box::new(super::Terminal::open_with(options, None)?)),
+        Err(_) => Ok(Box::new(super::Terminal::open(options, None)?)),
     }
 }
 
