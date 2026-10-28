@@ -28,8 +28,8 @@ use crate::renderer::{
     missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, Element, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin,
-    Paint, Path, Rgba, Sampling, Scene, SpreadMode, Text,
+    Affine, Bitmap, ClipPath, Element, FillRule, Gradient, GradientGeometry, Image, LineCap,
+    LineJoin, Paint, Path, Rgba, Sampling, Scene, SpreadMode, Text,
 };
 use crate::text::{Glyph, TextLayout};
 
@@ -255,7 +255,7 @@ impl CanvasRenderer {
 
     /// Draw a gray box with a red cross, one pixel wide, over the unit
     /// square of `t`.
-    fn draw_missing(&self, t: [f32; 6]) {
+    fn draw_missing(&self, t: Affine) {
         let mut outline = Calls::new();
         missing_box(t, &mut outline);
         let mut cross = Calls::new();
@@ -378,7 +378,7 @@ impl Canvas<Infallible> for CanvasRenderer {
                 // Each glyph keeps its path from frame to frame, and fills
                 // under the transform of the text moved to its origin.
                 let y = layout.baseline_y();
-                let [a, b, c, d, e, f] = node.transform();
+                let [a, b, c, d, e, f] = node.transform().coefficients();
                 for (g, x) in layout.placed_glyphs() {
                     if let Some(p) = self.glyph(g) {
                         self.set([a, b, c, d, a * x + c * y + e, b * x + d * y + f]);
@@ -425,7 +425,7 @@ impl Canvas<Infallible> for CanvasRenderer {
                 return;
             }
         };
-        self.set(bitmap.transform);
+        self.set(bitmap.transform.coefficients());
         let ctx = self.ctx();
         ctx.set_image_smoothing_enabled(bitmap.sampling == Sampling::Smooth);
         _ = ctx.draw_image_with_image_bitmap_and_dw_and_dh(&img, -0.5, -0.5, 1.0, 1.0);

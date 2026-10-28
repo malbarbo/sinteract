@@ -21,8 +21,8 @@ use crate::renderer::{
     frame_side, missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, GradientGeometry, Image, LineCap, LineJoin, Paint, Path, Rgba,
-    Sampling, SpreadMode, Stops, Text,
+    Affine, Bitmap, ClipPath, FillRule, GradientGeometry, Image, LineCap, LineJoin, Paint, Path,
+    Rgba, Sampling, SpreadMode, Stops, Text,
 };
 use crate::text::TextLayout;
 
@@ -322,7 +322,7 @@ impl Canvas<AllocError> for PixmapRenderer {
             InEffect::Everything => None,
             InEffect::Through(mask) => Some(mask),
         };
-        let [a, b, c, d, e, f] = bitmap.transform;
+        let [a, b, c, d, e, f] = bitmap.transform.coefficients();
         let square = Transform::from_row(a, b, c, d, e, f).post_concat(self.base);
         let Some(image) = self.images.get(&bitmap.image) else {
             draw_missing(
@@ -679,7 +679,7 @@ fn render_text(
 
     // The transform is in the `cm` convention, which is the order of
     // Transform::from_row.
-    let [a, b, c, d, e, f] = node.transform();
+    let [a, b, c, d, e, f] = node.transform().coefficients();
     let local = Transform::from_row(a, b, c, d, e, f);
     let paints = TextPaints {
         fill: node.style.fill().and_then(|p| text_paint(p, local, fade)),
@@ -778,14 +778,14 @@ fn draw_missing(
     if !rect_within_reach(unit, transform) {
         return;
     }
-    let t = [
+    let t = Affine::from_coefficients([
         transform.sx,
         transform.ky,
         transform.kx,
         transform.sy,
         transform.tx,
         transform.ty,
-    ];
+    ]);
     let mut b = std::mem::take(builder);
     missing_box(t, &mut b);
     let Some(outline) = b.finish() else {
@@ -1009,7 +1009,7 @@ mod tests {
                 })
                 .unwrap(),
             ),
-            [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
+            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 160.0, 60.0]),
             spec,
             true,
         );
@@ -1409,7 +1409,7 @@ mod tests {
                 })
                 .unwrap(),
             ),
-            [1e9, 0.0, 0.0, 1e9, 0.0, 50.0],
+            Affine::from_coefficients([1e9, 0.0, 0.0, 1e9, 0.0, 50.0]),
             TextSpec {
                 size: 20.0,
                 text: "H".into(),
@@ -1601,7 +1601,7 @@ mod tests {
                     paint: Paint::opaque(0, 0, 0),
                     width: StrokeWidth::ONE,
                 }),
-                [scale, 0.0, 0.0, scale, 10.0, 10.0],
+                Affine::from_coefficients([scale, 0.0, 0.0, scale, 10.0, 10.0]),
                 TextSpec {
                     size,
                     text: "Hi".into(),
@@ -1631,7 +1631,7 @@ mod tests {
                 })
                 .unwrap(),
             ),
-            [1.0, 0.0, 0.0, 1.0, 5.0, 5.0],
+            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 5.0, 5.0]),
             TextSpec {
                 size: 24.0,
                 ..TextSpec::default()

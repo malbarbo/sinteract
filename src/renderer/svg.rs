@@ -30,8 +30,8 @@ use crate::renderer::{
     missing_box, missing_cross, sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin, MiterLimit,
-    Paint, Path, Rgba, Sampling, SpreadMode, Text, TextStroke,
+    Affine, Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin,
+    MiterLimit, Paint, Path, Rgba, Sampling, SpreadMode, Text, TextStroke,
 };
 use crate::text::{Glyph, TextLayout};
 
@@ -265,13 +265,19 @@ impl Canvas<Infallible> for SvgRenderer {
             return;
         };
         let fill_paint = node.style.fill();
-        let fill = fill_paint
-            .and_then(|p| self.text_paint(p, "fill", "fill-opacity", invert(node.transform())));
+        let fill = fill_paint.and_then(|p| {
+            self.text_paint(
+                p,
+                "fill",
+                "fill-opacity",
+                invert(node.transform().coefficients()),
+            )
+        });
         let stroke = node.style.stroke();
         // The underline paints on its own and after the stroke of the glyphs,
         // as in the other renderers. With no stroke, it fills in the group of
         // the glyphs.
-        let [a, b, c, d, e, f] = node.transform();
+        let [a, b, c, d, e, f] = node.transform().coefficients();
         if let Some(fill) = &fill {
             _ = writeln!(
                 self.body,
@@ -333,7 +339,7 @@ impl Canvas<Infallible> for SvgRenderer {
             self.body,
             "<use xlink:href=\"#{prefix}i{id}\" transform=\"matrix("
         );
-        write_list(&bitmap.transform, &mut self.body);
+        write_list(&bitmap.transform.coefficients(), &mut self.body);
         self.body.push_str(")\"");
         if bitmap.sampling == Sampling::Nearest {
             // SVG 1.1 names nearest sampling optimizeSpeed, and CSS names it
@@ -589,7 +595,7 @@ impl fmt::Display for Hex {
 
 /// Writes the gray box with a red cross that stands for a bitmap of
 /// `transform` whose image does not decode.
-fn write_missing(transform: [f32; 6], out: &mut String) {
+fn write_missing(transform: Affine, out: &mut String) {
     out.push_str("<path d=\"");
     let mut d = PathData::new(out);
     missing_box(transform, &mut d);
@@ -625,8 +631,8 @@ fn write_list(values: &[f32], out: &mut String) {
     }
 }
 
-/// The inverse of the affine `m`, in the convention of [`Text::transform`],
-/// or `None` when `m` has none.
+/// The inverse of the affine `m`, in the order of
+/// [`Affine::from_coefficients`], or `None` when `m` has none.
 fn invert(m: [f32; 6]) -> Option<[f32; 6]> {
     let affine = kurbo::Affine::new(m.map(f64::from));
     if affine.determinant() == 0.0 {
@@ -710,7 +716,7 @@ mod tests {
     fn bitmap(image: Image, sampling: Sampling) -> Bitmap {
         Bitmap {
             image,
-            transform: [10.0, 0.0, 0.0, 10.0, 10.0, 10.0],
+            transform: Affine::from_coefficients([10.0, 0.0, 0.0, 10.0, 10.0, 10.0]),
             sampling,
         }
     }
@@ -785,7 +791,7 @@ mod tests {
     fn text(s: &str) -> Text {
         Text::from_parts(
             TextStyle::Fill(Paint::solid(black()).unwrap()),
-            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
             TextSpec {
                 size: 16.0,
                 text: s.to_owned(),
@@ -1019,7 +1025,7 @@ mod tests {
                     width: StrokeWidth::ONE,
                 },
             ),
-            [4.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            Affine::from_coefficients([4.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
             text("ab").spec().clone(),
             false,
         ));
@@ -1050,7 +1056,7 @@ mod tests {
         ];
         let node = Text::from_parts(
             TextStyle::Fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops).unwrap()),
-            [2.0, 0.0, 0.0, 2.0, 10.0, 4.0],
+            Affine::from_coefficients([2.0, 0.0, 0.0, 2.0, 10.0, 4.0]),
             text("ab").spec().clone(),
             false,
         );

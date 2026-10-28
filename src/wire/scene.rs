@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use capnp::message::{Builder, HeapAllocator};
 
 use crate::scene::{
-    Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
+    Affine, Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
     LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathFill, PathStroke, PathStyle, Rgba,
     Sampling, Scene, Segment, SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth, Text,
     TextSpec, TextStroke, TextStyle, end_segments, push_segment,
@@ -313,12 +313,13 @@ fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ValueError>
 
 fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap, ids: &dyn Fn(&Image) -> u32) {
     b.set_id(ids(&n.image));
-    b.set_m0(n.transform[0]);
-    b.set_m1(n.transform[1]);
-    b.set_m2(n.transform[2]);
-    b.set_m3(n.transform[3]);
-    b.set_m4(n.transform[4]);
-    b.set_m5(n.transform[5]);
+    let m = n.transform.coefficients();
+    b.set_m0(m[0]);
+    b.set_m1(m[1]);
+    b.set_m2(m[2]);
+    b.set_m3(m[3]);
+    b.set_m4(m[4]);
+    b.set_m5(m[5]);
     b.set_sampling(match n.sampling {
         Sampling::Smooth => WSampling::Smooth,
         Sampling::Nearest => WSampling::Nearest,
@@ -331,14 +332,14 @@ fn read_bitmap(
 ) -> Result<Bitmap, ValueError> {
     let bitmap = Bitmap {
         image: images(r.get_id()).ok_or(ValueError::NoImage)?,
-        transform: [
+        transform: Affine::from_coefficients([
             r.get_m0(),
             r.get_m1(),
             r.get_m2(),
             r.get_m3(),
             r.get_m4(),
             r.get_m5(),
-        ],
+        ]),
         // A sampling from a newer schema is a hint, so it draws smooth.
         sampling: match r.get_sampling() {
             Ok(WSampling::Nearest) => Sampling::Nearest,
@@ -375,7 +376,7 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     } else {
         write_no_paint(b.reborrow().init_stroke());
     }
-    let m = n.transform();
+    let m = n.transform().coefficients();
     b.set_m0(m[0]);
     b.set_m1(m[1]);
     b.set_m2(m[2]);
@@ -395,14 +396,14 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
     let stroke = read_stroke(read_paint(r.get_stroke()?)?, r.get_stroke_width())?
         .map(|(paint, width)| TextStroke { paint, width });
     let style = TextStyle::new(fill, stroke);
-    let transform = [
+    let transform = Affine::from_coefficients([
         r.get_m0(),
         r.get_m1(),
         r.get_m2(),
         r.get_m3(),
         r.get_m4(),
         r.get_m5(),
-    ];
+    ]);
     let spec = TextSpec {
         size: r.get_size(),
         family: r.get_family()?.to_str()?.into(),

@@ -217,8 +217,8 @@ mod tests {
     use crate::event_capnp::input_event;
     use crate::protocol_capnp;
     use crate::scene::{
-        Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Image, LineCap, LineJoin, Paint,
-        Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment,
+        Affine, Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Image, LineCap, LineJoin,
+        Paint, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment,
         SegmentKind, SpreadMode, Stop, StrokeWidth, Text, TextSpec, TextStroke, TextStyle,
     };
     use crate::scene_capnp::element;
@@ -371,7 +371,7 @@ mod tests {
     fn bitmap(id: u32) -> Bitmap {
         Bitmap {
             image: crate::asset::png_image(id, 1),
-            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            transform: Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
             sampling: Sampling::Smooth,
         }
     }
@@ -1911,12 +1911,12 @@ mod tests {
                 paint: Paint::opaque(0, 0, 0),
                 width: StrokeWidth::new(mark).unwrap(),
             }),
-            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
             TextSpec::default(),
             false,
         ));
         scene.add_bitmap(Bitmap {
-            transform: [1.0, 0.0, 0.0, 1.0, mark, 0.0],
+            transform: Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, mark, 0.0]),
             ..bitmap(1)
         });
         scene.add_path(

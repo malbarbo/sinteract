@@ -26,7 +26,7 @@ pub mod pixmap;
 pub mod svg;
 
 use crate::outline::PathSink;
-use crate::scene::{Rgba, Scene};
+use crate::scene::{Affine, Rgba, Scene};
 
 /// A renderer that draws a [`Scene`] into a surface it owns. The
 /// [module docs](self) describe the lifecycle.
@@ -141,8 +141,8 @@ pub(crate) const MISSING_STROKE: Rgba = Rgba {
 
 /// Feed `out` the outline of the box that stands for a missing image under
 /// `t`, the unit square that the bitmap covers.
-pub(crate) fn missing_box(t: [f32; 6], out: &mut impl PathSink) {
-    let [p0, p1, p2, p3] = unit_square(t);
+pub(crate) fn missing_box(t: Affine, out: &mut impl PathSink) {
+    let [p0, p1, p2, p3] = t.corners();
     out.move_to(p0.0, p0.1);
     for (x, y) in [p1, p2, p3] {
         out.line_to(x, y);
@@ -152,20 +152,12 @@ pub(crate) fn missing_box(t: [f32; 6], out: &mut impl PathSink) {
 
 /// Feed `out` the cross from corner to corner of the box of
 /// [`missing_box`].
-pub(crate) fn missing_cross(t: [f32; 6], out: &mut impl PathSink) {
-    let [p0, p1, p2, p3] = unit_square(t);
+pub(crate) fn missing_cross(t: Affine, out: &mut impl PathSink) {
+    let [p0, p1, p2, p3] = t.corners();
     out.move_to(p0.0, p0.1);
     out.line_to(p2.0, p2.1);
     out.move_to(p1.0, p1.1);
     out.line_to(p3.0, p3.1);
-}
-
-/// The corners of the unit square centred on the origin under `t`, in
-/// order around it. A bitmap covers this square.
-fn unit_square(t: [f32; 6]) -> [(f32, f32); 4] {
-    let [a, b, c, d, e, f] = t;
-    [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
-        .map(|(x, y)| (a * x + c * y + e, b * x + d * y + f))
 }
 
 /// The miter limit of a text stroke. A glyph is a closed smooth contour, so

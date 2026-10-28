@@ -10,7 +10,7 @@ use super::{Attribute, Color, Font, Image, Length, Style};
 use crate::renderer::Renderer;
 use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
-    Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathFill,
+    Affine, Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathFill,
     PathStroke, PathStyle, Rgba, Sampling, Scene, StrokeWidth, Text,
 };
 
@@ -230,16 +230,19 @@ impl Leaf {
 
 /// The affine that takes the unit square centred on the origin to `region`
 /// moved by `at`.
-fn affine(region: ImageBox, at: Point) -> [f32; 6] {
-    let v = |v: f64| without_residue(v) as f32;
-    let (x, y, c) = (region.x_axis, region.y_axis, region.center.plus(at));
-    [v(x.x), v(x.y), v(y.x), v(y.y), v(c.x), v(c.y)]
+fn affine(region: ImageBox, at: Point) -> Affine {
+    let v = |p: Point| (without_residue(p.x) as f32, without_residue(p.y) as f32);
+    Affine {
+        x_axis: v(region.x_axis),
+        y_axis: v(region.y_axis),
+        origin: v(region.center.plus(at)),
+    }
 }
 
-/// The corners of the box of `m`, in the convention of
-/// [`ClipPath::from_transform`].
-fn corners(m: [f32; 6]) -> [(f64, f64); 4] {
-    let [a, b, c, d, e, f] = m.map(f64::from);
+/// The corners of the box of `m`, as [`ClipPath`] takes them from an
+/// [`Affine`].
+fn corners(m: Affine) -> [(f64, f64); 4] {
+    let [a, b, c, d, e, f] = m.coefficients().map(f64::from);
     [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
         .map(|(u, v)| (a * u + c * v + e, b * u + d * v + f))
 }
@@ -334,7 +337,7 @@ fn pixel_point(style: &Resolved, at: Point) -> impl Fn(Point) -> (f32, f32) {
 
 /// The text of `text` in `font` with `style`, in the box of `transform`, or
 /// `None` when it draws nothing.
-fn draw_text(style: &Style, transform: [f32; 6], text: &str, font: &Font) -> Option<Text> {
+fn draw_text(style: &Style, transform: Affine, text: &str, font: &Font) -> Option<Text> {
     let style = Resolved::read(style).path_style(false)?;
     let mut text = font.spec(text).fit_transform(transform, style.into())?;
     text.underline = font.underline;
@@ -645,7 +648,10 @@ mod tests {
         let [Element::Bitmap(bitmap)] = scene.elements() else {
             panic!("{:?}", scene.elements());
         };
-        assert_eq!(bitmap.transform, [3.0, 0.0, 0.0, 2.0, 1.5, 1.0]);
+        assert_eq!(
+            bitmap.transform.coefficients(),
+            [3.0, 0.0, 0.0, 2.0, 1.5, 1.0]
+        );
     }
 
     #[test]

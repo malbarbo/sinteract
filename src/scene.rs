@@ -559,41 +559,85 @@ pub struct RotatedRect {
     pub angle_deg: f32,
 }
 
-impl RotatedRect {
-    /// The affine that maps a box of `natural_w` by `natural_h`, centred on
-    /// the origin, onto this rectangle. A box with no area gets a
-    /// translation to the center.
-    fn affine(self, natural_w: f32, natural_h: f32) -> [f32; 6] {
-        if natural_w <= 0.0 || natural_h <= 0.0 {
-            return translate(self.cx, self.cy);
+/// An affine map of the plane. `x_axis` and `y_axis` are the images of the
+/// unit vectors and `origin` is the image of the origin, so a point
+/// `(x, y)` goes to `origin + x * x_axis + y * y_axis`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Affine {
+    pub x_axis: (f32, f32),
+    pub y_axis: (f32, f32),
+    pub origin: (f32, f32),
+}
+
+impl Affine {
+    /// The map that moves a point by `(x, y)`.
+    pub(crate) fn translate(x: f32, y: f32) -> Self {
+        Self {
+            x_axis: (1.0, 0.0),
+            y_axis: (0.0, 1.0),
+            origin: (x, y),
         }
-        rotate_scale_at(
-            self.w / natural_w,
-            self.h / natural_h,
-            self.angle_deg,
-            self.cx,
-            self.cy,
-        )
+    }
+
+    /// The map of the coefficients `[a, b, c, d, e, f]` in the convention
+    /// of the PDF `cm` operator, where `x' = a x + c y + e` and
+    /// `y' = b x + d y + f`.
+    pub(crate) fn from_coefficients([a, b, c, d, e, f]: [f32; 6]) -> Self {
+        Self {
+            x_axis: (a, b),
+            y_axis: (c, d),
+            origin: (e, f),
+        }
+    }
+
+    /// The coefficients in the order of [`Affine::from_coefficients`].
+    pub(crate) fn coefficients(self) -> [f32; 6] {
+        let ((a, b), (c, d), (e, f)) = (self.x_axis, self.y_axis, self.origin);
+        [a, b, c, d, e, f]
+    }
+
+    pub(crate) fn apply(self, x: f32, y: f32) -> (f32, f32) {
+        let [a, b, c, d, e, f] = self.coefficients();
+        (a * x + c * y + e, b * x + d * y + f)
+    }
+
+    /// The corners of the unit square centred on the origin, under this
+    /// map, in the order that goes round the square.
+    pub(crate) fn corners(self) -> [(f32, f32); 4] {
+        [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)].map(|(x, y)| self.apply(x, y))
+    }
+
+    /// Returns `true` if every coefficient is finite, `false` otherwise.
+    pub(crate) fn is_finite(self) -> bool {
+        all_finite(&self.coefficients())
+    }
+}
+
+impl From<RotatedRect> for Affine {
+    /// The map of the unit square centred on the origin onto `rect`.
+    fn from(rect: RotatedRect) -> Self {
+        let (st, ct) = rect.angle_deg.to_radians().sin_cos();
+        Self {
+            x_axis: (rect.w * ct, rect.w * st),
+            y_axis: (-rect.h * st, rect.h * ct),
+            origin: (rect.cx, rect.cy),
+        }
     }
 }
 
 impl From<RotatedRect> for ClipPath {
-    /// The outline of `rect`. A rectangle covers the same area under either
-    /// fill rule, so the clip takes the default.
+    /// The outline of `rect`.
     fn from(rect: RotatedRect) -> Self {
-        ClipPath::from_transform(rect.affine(1.0, 1.0))
+        Affine::from(rect).into()
     }
 }
 
-impl ClipPath {
-    /// The outline of the box of `transform`, in the convention of
-    /// [`Bitmap::transform`]. The box is a parallelogram, and it covers the
-    /// same area under either fill rule, so the clip takes the default.
-    pub fn from_transform(m: [f32; 6]) -> Self {
-        let p0 = apply_affine(m, -0.5, -0.5);
-        let p1 = apply_affine(m, 0.5, -0.5);
-        let p2 = apply_affine(m, 0.5, 0.5);
-        let p3 = apply_affine(m, -0.5, 0.5);
+impl From<Affine> for ClipPath {
+    /// The outline of the box of `m`, the unit square centred on the origin
+    /// under `m`. The box is a parallelogram, and it covers the same area
+    /// under either fill rule, so the clip takes the default.
+    fn from(m: Affine) -> Self {
+        let [p0, p1, p2, p3] = m.corners();
         ClipPath::builder(FillRule::default(), p0.0, p0.1)
             .line_to(p1.0, p1.1)
             .line_to(p2.0, p2.1)
@@ -623,15 +667,8 @@ impl From<PathStroke> for TextStroke {
     }
 }
 
-/// A text run. The glyphs are laid out in text space, as [`TextSpec`] says.
-/// [`Text::transform`] maps them to the canvas in the convention of the PDF
-/// `cm` operator:
-///
-/// ```text
-/// x' = transform[0] * x + transform[2] * y + transform[4]
-/// y' = transform[1] * x + transform[3] * y + transform[5]
-/// ```
-///
+/// A text run. The glyphs are laid out in text space, as [`TextSpec`] says,
+/// and [`Text::transform`] maps the text space to the canvas.
 /// [`TextSpec::fit`] puts the fit to a box, the rotation and the mirroring
 /// in the matrix. It is the only way to build a text, so the matrix always
 /// fits the measure of the spec. A gradient of `style` is in canvas space,
@@ -639,7 +676,7 @@ impl From<PathStroke> for TextStroke {
 #[derive(Clone, Debug)]
 pub struct Text {
     pub style: TextStyle,
-    transform: [f32; 6],
+    transform: Affine,
     spec: TextSpec,
     pub underline: bool,
 }
@@ -705,7 +742,7 @@ impl Text {
     /// with the measure from the engine.
     pub(crate) fn from_parts(
         style: TextStyle,
-        transform: [f32; 6],
+        transform: Affine,
         spec: TextSpec,
         underline: bool,
     ) -> Self {
@@ -717,8 +754,8 @@ impl Text {
         }
     }
 
-    /// The matrix that maps the text space to the canvas.
-    pub fn transform(&self) -> [f32; 6] {
+    /// The map of the text space to the canvas.
+    pub fn transform(&self) -> Affine {
         self.transform
     }
 
@@ -730,7 +767,7 @@ impl Text {
     /// Returns `true` if every float of the text is finite, `false`
     /// otherwise. A [`Paint`] and a [`StrokeWidth`] are always finite.
     pub(crate) fn is_finite(&self) -> bool {
-        self.spec.size.is_finite() && all_finite(&self.transform)
+        self.spec.size.is_finite() && self.transform.is_finite()
     }
 }
 
@@ -776,26 +813,34 @@ impl TextSpec {
     /// [`crate::text::measure`] returns `None` or the text measures zero
     /// wide.
     pub fn fit(self, rect: RotatedRect, style: TextStyle) -> Option<Text> {
-        self.fit_transform(rect.affine(1.0, 1.0), style)
+        self.fit_transform(rect.into(), style)
     }
 
-    /// Like [`TextSpec::fit`], for the box of `transform` in the convention
-    /// of [`Bitmap::transform`]. The box is a parallelogram, so it can hold
-    /// a text that is skewed.
-    pub fn fit_transform(self, transform: [f32; 6], style: TextStyle) -> Option<Text> {
+    /// Like [`TextSpec::fit`], for the box of `transform`, the unit square
+    /// centred on the origin under `transform`. The box is a parallelogram,
+    /// so it can hold a text that is skewed.
+    pub fn fit_transform(self, transform: Affine, style: TextStyle) -> Option<Text> {
         let metrics = crate::text::measure(&self)?;
         let (w, h) = (metrics.width(), metrics.height());
         if w <= 0.0 {
             return None;
         }
-        let [a, b, c, d, e, f] = transform;
+        let Affine {
+            x_axis: (a, b),
+            y_axis: (c, d),
+            origin: (e, f),
+        } = transform;
         Some(Text {
             style,
             // A text with no height goes to the center at its natural size.
             transform: if h > 0.0 {
-                [a / w, b / w, c / h, d / h, e, f]
+                Affine {
+                    x_axis: (a / w, b / w),
+                    y_axis: (c / h, d / h),
+                    origin: (e, f),
+                }
             } else {
-                translate(e, f)
+                Affine::translate(e, f)
             },
             spec: Self {
                 family: metrics.family().into(),
@@ -804,21 +849,6 @@ impl TextSpec {
             underline: false,
         })
     }
-}
-
-/// The affine that scales by `(sx, sy)`, rotates by `angle_deg` and then
-/// translates to `(e, f)`.
-fn rotate_scale_at(sx: f32, sy: f32, angle_deg: f32, e: f32, f: f32) -> [f32; 6] {
-    let (st, ct) = angle_deg.to_radians().sin_cos();
-    [sx * ct, sx * st, -sy * st, sy * ct, e, f]
-}
-
-fn translate(e: f32, f: f32) -> [f32; 6] {
-    [1.0, 0.0, 0.0, 1.0, e, f]
-}
-
-pub(crate) fn apply_affine(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
-    (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
 fn all_finite(values: &[f32]) -> bool {
@@ -927,13 +957,12 @@ impl std::fmt::Debug for Image {
 }
 
 /// A bitmap. `transform` maps the unit square centred on the origin, which
-/// the image fills whatever its size, to the canvas in the convention of
-/// [`Text::transform`]. So the place of a bitmap does not depend on the
+/// the image fills whatever its size, to the canvas. So the place of a bitmap does not depend on the
 /// pixels of its image. [`Bitmap::fit`] computes it for a [`RotatedRect`].
 #[derive(Clone, Debug)]
 pub struct Bitmap {
     pub image: Image,
-    pub transform: [f32; 6],
+    pub transform: Affine,
     pub sampling: Sampling,
 }
 
@@ -942,7 +971,7 @@ impl Bitmap {
     pub fn fit(image: Image, rect: RotatedRect) -> Self {
         Self {
             image,
-            transform: rect.affine(1.0, 1.0),
+            transform: rect.into(),
             sampling: Sampling::Smooth,
         }
     }
@@ -950,7 +979,7 @@ impl Bitmap {
     /// Returns `true` if every float of the transform is finite, `false`
     /// otherwise.
     pub(crate) fn is_finite(&self) -> bool {
-        all_finite(&self.transform)
+        self.transform.is_finite()
     }
 }
 
@@ -2420,9 +2449,19 @@ mod tests {
         let text = spec.fit(rect, TextStyle::black()).expect("text fits");
         assert_ne!(&*text.spec.family, "ZZZ_nope");
         assert_eq!(&*text.spec.family, metrics.family());
+        let (w, h) = (metrics.width(), metrics.height());
+        let Affine {
+            x_axis,
+            y_axis,
+            origin,
+        } = rect.into();
         assert_eq!(
             text.transform,
-            rect.affine(metrics.width(), metrics.height())
+            Affine {
+                x_axis: (x_axis.0 / w, x_axis.1 / w),
+                y_axis: (y_axis.0 / h, y_axis.1 / h),
+                origin,
+            }
         );
         assert_eq!((text.spec.size, &*text.spec.text), (20.0, "Hi"));
     }
@@ -2436,7 +2475,11 @@ mod tests {
         };
         let metrics = crate::text::measure(&spec).expect("text measures");
         let (w, h) = (metrics.width(), metrics.height());
-        let skewed = [30.0, 0.0, 10.0, 20.0, 50.0, 40.0];
+        let skewed = Affine {
+            x_axis: (30.0, 0.0),
+            y_axis: (10.0, 20.0),
+            origin: (50.0, 40.0),
+        };
         let m = spec
             .fit_transform(skewed, TextStyle::black())
             .expect("text fits")
@@ -2444,13 +2487,17 @@ mod tests {
         let close = |(x, y): (f32, f32), (ex, ey): (f32, f32)| {
             assert!((x - ex).abs() < 1e-4 && (y - ey).abs() < 1e-4, "{x}, {y}");
         };
-        close(apply_affine(m, w / 2.0, h / 2.0), (70.0, 50.0));
-        close(apply_affine(m, -w / 2.0, h / 2.0), (40.0, 50.0));
+        close(m.apply(w / 2.0, h / 2.0), (70.0, 50.0));
+        close(m.apply(-w / 2.0, h / 2.0), (40.0, 50.0));
     }
 
     #[test]
-    fn a_clip_from_a_transform_is_the_outline_of_its_box() {
-        let clip = ClipPath::from_transform([30.0, 0.0, 10.0, 20.0, 50.0, 40.0]);
+    fn a_clip_from_an_affine_is_the_outline_of_its_box() {
+        let clip = ClipPath::from(Affine {
+            x_axis: (30.0, 0.0),
+            y_axis: (10.0, 20.0),
+            origin: (50.0, 40.0),
+        });
         let segs: Vec<_> = clip.segments().collect();
         assert_eq!(
             segs,
@@ -2508,8 +2555,8 @@ mod tests {
         };
         let bitmap = Bitmap::fit(crate::asset::png_image(1, 1), rect);
         let m = bitmap.transform;
-        assert_eq!(apply_affine(m, 0.0, 0.0), (70.0, 40.0));
-        let (x, y) = apply_affine(m, 0.5, 0.5);
+        assert_eq!(m.apply(0.0, 0.0), (70.0, 40.0));
+        let (x, y) = m.apply(0.5, 0.5);
         assert!(
             (x - 62.0).abs() < 1e-4 && (y - 24.0).abs() < 1e-4,
             "{x}, {y}"
@@ -2555,7 +2602,7 @@ mod tests {
             ..text.clone()
         });
         scene.add_text(Text {
-            transform: [1.0, 0.0, 0.0, 1.0, inf, 0.0],
+            transform: Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, inf, 0.0]),
             ..text
         });
         scene.add_bitmap(Bitmap::fit(crate::asset::png_image(1, 1), a_unit_rect(nan)));

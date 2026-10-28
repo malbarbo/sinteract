@@ -40,8 +40,8 @@ use crate::renderer::{
     sealed::Canvas,
 };
 use crate::scene::{
-    Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin, Paint, Path,
-    PathStroke, Rgba, Sampling, Stop, Text, TextStroke,
+    Affine, Bitmap, ClipPath, FillRule, Gradient, GradientGeometry, Image, LineCap, LineJoin,
+    Paint, Path, PathStroke, Rgba, Sampling, Stop, Text, TextStroke,
 };
 use crate::text::TextLayout;
 
@@ -238,7 +238,7 @@ impl Canvas<Infallible> for PdfRenderer {
             }
         };
         self.content.save_state();
-        self.content.transform(bitmap.transform);
+        self.content.transform(bitmap.transform.coefficients());
         // An image fills the unit square from the origin with its first row
         // at y = 1, and a bitmap covers the unit square centred on the
         // origin with its first row at y = -0.5.
@@ -385,7 +385,7 @@ impl PdfRenderer {
     ) {
         if do_fill {
             self.content.save_state();
-            self.content.transform(node.transform());
+            self.content.transform(node.transform().coefficients());
             let mut out = PdfOutline::new(&mut self.content);
             outline(&mut out);
             if !out.empty {
@@ -404,7 +404,7 @@ impl PdfRenderer {
 
     /// Draws the gray box with a red cross that stands for a bitmap of
     /// `transform` whose image does not decode.
-    fn draw_missing(&mut self, transform: [f32; 6]) {
+    fn draw_missing(&mut self, transform: Affine) {
         let c = &mut self.content;
         c.save_state();
         let [r, g, b] = rgb_components(MISSING_FILL);
@@ -1137,7 +1137,7 @@ mod tests {
     fn text(s: &str, size: f32) -> Text {
         Text::from_parts(
             TextStyle::Fill(Paint::opaque(0, 0, 0)),
-            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
             TextSpec {
                 size,
                 text: s.to_owned(),
@@ -1432,7 +1432,7 @@ mod tests {
     fn bitmap(image: &Image, sampling: Sampling) -> Bitmap {
         Bitmap {
             image: image.clone(),
-            transform: [10.0, 0.0, 0.0, 10.0, 10.0, 10.0],
+            transform: Affine::from_coefficients([10.0, 0.0, 0.0, 10.0, 10.0, 10.0]),
             sampling,
         }
     }
