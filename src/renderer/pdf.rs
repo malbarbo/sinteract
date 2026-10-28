@@ -188,7 +188,7 @@ impl Canvas<Infallible> for PdfRenderer {
 
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
-        let fill = style.draws_fill().then_some(&style.fill);
+        let fill = style.drawn_fill().map(|f| &f.paint);
         let stroke = style.drawn_stroke();
         if fill.is_none() && stroke.is_none() {
             return;
@@ -203,7 +203,7 @@ impl Canvas<Infallible> for PdfRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        let fill = node.draws_fill().then_some(&node.fill);
+        let fill = node.drawn_fill();
         let stroke = node.drawn_stroke();
         if fill.is_none() && stroke.is_none() {
             return;
@@ -335,7 +335,8 @@ impl PdfRenderer {
             &mut self.content,
             fill.is_some(),
             stroke.is_some(),
-            path.style.fill_rule,
+            // A pass with no fill takes any rule.
+            path.style.fill().map_or(FillRule::NonZero, |f| f.rule),
         );
         // restore_state also resets the pattern color space.
         self.content.restore_state();
@@ -1101,20 +1102,22 @@ fn rgb_components(c: Rgba) -> [f32; 3] {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, PathStyle, RotatedRect, Scene, StrokeWidth, TextSpec};
+    use crate::scene::{
+        Dash, PathFill, PathStyle, RotatedRect, Scene, StrokeWidth, TextSpec, TextStyle,
+    };
 
     fn red_fill(a: u8) -> PathStyle {
-        PathStyle {
-            fill: Paint::rgba(255, 0, 0, a),
-            ..PathStyle::default()
-        }
+        PathStyle::Fill(PathFill {
+            paint: Paint::rgba(255, 0, 0, a),
+            rule: FillRule::NonZero,
+        })
     }
 
     fn gradient_fill(gradient: Paint) -> PathStyle {
-        PathStyle {
-            fill: gradient,
-            ..PathStyle::default()
-        }
+        PathStyle::Fill(PathFill {
+            paint: gradient,
+            rule: FillRule::NonZero,
+        })
     }
 
     fn opaque(r: u8, g: u8, b: u8) -> Rgba {
@@ -1127,13 +1130,14 @@ mod tests {
 
     fn text(s: &str, size: f32) -> Text {
         Text {
-            fill: Paint::Solid(opaque(0, 0, 0)),
+            style: TextStyle::Fill(Paint::Solid(opaque(0, 0, 0))),
             spec: TextSpec {
                 size,
                 text: s.to_owned(),
                 ..TextSpec::default()
             },
-            ..Text::default()
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            underline: false,
         }
     }
 
@@ -1166,16 +1170,19 @@ mod tests {
             text: "Hi".to_owned(),
             ..TextSpec::default()
         }
-        .fit(RotatedRect {
-            cx: 50.0,
-            cy: 15.0,
-            w: 80.0,
-            h: 20.0,
-            angle_deg: 0.0,
-        })
+        .fit(
+            RotatedRect {
+                cx: 50.0,
+                cy: 15.0,
+                w: 80.0,
+                h: 20.0,
+                angle_deg: 0.0,
+            },
+            TextStyle::black(),
+        )
         .expect("text fits");
         scene.add_text(Text {
-            fill: Paint::Solid(opaque(0, 0, 0)),
+            style: TextStyle::Fill(Paint::Solid(opaque(0, 0, 0))),
             ..fitted
         });
         let s = pdf_text(&scene);
@@ -1222,13 +1229,10 @@ mod tests {
     #[test]
     fn dash_pattern_emits_d_operator() {
         let mut scene = Scene::new(100.0, 50.0);
-        let style = PathStyle {
-            stroke: Some(PathStroke {
-                dash: Dash::new(vec![3.0, 2.0], 1.0),
-                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::ONE)
-            }),
-            ..PathStyle::default()
-        };
+        let style = PathStyle::Stroke(PathStroke {
+            dash: Dash::new(vec![3.0, 2.0], 1.0),
+            ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::ONE)
+        });
         scene.add_path(rect(style, 0.0, 0.0, 100.0, 50.0));
         let s = pdf_text(&scene);
         // `set_dash_pattern` emits `[a b] off d`.
@@ -1242,13 +1246,10 @@ mod tests {
     #[test]
     fn miter_limit_emits_m_operator() {
         let mut scene = Scene::new(50.0, 50.0);
-        let style = PathStyle {
-            stroke: Some(PathStroke {
-                join: LineJoin::miter(12.0).unwrap(),
-                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(4.0).unwrap())
-            }),
-            ..PathStyle::default()
-        };
+        let style = PathStyle::Stroke(PathStroke {
+            join: LineJoin::miter(12.0).unwrap(),
+            ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(4.0).unwrap())
+        });
         scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
         let s = pdf_text(&scene);
         assert!(s.contains("12 M"), "expected miter limit op: {s}");
@@ -1380,13 +1381,13 @@ mod tests {
             ..opaque(0, 0, 255)
         };
         let stops = vec![stop(0.0, opaque(255, 0, 0)), stop(1.0, clear)];
-        let style = PathStyle {
-            stroke: Some(PathStroke::new(
-                Paint::rgba(0, 0, 0, 255),
-                StrokeWidth::new(2.0).unwrap(),
-            )),
-            ..gradient_fill(Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap())
-        };
+        let style = PathStyle::Both(
+            PathFill {
+                paint: Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap(),
+                rule: FillRule::NonZero,
+            },
+            PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap()),
+        );
         scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
         let s = pdf_text(&scene);
         let lines: Vec<_> = s.lines().collect();
@@ -1397,14 +1398,13 @@ mod tests {
     #[test]
     fn a_translucent_fill_and_stroke_draw_apart() {
         let mut scene = Scene::new(100.0, 40.0);
-        let style = PathStyle {
-            stroke: Some(PathStroke::new(
-                Paint::rgba(0, 0, 255, 128),
-                StrokeWidth::new(4.0).unwrap(),
-            )),
-            fill: Paint::rgba(255, 0, 0, 128),
-            ..PathStyle::default()
-        };
+        let style = PathStyle::Both(
+            PathFill {
+                paint: Paint::rgba(255, 0, 0, 128),
+                rule: FillRule::NonZero,
+            },
+            PathStroke::new(Paint::rgba(0, 0, 255, 128), StrokeWidth::new(4.0).unwrap()),
+        );
         scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
         let s = pdf_text(&scene);
         let lines: Vec<_> = s.lines().collect();

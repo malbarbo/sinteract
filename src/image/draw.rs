@@ -10,8 +10,8 @@ use super::{Attribute, Color, Font, Image, Length, Style};
 use crate::renderer::Renderer;
 use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
-    Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathStroke,
-    PathStyle, Sampling, Scene, StrokeWidth, Text, TextStroke,
+    Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathFill,
+    PathStroke, PathStyle, Sampling, Scene, StrokeWidth, Text,
 };
 
 /// The canvas of the image is too large. Its width or its height is above
@@ -145,18 +145,18 @@ impl Image {
                     ..
                 } => {
                     let style = Resolved::read(style);
-                    let mut path_style = style.path_style();
-                    if let Some(stroke) = &mut path_style.stroke {
-                        stroke.closed = *closed;
-                    }
-                    path::draw(commands, path_style, pixel_point(&style, at)).map(Leaf::Path)
+                    style
+                        .path_style(*closed)
+                        .and_then(|s| path::draw(commands, s, pixel_point(&style, at)))
+                        .map(Leaf::Path)
                 }
                 Node::Line { style, from, to } => {
                     let style = Resolved::read(style);
                     let point = pixel_point(&style, at);
                     let ((x, y), (to_x, to_y)) = (point(*from), point(*to));
-                    let line = Path::builder(style.path_style(), x, y).line_to(to_x, to_y);
-                    Some(Leaf::Path(line.build()))
+                    style
+                        .path_style(false)
+                        .map(|s| Leaf::Path(Path::builder(s, x, y).line_to(to_x, to_y).build()))
                 }
                 Node::Text {
                     style,
@@ -335,10 +335,8 @@ fn pixel_point(style: &Resolved, at: Point) -> impl Fn(Point) -> (f32, f32) {
 /// The text of `text` in `font` with `style`, in the box of `transform`, or
 /// `None` when it draws nothing.
 fn draw_text(style: &Style, transform: [f32; 6], text: &str, font: &Font) -> Option<Text> {
-    let mut text = font.spec(text).fit_transform(transform)?;
-    let path_style = Resolved::read(style).path_style();
-    text.fill = path_style.fill;
-    text.stroke = path_style.stroke.map(TextStroke::from);
+    let style = Resolved::read(style).path_style(false)?;
+    let mut text = font.spec(text).fit_transform(transform, style.into())?;
     text.underline = font.underline;
     Some(text)
 }
@@ -387,7 +385,9 @@ impl Resolved {
         self.stroke.is_some() && self.fill.is_none() && self.stroke_width.is_none_or(|w| w == 1.0)
     }
 
-    fn path_style(&self) -> PathStyle {
+    /// The style of a path, with a closed stroke if `closed`, or `None` if
+    /// the path marks nothing.
+    fn path_style(&self, closed: bool) -> Option<PathStyle> {
         let outline = self.stroke.is_some();
         // A shape with no fill is black, as in svg, and an outline is not
         // filled.
@@ -406,14 +406,14 @@ impl Resolved {
                     .line_join
                     .unwrap_or(LineJoin::Miter(OUTLINE_MITER_LIMIT)),
                 dash: self.dash.clone().and_then(|a| Dash::new(a, 0.0)),
-                closed: false,
+                closed,
             })
         });
-        PathStyle {
-            fill: paint(fill, self.fill_opacity),
-            fill_rule: self.fill_rule.unwrap_or(FillRule::NonZero),
-            stroke,
-        }
+        let fill = PathFill {
+            paint: paint(fill, self.fill_opacity),
+            rule: self.fill_rule.unwrap_or(FillRule::NonZero),
+        };
+        PathStyle::new(fill.paint.is_visible().then_some(fill), stroke)
     }
 }
 
@@ -431,7 +431,7 @@ fn paint(c: Color, opacity: Option<f32>) -> Paint {
 mod tests {
     use super::*;
     use crate::image::{Finite, Opacity, PathCmd, YPlace};
-    use crate::scene::Element;
+    use crate::scene::{Element, TextStyle};
 
     fn length(v: f64) -> Length {
         Length::new(v).unwrap()
@@ -578,9 +578,12 @@ mod tests {
             Attribute::Fill(Color::rgb(0, 0, 255)),
             Attribute::FillOpacity(Opacity::OPAQUE),
         ]);
-        let path_style = Resolved::read(&style).path_style();
-        assert_eq!(path_style.fill, Paint::rgba(255, 0, 0, 128));
-        assert_eq!(path_style.stroke, None);
+        let path_style = Resolved::read(&style).path_style(false).unwrap();
+        assert_eq!(
+            path_style.fill().unwrap().paint,
+            Paint::rgba(255, 0, 0, 128)
+        );
+        assert_eq!(path_style.stroke(), None);
     }
 
     #[test]
@@ -590,10 +593,10 @@ mod tests {
             Attribute::Stroke(Color::rgba(255, 0, 0, half)),
             Attribute::StrokeOpacity(half),
         ]);
-        let path_style = Resolved::read(&style).path_style();
-        let stroke = path_style.stroke.unwrap();
+        let path_style = Resolved::read(&style).path_style(false).unwrap();
+        let stroke = path_style.stroke().unwrap();
         assert_eq!(stroke.paint, Paint::rgba(255, 0, 0, 64));
-        assert_eq!(path_style.fill, Paint::rgba(0, 0, 0, 0));
+        assert_eq!(path_style.fill(), None);
         assert_eq!(stroke.cap, LineCap::Round);
         assert_eq!(stroke.join, LineJoin::Miter(OUTLINE_MITER_LIMIT));
     }
@@ -610,7 +613,7 @@ mod tests {
             panic!("{:?}", scene.elements());
         };
         assert!(text.underline);
-        assert_eq!(text.fill, Paint::rgba(255, 0, 0, 255));
+        assert_eq!(text.style, TextStyle::Fill(Paint::rgba(255, 0, 0, 255)));
         assert_eq!(text.spec.text, "hi");
     }
 

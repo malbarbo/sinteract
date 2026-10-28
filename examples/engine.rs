@@ -25,7 +25,9 @@ use std::process::ExitCode;
 
 use sinteract::display::{Stage, StageEvent, StageOptions};
 use sinteract::event::{InputEvent, Interrupt, KeyKind, key};
-use sinteract::scene::{Bitmap, Image, Paint, Path, PathStyle, RotatedRect, Scene};
+use sinteract::scene::{
+    Bitmap, FillRule, Image, Paint, Path, PathFill, PathStyle, RotatedRect, Scene,
+};
 use sinteract::session::PlayerRange;
 use sinteract::session::Target;
 
@@ -172,9 +174,11 @@ impl Game {
     /// The field, with the paddle.
     fn scene(&self) -> Scene {
         let mut scene = Scene::new(WIDTH, HEIGHT);
-        let fill = |r, g, b| PathStyle {
-            fill: Paint::rgba(r, g, b, 255),
-            ..PathStyle::default()
+        let fill = |r, g, b| {
+            PathStyle::Fill(PathFill {
+                paint: Paint::rgba(r, g, b, 255),
+                rule: FillRule::NonZero,
+            })
         };
         scene.add_path(
             Path::builder(fill(20, 20, 40), 0.0, 0.0)

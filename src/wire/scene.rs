@@ -10,9 +10,9 @@ use capnp::message::{Builder, HeapAllocator};
 
 use crate::scene::{
     Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
-    LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathStroke, PathStyle, Rgba, Sampling, Scene,
-    Segment, SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth, Text, TextSpec,
-    TextStroke, end_segments, push_segment,
+    LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathFill, PathStroke, PathStyle, Rgba,
+    Sampling, Scene, Segment, SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth, Text,
+    TextSpec, TextStroke, TextStyle, end_segments, push_segment,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -229,11 +229,16 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
 }
 
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
-    write_paint(b.reborrow().init_fill(), &s.fill);
-    b.set_fill_rule(fill_rule_to_wire(s.fill_rule));
+    // No fill writes a transparent paint.
+    if let Some(fill) = s.fill() {
+        write_paint(b.reborrow().init_fill(), &fill.paint);
+        b.set_fill_rule(fill_rule_to_wire(fill.rule));
+    } else {
+        write_paint(b.reborrow().init_fill(), &Paint::default());
+    }
     // No stroke writes a transparent paint, a width of 0, the default cap
     // and join, no dash and an open path.
-    let Some(stroke) = &s.stroke else {
+    let Some(stroke) = s.stroke() else {
         write_paint(b.reborrow().init_stroke(), &Paint::default());
         let (join, limit) = line_join_to_wire(LineJoin::default());
         b.set_line_join(join);
@@ -256,7 +261,8 @@ fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
     }
 }
 
-fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ValueError> {
+/// The style, or `None` if it marks nothing.
+fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<Option<PathStyle>, ValueError> {
     // Dash::new returns None for an array that draws a solid stroke, such as
     // an empty one, and drops any stray offset.
     let dash = Dash::new(
@@ -268,10 +274,11 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ValueErr
     let cap = line_cap_from_wire(r.get_line_cap()?);
     let join = line_join_from_wire(r.get_line_join()?, r.get_miter_limit())?;
     let stroke = read_stroke(read_paint(r.get_stroke()?)?, r.get_stroke_width())?;
-    Ok(PathStyle {
-        fill: read_paint(r.get_fill()?)?,
-        fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
-        stroke: stroke.map(|(paint, width)| PathStroke {
+    let fill = read_paint(r.get_fill()?)?;
+    let rule = fill_rule_from_wire(r.get_fill_rule()?);
+    Ok(PathStyle::new(
+        fill.is_visible().then_some(PathFill { paint: fill, rule }),
+        stroke.map(|(paint, width)| PathStroke {
             paint,
             width,
             cap,
@@ -279,7 +286,7 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ValueErr
             dash,
             closed: r.get_closed(),
         }),
-    })
+    ))
 }
 
 fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
@@ -335,21 +342,26 @@ fn read_bitmap(
     Ok(bitmap)
 }
 
-/// The paint and the width of a stroke, `None` for a width of 0 or less,
-/// which draws no stroke. A width that is not finite is
-/// [`ValueError::NotFinite`], the rule of the schema for a float that does
-/// not draw.
+/// The paint and the width of a stroke, `None` for a paint that marks
+/// nothing or a width of 0 or less, which draw no stroke. A width that is
+/// not finite is [`ValueError::NotFinite`], the rule of the schema for a
+/// float that does not draw.
 fn read_stroke(paint: Paint, width: f32) -> Result<Option<(Paint, StrokeWidth)>, ValueError> {
     if !width.is_finite() {
         return Err(ValueError::NotFinite);
     }
-    Ok(StrokeWidth::new(width).map(|width| (paint, width)))
+    let width = StrokeWidth::new(width).filter(|_| paint.is_visible());
+    Ok(width.map(|width| (paint, width)))
 }
 
 fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
-    write_paint(b.reborrow().init_fill(), &n.fill);
-    // No stroke writes a transparent paint and a width of 0.
-    if let Some(stroke) = &n.stroke {
+    // No fill writes a transparent paint, and no stroke a transparent paint
+    // and a width of 0.
+    write_paint(
+        b.reborrow().init_fill(),
+        n.style.fill().unwrap_or(&Paint::default()),
+    );
+    if let Some(stroke) = n.style.stroke() {
         write_paint(b.reborrow().init_stroke(), &stroke.paint);
         b.set_stroke_width(stroke.width.get());
     } else {
@@ -370,28 +382,32 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
 }
 
 fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
-    let text = Text {
-        fill: read_paint(r.get_fill()?)?,
-        stroke: read_stroke(read_paint(r.get_stroke()?)?, r.get_stroke_width())?
-            .map(|(paint, width)| TextStroke { paint, width }),
-        transform: [
-            r.get_m0(),
-            r.get_m1(),
-            r.get_m2(),
-            r.get_m3(),
-            r.get_m4(),
-            r.get_m5(),
-        ],
-        spec: TextSpec {
-            size: r.get_size(),
-            family: r.get_family()?.to_str()?.into(),
-            weight: r.get_weight(),
-            font_style: font_style_from_wire(r.get_style()?),
-            text: r.get_text()?.to_str()?.to_owned(),
-        },
-        underline: r.get_underline(),
+    let fill = read_paint(r.get_fill()?)?;
+    let stroke = read_stroke(read_paint(r.get_stroke()?)?, r.get_stroke_width())?
+        .map(|(paint, width)| TextStroke { paint, width });
+    let style = TextStyle::new(fill.is_visible().then_some(fill), stroke);
+    let transform = [
+        r.get_m0(),
+        r.get_m1(),
+        r.get_m2(),
+        r.get_m3(),
+        r.get_m4(),
+        r.get_m5(),
+    ];
+    let spec = TextSpec {
+        size: r.get_size(),
+        family: r.get_family()?.to_str()?.into(),
+        weight: r.get_weight(),
+        font_style: font_style_from_wire(r.get_style()?),
+        text: r.get_text()?.to_str()?.to_owned(),
     };
-    Ok(text)
+    // After every field, so damage in one stays an error.
+    Ok(Text {
+        style: style.ok_or(ValueError::NoInk)?,
+        transform,
+        spec,
+        underline: r.get_underline(),
+    })
 }
 
 /// [`ValueError::NotFinite`] unless `is_finite`, the rule of [`Scene`] for
@@ -506,10 +522,11 @@ fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
 }
 
 fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ValueError> {
-    let mut path = Path::default();
-    path.style = read_path_style(r.get_style()?)?;
-    read_segments(path.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
-    Ok(path)
+    let style = read_path_style(r.get_style()?)?;
+    let mut segs = Vec::new();
+    read_segments(&mut segs, r.get_verbs()?, r.get_coords()?)?;
+    // After the segments, so damage in them stays an error.
+    Ok(Path::from_segments(style.ok_or(ValueError::NoInk)?, segs))
 }
 
 fn write_element(b: element::Builder<'_>, node: &Element, ids: &dyn Fn(&Image) -> u32) {

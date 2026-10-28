@@ -208,9 +208,9 @@ impl Canvas<Infallible> for SvgRenderer {
 
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
-        let do_fill = style.draws_fill();
+        let fill = style.drawn_fill();
         let stroke = style.drawn_stroke();
-        if !do_fill && stroke.is_none() {
+        if fill.is_none() && stroke.is_none() {
             return;
         }
         // A path with no segments would write an empty `<path>`.
@@ -222,9 +222,9 @@ impl Canvas<Infallible> for SvgRenderer {
         path.outline(&mut PathData::new(&mut self.body));
         self.body.push('"');
 
-        if do_fill {
-            self.write_paint(&style.fill, "fill", "fill-opacity");
-            if style.fill_rule == FillRule::EvenOdd {
+        if let Some(fill) = fill {
+            self.write_paint(&fill.paint, "fill", "fill-opacity");
+            if fill.rule == FillRule::EvenOdd {
                 self.body.push_str(" fill-rule=\"evenodd\"");
             }
         } else {
@@ -264,10 +264,9 @@ impl Canvas<Infallible> for SvgRenderer {
         let Some(layout) = TextLayout::new(&node.spec) else {
             return;
         };
-        let fill = node
-            .draws_fill()
-            .then(|| self.text_paint(&node.fill, "fill", "fill-opacity", invert(node.transform)))
-            .flatten();
+        let fill_paint = node.drawn_fill();
+        let fill = fill_paint
+            .and_then(|p| self.text_paint(p, "fill", "fill-opacity", invert(node.transform)));
         let stroke = node.drawn_stroke();
         // The underline paints on its own and after the stroke of the glyphs,
         // as in the other renderers. With no stroke, it fills in the group of
@@ -278,7 +277,7 @@ impl Canvas<Infallible> for SvgRenderer {
                 self.body,
                 "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">"
             );
-            if matches!(node.fill, Paint::Gradient(_)) {
+            if matches!(fill_paint, Some(Paint::Gradient(_))) {
                 // A gradient on a <use> starts again at the x of each glyph,
                 // so the glyphs go into one path.
                 self.body.push_str("<path d=\"");
@@ -691,13 +690,15 @@ impl PathSink for PathData<'_> {
 mod tests {
     use super::*;
     use crate::renderer::tests::rect;
-    use crate::scene::{Dash, Path, PathStroke, PathStyle, Scene, Stop, StrokeWidth, TextSpec};
+    use crate::scene::{
+        Dash, Path, PathFill, PathStroke, PathStyle, Scene, Stop, StrokeWidth, TextSpec, TextStyle,
+    };
 
     fn red_fill(a: u8) -> PathStyle {
-        PathStyle {
-            fill: Paint::rgba(255, 0, 0, a),
-            ..PathStyle::default()
-        }
+        PathStyle::Fill(PathFill {
+            paint: Paint::rgba(255, 0, 0, a),
+            rule: FillRule::NonZero,
+        })
     }
 
     fn bitmap(image: Image, sampling: Sampling) -> Bitmap {
@@ -777,13 +778,14 @@ mod tests {
 
     fn text(s: &str) -> Text {
         Text {
-            fill: Paint::Solid(black()),
+            style: TextStyle::Fill(Paint::Solid(black())),
             spec: TextSpec {
                 size: 16.0,
                 text: s.to_owned(),
                 ..TextSpec::default()
             },
-            ..Text::default()
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            underline: false,
         }
     }
 
@@ -825,16 +827,13 @@ mod tests {
     #[test]
     fn a_stroke_writes_its_width_cap_join_and_dash() {
         let mut scene = Scene::new(50.0, 50.0);
-        let style = PathStyle {
-            stroke: Some(PathStroke {
-                cap: LineCap::Round,
-                join: LineJoin::Bevel,
-                dash: Dash::new(vec![3.0, 2.0], 1.0),
-                closed: true,
-                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
-            }),
-            ..PathStyle::default()
-        };
+        let style = PathStyle::Stroke(PathStroke {
+            cap: LineCap::Round,
+            join: LineJoin::Bevel,
+            dash: Dash::new(vec![3.0, 2.0], 1.0),
+            closed: true,
+            ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
+        });
         scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
         let svg = render_to_svg(&scene);
         assert!(
@@ -851,13 +850,10 @@ mod tests {
     fn only_a_miter_limit_other_than_the_default_is_written() {
         let svg = |miter_limit: f32| {
             let mut scene = Scene::new(50.0, 50.0);
-            let style = PathStyle {
-                stroke: Some(PathStroke {
-                    join: LineJoin::miter(miter_limit).unwrap(),
-                    ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(4.0).unwrap())
-                }),
-                ..PathStyle::default()
-            };
+            let style = PathStyle::Stroke(PathStroke {
+                join: LineJoin::miter(miter_limit).unwrap(),
+                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(4.0).unwrap())
+            });
             scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
             render_to_svg(&scene)
         };
@@ -896,10 +892,10 @@ mod tests {
         )
         .unwrap()
         .with_spread(SpreadMode::Reflect);
-        let style = PathStyle {
-            fill: gradient,
-            ..PathStyle::default()
-        };
+        let style = PathStyle::Fill(PathFill {
+            paint: gradient,
+            rule: FillRule::NonZero,
+        });
         scene.add_path(rect(style, 0.0, 0.0, 50.0, 50.0));
         let svg = render_to_svg(&scene);
         assert!(
@@ -1010,10 +1006,13 @@ mod tests {
     fn a_text_strokes_its_outline_moved_by_its_transform() {
         let mut scene = Scene::new(60.0, 20.0);
         scene.add_text(Text {
-            stroke: Some(TextStroke {
-                paint: Paint::Solid(black()),
-                width: StrokeWidth::ONE,
-            }),
+            style: TextStyle::Both(
+                Paint::Solid(black()),
+                TextStroke {
+                    paint: Paint::Solid(black()),
+                    width: StrokeWidth::ONE,
+                },
+            ),
             transform: [4.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             ..text("ab")
         });
@@ -1043,7 +1042,7 @@ mod tests {
             },
         ];
         let node = Text {
-            fill: Paint::linear(0.0, 0.0, 60.0, 0.0, stops).unwrap(),
+            style: TextStyle::Fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops).unwrap()),
             transform: [2.0, 0.0, 0.0, 2.0, 10.0, 4.0],
             ..text("ab")
         };
@@ -1096,10 +1095,10 @@ mod tests {
                 .line_to(20.0, 20.0)
                 .build();
             scene.clip(clip, |clipped| {
-                let style = PathStyle {
-                    fill: Paint::radial(20.0, 20.0, 10.0, stops).unwrap(),
-                    ..PathStyle::default()
-                };
+                let style = PathStyle::Fill(PathFill {
+                    paint: Paint::radial(20.0, 20.0, 10.0, stops).unwrap(),
+                    rule: FillRule::NonZero,
+                });
                 clipped.add_path(rect(style, 0.0, 0.0, 40.0, 40.0));
                 clipped.add_text(text("a"));
             });

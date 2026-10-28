@@ -553,7 +553,7 @@ const BOLD_THRESHOLD: u16 = 600;
 mod tests {
     use super::*;
     use crate::outline::tests::Recorder;
-    use crate::scene::RotatedRect;
+    use crate::scene::{RotatedRect, TextStyle};
 
     /// Sinteract Sans Regular, the face of a node that names no family.
     fn sans() -> &'static Face<'static> {
@@ -969,7 +969,7 @@ mod tests {
             let spec = text_spec(size, text);
             let draws = TextLayout::new(&spec).is_some();
             assert_eq!(
-                spec.fit(rect).is_some(),
+                spec.fit(rect, TextStyle::black()).is_some(),
                 draws,
                 "size {size}, text {text:?}"
             );
@@ -988,7 +988,10 @@ mod tests {
         };
         let spec = text_spec(size, text);
         let u = TextLayout::new(&spec).expect("node draws").underline_rect();
-        let m = spec.fit(rect).expect("text fits").transform;
+        let m = spec
+            .fit(rect, TextStyle::black())
+            .expect("text fits")
+            .transform;
         let map = |x: f32, y: f32| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
         let (left, top) = map(u.left, u.top);
         let (right, bottom) = map(u.right, u.bottom);

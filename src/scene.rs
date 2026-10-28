@@ -370,23 +370,65 @@ impl PathStroke {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PathStyle {
-    pub fill: Paint,
-    pub fill_rule: FillRule,
-    /// `None` draws no stroke.
-    pub stroke: Option<PathStroke>,
+/// The fill of a [`Path`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathFill {
+    pub paint: Paint,
+    pub rule: FillRule,
+}
+
+/// How a [`Path`] marks the canvas, with a fill, a stroke or both.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PathStyle {
+    Fill(PathFill),
+    Stroke(PathStroke),
+    Both(PathFill, PathStroke),
+}
+
+#[cfg(test)]
+impl PathStyle {
+    /// An opaque black fill, for a test that needs a path that draws.
+    pub(crate) fn black() -> Self {
+        Self::Fill(PathFill {
+            paint: Paint::rgba(0, 0, 0, 255),
+            rule: FillRule::NonZero,
+        })
+    }
 }
 
 impl PathStyle {
-    /// Returns `true` if the fill marks the canvas, `false` otherwise.
-    pub fn draws_fill(&self) -> bool {
-        self.fill.is_visible()
+    /// Returns `None` if both are `None`.
+    pub fn new(fill: Option<PathFill>, stroke: Option<PathStroke>) -> Option<Self> {
+        match (fill, stroke) {
+            (Some(fill), Some(stroke)) => Some(Self::Both(fill, stroke)),
+            (Some(fill), None) => Some(Self::Fill(fill)),
+            (None, Some(stroke)) => Some(Self::Stroke(stroke)),
+            (None, None) => None,
+        }
+    }
+
+    pub fn fill(&self) -> Option<&PathFill> {
+        match self {
+            Self::Fill(fill) | Self::Both(fill, _) => Some(fill),
+            Self::Stroke(_) => None,
+        }
+    }
+
+    pub fn stroke(&self) -> Option<&PathStroke> {
+        match self {
+            Self::Stroke(stroke) | Self::Both(_, stroke) => Some(stroke),
+            Self::Fill(_) => None,
+        }
+    }
+
+    /// The fill, or `None` if it does not mark the canvas.
+    pub fn drawn_fill(&self) -> Option<&PathFill> {
+        self.fill().filter(|f| f.paint.is_visible())
     }
 
     /// The stroke, or `None` if it does not mark the canvas.
     pub fn drawn_stroke(&self) -> Option<&PathStroke> {
-        self.stroke.as_ref().filter(|s| s.paint.is_visible())
+        self.stroke().filter(|s| s.paint.is_visible())
     }
 }
 
@@ -586,45 +628,86 @@ impl From<PathStroke> for TextStroke {
 /// ```
 ///
 /// [`TextSpec::fit`] puts the fit to a box, the rotation and the mirroring
-/// in the matrix. A gradient of `fill` or `stroke` is in canvas space, as
+/// in the matrix. A gradient of `style` is in canvas space, as
 /// the gradient of a [`Path`], so it does not turn with the text.
 #[derive(Clone, Debug)]
 pub struct Text {
-    pub fill: Paint,
-    /// `None` draws no stroke.
-    pub stroke: Option<TextStroke>,
+    pub style: TextStyle,
     pub transform: [f32; 6],
     pub spec: TextSpec,
     pub underline: bool,
 }
 
+/// How a [`Text`] marks the canvas, with a fill, a stroke or both. A glyph
+/// fills with the non-zero rule, so the fill is a paint alone.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextStyle {
+    Fill(Paint),
+    Stroke(TextStroke),
+    Both(Paint, TextStroke),
+}
+
+#[cfg(test)]
+impl TextStyle {
+    /// An opaque black fill, for a test that needs a text that draws.
+    pub(crate) fn black() -> Self {
+        Self::Fill(Paint::rgba(0, 0, 0, 255))
+    }
+}
+
+impl TextStyle {
+    /// Returns `None` if both are `None`.
+    pub fn new(fill: Option<Paint>, stroke: Option<TextStroke>) -> Option<Self> {
+        match (fill, stroke) {
+            (Some(fill), Some(stroke)) => Some(Self::Both(fill, stroke)),
+            (Some(fill), None) => Some(Self::Fill(fill)),
+            (None, Some(stroke)) => Some(Self::Stroke(stroke)),
+            (None, None) => None,
+        }
+    }
+
+    pub fn fill(&self) -> Option<&Paint> {
+        match self {
+            Self::Fill(fill) | Self::Both(fill, _) => Some(fill),
+            Self::Stroke(_) => None,
+        }
+    }
+
+    pub fn stroke(&self) -> Option<&TextStroke> {
+        match self {
+            Self::Stroke(stroke) | Self::Both(_, stroke) => Some(stroke),
+            Self::Fill(_) => None,
+        }
+    }
+}
+
+/// The text of a [`PathStyle`], with its paint and the paint and the width
+/// of its stroke.
+impl From<PathStyle> for TextStyle {
+    fn from(style: PathStyle) -> Self {
+        match style {
+            PathStyle::Fill(fill) => Self::Fill(fill.paint),
+            PathStyle::Stroke(stroke) => Self::Stroke(stroke.into()),
+            PathStyle::Both(fill, stroke) => Self::Both(fill.paint, stroke.into()),
+        }
+    }
+}
+
 impl Text {
-    /// Returns `true` if the fill marks the canvas, `false` otherwise.
-    pub fn draws_fill(&self) -> bool {
-        self.fill.is_visible()
+    /// The fill, or `None` if it does not mark the canvas.
+    pub fn drawn_fill(&self) -> Option<&Paint> {
+        self.style.fill().filter(|p| p.is_visible())
     }
 
     /// The stroke, or `None` if it does not mark the canvas.
     pub fn drawn_stroke(&self) -> Option<&TextStroke> {
-        self.stroke.as_ref().filter(|s| s.paint.is_visible())
+        self.style.stroke().filter(|s| s.paint.is_visible())
     }
 
     /// Returns `true` if every float of the text is finite, `false`
     /// otherwise. A [`Paint`] and a [`StrokeWidth`] are always finite.
     pub(crate) fn is_finite(&self) -> bool {
         self.spec.size.is_finite() && all_finite(&self.transform)
-    }
-}
-
-impl Default for Text {
-    fn default() -> Self {
-        Self {
-            fill: Paint::default(),
-            stroke: None,
-            transform: translate(0.0, 0.0),
-            spec: TextSpec::default(),
-            underline: false,
-        }
     }
 }
 
@@ -664,20 +747,19 @@ impl Default for TextSpec {
 }
 
 impl TextSpec {
-    /// A [`Text`] that draws this text into `rect`. The family becomes the
-    /// family after fallback, so a view measures with the face of the
-    /// engine. The text has no fill and no stroke until the caller sets
-    /// them. Returns `None` when the text draws nothing, because
+    /// A [`Text`] that draws this text into `rect` with `style`. The family
+    /// becomes the family after fallback, so a view measures with the face
+    /// of the engine. Returns `None` when the text draws nothing, because
     /// [`crate::text::measure`] returns `None` or the text measures zero
     /// wide.
-    pub fn fit(self, rect: RotatedRect) -> Option<Text> {
-        self.fit_transform(rect.affine(1.0, 1.0))
+    pub fn fit(self, rect: RotatedRect, style: TextStyle) -> Option<Text> {
+        self.fit_transform(rect.affine(1.0, 1.0), style)
     }
 
     /// Like [`TextSpec::fit`], for the box of `transform` in the convention
     /// of [`Bitmap::transform`]. The box is a parallelogram, so it can hold
     /// a text that is skewed.
-    pub fn fit_transform(self, transform: [f32; 6]) -> Option<Text> {
+    pub fn fit_transform(self, transform: [f32; 6], style: TextStyle) -> Option<Text> {
         let metrics = crate::text::measure(
             &self.family,
             self.weight,
@@ -691,6 +773,7 @@ impl TextSpec {
         }
         let [a, b, c, d, e, f] = transform;
         Some(Text {
+            style,
             // A text with no height goes to the center at its natural size.
             transform: if h > 0.0 {
                 [a / w, b / w, c / h, d / h, e, f]
@@ -701,7 +784,7 @@ impl TextSpec {
                 family: metrics.family().into(),
                 ..self
             },
-            ..Text::default()
+            underline: false,
         })
     }
 }
@@ -1279,7 +1362,7 @@ pub(crate) fn end_segments(segs: &mut Vec<Segment>) {
 
 /// A style and the [`Segment`]s it applies to. [`Path::builder`] builds
 /// one, and [`Path::segments`] reads it back.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Path {
     pub style: PathStyle,
     segs: Vec<Segment>,
@@ -1291,9 +1374,9 @@ impl Path {
         PathBuilder::new(style, x, y)
     }
 
-    /// For the wire decoder, which refills a path in place.
-    pub(crate) fn segments_mut(&mut self) -> &mut Vec<Segment> {
-        &mut self.segs
+    /// For the wire decoder, which reads the segments as they are.
+    pub(crate) fn from_segments(style: PathStyle, segs: Vec<Segment>) -> Self {
+        Self { style, segs }
     }
 
     pub fn segments(&self) -> Segments<'_> {
@@ -1837,7 +1920,7 @@ mod tests {
 
     #[test]
     fn standalone_path_builder_builds_the_segments_it_was_given() {
-        let p = Path::builder(PathStyle::default(), 0.0, 0.0)
+        let p = Path::builder(PathStyle::black(), 0.0, 0.0)
             .line_to(10.0, 0.0)
             .quad_to(15.0, 5.0, 10.0, 10.0)
             .build();
@@ -1861,7 +1944,7 @@ mod tests {
     fn an_arc_of_a_huge_radius_takes_a_bounded_number_of_cubics() {
         // Nearly a whole turn, since the two ends are close on the circle.
         let arc = |r: f32| {
-            Path::builder(PathStyle::default(), 0.0, 0.0)
+            Path::builder(PathStyle::black(), 0.0, 0.0)
                 .arc_to(r, r, 0.0, true, true, r * 1e-3, 0.0)
                 .build()
                 .segments()
@@ -1998,7 +2081,7 @@ mod tests {
 
     #[test]
     fn an_arc_through_0_puts_its_points_at_0() {
-        let path = Path::builder(PathStyle::default(), 20.0, 10.0)
+        let path = Path::builder(PathStyle::black(), 20.0, 10.0)
             .arc_to(10.0, 10.0, 0.0, false, true, 0.0, 10.0)
             .arc_to(10.0, 10.0, 0.0, false, true, 20.0, 10.0)
             .build();
@@ -2082,7 +2165,7 @@ mod tests {
             (0.0, 10.0, 0.0, false, true, 7.0, 7.0),
         ];
         for (rx, ry, rotation, large_arc, sweep, x, y) in arcs {
-            let path = Path::builder(PathStyle::default(), 20.0, 10.0)
+            let path = Path::builder(PathStyle::black(), 20.0, 10.0)
                 .arc_to(rx, ry, rotation, large_arc, sweep, x, y)
                 .build();
             let bounds = PathBounds::new(20.0, 10.0)
@@ -2115,7 +2198,7 @@ mod tests {
     fn scene_path_builder_commits_the_expanded_arc() {
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(
-            Path::builder(PathStyle::default(), 0.0, 0.0)
+            Path::builder(PathStyle::black(), 0.0, 0.0)
                 .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0)
                 .build(),
         );
@@ -2128,7 +2211,7 @@ mod tests {
     #[test]
     fn add_path_appends_prebuilt_path() {
         let mut scene = Scene::new(10.0, 10.0);
-        let p = Path::builder(PathStyle::default(), 0.0, 0.0)
+        let p = Path::builder(PathStyle::black(), 0.0, 0.0)
             .line_to(5.0, 5.0)
             .build();
         scene.add_path(p);
@@ -2141,7 +2224,7 @@ mod tests {
 
     #[test]
     fn a_move_replaces_a_move_before_it_and_a_last_move_is_dropped() {
-        let p = Path::builder(PathStyle::default(), 1.0, 1.0)
+        let p = Path::builder(PathStyle::black(), 1.0, 1.0)
             .move_to(2.0, 2.0)
             .line_to(3.0, 3.0)
             .move_to(4.0, 4.0)
@@ -2158,7 +2241,7 @@ mod tests {
 
     #[test]
     fn a_builder_with_only_a_start_point_builds_no_segments() {
-        let p = Path::builder(PathStyle::default(), 1.0, 1.0).build();
+        let p = Path::builder(PathStyle::black(), 1.0, 1.0).build();
         assert_eq!(p.segments().len(), 0);
         let clip = ClipPath::builder(FillRule::NonZero, 1.0, 1.0)
             .move_to(2.0, 2.0)
@@ -2206,18 +2289,18 @@ mod tests {
     #[test]
     fn clip_wraps_only_elements_drawn_inside() {
         let mut scene = Scene::new(20.0, 20.0);
-        scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
+        scene.add_path(Path::builder(PathStyle::black(), 0.0, 0.0).build());
         scene.clip(
             ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build(),
             |c| {
                 c.add_path(
-                    Path::builder(PathStyle::default(), 1.0, 1.0)
+                    Path::builder(PathStyle::black(), 1.0, 1.0)
                         .line_to(2.0, 2.0)
                         .build(),
                 );
             },
         );
-        scene.add_path(Path::builder(PathStyle::default(), 2.0, 2.0).build());
+        scene.add_path(Path::builder(PathStyle::black(), 2.0, 2.0).build());
 
         assert!(matches!(scene.elements[0], Element::Path(_)));
         assert!(matches!(scene.elements[2], Element::Path(_)));
@@ -2242,7 +2325,7 @@ mod tests {
     fn clip_returns_what_its_closure_returns() {
         let mut scene = Scene::new(20.0, 20.0);
         let failed: Result<(), &str> = scene.clip(a_unit_rect(0.0), |clip| {
-            clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+            clip.add_path(a_line(PathStyle::black(), 5.0, 5.0));
             Err("stop")
         });
         assert_eq!(failed, Err("stop"));
@@ -2258,7 +2341,7 @@ mod tests {
         let mut scene = Scene::new(20.0, 20.0);
         for opacity in [0.5, 1.0, 2.0, 0.0, -1.0, f32::NAN, f32::INFINITY] {
             let drawn = scene.layer(opacity, |layer| {
-                layer.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+                layer.add_path(a_line(PathStyle::black(), 5.0, 5.0));
                 opacity
             });
             assert!(drawn.to_bits() == opacity.to_bits());
@@ -2282,11 +2365,11 @@ mod tests {
         scene.clip(
             ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build(),
             |outer| {
-                outer.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+                outer.add_path(Path::builder(PathStyle::black(), 1.0, 1.0).build());
                 outer.clip(
                     ClipPath::builder(FillRule::NonZero, 0.0, 0.0).build(),
                     |inner| {
-                        inner.add_path(Path::builder(PathStyle::default(), 2.0, 2.0).build());
+                        inner.add_path(Path::builder(PathStyle::black(), 2.0, 2.0).build());
                     },
                 );
             },
@@ -2324,7 +2407,7 @@ mod tests {
             &spec.text,
         )
         .expect("text measures");
-        let text = spec.fit(rect).expect("text fits");
+        let text = spec.fit(rect, TextStyle::black()).expect("text fits");
         assert_ne!(&*text.spec.family, "ZZZ_nope");
         assert_eq!(&*text.spec.family, metrics.family());
         assert_eq!(
@@ -2351,7 +2434,10 @@ mod tests {
         .expect("text measures");
         let (w, h) = (metrics.width(), metrics.height());
         let skewed = [30.0, 0.0, 10.0, 20.0, 50.0, 40.0];
-        let m = spec.fit_transform(skewed).expect("text fits").transform;
+        let m = spec
+            .fit_transform(skewed, TextStyle::black())
+            .expect("text fits")
+            .transform;
         let close = |(x, y): (f32, f32), (ex, ey): (f32, f32)| {
             assert!((x - ex).abs() < 1e-4 && (y - ey).abs() < 1e-4, "{x}, {y}");
         };
@@ -2381,13 +2467,16 @@ mod tests {
             ..TextSpec::default()
         };
         assert!(
-            spec.fit(RotatedRect {
-                cx: 0.0,
-                cy: 0.0,
-                w: 10.0,
-                h: 10.0,
-                angle_deg: 0.0
-            })
+            spec.fit(
+                RotatedRect {
+                    cx: 0.0,
+                    cy: 0.0,
+                    w: 10.0,
+                    h: 10.0,
+                    angle_deg: 0.0
+                },
+                TextStyle::black()
+            )
             .is_none()
         );
     }
@@ -2442,9 +2531,9 @@ mod tests {
     fn an_element_with_a_non_finite_float_is_not_added() {
         let (nan, inf) = (f32::NAN, f32::INFINITY);
         let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(a_line(PathStyle::default(), nan, 5.0));
+        scene.add_path(a_line(PathStyle::black(), nan, 5.0));
         scene.add_path(
-            Path::builder(PathStyle::default(), 0.0, 0.0)
+            Path::builder(PathStyle::black(), 0.0, 0.0)
                 .cubic_to(1.0, 2.0, 3.0, 4.0, 5.0, -inf)
                 .build(),
         );
@@ -2453,7 +2542,7 @@ mod tests {
             text: "Hi".into(),
             ..TextSpec::default()
         }
-        .fit(a_unit_rect(0.0))
+        .fit(a_unit_rect(0.0), TextStyle::black())
         .expect("text fits");
         scene.add_text(Text {
             spec: TextSpec {
@@ -2481,20 +2570,20 @@ mod tests {
             (5.0, 0.0, nan),
         ] {
             scene.add_path(
-                Path::builder(PathStyle::default(), 0.0, 0.0)
+                Path::builder(PathStyle::black(), 0.0, 0.0)
                     .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
                     .line_to(0.0, 9.0)
                     .build(),
             );
             scene.add_path(
-                Path::builder(PathStyle::default(), 0.0, 0.0)
+                Path::builder(PathStyle::black(), 0.0, 0.0)
                     .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
                     .build(),
             );
             let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
                 .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
                 .build();
-            scene.clip(clip, |c| c.add_path(a_line(PathStyle::default(), 5.0, 5.0)));
+            scene.clip(clip, |c| c.add_path(a_line(PathStyle::black(), 5.0, 5.0)));
         }
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
     }
@@ -2503,7 +2592,7 @@ mod tests {
     fn a_clip_with_a_non_finite_float_drops_what_it_holds() {
         let mut scene = Scene::new(10.0, 10.0);
         scene.clip(a_unit_rect(f32::NAN), |clip| {
-            clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+            clip.add_path(a_line(PathStyle::black(), 5.0, 5.0));
         });
         assert!(scene.elements.is_empty(), "{:?}", scene.elements);
     }
@@ -2512,7 +2601,7 @@ mod tests {
     fn a_clip_or_a_layer_past_max_nesting_drops_what_it_holds() {
         fn nest(scene: &mut Scene, depth: usize, layer: bool) {
             if depth == 0 {
-                scene.add_path(a_line(PathStyle::default(), 5.0, 5.0));
+                scene.add_path(a_line(PathStyle::black(), 5.0, 5.0));
             } else if layer {
                 scene.layer(0.5, |s| nest(s, depth - 1, layer));
             } else {
@@ -2543,8 +2632,8 @@ mod tests {
     fn a_non_finite_element_inside_a_clip_drops_alone() {
         let mut scene = Scene::new(10.0, 10.0);
         scene.clip(a_unit_rect(0.0), |clip| {
-            clip.add_path(a_line(PathStyle::default(), 5.0, 5.0));
-            clip.add_path(a_line(PathStyle::default(), f32::NAN, 5.0));
+            clip.add_path(a_line(PathStyle::black(), 5.0, 5.0));
+            clip.add_path(a_line(PathStyle::black(), f32::NAN, 5.0));
         });
         let [Element::Clipped { elements, .. }] = &scene.elements[..] else {
             panic!("expected one clip, got {:?}", scene.elements);
@@ -2687,6 +2776,21 @@ mod tests {
         let eight = MiterLimit::new(8.0).unwrap();
         assert_eq!(eight.get(), 8.0);
         assert_eq!(LineJoin::miter(8.0), Some(LineJoin::Miter(eight)));
+    }
+
+    #[test]
+    fn a_style_holds_a_fill_a_stroke_or_both() {
+        let PathStyle::Fill(fill) = PathStyle::black() else {
+            panic!("black is a fill");
+        };
+        let stroke = PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::ONE);
+        assert_eq!(PathStyle::new(None, None), None);
+        let both = PathStyle::new(Some(fill.clone()), Some(stroke.clone())).unwrap();
+        assert_eq!((both.fill(), both.stroke()), (Some(&fill), Some(&stroke)));
+        let text = TextStyle::from(both);
+        assert_eq!(text.fill(), Some(&fill.paint));
+        assert_eq!(text.stroke(), Some(&TextStroke::from(stroke)));
+        assert_eq!(TextStyle::new(None, None), None);
     }
 
     #[test]

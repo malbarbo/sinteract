@@ -305,9 +305,9 @@ impl Canvas<Infallible> for CanvasRenderer {
 
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
-        let fill = style.draws_fill();
+        let fill = style.drawn_fill();
         let stroke = style.drawn_stroke();
-        if !fill && stroke.is_none() {
+        if fill.is_none() && stroke.is_none() {
             return;
         }
         let mut sink = Calls::new();
@@ -318,9 +318,9 @@ impl Canvas<Infallible> for CanvasRenderer {
         let p = sink.path;
         self.set(IDENTITY);
         let ctx = self.ctx();
-        if fill {
-            self.fill_style(&style.fill);
-            ctx.fill_with_path_2d_and_winding(&p, winding(style.fill_rule));
+        if let Some(fill) = fill {
+            self.fill_style(&fill.paint);
+            ctx.fill_with_path_2d_and_winding(&p, winding(fill.rule));
         }
         if let Some(stroke) = stroke {
             self.stroke_style(&stroke.paint);
@@ -354,9 +354,9 @@ impl Canvas<Infallible> for CanvasRenderer {
         let Some(layout) = TextLayout::new(&node.spec) else {
             return;
         };
-        let fill = node.draws_fill();
+        let fill = node.drawn_fill();
         let stroke = node.drawn_stroke();
-        if !fill && stroke.is_none() {
+        if fill.is_none() && stroke.is_none() {
             return;
         }
         // An outline moved by the transform of the text, in the space of the
@@ -366,9 +366,9 @@ impl Canvas<Infallible> for CanvasRenderer {
             outline(&mut moved);
             moved.out.path
         };
-        if fill {
-            self.fill_style(&node.fill);
-            if matches!(node.fill, Paint::Gradient(_)) {
+        if let Some(fill) = fill {
+            self.fill_style(fill);
+            if matches!(fill, Paint::Gradient(_)) {
                 // The gradient stays in the space of the scene, so the glyphs
                 // go into one path in that space.
                 self.set(IDENTITY);
@@ -400,8 +400,8 @@ impl Canvas<Infallible> for CanvasRenderer {
         if node.underline {
             let u = moved(&|out| layout.outline_underline(out));
             self.set(IDENTITY);
-            if fill {
-                self.fill_style(&node.fill);
+            if let Some(fill) = fill {
+                self.fill_style(fill);
                 self.ctx().fill_with_path_2d(&u);
             }
             if let Some(stroke) = stroke {

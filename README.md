@@ -10,12 +10,12 @@ vector, with text as glyph outlines.
 
 ```rust,no_run
 use sinteract::display::Printer;
-use sinteract::scene::{Paint, Path, PathStyle, Scene};
+use sinteract::scene::{FillRule, Paint, Path, PathFill, PathStyle, Scene};
 
-let blue = PathStyle {
-    fill: Paint::rgba(0, 0, 255, 255),
-    ..PathStyle::default()
-};
+let blue = PathStyle::Fill(PathFill {
+    paint: Paint::rgba(0, 0, 255, 255),
+    rule: FillRule::NonZero,
+});
 let mut scene = Scene::new(40.0, 30.0);
 scene.add_path(
     Path::builder(blue, 0.0, 0.0)

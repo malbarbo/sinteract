@@ -30,7 +30,8 @@ use std::process::ExitCode;
 use sinteract::display::{Stage, StageEvent, StageOptions};
 use sinteract::event::{InputEvent, Interrupt, KeyKind, PadButton, PadEvent, key};
 use sinteract::scene::{
-    Paint, Path, PathStroke, PathStyle, Rgba, RotatedRect, Scene, StrokeWidth, Text, TextSpec,
+    FillRule, Paint, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Scene, StrokeWidth,
+    Text, TextSpec, TextStyle,
 };
 use sinteract::session::{Player, PlayerRange, Target};
 
@@ -195,13 +196,16 @@ impl Game {
         scene.add_path(rect(fill(opaque(20, 20, 40)), 0.0, 0.0, WIDTH, HEIGHT));
         for s in &self.squares {
             let style = if s.player == player {
-                PathStyle {
-                    stroke: Some(PathStroke::new(
+                PathStyle::Both(
+                    PathFill {
+                        paint: Paint::Solid(s.color),
+                        rule: FillRule::NonZero,
+                    },
+                    PathStroke::new(
                         Paint::rgba(255, 255, 255, 255),
                         StrokeWidth::new(3.0).expect("a positive width"),
-                    )),
-                    ..fill(s.color)
-                }
+                    ),
+                )
             } else {
                 fill(s.color)
             };
@@ -241,10 +245,10 @@ fn pad_direction(button: PadButton) -> Option<Direction> {
 }
 
 fn fill(color: Rgba) -> PathStyle {
-    PathStyle {
-        fill: Paint::Solid(color),
-        ..PathStyle::default()
-    }
+    PathStyle::Fill(PathFill {
+        paint: Paint::Solid(color),
+        rule: FillRule::NonZero,
+    })
 }
 
 fn rect(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
@@ -270,17 +274,16 @@ fn label(text: &str, cx: f32, cy: f32) -> Option<Text> {
         spec.size,
         &spec.text,
     )?;
-    let node = spec.fit(RotatedRect {
-        cx,
-        cy,
-        w: m.width(),
-        h: m.height(),
-        angle_deg: 0.0,
-    })?;
-    Some(Text {
-        fill: Paint::rgba(255, 255, 255, 255),
-        ..node
-    })
+    spec.fit(
+        RotatedRect {
+            cx,
+            cy,
+            w: m.width(),
+            h: m.height(),
+            angle_deg: 0.0,
+        },
+        TextStyle::Fill(Paint::rgba(255, 255, 255, 255)),
+    )
 }
 
 const fn opaque(r: u8, g: u8, b: u8) -> Rgba {

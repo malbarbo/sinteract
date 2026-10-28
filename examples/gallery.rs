@@ -44,8 +44,8 @@ use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
 use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
     Bitmap, ClipPath, Dash, FillRule, FontStyle, Image, LineCap, LineJoin, MiterLimit, Paint, Path,
-    PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop, StrokeWidth, Text,
-    TextSpec, TextStroke,
+    PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop,
+    StrokeWidth, Text, TextSpec, TextStroke, TextStyle,
 };
 use sinteract::session::{PlayerRange, Target};
 
@@ -262,10 +262,10 @@ fn gallery(t: f32) -> Scene {
 }
 
 fn fill_and_stroke(s: &mut Scene, x: f32, y: f32, _: f32) {
-    let both = PathStyle {
-        stroke: Some(solid_stroke(rgb(20, 40, 120), 4.0)),
-        ..fill(rgb(90, 160, 240))
-    };
+    let both = PathStyle::Both(
+        solid_fill(rgb(90, 160, 240)),
+        solid_stroke(rgb(20, 40, 120), 4.0),
+    );
     s.add_path(rect(both, x + 15.0, y + 15.0, 70.0, 70.0));
     circle(
         s,
@@ -327,13 +327,13 @@ fn segments(s: &mut Scene, x: f32, y: f32, _: f32) {
             .build(),
     );
     // A closed shape of every segment kind.
-    let shape = PathStyle {
-        stroke: Some(PathStroke {
+    let shape = PathStyle::Both(
+        solid_fill(rgb(230, 200, 240)),
+        PathStroke {
             closed: true,
             ..solid_stroke(rgb(120, 40, 140), 2.0)
-        }),
-        ..fill(rgb(230, 200, 240))
-    };
+        },
+    );
     s.add_path(
         Path::builder(shape, x + 130.0, y + 95.0)
             .line_to(x + 150.0, y + 50.0)
@@ -416,14 +416,16 @@ fn fill_rules(s: &mut Scene, x: f32, y: f32, _: f32) {
         .into_iter()
         .enumerate()
     {
-        let style = PathStyle {
-            fill_rule: rule,
-            stroke: Some(PathStroke {
+        let style = PathStyle::Both(
+            PathFill {
+                rule,
+                ..solid_fill(rgb(240, 180, 40))
+            },
+            PathStroke {
                 closed: true,
                 ..solid_stroke(rgb(0, 0, 0), 1.5)
-            }),
-            ..fill(rgb(240, 180, 40))
-        };
+            },
+        );
         // A star crosses itself.
         let (cx, cy) = (x + 50.0 + i as f32 * 100.0, y + 35.0);
         let point = |k: usize| {
@@ -751,77 +753,69 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         s.add_text(node);
     }
     // A negative width mirrors the text, and a negative height flips it.
-    let mirror = spec("mirror", 20.0).fit(RotatedRect {
-        cx: x + 150.0,
-        cy: y + 10.0,
-        w: -70.0,
-        h: 23.0,
-        angle_deg: 0.0,
-    });
+    let mirror = spec("mirror", 20.0).fit(
+        RotatedRect {
+            cx: x + 150.0,
+            cy: y + 10.0,
+            w: -70.0,
+            h: 23.0,
+            angle_deg: 0.0,
+        },
+        TextStyle::Fill(Paint::Solid(opaque(40, 90, 200))),
+    );
     if let Some(node) = mirror {
-        s.add_text(Text {
-            fill: Paint::Solid(opaque(40, 90, 200)),
-            ..node
-        });
+        s.add_text(node);
     }
-    let flip = spec("flip", 20.0).fit(RotatedRect {
-        cx: x + 150.0,
-        cy: y + 38.0,
-        w: 40.0,
-        h: -23.0,
-        angle_deg: 0.0,
-    });
+    let flip = spec("flip", 20.0).fit(
+        RotatedRect {
+            cx: x + 150.0,
+            cy: y + 38.0,
+            w: 40.0,
+            h: -23.0,
+            angle_deg: 0.0,
+        },
+        TextStyle::Fill(Paint::Solid(opaque(40, 90, 200))),
+    );
     if let Some(node) = flip {
-        s.add_text(Text {
-            fill: Paint::Solid(opaque(40, 90, 200)),
-            ..node
-        });
+        s.add_text(node);
     }
     // A box of another shape stretches the text.
-    let wide = spec("wide", 20.0).fit(RotatedRect {
-        cx: x + 50.0,
-        cy: y + 115.0,
-        w: 80.0,
-        h: 16.0,
-        angle_deg: 0.0,
-    });
+    let wide = spec("wide", 20.0).fit(
+        RotatedRect {
+            cx: x + 50.0,
+            cy: y + 115.0,
+            w: 80.0,
+            h: 16.0,
+            angle_deg: 0.0,
+        },
+        TextStyle::Fill(Paint::Solid(opaque(40, 140, 60))),
+    );
     if let Some(node) = wide {
-        s.add_text(Text {
-            fill: Paint::Solid(opaque(40, 140, 60)),
-            ..node
-        });
+        s.add_text(node);
     }
     let outline = TextSpec {
         weight: 700,
         ..spec("Outline", 30.0)
     };
-    if let Some(node) = text(outline, x + 140.0, y + 75.0, 0.0, Rgba::default()) {
-        // A gradient on a text is in canvas space, as on a path.
-        let sunset = stops(&[(0.0, (250, 220, 60)), (1.0, (230, 60, 40))]);
-        s.add_text(Text {
-            fill: Paint::linear(x + 95.0, y, x + 185.0, y, sunset).expect("a finite gradient"),
-            stroke: Some(TextStroke {
-                paint: Paint::Solid(opaque(20, 20, 20)),
-                width: StrokeWidth::new(1.2).expect("a positive width"),
-            }),
-            ..node
-        });
+    // A gradient on a text is in canvas space, as on a path.
+    let sunset = stops(&[(0.0, (250, 220, 60)), (1.0, (230, 60, 40))]);
+    let style = TextStyle::Both(
+        Paint::linear(x + 95.0, y, x + 185.0, y, sunset).expect("a finite gradient"),
+        TextStroke {
+            paint: Paint::Solid(opaque(20, 20, 20)),
+            width: StrokeWidth::new(1.2).expect("a positive width"),
+        },
+    );
+    if let Some(node) = styled_text(outline, x + 140.0, y + 75.0, 0.0, style) {
+        s.add_text(node);
     }
     // A stroke with no fill.
-    if let Some(node) = text(
-        spec("hollow", 18.0),
-        x + 150.0,
-        y + 108.0,
-        0.0,
-        Rgba::default(),
-    ) {
-        s.add_text(Text {
-            stroke: Some(TextStroke {
-                paint: Paint::Solid(opaque(20, 20, 20)),
-                width: StrokeWidth::new(0.8).expect("a positive width"),
-            }),
-            ..node
-        });
+    let style = TextStyle::Stroke(TextStroke {
+        paint: Paint::Solid(opaque(20, 20, 20)),
+        width: StrokeWidth::new(0.8).expect("a positive width"),
+    });
+    if let Some(node) = styled_text(spec("hollow", 18.0), x + 150.0, y + 108.0, 0.0, style) {
+        s.add_text(node);
     }
 }
 
@@ -926,6 +920,12 @@ fn badge(cx: f32, cy: f32, scale: f32, angle_deg: f32) -> Bitmap {
 /// A text at its natural size in `fill`, centred on `(cx, cy)` and rotated
 /// by `angle_deg`.
 fn text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, fill: Rgba) -> Option<Text> {
+    styled_text(spec, cx, cy, angle_deg, TextStyle::Fill(Paint::Solid(fill)))
+}
+
+/// A text at its natural size in `style`, centred on `(cx, cy)` and rotated
+/// by `angle_deg`.
+fn styled_text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, style: TextStyle) -> Option<Text> {
     let m = sinteract::text::measure(
         &spec.family,
         spec.weight,
@@ -933,17 +933,16 @@ fn text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, fill: Rgba) -> Option<
         spec.size,
         &spec.text,
     )?;
-    let node = spec.fit(RotatedRect {
-        cx,
-        cy,
-        w: m.width(),
-        h: m.height(),
-        angle_deg,
-    })?;
-    Some(Text {
-        fill: Paint::Solid(fill),
-        ..node
-    })
+    spec.fit(
+        RotatedRect {
+            cx,
+            cy,
+            w: m.width(),
+            h: m.height(),
+            angle_deg,
+        },
+        style,
+    )
 }
 
 /// Two strokes that meet at the top in a join, inside the box at
@@ -958,11 +957,16 @@ fn chevron(s: &mut Scene, style: PathStyle, left: f32, top: f32, w: f32, h: f32)
 }
 
 /// `style` with its stroke closed.
-fn closed(mut style: PathStyle) -> PathStyle {
-    if let Some(stroke) = &mut style.stroke {
-        stroke.closed = true;
+fn closed(style: PathStyle) -> PathStyle {
+    let close = |stroke| PathStroke {
+        closed: true,
+        ..stroke
+    };
+    match style {
+        PathStyle::Fill(fill) => PathStyle::Fill(fill),
+        PathStyle::Stroke(stroke) => PathStyle::Stroke(close(stroke)),
+        PathStyle::Both(fill, stroke) => PathStyle::Both(fill, close(stroke)),
     }
-    style
 }
 
 fn rect(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
@@ -983,9 +987,13 @@ fn circle(s: &mut Scene, style: PathStyle, cx: f32, cy: f32, r: f32) {
 }
 
 fn fill(paint: Paint) -> PathStyle {
-    PathStyle {
-        fill: paint,
-        ..PathStyle::default()
+    PathStyle::Fill(solid_fill(paint))
+}
+
+fn solid_fill(paint: Paint) -> PathFill {
+    PathFill {
+        paint,
+        rule: FillRule::NonZero,
     }
 }
 
@@ -994,10 +1002,7 @@ fn stroke(paint: Paint, width: f32) -> PathStyle {
 }
 
 fn stroked(stroke: PathStroke) -> PathStyle {
-    PathStyle {
-        stroke: Some(stroke),
-        ..PathStyle::default()
-    }
+    PathStyle::Stroke(stroke)
 }
 
 fn solid_stroke(paint: Paint, width: f32) -> PathStroke {

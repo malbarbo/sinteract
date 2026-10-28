@@ -156,6 +156,9 @@ enum ValueError {
     NotFinite,
     /// A bitmap whose id names no image. The reader skips it.
     NoImage,
+    /// A path or a text with no fill and no stroke that marks the canvas.
+    /// The reader skips it, since it draws nothing.
+    NoInk,
 }
 
 impl From<Error> for ValueError {
@@ -183,12 +186,14 @@ impl From<std::str::Utf8Error> for ValueError {
 }
 
 /// `None` when reading an element or an event met a value from a newer
-/// schema, a float that is not finite or a bitmap with no image, so the
-/// reader skips what holds it. Damage stays an error.
+/// schema, a float that is not finite, a bitmap with no image or an element
+/// with no ink, so the reader skips what holds it. Damage stays an error.
 fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
     match read {
         Ok(v) => Ok(Some(v)),
-        Err(ValueError::Newer | ValueError::NotFinite | ValueError::NoImage) => Ok(None),
+        Err(
+            ValueError::Newer | ValueError::NotFinite | ValueError::NoImage | ValueError::NoInk,
+        ) => Ok(None),
         Err(ValueError::Malformed(e)) => Err(e),
     }
 }
@@ -213,8 +218,8 @@ mod tests {
     use crate::protocol_capnp;
     use crate::scene::{
         Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Image, LineCap, LineJoin, Paint,
-        Path, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment, SegmentKind,
-        SpreadMode, Stop, StrokeWidth, Text, TextSpec, TextStroke,
+        Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment,
+        SegmentKind, SpreadMode, Stop, StrokeWidth, Text, TextSpec, TextStroke, TextStyle,
     };
     use crate::scene_capnp::element;
     use capnp::message::Builder as MessageBuilder;
@@ -223,8 +228,12 @@ mod tests {
         let mut scene = Scene::new(120.0, 80.0);
         scene.add_path(
             Path::builder(
-                PathStyle {
-                    stroke: Some(PathStroke {
+                PathStyle::Both(
+                    PathFill {
+                        paint: Paint::rgba(10, 20, 30, 128),
+                        rule: FillRule::EvenOdd,
+                    },
+                    PathStroke {
                         cap: LineCap::Round,
                         join: LineJoin::Bevel,
                         closed: true,
@@ -232,10 +241,8 @@ mod tests {
                             Paint::rgba(200, 0, 0, 255),
                             StrokeWidth::new(2.5).unwrap(),
                         )
-                    }),
-                    fill: Paint::rgba(10, 20, 30, 128),
-                    fill_rule: FillRule::EvenOdd,
-                },
+                    },
+                ),
                 0.0,
                 0.0,
             )
@@ -260,39 +267,44 @@ mod tests {
                     font_style: FontStyle::Italic,
                     text: "Olá".into(),
                 }
-                .fit(RotatedRect {
-                    cx: 60.0,
-                    cy: 30.0,
-                    w: 50.0,
-                    h: 14.0,
-                    angle_deg: 0.0,
-                })
+                .fit(
+                    RotatedRect {
+                        cx: 60.0,
+                        cy: 30.0,
+                        w: 50.0,
+                        h: 14.0,
+                        angle_deg: 0.0,
+                    },
+                    TextStyle::black(),
+                )
                 .expect("text fits");
                 clip.add_text(Text {
-                    fill: Paint::Solid(Rgba {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                        a: 255,
-                    }),
-                    stroke: Some(TextStroke {
-                        paint: Paint::radial(
-                            60.0,
-                            30.0,
-                            25.0,
-                            vec![Stop {
-                                offset: 0.5,
-                                color: Rgba {
-                                    r: 200,
-                                    g: 0,
-                                    b: 0,
-                                    a: 128,
-                                },
-                            }],
-                        )
-                        .unwrap(),
-                        width: StrokeWidth::ONE,
-                    }),
+                    style: TextStyle::Both(
+                        Paint::Solid(Rgba {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        }),
+                        TextStroke {
+                            paint: Paint::radial(
+                                60.0,
+                                30.0,
+                                25.0,
+                                vec![Stop {
+                                    offset: 0.5,
+                                    color: Rgba {
+                                        r: 200,
+                                        g: 0,
+                                        b: 0,
+                                        a: 128,
+                                    },
+                                }],
+                            )
+                            .unwrap(),
+                            width: StrokeWidth::ONE,
+                        },
+                    ),
                     underline: true,
                     ..text
                 });
@@ -913,14 +925,14 @@ mod tests {
     /// walks it for every element walks more words than the message holds.
     fn scene_of_paths() -> Scene {
         let mut scene = Scene::new(100.0, 100.0);
-        let mut p = Path::builder(PathStyle::default(), 0.0, 0.0);
+        let mut p = Path::builder(PathStyle::black(), 0.0, 0.0);
         for i in 1..100 {
             p = p.line_to(i as f32, (i % 7) as f32);
         }
         scene.add_path(p.build());
         for i in 1..32 {
             scene.add_path(
-                Path::builder(PathStyle::default(), 0.0, 0.0)
+                Path::builder(PathStyle::black(), 0.0, 0.0)
                     .line_to(i as f32, 1.0)
                     .build(),
             );
@@ -941,7 +953,12 @@ mod tests {
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
-            let _ = p.reborrow().init_style();
+            // An opaque black fill, as PathStyle::black().
+            p.reborrow()
+                .init_style()
+                .init_fill()
+                .init_solid()
+                .set_a(255);
             p.set_verbs(&[SegmentKind::Move as u8]);
             let mut coords = p.init_coords(4);
             for i in 0..4 {
@@ -970,7 +987,12 @@ mod tests {
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
-            let _ = p.reborrow().init_style();
+            // An opaque black fill, as PathStyle::black().
+            p.reborrow()
+                .init_style()
+                .init_fill()
+                .init_solid()
+                .set_a(255);
             p.set_verbs(&[SegmentKind::Line as u8, SegmentKind::Line as u8]);
             let mut coords = p.init_coords(4);
             for (i, v) in [5.0, 10.0, 20.0, 0.0].into_iter().enumerate() {
@@ -984,7 +1006,7 @@ mod tests {
         let [Element::Path(p)] = d.elements() else {
             panic!("expected one Path, got {:?}", d.elements());
         };
-        let expected = Path::builder(PathStyle::default(), 0.0, 0.0)
+        let expected = Path::builder(PathStyle::black(), 0.0, 0.0)
             .line_to(5.0, 10.0)
             .line_to(20.0, 0.0)
             .build();
@@ -1013,7 +1035,12 @@ mod tests {
             for (i, (verbs, xs)) in paths.iter().enumerate() {
                 let node = nodes.reborrow().get(i as u32);
                 let mut p = node.init_path();
-                let _ = p.reborrow().init_style();
+                // An opaque black fill, as PathStyle::black().
+                p.reborrow()
+                    .init_style()
+                    .init_fill()
+                    .init_solid()
+                    .set_a(255);
                 let verbs: Vec<u8> = verbs.iter().map(|&k| k as u8).collect();
                 p.set_verbs(&verbs);
                 let mut coords = p.init_coords(xs.len() as u32);
@@ -1029,7 +1056,7 @@ mod tests {
         let [Element::Path(p), Element::Path(lone)] = d.elements() else {
             panic!("expected two Paths, got {:?}", d.elements());
         };
-        let expected = Path::builder(PathStyle::default(), 2.0, 2.0)
+        let expected = Path::builder(PathStyle::black(), 2.0, 2.0)
             .line_to(3.0, 3.0)
             .build();
         assert!(p.segments().eq(expected.segments()), "{p:?}");
@@ -1045,7 +1072,12 @@ mod tests {
             let mut nodes = frame.init_elements(1);
             let node = nodes.reborrow().get(0);
             let mut p = node.init_path();
-            let _ = p.reborrow().init_style();
+            // An opaque black fill, as PathStyle::black().
+            p.reborrow()
+                .init_style()
+                .init_fill()
+                .init_solid()
+                .set_a(255);
             p.set_verbs(&[SegmentKind::Cubic as u8]);
             let mut coords = p.init_coords(4);
             for i in 0..4 {
@@ -1071,7 +1103,7 @@ mod tests {
         // A path, then a clip that holds a path and a bitmap. The first path
         // and the bitmap become arms of a newer schema.
         let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
+        scene.add_path(Path::builder(PathStyle::black(), 0.0, 0.0).build());
         scene.clip(
             RotatedRect {
                 cx: 5.0,
@@ -1081,7 +1113,7 @@ mod tests {
                 angle_deg: 0.0,
             },
             |clip| {
-                clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+                clip.add_path(Path::builder(PathStyle::black(), 1.0, 1.0).build());
                 clip.add_bitmap(Bitmap::fit(
                     crate::asset::png_image(7, 1),
                     RotatedRect {
@@ -1165,7 +1197,7 @@ mod tests {
         let mut scene = Scene::new(10.0, 10.0);
         for _ in 0..3 {
             scene.add_path(
-                Path::builder(PathStyle::default(), 0.0, 0.0)
+                Path::builder(PathStyle::black(), 0.0, 0.0)
                     .line_to(1.0, 1.0)
                     .build(),
             );
@@ -1178,10 +1210,10 @@ mod tests {
             angle_deg: 0.0,
         };
         scene.clip(rect, |clip| {
-            clip.add_path(Path::builder(PathStyle::default(), 1.0, 1.0).build());
+            clip.add_path(Path::builder(PathStyle::black(), 1.0, 1.0).build());
         });
         scene.add_path(
-            Path::builder(PathStyle::default(), 9.0, 9.0)
+            Path::builder(PathStyle::black(), 9.0, 9.0)
                 .line_to(10.0, 10.0)
                 .build(),
         );
@@ -1402,7 +1434,7 @@ mod tests {
             b: 0xff,
             a: 128,
         };
-        assert_eq!(p.style.fill, Paint::Solid(color));
+        assert_eq!(p.style.fill().unwrap().paint, Paint::Solid(color));
     }
 
     #[test]
@@ -1410,14 +1442,11 @@ mod tests {
         let mut scene = Scene::new(100.0, 50.0);
         scene.add_path(
             Path::builder(
-                PathStyle {
-                    stroke: Some(PathStroke {
-                        join: LineJoin::miter(7.5).unwrap(),
-                        dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5),
-                        ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
-                    }),
-                    ..PathStyle::default()
-                },
+                PathStyle::Stroke(PathStroke {
+                    join: LineJoin::miter(7.5).unwrap(),
+                    dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5),
+                    ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
+                }),
                 0.0,
                 0.0,
             )
@@ -1431,7 +1460,7 @@ mod tests {
                 let Element::Path(p) = node else {
                     panic!("expected path");
                 };
-                let stroke = p.style.stroke.as_ref().unwrap();
+                let stroke = p.style.stroke().unwrap();
                 assert_eq!(stroke.join, LineJoin::miter(7.5).unwrap());
                 let dash = stroke.dash.as_ref().unwrap();
                 assert_eq!(dash.array(), [4.0, 2.0, 1.0, 4.0, 2.0, 1.0]);
@@ -1482,10 +1511,10 @@ mod tests {
         .unwrap();
         scene.add_path(
             Path::builder(
-                PathStyle {
-                    fill: gradient.clone(),
-                    ..PathStyle::default()
-                },
+                PathStyle::Fill(PathFill {
+                    paint: gradient.clone(),
+                    rule: FillRule::NonZero,
+                }),
                 0.0,
                 0.0,
             )
@@ -1499,7 +1528,7 @@ mod tests {
                 let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
-                assert_eq!(p.style.fill, gradient);
+                assert_eq!(p.style.fill().unwrap().paint, gradient);
             }
             _ => panic!(),
         }
@@ -1536,10 +1565,10 @@ mod tests {
         .unwrap();
         scene.add_path(
             Path::builder(
-                PathStyle {
-                    fill: gradient.clone(),
-                    ..PathStyle::default()
-                },
+                PathStyle::Fill(PathFill {
+                    paint: gradient.clone(),
+                    rule: FillRule::NonZero,
+                }),
                 0.0,
                 0.0,
             )
@@ -1552,7 +1581,7 @@ mod tests {
                 let Element::Path(p) = d.elements().first().unwrap() else {
                     panic!();
                 };
-                assert_eq!(p.style.fill, gradient);
+                assert_eq!(p.style.fill().unwrap().paint, gradient);
             }
             _ => panic!(),
         }
@@ -1591,10 +1620,10 @@ mod tests {
         .with_spread(SpreadMode::Reflect);
         scene.add_path(
             Path::builder(
-                PathStyle {
-                    fill: linear.clone(),
-                    ..PathStyle::default()
-                },
+                PathStyle::Fill(PathFill {
+                    paint: linear.clone(),
+                    rule: FillRule::NonZero,
+                }),
                 0.0,
                 0.0,
             )
@@ -1625,10 +1654,10 @@ mod tests {
         .with_spread(SpreadMode::Repeat);
         scene.add_path(
             Path::builder(
-                PathStyle {
-                    fill: radial.clone(),
-                    ..PathStyle::default()
-                },
+                PathStyle::Fill(PathFill {
+                    paint: radial.clone(),
+                    rule: FillRule::NonZero,
+                }),
                 0.0,
                 0.0,
             )
@@ -1641,11 +1670,11 @@ mod tests {
                 let Element::Path(p0) = &d.elements()[0] else {
                     panic!();
                 };
-                assert_eq!(p0.style.fill, linear);
+                assert_eq!(p0.style.fill().unwrap().paint, linear);
                 let Element::Path(p1) = &d.elements()[1] else {
                     panic!();
                 };
-                assert_eq!(p1.style.fill, radial);
+                assert_eq!(p1.style.fill().unwrap().paint, radial);
             }
             _ => panic!(),
         }
@@ -1664,7 +1693,7 @@ mod tests {
                 .build(),
             |clip| {
                 clip.add_path(
-                    Path::builder(PathStyle::default(), 0.0, 0.0)
+                    Path::builder(PathStyle::black(), 0.0, 0.0)
                         .line_to(10.0, 10.0)
                         .build(),
                 )
@@ -1741,7 +1770,7 @@ mod tests {
             },
             |outer| {
                 outer.add_path(
-                    Path::builder(PathStyle::default(), 0.0, 0.0)
+                    Path::builder(PathStyle::black(), 0.0, 0.0)
                         .line_to(100.0, 100.0)
                         .build(),
                 );
@@ -1755,7 +1784,7 @@ mod tests {
                     },
                     |inner| {
                         inner.add_path(
-                            Path::builder(PathStyle::default(), 10.0, 10.0)
+                            Path::builder(PathStyle::black(), 10.0, 10.0)
                                 .line_to(20.0, 20.0)
                                 .build(),
                         )
@@ -1791,20 +1820,34 @@ mod tests {
     }
 
     #[test]
-    fn default_style_uses_solid_transparent_paint() {
+    fn a_path_or_a_text_with_no_ink_is_skipped() {
+        let clear = Paint::rgba(0, 0, 0, 0);
+        let line = |style| Path::builder(style, 0.0, 0.0).line_to(1.0, 1.0).build();
         let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(Path::builder(PathStyle::default(), 0.0, 0.0).build());
-        let bytes = encode_frame(&scene);
-        match decode(&bytes).unwrap() {
-            Message::Frame { scene: d, .. } => {
-                let Element::Path(p) = d.elements().first().unwrap() else {
-                    panic!();
-                };
-                assert_eq!(p.style.fill, Paint::Solid(Rgba::default()));
-                assert_eq!(p.style.stroke, None);
-            }
-            _ => panic!(),
+        scene.add_path(line(PathStyle::Fill(PathFill {
+            paint: clear.clone(),
+            rule: FillRule::NonZero,
+        })));
+        scene.add_path(line(PathStyle::Stroke(PathStroke::new(
+            clear.clone(),
+            StrokeWidth::ONE,
+        ))));
+        let text = TextSpec {
+            size: 12.0,
+            text: "Hi".into(),
+            ..TextSpec::default()
         }
+        .fit_transform([10.0, 0.0, 0.0, 10.0, 5.0, 5.0], TextStyle::Fill(clear))
+        .expect("text fits");
+        scene.add_text(text);
+        scene.add_path(line(PathStyle::black()));
+        let Message::Frame { scene: d, .. } = decode(&encode_frame(&scene)).unwrap() else {
+            panic!("expected Frame");
+        };
+        let [Element::Path(p)] = d.elements() else {
+            panic!("expected one Path, got {:?}", d.elements());
+        };
+        assert_eq!(p.style, PathStyle::black());
     }
 
     #[test]
@@ -1823,55 +1866,51 @@ mod tests {
             angle_deg: 0.0,
         };
         let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(line(PathStyle::default(), mark));
+        scene.add_path(line(PathStyle::black(), mark));
         scene.add_path(line(
-            PathStyle {
-                stroke: Some(PathStroke::new(
-                    Paint::default(),
-                    StrokeWidth::new(mark).unwrap(),
-                )),
-                ..PathStyle::default()
-            },
+            PathStyle::Stroke(PathStroke::new(
+                Paint::default(),
+                StrokeWidth::new(mark).unwrap(),
+            )),
             1.0,
         ));
         scene.add_path(line(
-            PathStyle {
-                stroke: Some(PathStroke {
-                    join: LineJoin::miter(mark).unwrap(),
-                    ..PathStroke::new(Paint::default(), StrokeWidth::ONE)
-                }),
-                ..PathStyle::default()
-            },
+            PathStyle::Stroke(PathStroke {
+                join: LineJoin::miter(mark).unwrap(),
+                ..PathStroke::new(Paint::default(), StrokeWidth::ONE)
+            }),
             1.0,
         ));
         scene.add_path(line(
-            PathStyle {
-                fill: Paint::radial(0.0, 0.0, mark, vec![Stop::default()]).unwrap(),
-                ..PathStyle::default()
-            },
+            PathStyle::Fill(PathFill {
+                paint: Paint::radial(0.0, 0.0, mark, vec![Stop::default()]).unwrap(),
+                rule: FillRule::NonZero,
+            }),
             1.0,
         ));
         let clip = ClipPath::builder(FillRule::NonZero, mark, 0.0)
             .line_to(1.0, 1.0)
             .build();
-        scene.clip(clip, |clip| clip.add_path(line(PathStyle::default(), 1.0)));
+        scene.clip(clip, |clip| clip.add_path(line(PathStyle::black(), 1.0)));
         scene.clip(rect, |clip| {
-            clip.add_path(line(PathStyle::default(), mark));
-            clip.add_path(line(PathStyle::default(), 1.0));
+            clip.add_path(line(PathStyle::black(), mark));
+            clip.add_path(line(PathStyle::black(), 1.0));
         });
         scene.add_text(Text {
-            stroke: Some(TextStroke {
-                paint: Paint::default(),
+            style: TextStyle::Stroke(TextStroke {
+                paint: Paint::rgba(0, 0, 0, 255),
                 width: StrokeWidth::new(mark).unwrap(),
             }),
-            ..Text::default()
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            spec: TextSpec::default(),
+            underline: false,
         });
         scene.add_bitmap(Bitmap {
             transform: [1.0, 0.0, 0.0, 1.0, mark, 0.0],
             ..bitmap(1)
         });
         scene.add_path(
-            Path::builder(PathStyle::default(), 9.0, 9.0)
+            Path::builder(PathStyle::black(), 9.0, 9.0)
                 .line_to(10.0, 10.0)
                 .build(),
         );
@@ -1900,10 +1939,10 @@ mod tests {
                 color: Rgba::default(),
             },
         ];
-        let style = PathStyle {
-            fill: Paint::linear(0.0, 0.0, 10.0, 0.0, stops).unwrap(),
-            ..PathStyle::default()
-        };
+        let style = PathStyle::Fill(PathFill {
+            paint: Paint::linear(0.0, 0.0, 10.0, 0.0, stops).unwrap(),
+            rule: FillRule::NonZero,
+        });
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(Path::builder(style, 0.0, 0.0).line_to(10.0, 10.0).build());
         let bytes = with_float(&encode_frame(&scene), 0.75, 0.125);
@@ -1914,8 +1953,12 @@ mod tests {
         let [Element::Path(p)] = d.elements() else {
             panic!("expected one Path, got {:?}", d.elements());
         };
-        let Paint::Gradient(g) = &p.style.fill else {
-            panic!("expected a gradient, got {:?}", p.style.fill);
+        let Some(PathFill {
+            paint: Paint::Gradient(g),
+            ..
+        }) = p.style.fill()
+        else {
+            panic!("expected a gradient, got {:?}", p.style);
         };
         assert_eq!(
             g.stops().iter().map(|s| s.offset).collect::<Vec<_>>(),
@@ -1927,13 +1970,10 @@ mod tests {
     fn a_decoded_miter_limit_below_1_is_a_bevel() {
         // A LineJoin cannot hold such a limit, so the bytes are patched to
         // hold one, as a writer from elsewhere could send it.
-        let style = PathStyle {
-            stroke: Some(PathStroke {
-                join: LineJoin::miter(8.0).unwrap(),
-                ..PathStroke::new(Paint::default(), StrokeWidth::ONE)
-            }),
-            ..PathStyle::default()
-        };
+        let style = PathStyle::Stroke(PathStroke {
+            join: LineJoin::miter(8.0).unwrap(),
+            ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::ONE)
+        });
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(Path::builder(style, 0.0, 0.0).line_to(10.0, 10.0).build());
         let bytes = with_float(&encode_frame(&scene), 8.0, 0.25);
@@ -1944,7 +1984,7 @@ mod tests {
         let [Element::Path(p)] = d.elements() else {
             panic!("expected one Path, got {:?}", d.elements());
         };
-        assert_eq!(p.style.stroke.as_ref().unwrap().join, LineJoin::Bevel);
+        assert_eq!(p.style.stroke().unwrap().join, LineJoin::Bevel);
     }
 
     #[test]
