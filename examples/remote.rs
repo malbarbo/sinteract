@@ -6,7 +6,7 @@
 //! ```text
 //! cargo build --release --examples
 //! cargo run --release --manifest-path web/server/Cargo.toml -- \
-//!     --players 1 target/release/examples/engine 20
+//!     --players 1 target/release/examples/engine server 20
 //! target/release/examples/remote 'http://127.0.0.1:8765/?token=...'
 //! ```
 //!

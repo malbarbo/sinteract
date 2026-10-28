@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! cargo build --release --examples
-//! target/release/examples/view target/release/examples/engine 200
+//! target/release/examples/view target/release/examples/engine server 200
 //! ```
 
 // The view hands the engine fd 3 and fd 4, which only unix has. Without a
@@ -28,7 +28,7 @@ use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::{Event, Interrupt};
 use sinteract::server::{Conn, LobbyCore, Next, ServerCore};
-use sinteract::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD, SESSION_VAR};
+use sinteract::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD};
 use sinteract::view::FrameReader;
 
 /// How many reads of the engine the reader thread holds before it waits
@@ -187,7 +187,6 @@ fn spawn(engine: &str, args: &[String]) -> io::Result<(Child, PipeWriter, PipeRe
     // stream.
     let child = Command::new(engine)
         .args(args)
-        .env(SESSION_VAR, "1")
         .stdin(Stdio::null())
         .fd_mappings(vec![
             FdMapping {

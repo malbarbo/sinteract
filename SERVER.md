@@ -51,11 +51,11 @@ pipe ou o close de um WebSocket, o que cobre também um lado que cai.
 ## Processo e ciclo de vida
 
 Cada partida tem um processo de engine. O servidor cria dois pipes e os
-entrega à engine como fd 3 e fd 4, com `SINTERACT_SESSION=1` no ambiente.
+entrega à engine como fd 3 e fd 4, e roda o subcomando `server` dela.
 A engine lê as mensagens do servidor (`SIS1`) no fd 3 e escreve as suas
 (`SIE1`) no fd 4. Os números são fixos, porque as permissões do Deno já
-nomeiam `/dev/fd/3` e `/dev/fd/4`. O módulo `session` dá esses nomes como
-`SESSION_VAR`, `SERVER_TO_ENGINE_FD` e `ENGINE_TO_SERVER_FD`. O crate
+nomeiam `/dev/fd/3` e `/dev/fd/4`. O módulo `session` dá esses números como
+`SERVER_TO_ENGINE_FD` e `ENGINE_TO_SERVER_FD`. O crate
 `command-fds` põe os pipes no lugar. Num unix, a engine confere que o
 fd 3 e o fd 4 são pipes ou sockets, e um descritor de outro tipo, como o
 de um `3>arquivo` num shell, faz o `Stage::open` falhar com o
@@ -369,7 +369,7 @@ use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
 use sinteract::server::{EngineError, LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
-use sinteract::session::{ENGINE_TO_SERVER_FD, Player, SERVER_TO_ENGINE_FD, SESSION_VAR};
+use sinteract::session::{ENGINE_TO_SERVER_FD, Player, SERVER_TO_ENGINE_FD};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
 use tokio::process::{Child, Command};
@@ -441,7 +441,6 @@ async fn main() -> io::Result<()> {
         let mut command = Command::new("sgleam");
         command
             .args(["server", "jogo.gleam"])
-            .env(SESSION_VAR, "1")
             .stdin(Stdio::null())
             .process_group(0) // o Ctrl-C do servidor não chega à engine
             .kill_on_drop(true)
@@ -664,13 +663,13 @@ O esboço deixa de fora:
 
 ## O lado da engine
 
-A engine abre um `Stage`. Com `SINTERACT_SESSION` no ambiente, ou num
-build sem tela própria, como o de wasi, o `Stage` manda o `hello`, espera
-o `start`, lê o fd 3 e escreve no fd 4. Sem ela, ele abre uma janela ou o
-terminal, como o `StageMode` pede, e o usuário é o jogador 1, então o
-mesmo jogo roda sem servidor. O `StageMode::auto` monta o event loop das
-janelas e escolhe o terminal quando o loop não monta, como num ssh sem
-servidor gráfico. O `players` do `StageMode::Window` pede mais jogadores,
+A engine abre um `Stage` com um `StageMode`. Com o `StageMode::Session`,
+que o subcomando `server` e o build de wasi pedem, o `Stage` manda o
+`hello`, espera o `start`, lê o fd 3 e escreve no fd 4. Com os outros
+modos, ele abre uma janela ou o terminal, e o usuário é o jogador 1,
+então o mesmo jogo roda sem servidor. O `StageMode::auto` monta o event
+loop das janelas e escolhe o terminal quando o loop não monta, como num
+ssh sem servidor gráfico. O `players` do `StageMode::Window` pede mais jogadores,
 até `MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem esse mínimo
 sem pedir. O `StageMode::Terminal` mostra um jogador só, e um jogo com
 mínimo acima de 1 falha nele com o `StageError::TerminalPlayers`, que
@@ -684,8 +683,7 @@ desenho de janela que falha depois de um `present`, no `wait`, num frame
 callback ou num redraw, faz falhar o `present` seguinte, que guarda a
 cena mesmo assim. Um `present` para um jogador que o `Stage` não tem
 devolve `PresentError::NoPlayer`, tanto aqui quanto numa sessão, e nada
-sai. O `Stage::opens_session` diz antes do `open` qual dos dois caminhos
-ele segue:
+sai:
 
 ```rust
 use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
@@ -693,7 +691,12 @@ use sinteract::event::Interrupt;
 use sinteract::session::{PlayerRange, Target};
 
 let players = PlayerRange::new(1, 4).expect("1 a 4 é uma faixa");
-let mode = StageMode::auto(None, TerminalOptions::default());
+let servidor = std::env::args().nth(1).is_some_and(|arg| arg == "server");
+let mode = if servidor {
+    StageMode::Session
+} else {
+    StageMode::auto(None, TerminalOptions::default())
+};
 let (mut stage, jogadores) = Stage::open("jogo", players, mode)?;
 mundo.start(&jogadores); // cada Player com o apelido, o jogador 1 primeiro
 loop {
@@ -750,9 +753,9 @@ ele pede mais de um. O `Frames` chama a função quando um mundo abre o
 stage, então um programa que não mostra nada não monta o event loop das
 janelas. A janela de cada jogador ganha o tamanho da cena do primeiro
 `show_to`. O `players` dá os jogadores do mundo. Com o
-`StageMode::Headless`, fora de uma sessão, o stage abre sem tela, como
-num teste. Ele dá um `Tick` a 60 Hz e não desenha
-nada, e os jogadores vêm do `players` dele como numa janela.
+`StageMode::Headless`, o stage abre sem tela, como num teste. Ele dá um
+`Tick` a 60 Hz e não desenha nada, e os jogadores vêm do `players` dele
+como numa janela.
 Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
 `ShowError::Unavailable`, e o `wait_event` dorme até o prazo.
 

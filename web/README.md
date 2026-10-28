@@ -60,7 +60,7 @@ each player, so two tabs play the same game:
 make -C web
 cargo build --release --examples
 cargo run --release --manifest-path web/server/Cargo.toml -- \
-    --players 2 target/release/examples/engine 20
+    --players 2 target/release/examples/engine server 20
 ```
 
 The test server serves `dist/index.html` and the fonts of `dist/fonts/`, and

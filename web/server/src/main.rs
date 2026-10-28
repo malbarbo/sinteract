@@ -9,7 +9,7 @@
 //! make -C web
 //! cargo build --release --examples
 //! cargo run --release --manifest-path web/server/Cargo.toml -- \
-//!     --players 2 target/release/examples/engine 20
+//!     --players 2 target/release/examples/engine server 20
 //! ```
 
 use std::collections::HashMap;
@@ -33,7 +33,7 @@ use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
 use sinteract::server::{LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
-use sinteract::session::{ENGINE_TO_SERVER_FD, Player, SERVER_TO_ENGINE_FD, SESSION_VAR};
+use sinteract::session::{ENGINE_TO_SERVER_FD, Player, SERVER_TO_ENGINE_FD};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
 use tokio::process::{Child, Command};
@@ -180,7 +180,6 @@ async fn run(options: Options) -> io::Result<()> {
         let mut command = Command::new(&options.engine);
         command
             .args(&options.engine_args)
-            .env(SESSION_VAR, "1")
             .stdin(Stdio::null())
             // The Ctrl-C of the server does not reach the engine.
             .process_group(0)

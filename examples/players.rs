@@ -5,12 +5,13 @@
 //! own square with a white border. A square stops when the view of its
 //! player leaves, since the server releases the keys of that view. The
 //! square of a player whose view found a gamepad says so under the name.
+//! A first argument `server` asks for the session.
 //!
 //! ```text
 //! make -C web
 //! cargo build --release --examples
 //! cargo run --release --manifest-path web/server/Cargo.toml -- \
-//!     --players 3 target/release/examples/players
+//!     --players 3 target/release/examples/players server
 //! target/release/examples/players          # one player, in a window
 //! ```
 //!
@@ -40,7 +41,11 @@ const HEIGHT: f32 = 360.0;
 const PLAYERS: PlayerRange = PlayerRange::new(1, 8).expect("1 to 8 is a range");
 
 fn main() -> ExitCode {
-    let mode = StageMode::auto(None, TerminalOptions::default());
+    let mode = if std::env::args().nth(1).is_some_and(|arg| arg == "server") {
+        StageMode::Session
+    } else {
+        StageMode::auto(None, TerminalOptions::default())
+    };
     let (mut stage, players) = match Stage::open("players", PLAYERS, mode) {
         Ok(opened) => opened,
         Err(e) => {

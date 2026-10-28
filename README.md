@@ -102,12 +102,12 @@ cargo run --release --example gallery pdf > gallery.pdf
 `examples/engine.rs` is a game of balls and paddles for 1 to 8 players,
 and `examples/players.rs` is a game where each player moves a square of
 its own. Both run on a `Stage`, so each one runs alone in a window, or
-in a session. `examples/view.rs` runs an engine as a subprocess and plays
+in a session when `server` is its first argument. `examples/view.rs` runs an engine as a subprocess and plays
 the part of the server for one player:
 
 ```sh
 cargo build --release --examples
-target/release/examples/view target/release/examples/engine 200
+target/release/examples/view target/release/examples/engine server 200
 ```
 
 `web/server/` is a server with one room, which serves the page of `web/`
@@ -117,7 +117,7 @@ of that server from the terminal or a window, with the link of a player:
 ```sh
 make -C web
 cargo run --release --manifest-path web/server/Cargo.toml -- \
-    --players 2 target/release/examples/players
+    --players 2 target/release/examples/players server
 target/release/examples/remote 'http://127.0.0.1:8765/?token=...'
 ```
 

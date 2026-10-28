@@ -1,17 +1,18 @@
 //! An engine that runs a game and talks the protocol on fd 3 and fd 4, for
-//! `examples/view.rs`, or shows the game itself when no view runs it.
+//! `examples/view.rs`, or shows the game itself.
 //! Balls bounce, and the arrows of any player move a paddle, for 1 to 8
 //! players. The paddle is an image that changes its
 //! color at each move, so a new image goes out at each move.
-//! `q` ends the session from this side. The first argument is the number
-//! of balls. With `big` after it, the image of the paddle has 1024 by 1024
+//! `q` ends the session from this side. A first argument `server` asks
+//! for the session, and the next argument is the number of balls. With
+//! `big` after it, the image of the paddle has 1024 by 1024
 //! pixels, so the 32 that fit in a room fill it after 32 moves, and the
 //! view drops the oldest ones:
 //!
 //! ```text
 //! cargo build --release --examples
-//! target/release/examples/view target/release/examples/engine 200
-//! target/release/examples/view target/release/examples/engine 1 big
+//! target/release/examples/view target/release/examples/engine server 200
+//! target/release/examples/view target/release/examples/engine server 1 big
 //! target/release/examples/engine 200      # in a window, with no view
 //! ```
 
@@ -36,13 +37,21 @@ const HEIGHT: f32 = 300.0;
 const PLAYERS: PlayerRange = PlayerRange::new(1, 8).expect("1 to 8 is a range");
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let server = args.first().is_some_and(|arg| arg == "server");
+    if server {
+        args.remove(0);
+    }
     let balls = args.first().and_then(|n| n.parse().ok()).unwrap_or(1);
     let big = args.get(1).is_some_and(|arg| arg == "big");
     let mut game = Game::new(balls, big);
     // The example draws the same scene for every player, so it has no use
     // for the players.
-    let mode = StageMode::auto(None, TerminalOptions::default());
+    let mode = if server {
+        StageMode::Session
+    } else {
+        StageMode::auto(None, TerminalOptions::default())
+    };
     let mut stage = match Stage::open("engine", PLAYERS, mode) {
         Ok((stage, _players)) => stage,
         Err(e) => {

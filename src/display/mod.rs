@@ -17,8 +17,8 @@
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the
 //! window, and `open_native` needs both. An engine on wasi has neither, and
-//! its [`Stage`] runs only in a session, with the page that hosts the
-//! engine as the server.
+//! its [`Stage`] opens only with [`StageMode::Session`], with the page that
+//! hosts the engine as the server.
 
 // Most links above go to items that only a native build with both
 // features has.

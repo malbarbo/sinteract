@@ -12,8 +12,8 @@ use std::time::Instant;
 use super::{Display, OpenError, PresentError};
 use crate::event::{Event, InputEvent, Interrupt};
 use crate::scene::Scene;
+use crate::session::PlayerRange;
 use crate::session::{FrameError, Player, Session, SessionError, SessionEvent, StartError, Target};
-use crate::session::{PlayerRange, SESSION_VAR};
 
 /// The game of an engine, in a session with a server when the server runs
 /// the engine, and on a window or the terminal otherwise, where the user is
@@ -92,8 +92,8 @@ pub enum TerminalGraphics {
     HalfBlocks,
 }
 
-/// The display of this process where [`Stage::open`] shows a game that no
-/// server runs. A session ignores it and takes its players from the server.
+/// Where [`Stage::open`] shows a game, on a display of this process or in a
+/// session with a server.
 #[derive(Clone, Copy, Debug)]
 pub enum StageMode {
     /// A window for each player.
@@ -109,13 +109,16 @@ pub enum StageMode {
         /// it shows.
         graphics: Option<TerminalGraphics>,
     },
-    /// No display. Outside a session, the stage ticks at 60 Hz and draws
-    /// nothing, so a game runs without a screen, as in a test.
+    /// No display. The stage ticks at 60 Hz and draws nothing, so a game
+    /// runs without a screen, as in a test.
     Headless {
         /// How many players play, or the fewest that the game takes when
         /// `None`.
         players: Option<NonZeroU32>,
     },
+    /// A session with the server that runs this process, on fd 3 and fd 4.
+    /// The server gives the players.
+    Session,
 }
 
 impl StageMode {
@@ -123,11 +126,8 @@ impl StageMode {
     /// the terminal with `options` otherwise, as over ssh. More than one
     /// player always gets windows, since the terminal shows one. Outside
     /// macOS the check builds the event loop of the windows, so it runs on
-    /// the thread that opens the stage. In a session it checks nothing.
+    /// the thread that opens the stage.
     pub fn auto(players: Option<NonZeroU32>, options: TerminalOptions) -> StageMode {
-        if Stage::opens_session() {
-            return StageMode::Window { players };
-        }
         StageMode::choose(players, options, has_window_system)
     }
 
@@ -153,11 +153,6 @@ impl StageMode {
 /// own.
 pub const MAX_LOCAL_PLAYERS: u32 = 8;
 
-/// Whether this build shows a game on a display of its own. A build
-/// without one, such as an engine on wasm32, shows a game only in a
-/// session.
-const HAS_NATIVE: bool = cfg!(all(feature = "terminal", feature = "window"));
-
 /// Why [`Stage::open`] did not open a stage.
 #[derive(Debug)]
 pub enum StageError {
@@ -178,9 +173,8 @@ pub enum StageError {
     /// Several players play on a display of this process, and the session
     /// has no graphical display for their windows.
     NoWindowPlayers,
-    /// `SINTERACT_SESSION` asks for a session, or the build has no display
-    /// of its own, and fd 3 or fd 4 is not open, or the platform has no such
-    /// descriptors.
+    /// The mode is [`StageMode::Session`], and fd 3 or fd 4 is not open, or
+    /// the platform has no such descriptors.
     NoSession,
     /// `fd`, which is fd 3 or fd 4, is open and is not a pipe or a socket,
     /// so no server opened it for the session, as with a `3>file` in a
@@ -189,18 +183,11 @@ pub enum StageError {
 }
 
 impl Stage {
-    /// Returns `true` if [`Stage::open`] starts a session, `false` if it
-    /// opens a display of this process.
-    pub fn opens_session() -> bool {
-        !HAS_NATIVE || std::env::var_os(SESSION_VAR).is_some()
-    }
-
     /// Open the stage of a game that takes `players`, with each player and
-    /// its nickname. With `SINTERACT_SESSION` in the environment, or in a
-    /// build with no display of its own, it starts a session that reads
-    /// the server from fd 3 and writes to it on fd 4, and blocks until the
-    /// start. Otherwise it opens a window with `title`, or the terminal, as
-    /// `mode` asks, with player 1 and an empty nickname. With several
+    /// its nickname. With [`StageMode::Session`] it starts a session that
+    /// reads the server from fd 3 and writes to it on fd 4, and blocks
+    /// until the start. Otherwise it opens a window with `title`, or the
+    /// terminal, as `mode` asks, with player 1 and an empty nickname. With several
     /// players in `mode`, it opens a window for each one, with the
     /// number of the player in the title and an empty nickname, and closing
     /// any of them ends the stage. A window stays hidden until its first
@@ -212,34 +199,48 @@ impl Stage {
         players: PlayerRange,
         mode: StageMode,
     ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
-        if Stage::opens_session() {
-            return Stage::open_session(players);
+        match mode {
+            StageMode::Session => Stage::open_session(players),
+            StageMode::Window { players: local } => {
+                let local = Stage::local_players(players, local)?;
+                if local.get() > 1 {
+                    return open_players(title, local);
+                }
+                Stage::open_local(local, open_window(title))
+            }
+            StageMode::Terminal { options, graphics } => {
+                if players.min().get() > 1 {
+                    return Err(StageError::TerminalPlayers { range: players });
+                }
+                Stage::open_local(NonZeroU32::MIN, open_terminal(options, graphics))
+            }
+            StageMode::Headless { players: local } => {
+                let local = Stage::local_players(players, local)?;
+                Stage::open_local(local, open_headless())
+            }
         }
-        let local = Stage::local_players(players, mode)?;
-        if local.get() > 1 && matches!(mode, StageMode::Window { .. }) {
-            return open_players(title, local);
-        }
-        let display = open_local(title, mode).map_err(StageError::Open)?;
-        let stage = Stage {
-            inner: Inner::Local(display),
-            players: local,
-        };
-        Ok((stage, numbered(local)))
     }
 
-    /// The players of `mode` for a game that takes `players`, from
-    /// `mode` or the fewest of the game. Fails, before any display
-    /// opens, as [`Stage::open`] would for these players.
-    fn local_players(players: PlayerRange, mode: StageMode) -> Result<NonZeroU32, StageError> {
-        let local = match mode {
-            StageMode::Terminal { .. } if players.min().get() > 1 => {
-                return Err(StageError::TerminalPlayers { range: players });
-            }
-            StageMode::Terminal { .. } => NonZeroU32::MIN,
-            StageMode::Window { players: local } | StageMode::Headless { players: local } => {
-                local.unwrap_or(players.min())
-            }
+    /// The stage of `players` on `display`, which shows them all.
+    fn open_local(
+        players: NonZeroU32,
+        display: Result<Box<dyn Display>, OpenError>,
+    ) -> Result<(Stage, Vec<(Player, String)>), StageError> {
+        let stage = Stage {
+            inner: Inner::Local(display.map_err(StageError::Open)?),
+            players,
         };
+        Ok((stage, numbered(players)))
+    }
+
+    /// The players of a display of this process for a game that takes
+    /// `players`, from `local` or the fewest of the game. Fails, before any
+    /// display opens, as [`Stage::open`] would for these players.
+    fn local_players(
+        players: PlayerRange,
+        local: Option<NonZeroU32>,
+    ) -> Result<NonZeroU32, StageError> {
+        let local = local.unwrap_or(players.min());
         if !players.contains(local.get() as usize) || local.get() > MAX_LOCAL_PLAYERS {
             return Err(StageError::Players {
                 range: players,
@@ -383,17 +384,23 @@ impl Stage {
     }
 }
 
-/// The display of one player that `mode` asks for.
+/// A window for one player, with `title`.
 #[cfg(all(feature = "terminal", feature = "window"))]
-fn open_local(title: &str, mode: StageMode) -> Result<Box<dyn Display>, OpenError> {
-    use super::{Terminal, Window};
-    match mode {
-        StageMode::Window { .. } => Ok(Box::new(Window::open_seats(&[title.to_owned()])?)),
-        StageMode::Terminal { options, graphics } => {
-            Ok(Box::new(Terminal::open(options, graphics)?))
-        }
-        StageMode::Headless { .. } => Ok(Box::new(super::headless::Headless::new())),
-    }
+fn open_window(title: &str) -> Result<Box<dyn Display>, OpenError> {
+    Ok(Box::new(super::Window::open_seats(&[title.to_owned()])?))
+}
+
+#[cfg(all(feature = "terminal", feature = "window"))]
+fn open_terminal(
+    options: TerminalOptions,
+    graphics: Option<TerminalGraphics>,
+) -> Result<Box<dyn Display>, OpenError> {
+    Ok(Box::new(super::Terminal::open(options, graphics)?))
+}
+
+#[cfg(all(feature = "terminal", feature = "window"))]
+fn open_headless() -> Result<Box<dyn Display>, OpenError> {
+    Ok(Box::new(super::headless::Headless::new()))
 }
 
 #[cfg(all(feature = "terminal", feature = "window"))]
@@ -401,8 +408,8 @@ fn has_window_system() -> bool {
     super::window::has_window_system()
 }
 
-/// A build without both displays opens only a session, so
-/// [`StageMode::auto`] never asks.
+/// A build without both displays opens no window, so [`StageMode::auto`]
+/// picks the terminal.
 #[cfg(not(all(feature = "terminal", feature = "window")))]
 fn has_window_system() -> bool {
     false
@@ -450,7 +457,20 @@ fn open_players(
 }
 
 #[cfg(not(all(feature = "terminal", feature = "window")))]
-fn open_local(_title: &str, _mode: StageMode) -> Result<Box<dyn Display>, OpenError> {
+fn open_window(_title: &str) -> Result<Box<dyn Display>, OpenError> {
+    Err(OpenError::Platform("this build has no display".into()))
+}
+
+#[cfg(not(all(feature = "terminal", feature = "window")))]
+fn open_terminal(
+    _options: TerminalOptions,
+    _graphics: Option<TerminalGraphics>,
+) -> Result<Box<dyn Display>, OpenError> {
+    Err(OpenError::Platform("this build has no display".into()))
+}
+
+#[cfg(not(all(feature = "terminal", feature = "window")))]
+fn open_headless() -> Result<Box<dyn Display>, OpenError> {
     Err(OpenError::Platform("this build has no display".into()))
 }
 
@@ -480,7 +500,7 @@ impl fmt::Display for StageError {
                 "several players need a window each, and this session has no graphical display",
             ),
             StageError::NoSession => {
-                write!(f, "{SESSION_VAR} is set, and fd 3 or fd 4 is not open")
+                f.write_str("no server ran this engine, since fd 3 or fd 4 is not open")
             }
             StageError::NotSessionFd { fd } => {
                 write!(
@@ -738,8 +758,9 @@ fn take_session_fds() -> Result<(File, File), StageError> {
     if TAKEN.swap(true, Ordering::SeqCst) {
         return Err(StageError::Open(OpenError::Busy));
     }
-    // SAFETY: both are open, and on unix both are a pipe or a socket, which
-    // a server gives and a shell does not. TAKEN gives them to one stage.
+    // SAFETY: both are open, StageMode::Session says that a server opened
+    // them, and on unix both are a pipe or a socket, which a server gives
+    // and a shell does not. TAKEN gives them to one stage.
     Ok(unsafe {
         (
             File::from_raw_fd(SERVER_TO_ENGINE_FD),
