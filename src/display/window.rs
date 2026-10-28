@@ -615,7 +615,8 @@ fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
 /// any thread, and macOS, which cannot, gets an error. A second build means
 /// that another thread built the loop.
 fn build_loop() -> Result<EventLoop<()>, OpenError> {
-    if !can_open() {
+    #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+    if !has_display(|name| std::env::var_os(name)) {
         return Err(OpenError::NoWindow);
     }
     let mut builder = EventLoop::<()>::with_user_event();
@@ -649,13 +650,24 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
     Ok(event_loop)
 }
 
-/// Returns `true` if the session has a display for a window, `false`
-/// otherwise.
-pub(crate) fn can_open() -> bool {
-    #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-    return has_display(|name| std::env::var_os(name));
-    #[cfg(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))))]
-    true
+/// Returns `true` if the process has a window system, `false` otherwise.
+/// Outside macOS it builds the event loop of the process, which connects
+/// to the X server or to the Wayland compositor, so it runs on the thread
+/// that opens the windows. A loop that a window holds, that another thread
+/// built or that ended still counts, and the open of the window gives the
+/// error. On macOS it only checks for the main thread, since a build there
+/// registers the process with the dock.
+// Only the stage, which needs the terminal too, asks.
+#[cfg_attr(not(feature = "terminal"), allow(dead_code))]
+pub(crate) fn has_window_system() -> bool {
+    #[cfg(target_os = "macos")]
+    return unsafe { libc::pthread_main_np() } == 1;
+    #[cfg(not(target_os = "macos"))]
+    match Lent::take() {
+        Ok(_) => true,
+        Err(OpenError::NoWindow | OpenError::Platform(_)) => false,
+        Err(_) => true,
+    }
 }
 
 /// Returns `true` if `var` names a Wayland or X11 display, `false` otherwise.

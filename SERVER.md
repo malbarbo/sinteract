@@ -665,7 +665,9 @@ A engine abre um `Stage`. Com `SINTERACT_SESSION` no ambiente, ou num
 build sem tela própria, como o de wasi, o `Stage` manda o `hello`, espera
 o `start`, lê o fd 3 e escreve no fd 4. Sem ela, ele abre uma janela ou o
 terminal, como o `StageOptions` pede, e o usuário é o jogador 1, então o
-mesmo jogo roda sem servidor. O `StageOptions::players` pede mais
+mesmo jogo roda sem servidor. Com o `Native::Auto`, ele monta o event
+loop das janelas antes de abrir, e abre o terminal quando o loop não
+monta, como num ssh sem servidor gráfico. O `StageOptions::players` pede mais
 jogadores, até `MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem
 esse mínimo sem pedir. Cada jogador ganha uma janela, com o número dele no
 título e um apelido vazio, e o usuário testa o jogo trocando o foco. Fechar

@@ -108,7 +108,8 @@ pub enum TerminalGraphics {
 /// The display of this process that shows a game.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Native {
-    /// A window, and the terminal when no window opens, as over ssh.
+    /// A window when the process has a window system, and the terminal
+    /// otherwise, as over ssh.
     #[default]
     Auto,
     /// Only a window.
@@ -359,7 +360,8 @@ fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, Op
     use super::{Terminal, Window};
     let window = || Window::open_seats(&[title.to_owned()]);
     match options.display {
-        Native::Auto => super::driver::window_or_terminal(window, options.terminal),
+        Native::Auto if super::window::has_window_system() => Ok(Box::new(window()?)),
+        Native::Auto => Ok(Box::new(Terminal::open(options.terminal, None)?)),
         Native::Window => Ok(Box::new(window()?)),
         Native::Terminal { graphics } => Ok(Box::new(Terminal::open(options.terminal, graphics)?)),
         Native::Headless => Ok(Box::new(super::headless::Headless::new())),
