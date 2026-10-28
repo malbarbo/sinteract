@@ -146,14 +146,14 @@ impl CanvasRenderer {
 
     fn fill_style(&self, paint: &Paint) {
         match paint {
-            Paint::Solid(c) => self.ctx().set_fill_style_str(&css(*c)),
+            Paint::Solid(c) => self.ctx().set_fill_style_str(&css(c.get())),
             Paint::Gradient(g) => self.ctx().set_fill_style_canvas_gradient(&self.gradient(g)),
         }
     }
 
     fn stroke_style(&self, paint: &Paint) {
         match paint {
-            Paint::Solid(c) => self.ctx().set_stroke_style_str(&css(*c)),
+            Paint::Solid(c) => self.ctx().set_stroke_style_str(&css(c.get())),
             Paint::Gradient(g) => self
                 .ctx()
                 .set_stroke_style_canvas_gradient(&self.gradient(g)),
@@ -305,8 +305,8 @@ impl Canvas<Infallible> for CanvasRenderer {
 
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
-        let fill = style.drawn_fill();
-        let stroke = style.drawn_stroke();
+        let fill = style.fill();
+        let stroke = style.stroke();
         if fill.is_none() && stroke.is_none() {
             return;
         }
@@ -354,8 +354,8 @@ impl Canvas<Infallible> for CanvasRenderer {
         let Some(layout) = TextLayout::new(&node.spec) else {
             return;
         };
-        let fill = node.drawn_fill();
-        let stroke = node.drawn_stroke();
+        let fill = node.style.fill();
+        let stroke = node.style.stroke();
         if fill.is_none() && stroke.is_none() {
             return;
         }

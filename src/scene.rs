@@ -158,46 +158,64 @@ fn measurable(geometry: GradientGeometry) -> GradientGeometry {
     }
 }
 
-/// A fill or a stroke. The gradient is boxed because a solid color is the
-/// common case, and a `Gradient` inline would add 40 bytes to every
-/// `PathStyle` and so to every `Element`.
+/// An [`Rgba`] that is not transparent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VisibleRgba(Rgba);
+
+impl VisibleRgba {
+    /// Returns `None` if `color` is transparent.
+    pub const fn new(color: Rgba) -> Option<Self> {
+        if color.a > 0 { Some(Self(color)) } else { None }
+    }
+
+    pub fn get(self) -> Rgba {
+        self.0
+    }
+}
+
+/// A fill or a stroke that marks the canvas. The gradient is boxed because
+/// a solid color is the common case, and a `Gradient` inline would add 40
+/// bytes to every `PathStyle` and so to every `Element`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
-    Solid(Rgba),
+    Solid(VisibleRgba),
     Gradient(Box<Gradient>),
 }
 
-impl Default for Paint {
-    fn default() -> Self {
-        Self::Solid(Rgba::default())
-    }
-}
+/// A float of a gradient that is not finite.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NotFinite;
 
 impl Paint {
-    pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self::Solid(Rgba { r, g, b, a })
+    /// Returns `None` if `color` is transparent.
+    pub fn solid(color: Rgba) -> Option<Self> {
+        VisibleRgba::new(color).map(Self::Solid)
+    }
+
+    pub fn opaque(r: u8, g: u8, b: u8) -> Self {
+        Self::Solid(VisibleRgba(Rgba { r, g, b, a: 255 }))
     }
 
     /// A ramp along the line from `(x0, y0)` to `(x1, y1)`, with
-    /// [`SpreadMode::Pad`] outside it. Returns `None` if a coordinate or
-    /// an offset is not finite.
+    /// [`SpreadMode::Pad`] outside it. Returns `None` if the ramp marks
+    /// nothing, which is when a coordinate or an offset is not finite, when
+    /// there are no stops or when every stop is transparent.
     pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<Stop>) -> Option<Self> {
-        Self::gradient(
-            GradientGeometry::Linear { x0, y0, x1, y1 },
-            stops,
-            SpreadMode::Pad,
-        )
+        let geometry = GradientGeometry::Linear { x0, y0, x1, y1 };
+        Self::gradient(geometry, stops, SpreadMode::Pad)
+            .ok()
+            .flatten()
     }
 
     /// A ramp outward from `(cx, cy)` to `radius`, with [`SpreadMode::Pad`]
-    /// outside it. Returns `None` if a coordinate, the radius or an offset
-    /// is not finite.
+    /// outside it. Returns `None` if the ramp marks nothing, which is when a
+    /// coordinate, the radius or an offset is not finite, when there are no
+    /// stops or when every stop is transparent.
     pub fn radial(cx: f32, cy: f32, radius: f32, stops: Vec<Stop>) -> Option<Self> {
-        Self::gradient(
-            GradientGeometry::Radial { cx, cy, radius },
-            stops,
-            SpreadMode::Pad,
-        )
+        let geometry = GradientGeometry::Radial { cx, cy, radius };
+        Self::gradient(geometry, stops, SpreadMode::Pad)
+            .ok()
+            .flatten()
     }
 
     /// The paint with `spread` outside its ramp. The spread does not decide
@@ -213,23 +231,29 @@ impl Paint {
     /// A gradient paint, or the solid color of the last stop when the
     /// gradient has no extent, a radius or an axis of 2^-15 or less. SVG
     /// paints the last stop in that case, and tiny-skia and the pdf each did
-    /// something else. No stops give a transparent color. It shortens an
-    /// axis too long to measure. Returns `None` if a float is not finite.
-    /// The wire decoder calls it, because it reads the three parts apart.
+    /// something else. It shortens an axis too long to measure. Returns
+    /// `Ok(None)` if the gradient marks nothing, which is when there are no
+    /// stops, when every stop is transparent, or when it has no extent and
+    /// the last stop is transparent. The wire decoder calls it, because it
+    /// reads the three parts apart and skips an element with a float that
+    /// is not finite.
     pub(crate) fn gradient(
         geometry: GradientGeometry,
         stops: Vec<Stop>,
         spread: SpreadMode,
-    ) -> Option<Self> {
+    ) -> Result<Option<Self>, NotFinite> {
         let finite = match geometry {
             GradientGeometry::Linear { x0, y0, x1, y1 } => all_finite(&[x0, y0, x1, y1]),
             GradientGeometry::Radial { cx, cy, radius } => all_finite(&[cx, cy, radius]),
         };
         if !finite || !stops.iter().all(|s| s.offset.is_finite()) {
-            return None;
+            return Err(NotFinite);
+        }
+        if stops.iter().all(|s| s.color.a == 0) {
+            return Ok(None);
         }
         let Some(stops) = Stops::new(stops) else {
-            return Some(Self::default());
+            return Ok(None);
         };
         let g = Gradient {
             geometry: measurable(geometry),
@@ -244,27 +268,18 @@ impl Paint {
             GradientGeometry::Linear { x0, y0, x1, y1 } => (x1 - x0).hypot(y1 - y0) <= NO_EXTENT,
             GradientGeometry::Radial { radius, .. } => radius <= NO_EXTENT,
         };
-        Some(if no_extent {
-            Self::Solid(g.stops.last().color)
+        Ok(if no_extent {
+            Self::solid(g.stops.last().color)
         } else {
-            Self::Gradient(Box::new(g))
+            Some(Self::Gradient(Box::new(g)))
         })
-    }
-
-    /// Returns `true` if the paint marks at least one pixel, `false`
-    /// otherwise. A renderer skips a fill or a stroke that does not.
-    pub fn is_visible(&self) -> bool {
-        match self {
-            Self::Solid(c) => c.a > 0,
-            Self::Gradient(_) => true,
-        }
     }
 
     /// The solid color, or the color of the first stop of a gradient, for a
     /// renderer that cannot draw a gradient.
     pub fn primary_color(&self) -> Rgba {
         match self {
-            Self::Solid(c) => *c,
+            Self::Solid(c) => c.get(),
             Self::Gradient(g) => g.stops.first().color,
         }
     }
@@ -390,7 +405,7 @@ impl PathStyle {
     /// An opaque black fill, for a test that needs a path that draws.
     pub(crate) fn black() -> Self {
         Self::Fill(PathFill {
-            paint: Paint::rgba(0, 0, 0, 255),
+            paint: Paint::opaque(0, 0, 0),
             rule: FillRule::NonZero,
         })
     }
@@ -419,16 +434,6 @@ impl PathStyle {
             Self::Stroke(stroke) | Self::Both(_, stroke) => Some(stroke),
             Self::Fill(_) => None,
         }
-    }
-
-    /// The fill, or `None` if it does not mark the canvas.
-    pub fn drawn_fill(&self) -> Option<&PathFill> {
-        self.fill().filter(|f| f.paint.is_visible())
-    }
-
-    /// The stroke, or `None` if it does not mark the canvas.
-    pub fn drawn_stroke(&self) -> Option<&PathStroke> {
-        self.stroke().filter(|s| s.paint.is_visible())
     }
 }
 
@@ -651,7 +656,7 @@ pub enum TextStyle {
 impl TextStyle {
     /// An opaque black fill, for a test that needs a text that draws.
     pub(crate) fn black() -> Self {
-        Self::Fill(Paint::rgba(0, 0, 0, 255))
+        Self::Fill(Paint::opaque(0, 0, 0))
     }
 }
 
@@ -694,16 +699,6 @@ impl From<PathStyle> for TextStyle {
 }
 
 impl Text {
-    /// The fill, or `None` if it does not mark the canvas.
-    pub fn drawn_fill(&self) -> Option<&Paint> {
-        self.style.fill().filter(|p| p.is_visible())
-    }
-
-    /// The stroke, or `None` if it does not mark the canvas.
-    pub fn drawn_stroke(&self) -> Option<&TextStroke> {
-        self.style.stroke().filter(|s| s.paint.is_visible())
-    }
-
     /// Returns `true` if every float of the text is finite, `false`
     /// otherwise. A [`Paint`] and a [`StrokeWidth`] are always finite.
     pub(crate) fn is_finite(&self) -> bool {
@@ -2653,7 +2648,7 @@ mod tests {
             },
         };
         let stops = vec![stop(0.0, 10), stop(1.0, 200)];
-        let last = Paint::Solid(stop(1.0, 200).color);
+        let last = Paint::solid(stop(1.0, 200).color).unwrap();
         for geometry in [
             GradientGeometry::Radial {
                 cx: 5.0,
@@ -2685,7 +2680,7 @@ mod tests {
             },
         ] {
             let paint = Paint::gradient(geometry, stops.clone(), SpreadMode::Repeat);
-            assert_eq!(paint, Some(last.clone()), "{geometry:?}");
+            assert_eq!(paint, Ok(Some(last.clone())), "{geometry:?}");
         }
         assert!(matches!(
             Paint::radial(5.0, 5.0, 1.0, stops),
@@ -2695,11 +2690,14 @@ mod tests {
 
     #[test]
     fn a_gradient_with_a_non_finite_float_is_none() {
-        let stops = vec![Stop::default()];
         let stop = |offset| Stop {
             offset,
-            ..Stop::default()
+            color: Rgba {
+                a: 255,
+                ..Rgba::default()
+            },
         };
+        let stops = vec![stop(0.0)];
         for paint in [
             Paint::radial(5.0, 5.0, f32::NEG_INFINITY, stops.clone()),
             Paint::radial(f32::NAN, 5.0, 0.0, stops.clone()),
@@ -2712,15 +2710,34 @@ mod tests {
     }
 
     #[test]
-    fn a_gradient_with_no_stops_is_transparent() {
-        let paint = Paint::linear(0.0, 0.0, 10.0, 0.0, Vec::new()).unwrap();
-        assert_eq!(paint, Paint::default());
-        assert!(!paint.is_visible());
+    fn a_gradient_that_marks_nothing_is_none() {
+        let stop = |offset, a| Stop {
+            offset,
+            color: Rgba {
+                a,
+                ..Rgba::default()
+            },
+        };
+        let clear = vec![stop(0.0, 0), stop(1.0, 0)];
+        assert_eq!(Paint::linear(0.0, 0.0, 10.0, 0.0, Vec::new()), None);
+        assert_eq!(Paint::linear(0.0, 0.0, 10.0, 0.0, clear), None);
+        // With no extent, the gradient is the last stop, here transparent.
+        let last_clear = vec![stop(0.0, 255), stop(1.0, 0)];
+        assert_eq!(Paint::radial(5.0, 5.0, 0.0, last_clear.clone()), None);
+        assert!(Paint::radial(5.0, 5.0, 1.0, last_clear).is_some());
+        assert_eq!(Paint::solid(Rgba::default()), None);
     }
 
     #[test]
     fn a_gradient_axis_too_long_to_measure_shrinks_about_the_origin() {
-        let stops = vec![Stop::default(), Stop::default()];
+        let stop = Stop {
+            offset: 0.0,
+            color: Rgba {
+                a: 255,
+                ..Rgba::default()
+            },
+        };
+        let stops = vec![stop, stop];
         let axis = |p: Paint| match p {
             Paint::Gradient(g) => match g.geometry() {
                 GradientGeometry::Linear { x0, y0, x1, y1 } => (x0, y0, x1, y1),
@@ -2745,7 +2762,10 @@ mod tests {
     fn a_stop_before_the_one_before_it_moves_up_to_it() {
         let stop = |offset| Stop {
             offset,
-            color: Rgba::default(),
+            color: Rgba {
+                a: 255,
+                ..Rgba::default()
+            },
         };
         let offsets = |p: Paint| match p {
             Paint::Gradient(g) => g.stops().iter().map(|s| s.offset).collect::<Vec<_>>(),
@@ -2783,7 +2803,7 @@ mod tests {
         let PathStyle::Fill(fill) = PathStyle::black() else {
             panic!("black is a fill");
         };
-        let stroke = PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::ONE);
+        let stroke = PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::ONE);
         assert_eq!(PathStyle::new(None, None), None);
         let both = PathStyle::new(Some(fill.clone()), Some(stroke.clone())).unwrap();
         assert_eq!((both.fill(), both.stroke()), (Some(&fill), Some(&stroke)));

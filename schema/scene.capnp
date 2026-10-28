@@ -73,6 +73,11 @@ enum FontStyle {
 # At the other end, a line longer than a 32 bit float measures as infinite,
 # so a reader scales such a line about the origin until it measures. The
 # color under a path moves by less than a step of that float.
+#
+# A paint that marks nothing, a transparent color, a gradient with no stops
+# or with every stop transparent, or a transparent fallback, is no paint. A
+# reader takes the fill or the stroke that holds it as absent, and skips a
+# path or a text with neither.
 
 struct Stop {
     offset @0 :Float32;

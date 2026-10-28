@@ -167,7 +167,7 @@ fn read_stops(
 
 fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
     match p {
-        Paint::Solid(c) => write_rgba(b.init_solid(), *c),
+        Paint::Solid(c) => write_rgba(b.init_solid(), c.get()),
         Paint::Gradient(g) => match g.geometry() {
             GradientGeometry::Linear { x0, y0, x1, y1 } => {
                 let mut b = b.init_linear();
@@ -190,21 +190,27 @@ fn write_paint(b: wire_paint::Builder<'_>, p: &Paint) {
     }
 }
 
-fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
+/// A transparent color, which a reader takes as no paint.
+fn write_no_paint(b: wire_paint::Builder<'_>) {
+    write_rgba(b.init_solid(), Rgba::default());
+}
+
+/// The paint, or `None` if it marks nothing, such as a transparent color.
+fn read_paint(r: wire_paint::Reader<'_>) -> Result<Option<Paint>, ValueError> {
     use wire_paint::Which;
     let which = match r.which() {
         Ok(which) => which,
         // An arm from a newer schema draws the fallback color of its writer.
         // Without one, the element that holds the paint is skipped.
         Err(_) if r.get_has_fallback() => {
-            return Ok(Paint::Solid(rgba_from_u32(r.get_fallback())));
+            return Ok(Paint::solid(rgba_from_u32(r.get_fallback())));
         }
         Err(e) => return Err(e.into()),
     };
     // A null stops pointer reads as an empty list, so an absent ramp needs
     // no guard.
     let (geometry, stops, spread) = match which {
-        Which::Solid(c) => return Ok(Paint::Solid(read_rgba(c?))),
+        Which::Solid(c) => return Ok(Paint::solid(read_rgba(c?))),
         Which::Linear(g) => {
             let g = g?;
             let geometry = GradientGeometry::Linear {
@@ -225,7 +231,7 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
             (geometry, read_stops(g.get_stops()?)?, g.get_spread()?)
         }
     };
-    Paint::gradient(geometry, stops, spread_from_wire(spread)).ok_or(ValueError::NotFinite)
+    Paint::gradient(geometry, stops, spread_from_wire(spread)).map_err(|_| ValueError::NotFinite)
 }
 
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
@@ -234,12 +240,12 @@ fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
         write_paint(b.reborrow().init_fill(), &fill.paint);
         b.set_fill_rule(fill_rule_to_wire(fill.rule));
     } else {
-        write_paint(b.reborrow().init_fill(), &Paint::default());
+        write_no_paint(b.reborrow().init_fill());
     }
     // No stroke writes a transparent paint, a width of 0, the default cap
     // and join, no dash and an open path.
     let Some(stroke) = s.stroke() else {
-        write_paint(b.reborrow().init_stroke(), &Paint::default());
+        write_no_paint(b.reborrow().init_stroke());
         let (join, limit) = line_join_to_wire(LineJoin::default());
         b.set_line_join(join);
         b.set_miter_limit(limit);
@@ -277,7 +283,7 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<Option<PathStyle>, 
     let fill = read_paint(r.get_fill()?)?;
     let rule = fill_rule_from_wire(r.get_fill_rule()?);
     Ok(PathStyle::new(
-        fill.is_visible().then_some(PathFill { paint: fill, rule }),
+        fill.map(|paint| PathFill { paint, rule }),
         stroke.map(|(paint, width)| PathStroke {
             paint,
             width,
@@ -342,30 +348,32 @@ fn read_bitmap(
     Ok(bitmap)
 }
 
-/// The paint and the width of a stroke, `None` for a paint that marks
-/// nothing or a width of 0 or less, which draw no stroke. A width that is
-/// not finite is [`ValueError::NotFinite`], the rule of the schema for a
-/// float that does not draw.
-fn read_stroke(paint: Paint, width: f32) -> Result<Option<(Paint, StrokeWidth)>, ValueError> {
+/// The paint and the width of a stroke, `None` for no paint or a width of
+/// 0 or less, which draw no stroke. A width that is not finite is
+/// [`ValueError::NotFinite`], the rule of the schema for a float that does
+/// not draw.
+fn read_stroke(
+    paint: Option<Paint>,
+    width: f32,
+) -> Result<Option<(Paint, StrokeWidth)>, ValueError> {
     if !width.is_finite() {
         return Err(ValueError::NotFinite);
     }
-    let width = StrokeWidth::new(width).filter(|_| paint.is_visible());
-    Ok(width.map(|width| (paint, width)))
+    Ok(paint.zip(StrokeWidth::new(width)))
 }
 
 fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     // No fill writes a transparent paint, and no stroke a transparent paint
     // and a width of 0.
-    write_paint(
-        b.reborrow().init_fill(),
-        n.style.fill().unwrap_or(&Paint::default()),
-    );
+    match n.style.fill() {
+        Some(fill) => write_paint(b.reborrow().init_fill(), fill),
+        None => write_no_paint(b.reborrow().init_fill()),
+    }
     if let Some(stroke) = n.style.stroke() {
         write_paint(b.reborrow().init_stroke(), &stroke.paint);
         b.set_stroke_width(stroke.width.get());
     } else {
-        write_paint(b.reborrow().init_stroke(), &Paint::default());
+        write_no_paint(b.reborrow().init_stroke());
     }
     b.set_m0(n.transform[0]);
     b.set_m1(n.transform[1]);
@@ -385,7 +393,7 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
     let fill = read_paint(r.get_fill()?)?;
     let stroke = read_stroke(read_paint(r.get_stroke()?)?, r.get_stroke_width())?
         .map(|(paint, width)| TextStroke { paint, width });
-    let style = TextStyle::new(fill.is_visible().then_some(fill), stroke);
+    let style = TextStyle::new(fill, stroke);
     let transform = [
         r.get_m0(),
         r.get_m1(),

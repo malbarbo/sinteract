@@ -208,8 +208,8 @@ impl Canvas<Infallible> for SvgRenderer {
 
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
-        let fill = style.drawn_fill();
-        let stroke = style.drawn_stroke();
+        let fill = style.fill();
+        let stroke = style.stroke();
         if fill.is_none() && stroke.is_none() {
             return;
         }
@@ -264,10 +264,10 @@ impl Canvas<Infallible> for SvgRenderer {
         let Some(layout) = TextLayout::new(&node.spec) else {
             return;
         };
-        let fill_paint = node.drawn_fill();
+        let fill_paint = node.style.fill();
         let fill = fill_paint
             .and_then(|p| self.text_paint(p, "fill", "fill-opacity", invert(node.transform)));
-        let stroke = node.drawn_stroke();
+        let stroke = node.style.stroke();
         // The underline paints on its own and after the stroke of the glyphs,
         // as in the other renderers. With no stroke, it fills in the group of
         // the glyphs.
@@ -425,7 +425,7 @@ impl SvgRenderer {
     /// references it.
     fn write_paint(&mut self, paint: &Paint, attr: &str, opacity_attr: &str) {
         match paint {
-            Paint::Solid(c) => write_color(*c, attr, opacity_attr, &mut self.body),
+            Paint::Solid(c) => write_color(c.get(), attr, opacity_attr, &mut self.body),
             Paint::Gradient(g) => {
                 let id = self.push_gradient(g, None);
                 _ = write!(self.body, " {attr}=\"url(#{}p{id})\"", self.prefix);
@@ -446,7 +446,7 @@ impl SvgRenderer {
     ) -> Option<String> {
         let mut attrs = String::new();
         match paint {
-            Paint::Solid(c) => write_color(*c, attr, opacity_attr, &mut attrs),
+            Paint::Solid(c) => write_color(c.get(), attr, opacity_attr, &mut attrs),
             Paint::Gradient(g) => {
                 let id = self.push_gradient(g, Some(inverse?));
                 _ = write!(attrs, " {attr}=\"url(#{}p{id})\"", self.prefix);
@@ -696,7 +696,13 @@ mod tests {
 
     fn red_fill(a: u8) -> PathStyle {
         PathStyle::Fill(PathFill {
-            paint: Paint::rgba(255, 0, 0, a),
+            paint: Paint::solid(Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a,
+            })
+            .unwrap(),
             rule: FillRule::NonZero,
         })
     }
@@ -778,7 +784,7 @@ mod tests {
 
     fn text(s: &str) -> Text {
         Text {
-            style: TextStyle::Fill(Paint::Solid(black())),
+            style: TextStyle::Fill(Paint::solid(black()).unwrap()),
             spec: TextSpec {
                 size: 16.0,
                 text: s.to_owned(),
@@ -832,7 +838,7 @@ mod tests {
             join: LineJoin::Bevel,
             dash: Dash::new(vec![3.0, 2.0], 1.0),
             closed: true,
-            ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
+            ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::new(2.0).unwrap())
         });
         scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
         let svg = render_to_svg(&scene);
@@ -852,7 +858,7 @@ mod tests {
             let mut scene = Scene::new(50.0, 50.0);
             let style = PathStyle::Stroke(PathStroke {
                 join: LineJoin::miter(miter_limit).unwrap(),
-                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(4.0).unwrap())
+                ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::new(4.0).unwrap())
             });
             scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
             render_to_svg(&scene)
@@ -1007,9 +1013,9 @@ mod tests {
         let mut scene = Scene::new(60.0, 20.0);
         scene.add_text(Text {
             style: TextStyle::Both(
-                Paint::Solid(black()),
+                Paint::solid(black()).unwrap(),
                 TextStroke {
-                    paint: Paint::Solid(black()),
+                    paint: Paint::solid(black()).unwrap(),
                     width: StrokeWidth::ONE,
                 },
             ),

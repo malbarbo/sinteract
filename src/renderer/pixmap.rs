@@ -244,8 +244,8 @@ impl Canvas<AllocError> for PixmapRenderer {
 
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
-        let fill = style.drawn_fill();
-        let stroke = style.drawn_stroke();
+        let fill = style.fill();
+        let stroke = style.stroke();
         if fill.is_none() && stroke.is_none() {
             return;
         }
@@ -294,7 +294,7 @@ impl Canvas<AllocError> for PixmapRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        if node.drawn_fill().is_none() && node.drawn_stroke().is_none() {
+        if node.style.fill().is_none() && node.style.stroke().is_none() {
             return;
         }
         let mask = match in_effect(&self.clip_stack) {
@@ -609,7 +609,7 @@ fn sk_paint(shader: SkShader<'static>) -> SkPaint<'static> {
 /// change lets one through.
 fn paint_to_shader(p: &Paint, fade: f32) -> SkShader<'static> {
     let g = match p {
-        Paint::Solid(c) => return SkShader::SolidColor(sk_color(faded(*c, fade))),
+        Paint::Solid(c) => return SkShader::SolidColor(sk_color(faded(c.get(), fade))),
         Paint::Gradient(g) => g,
     };
     let stops = sk_stops(g.stops(), fade);
@@ -682,10 +682,10 @@ fn render_text(
     let [a, b, c, d, e, f] = node.transform;
     let local = Transform::from_row(a, b, c, d, e, f);
     let paints = TextPaints {
-        fill: node.drawn_fill().and_then(|p| text_paint(p, local, fade)),
+        fill: node.style.fill().and_then(|p| text_paint(p, local, fade)),
         // The stroke draws the outline moved by `local`, so its gradient is
         // already in the space of the scene.
-        stroke: node.drawn_stroke().and_then(|s| {
+        stroke: node.style.stroke().and_then(|s| {
             text_paint(&s.paint, Transform::identity(), fade).map(|paint| (paint, s.width.get()))
         }),
     };
@@ -884,7 +884,7 @@ mod tests {
 
     fn solid(r: u8, g: u8, b: u8) -> PathStyle {
         PathStyle::Fill(PathFill {
-            paint: Paint::rgba(r, g, b, 255),
+            paint: Paint::opaque(r, g, b),
             rule: FillRule::NonZero,
         })
     }
@@ -998,12 +998,15 @@ mod tests {
             return;
         }
         let node = Text {
-            style: TextStyle::Fill(Paint::Solid(crate::scene::Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            })),
+            style: TextStyle::Fill(
+                Paint::solid(crate::scene::Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })
+                .unwrap(),
+            ),
             transform: [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
             spec: TextSpec {
                 size: 96.0,
@@ -1310,7 +1313,7 @@ mod tests {
         // miter join covers the pixel outside that corner.
         let style = PathStyle::Stroke(PathStroke {
             closed: true,
-            ..PathStroke::new(Paint::rgba(0, 0, 255, 255), StrokeWidth::new(6.0).unwrap())
+            ..PathStroke::new(Paint::opaque(0, 0, 255), StrokeWidth::new(6.0).unwrap())
         });
         let mut scene = Scene::new(80.0, 40.0);
         scene.add_path(
@@ -1335,7 +1338,7 @@ mod tests {
             let mut scene = Scene::new(40.0, 10.0);
             let style = PathStyle::Stroke(PathStroke {
                 dash: Dash::new(array, 0.0),
-                ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
+                ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::new(2.0).unwrap())
             });
             scene.add_path(Path::builder(style, 0.0, 5.0).line_to(40.0, 5.0).build());
             render_to_pixmap(&scene, 1.0).expect("pixmap")
@@ -1385,7 +1388,7 @@ mod tests {
         let line = |width: f32| {
             let mut scene = Scene::new(100.0, 100.0);
             let style = PathStyle::Stroke(PathStroke::new(
-                Paint::rgba(0, 0, 255, 255),
+                Paint::opaque(0, 0, 255),
                 StrokeWidth::new(width).unwrap(),
             ));
             scene.add_path(Path::builder(style, 10.0, 50.0).line_to(90.0, 50.0).build());
@@ -1400,12 +1403,15 @@ mod tests {
         // A glyph 20 units tall at a scale of 1e9 reaches past the canvas.
         let mut scene = Scene::new(100.0, 100.0);
         scene.add_text(Text {
-            style: TextStyle::Fill(Paint::Solid(Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            })),
+            style: TextStyle::Fill(
+                Paint::solid(Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })
+                .unwrap(),
+            ),
             transform: [1e9, 0.0, 0.0, 1e9, 0.0, 50.0],
             spec: TextSpec {
                 size: 20.0,
@@ -1470,12 +1476,15 @@ mod tests {
 
     fn text_node(cx: f32, cy: f32, bw: f32, bh: f32, size: f32, text: &str) -> Text {
         Text {
-            style: TextStyle::Fill(Paint::Solid(Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            })),
+            style: TextStyle::Fill(
+                Paint::solid(Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })
+                .unwrap(),
+            ),
             ..TextSpec {
                 size,
                 text: text.to_owned(),
@@ -1603,7 +1612,7 @@ mod tests {
             let mut scene = Scene::new(200.0, 80.0);
             scene.add_text(Text {
                 style: TextStyle::Stroke(TextStroke {
-                    paint: Paint::rgba(0, 0, 0, 255),
+                    paint: Paint::opaque(0, 0, 0),
                     width: StrokeWidth::ONE,
                 }),
                 transform: [scale, 0.0, 0.0, scale, 10.0, 10.0],
@@ -1627,12 +1636,15 @@ mod tests {
         // one.
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_text(Text {
-            style: TextStyle::Fill(Paint::Solid(Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            })),
+            style: TextStyle::Fill(
+                Paint::solid(Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })
+                .unwrap(),
+            ),
             transform: [1.0, 0.0, 0.0, 1.0, 5.0, 5.0],
             spec: TextSpec {
                 size: 24.0,
@@ -1794,7 +1806,7 @@ mod tests {
             Path::builder(
                 PathStyle::Stroke(PathStroke {
                     dash: Dash::new(vec![10.0, 10.0], 0.0),
-                    ..PathStroke::new(Paint::rgba(255, 0, 0, 255), StrokeWidth::new(3.0).unwrap())
+                    ..PathStroke::new(Paint::opaque(255, 0, 0), StrokeWidth::new(3.0).unwrap())
                 }),
                 5.0,
                 10.0,

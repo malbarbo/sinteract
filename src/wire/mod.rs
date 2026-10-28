@@ -230,17 +230,20 @@ mod tests {
             Path::builder(
                 PathStyle::Both(
                     PathFill {
-                        paint: Paint::rgba(10, 20, 30, 128),
+                        paint: Paint::solid(Rgba {
+                            r: 10,
+                            g: 20,
+                            b: 30,
+                            a: 128,
+                        })
+                        .unwrap(),
                         rule: FillRule::EvenOdd,
                     },
                     PathStroke {
                         cap: LineCap::Round,
                         join: LineJoin::Bevel,
                         closed: true,
-                        ..PathStroke::new(
-                            Paint::rgba(200, 0, 0, 255),
-                            StrokeWidth::new(2.5).unwrap(),
-                        )
+                        ..PathStroke::new(Paint::opaque(200, 0, 0), StrokeWidth::new(2.5).unwrap())
                     },
                 ),
                 0.0,
@@ -280,12 +283,13 @@ mod tests {
                 .expect("text fits");
                 clip.add_text(Text {
                     style: TextStyle::Both(
-                        Paint::Solid(Rgba {
+                        Paint::solid(Rgba {
                             r: 0,
                             g: 0,
                             b: 0,
                             a: 255,
-                        }),
+                        })
+                        .unwrap(),
                         TextStroke {
                             paint: Paint::radial(
                                 60.0,
@@ -1434,7 +1438,7 @@ mod tests {
             b: 0xff,
             a: 128,
         };
-        assert_eq!(p.style.fill().unwrap().paint, Paint::Solid(color));
+        assert_eq!(p.style.fill().unwrap().paint, Paint::solid(color).unwrap());
     }
 
     #[test]
@@ -1445,7 +1449,7 @@ mod tests {
                 PathStyle::Stroke(PathStroke {
                     join: LineJoin::miter(7.5).unwrap(),
                     dash: Dash::new(vec![4.0, 2.0, 1.0], 1.5),
-                    ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
+                    ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::new(2.0).unwrap())
                 }),
                 0.0,
                 0.0,
@@ -1821,27 +1825,35 @@ mod tests {
 
     #[test]
     fn a_path_or_a_text_with_no_ink_is_skipped() {
-        let clear = Paint::rgba(0, 0, 0, 0);
-        let line = |style| Path::builder(style, 0.0, 0.0).line_to(1.0, 1.0).build();
-        let mut scene = Scene::new(10.0, 10.0);
-        scene.add_path(line(PathStyle::Fill(PathFill {
-            paint: clear.clone(),
-            rule: FillRule::NonZero,
-        })));
-        scene.add_path(line(PathStyle::Stroke(PathStroke::new(
-            clear.clone(),
-            StrokeWidth::ONE,
-        ))));
-        let text = TextSpec {
-            size: 12.0,
-            text: "Hi".into(),
-            ..TextSpec::default()
+        // A Paint cannot be transparent, so the bytes are built by hand, as a
+        // writer from elsewhere could send them. The paints of the first
+        // path and of the text are transparent, and the second path is
+        // black.
+        let mut builder = MessageBuilder::new_default();
+        {
+            let frame = builder.init_root::<crate::scene_capnp::scene::Builder>();
+            let mut nodes = frame.init_elements(3);
+            for i in [0, 2] {
+                let mut p = nodes.reborrow().get(i).init_path();
+                let mut style = p.reborrow().init_style();
+                let alpha = if i == 2 { 255 } else { 0 };
+                style.reborrow().init_fill().init_solid().set_a(alpha);
+                style.set_stroke_width(1.0);
+                style.init_stroke().init_solid();
+                p.set_verbs(&[SegmentKind::Move as u8, SegmentKind::Line as u8]);
+                let mut coords = p.init_coords(4);
+                for (k, v) in [0.0, 0.0, 1.0, 1.0].into_iter().enumerate() {
+                    coords.set(k as u32, v);
+                }
+            }
+            let mut text = nodes.get(1).init_text();
+            text.reborrow().init_fill().init_solid();
+            text.reborrow().init_stroke().init_solid();
+            text.set_size(12.0);
+            text.set_text("Hi");
         }
-        .fit_transform([10.0, 0.0, 0.0, 10.0, 5.0, 5.0], TextStyle::Fill(clear))
-        .expect("text fits");
-        scene.add_text(text);
-        scene.add_path(line(PathStyle::black()));
-        let Message::Frame { scene: d, .. } = decode(&encode_frame(&scene)).unwrap() else {
+        let Message::Frame { scene: d, .. } = decode(&frame_holding(&to_bytes(builder))).unwrap()
+        else {
             panic!("expected Frame");
         };
         let [Element::Path(p)] = d.elements() else {
@@ -1869,7 +1881,7 @@ mod tests {
         scene.add_path(line(PathStyle::black(), mark));
         scene.add_path(line(
             PathStyle::Stroke(PathStroke::new(
-                Paint::default(),
+                Paint::opaque(0, 0, 0),
                 StrokeWidth::new(mark).unwrap(),
             )),
             1.0,
@@ -1877,13 +1889,13 @@ mod tests {
         scene.add_path(line(
             PathStyle::Stroke(PathStroke {
                 join: LineJoin::miter(mark).unwrap(),
-                ..PathStroke::new(Paint::default(), StrokeWidth::ONE)
+                ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::ONE)
             }),
             1.0,
         ));
         scene.add_path(line(
             PathStyle::Fill(PathFill {
-                paint: Paint::radial(0.0, 0.0, mark, vec![Stop::default()]).unwrap(),
+                paint: Paint::radial(0.0, 0.0, mark, vec![opaque_stop(0.0)]).unwrap(),
                 rule: FillRule::NonZero,
             }),
             1.0,
@@ -1898,7 +1910,7 @@ mod tests {
         });
         scene.add_text(Text {
             style: TextStyle::Stroke(TextStroke {
-                paint: Paint::rgba(0, 0, 0, 255),
+                paint: Paint::opaque(0, 0, 0),
                 width: StrokeWidth::new(mark).unwrap(),
             }),
             transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -1926,19 +1938,20 @@ mod tests {
         assert_eq!(p.segments().next(), Some(Segment::Move { x: 9.0, y: 9.0 }));
     }
 
+    fn opaque_stop(offset: f32) -> Stop {
+        Stop {
+            offset,
+            color: Rgba {
+                a: 255,
+                ..Rgba::default()
+            },
+        }
+    }
+
     #[test]
     fn a_decoded_stop_moves_up_to_the_one_before_it() {
         // The second stop becomes 0.125 on the wire, before the first.
-        let stops = vec![
-            Stop {
-                offset: 0.25,
-                color: Rgba::default(),
-            },
-            Stop {
-                offset: 0.75,
-                color: Rgba::default(),
-            },
-        ];
+        let stops = vec![opaque_stop(0.25), opaque_stop(0.75)];
         let style = PathStyle::Fill(PathFill {
             paint: Paint::linear(0.0, 0.0, 10.0, 0.0, stops).unwrap(),
             rule: FillRule::NonZero,
@@ -1972,7 +1985,7 @@ mod tests {
         // hold one, as a writer from elsewhere could send it.
         let style = PathStyle::Stroke(PathStroke {
             join: LineJoin::miter(8.0).unwrap(),
-            ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::ONE)
+            ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::ONE)
         });
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(Path::builder(style, 0.0, 0.0).line_to(10.0, 10.0).build());

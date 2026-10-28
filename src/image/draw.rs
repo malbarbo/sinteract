@@ -11,7 +11,7 @@ use crate::renderer::Renderer;
 use crate::renderer::svg::{IdPrefix, SvgRenderer};
 use crate::scene::{
     Bitmap, ClipPath, Dash, FillRule, LineCap, LineJoin, MiterLimit, Paint, Path, PathFill,
-    PathStroke, PathStyle, Sampling, Scene, StrokeWidth, Text,
+    PathStroke, PathStyle, Rgba, Sampling, Scene, StrokeWidth, Text,
 };
 
 /// The canvas of the image is too large. Its width or its height is above
@@ -398,7 +398,7 @@ impl Resolved {
         };
         let stroke = self.stroke.and_then(|c| {
             Some(PathStroke {
-                paint: paint(c, self.stroke_opacity),
+                paint: paint(c, self.stroke_opacity)?,
                 width: StrokeWidth::new(self.stroke_width.unwrap_or(1.0))?,
                 cap: self.line_cap.unwrap_or(LineCap::Round),
                 // An outline with no join of its own gets a limit of 10.
@@ -409,11 +409,11 @@ impl Resolved {
                 closed,
             })
         });
-        let fill = PathFill {
-            paint: paint(fill, self.fill_opacity),
+        let fill = paint(fill, self.fill_opacity).map(|paint| PathFill {
+            paint,
             rule: self.fill_rule.unwrap_or(FillRule::NonZero),
-        };
-        PathStyle::new(fill.paint.is_visible().then_some(fill), stroke)
+        });
+        PathStyle::new(fill, stroke)
     }
 }
 
@@ -421,10 +421,15 @@ impl Resolved {
 const OUTLINE_MITER_LIMIT: MiterLimit = MiterLimit::new(10.0).unwrap();
 
 /// `c` with its alpha times `opacity`, rounded once to the byte of the
-/// scene.
-fn paint(c: Color, opacity: Option<f32>) -> Paint {
+/// scene, or `None` if the alpha rounds to 0.
+fn paint(c: Color, opacity: Option<f32>) -> Option<Paint> {
     let a = (c.a.get() as f32 * opacity.unwrap_or(1.0)).clamp(0.0, 1.0) * 255.0;
-    Paint::rgba(c.r, c.g, c.b, a.round() as u8)
+    Paint::solid(Rgba {
+        r: c.r,
+        g: c.g,
+        b: c.b,
+        a: a.round() as u8,
+    })
 }
 
 #[cfg(test)]
@@ -581,7 +586,13 @@ mod tests {
         let path_style = Resolved::read(&style).path_style(false).unwrap();
         assert_eq!(
             path_style.fill().unwrap().paint,
-            Paint::rgba(255, 0, 0, 128)
+            Paint::solid(Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 128
+            })
+            .unwrap()
         );
         assert_eq!(path_style.stroke(), None);
     }
@@ -595,7 +606,16 @@ mod tests {
         ]);
         let path_style = Resolved::read(&style).path_style(false).unwrap();
         let stroke = path_style.stroke().unwrap();
-        assert_eq!(stroke.paint, Paint::rgba(255, 0, 0, 64));
+        assert_eq!(
+            stroke.paint,
+            Paint::solid(Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 64
+            })
+            .unwrap()
+        );
         assert_eq!(path_style.fill(), None);
         assert_eq!(stroke.cap, LineCap::Round);
         assert_eq!(stroke.join, LineJoin::Miter(OUTLINE_MITER_LIMIT));
@@ -613,7 +633,7 @@ mod tests {
             panic!("{:?}", scene.elements());
         };
         assert!(text.underline);
-        assert_eq!(text.style, TextStyle::Fill(Paint::rgba(255, 0, 0, 255)));
+        assert_eq!(text.style, TextStyle::Fill(Paint::opaque(255, 0, 0)));
         assert_eq!(text.spec.text, "hi");
     }
 

@@ -188,8 +188,8 @@ impl Canvas<Infallible> for PdfRenderer {
 
     fn draw_path(&mut self, path: &Path) {
         let style = &path.style;
-        let fill = style.drawn_fill().map(|f| &f.paint);
-        let stroke = style.drawn_stroke();
+        let fill = style.fill().map(|f| &f.paint);
+        let stroke = style.stroke();
         if fill.is_none() && stroke.is_none() {
             return;
         }
@@ -203,8 +203,8 @@ impl Canvas<Infallible> for PdfRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        let fill = node.drawn_fill();
-        let stroke = node.drawn_stroke();
+        let fill = node.style.fill();
+        let stroke = node.style.stroke();
         if fill.is_none() && stroke.is_none() {
             return;
         }
@@ -467,7 +467,7 @@ impl PdfRenderer {
     fn bind_paint(&mut self, paint: &Paint, target: PaintTarget) -> Option<usize> {
         let gradient = match paint {
             Paint::Solid(c) => {
-                let [r, g, b] = rgb_components(*c);
+                let [r, g, b] = rgb_components(c.get());
                 match target {
                     PaintTarget::Fill => self.content.set_fill_rgb(r, g, b),
                     PaintTarget::Stroke => self.content.set_stroke_rgb(r, g, b),
@@ -799,7 +799,7 @@ fn passes<'a>(
     stroke: Option<&'a Paint>,
 ) -> impl Iterator<Item = (Option<&'a Paint>, Option<&'a Paint>)> {
     let translucent = |p: Option<&Paint>| match p {
-        Some(Paint::Solid(c)) => c.a < u8::MAX,
+        Some(Paint::Solid(c)) => c.get().a < u8::MAX,
         Some(Paint::Gradient(g)) => g.stops().iter().any(|s| s.color.a < u8::MAX),
         None => false,
     };
@@ -1108,7 +1108,13 @@ mod tests {
 
     fn red_fill(a: u8) -> PathStyle {
         PathStyle::Fill(PathFill {
-            paint: Paint::rgba(255, 0, 0, a),
+            paint: Paint::solid(Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a,
+            })
+            .unwrap(),
             rule: FillRule::NonZero,
         })
     }
@@ -1130,7 +1136,7 @@ mod tests {
 
     fn text(s: &str, size: f32) -> Text {
         Text {
-            style: TextStyle::Fill(Paint::Solid(opaque(0, 0, 0))),
+            style: TextStyle::Fill(Paint::opaque(0, 0, 0)),
             spec: TextSpec {
                 size,
                 text: s.to_owned(),
@@ -1182,7 +1188,7 @@ mod tests {
         )
         .expect("text fits");
         scene.add_text(Text {
-            style: TextStyle::Fill(Paint::Solid(opaque(0, 0, 0))),
+            style: TextStyle::Fill(Paint::opaque(0, 0, 0)),
             ..fitted
         });
         let s = pdf_text(&scene);
@@ -1231,7 +1237,7 @@ mod tests {
         let mut scene = Scene::new(100.0, 50.0);
         let style = PathStyle::Stroke(PathStroke {
             dash: Dash::new(vec![3.0, 2.0], 1.0),
-            ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::ONE)
+            ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::ONE)
         });
         scene.add_path(rect(style, 0.0, 0.0, 100.0, 50.0));
         let s = pdf_text(&scene);
@@ -1248,7 +1254,7 @@ mod tests {
         let mut scene = Scene::new(50.0, 50.0);
         let style = PathStyle::Stroke(PathStroke {
             join: LineJoin::miter(12.0).unwrap(),
-            ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(4.0).unwrap())
+            ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::new(4.0).unwrap())
         });
         scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));
         let s = pdf_text(&scene);
@@ -1386,7 +1392,7 @@ mod tests {
                 paint: Paint::linear(0.0, 0.0, 100.0, 0.0, stops).unwrap(),
                 rule: FillRule::NonZero,
             },
-            PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap()),
+            PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::new(2.0).unwrap()),
         );
         scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
         let s = pdf_text(&scene);
@@ -1400,10 +1406,25 @@ mod tests {
         let mut scene = Scene::new(100.0, 40.0);
         let style = PathStyle::Both(
             PathFill {
-                paint: Paint::rgba(255, 0, 0, 128),
+                paint: Paint::solid(Rgba {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 128,
+                })
+                .unwrap(),
                 rule: FillRule::NonZero,
             },
-            PathStroke::new(Paint::rgba(0, 0, 255, 128), StrokeWidth::new(4.0).unwrap()),
+            PathStroke::new(
+                Paint::solid(Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 255,
+                    a: 128,
+                })
+                .unwrap(),
+                StrokeWidth::new(4.0).unwrap(),
+            ),
         );
         scene.add_path(rect(style, 10.0, 10.0, 80.0, 20.0));
         let s = pdf_text(&scene);

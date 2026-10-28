@@ -269,21 +269,46 @@ fn fill_and_stroke(s: &mut Scene, x: f32, y: f32, _: f32) {
     s.add_path(rect(both, x + 15.0, y + 15.0, 70.0, 70.0));
     circle(
         s,
-        fill(Paint::rgba(230, 60, 60, 153)),
+        fill(
+            Paint::solid(Rgba {
+                r: 230,
+                g: 60,
+                b: 60,
+                a: 153,
+            })
+            .expect("a visible color"),
+        ),
         x + 120.0,
         y + 50.0,
         35.0,
     );
     circle(
         s,
-        fill(Paint::rgba(60, 200, 90, 153)),
+        fill(
+            Paint::solid(Rgba {
+                r: 60,
+                g: 200,
+                b: 90,
+                a: 153,
+            })
+            .expect("a visible color"),
+        ),
         x + 150.0,
         y + 80.0,
         35.0,
     );
     circle(
         s,
-        stroke(Paint::rgba(0, 0, 0, 128), 2.0),
+        stroke(
+            Paint::solid(Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 128,
+            })
+            .expect("a visible color"),
+            2.0,
+        ),
         x + 135.0,
         y + 65.0,
         50.0,
@@ -647,7 +672,15 @@ fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
             for i in 0..10 {
                 let top = y + i as f32 * 13.0;
                 inner.add_path(rect(
-                    fill(Paint::rgba(255, 255, 255, 179)),
+                    fill(
+                        Paint::solid(Rgba {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 179,
+                        })
+                        .expect("a visible color"),
+                    ),
                     cx,
                     top,
                     80.0,
@@ -664,14 +697,30 @@ fn layer(s: &mut Scene, x: f32, y: f32, _: f32) {
     let pair = |s: &mut Scene, x: f32, alpha: u8| {
         circle(
             s,
-            fill(Paint::rgba(230, 60, 60, alpha)),
+            fill(
+                Paint::solid(Rgba {
+                    r: 230,
+                    g: 60,
+                    b: 60,
+                    a: alpha,
+                })
+                .expect("a visible color"),
+            ),
             x + 30.0,
             y + 50.0,
             28.0,
         );
         circle(
             s,
-            fill(Paint::rgba(60, 90, 230, alpha)),
+            fill(
+                Paint::solid(Rgba {
+                    r: 60,
+                    g: 90,
+                    b: 230,
+                    a: alpha,
+                })
+                .expect("a visible color"),
+            ),
             x + 60.0,
             y + 70.0,
             28.0,
@@ -761,7 +810,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
             h: 23.0,
             angle_deg: 0.0,
         },
-        TextStyle::Fill(Paint::Solid(opaque(40, 90, 200))),
+        TextStyle::Fill(Paint::opaque(40, 90, 200)),
     );
     if let Some(node) = mirror {
         s.add_text(node);
@@ -774,7 +823,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
             h: -23.0,
             angle_deg: 0.0,
         },
-        TextStyle::Fill(Paint::Solid(opaque(40, 90, 200))),
+        TextStyle::Fill(Paint::opaque(40, 90, 200)),
     );
     if let Some(node) = flip {
         s.add_text(node);
@@ -788,7 +837,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
             h: 16.0,
             angle_deg: 0.0,
         },
-        TextStyle::Fill(Paint::Solid(opaque(40, 140, 60))),
+        TextStyle::Fill(Paint::opaque(40, 140, 60)),
     );
     if let Some(node) = wide {
         s.add_text(node);
@@ -802,7 +851,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
     let style = TextStyle::Both(
         Paint::linear(x + 95.0, y, x + 185.0, y, sunset).expect("a finite gradient"),
         TextStroke {
-            paint: Paint::Solid(opaque(20, 20, 20)),
+            paint: Paint::opaque(20, 20, 20),
             width: StrokeWidth::new(1.2).expect("a positive width"),
         },
     );
@@ -811,7 +860,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
     }
     // A stroke with no fill.
     let style = TextStyle::Stroke(TextStroke {
-        paint: Paint::Solid(opaque(20, 20, 20)),
+        paint: Paint::opaque(20, 20, 20),
         width: StrokeWidth::new(0.8).expect("a positive width"),
     });
     if let Some(node) = styled_text(spec("hollow", 18.0), x + 150.0, y + 108.0, 0.0, style) {
@@ -920,7 +969,13 @@ fn badge(cx: f32, cy: f32, scale: f32, angle_deg: f32) -> Bitmap {
 /// A text at its natural size in `fill`, centred on `(cx, cy)` and rotated
 /// by `angle_deg`.
 fn text(spec: TextSpec, cx: f32, cy: f32, angle_deg: f32, fill: Rgba) -> Option<Text> {
-    styled_text(spec, cx, cy, angle_deg, TextStyle::Fill(Paint::Solid(fill)))
+    styled_text(
+        spec,
+        cx,
+        cy,
+        angle_deg,
+        TextStyle::Fill(Paint::solid(fill)?),
+    )
 }
 
 /// A text at its natural size in `style`, centred on `(cx, cy)` and rotated
@@ -1010,7 +1065,7 @@ fn solid_stroke(paint: Paint, width: f32) -> PathStroke {
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> Paint {
-    Paint::Solid(opaque(r, g, b))
+    Paint::opaque(r, g, b)
 }
 
 fn opaque(r: u8, g: u8, b: u8) -> Rgba {

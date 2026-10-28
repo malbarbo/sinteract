@@ -176,7 +176,7 @@ impl Game {
         let mut scene = Scene::new(WIDTH, HEIGHT);
         let fill = |r, g, b| {
             PathStyle::Fill(PathFill {
-                paint: Paint::rgba(r, g, b, 255),
+                paint: Paint::opaque(r, g, b),
                 rule: FillRule::NonZero,
             })
         };

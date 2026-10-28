@@ -104,7 +104,7 @@ pub(crate) mod tests {
     fn two_squares(closed: bool) -> Path {
         let style = PathStyle::Stroke(PathStroke {
             closed,
-            ..PathStroke::new(Paint::default(), StrokeWidth::ONE)
+            ..PathStroke::new(Paint::opaque(0, 0, 0), StrokeWidth::ONE)
         });
         Path::builder(style, 0.0, 0.0)
             .line_to(9.0, 0.0)

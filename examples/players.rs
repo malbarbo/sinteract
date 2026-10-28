@@ -198,11 +198,11 @@ impl Game {
             let style = if s.player == player {
                 PathStyle::Both(
                     PathFill {
-                        paint: Paint::Solid(s.color),
+                        paint: Paint::solid(s.color).expect("a visible color"),
                         rule: FillRule::NonZero,
                     },
                     PathStroke::new(
-                        Paint::rgba(255, 255, 255, 255),
+                        Paint::opaque(255, 255, 255),
                         StrokeWidth::new(3.0).expect("a positive width"),
                     ),
                 )
@@ -246,7 +246,7 @@ fn pad_direction(button: PadButton) -> Option<Direction> {
 
 fn fill(color: Rgba) -> PathStyle {
     PathStyle::Fill(PathFill {
-        paint: Paint::Solid(color),
+        paint: Paint::solid(color).expect("a visible color"),
         rule: FillRule::NonZero,
     })
 }
@@ -282,7 +282,7 @@ fn label(text: &str, cx: f32, cy: f32) -> Option<Text> {
             h: m.height(),
             angle_deg: 0.0,
         },
-        TextStyle::Fill(Paint::rgba(255, 255, 255, 255)),
+        TextStyle::Fill(Paint::opaque(255, 255, 255)),
     )
 }
 
