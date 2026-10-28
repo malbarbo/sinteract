@@ -673,13 +673,13 @@ fn render_text(
     fade: f32,
     builder: &mut PathBuilder,
 ) {
-    let Some(layout) = TextLayout::new(&node.spec) else {
+    let Some(layout) = TextLayout::new(node.spec()) else {
         return;
     };
 
     // The transform is in the `cm` convention, which is the order of
     // Transform::from_row.
-    let [a, b, c, d, e, f] = node.transform;
+    let [a, b, c, d, e, f] = node.transform();
     let local = Transform::from_row(a, b, c, d, e, f);
     let paints = TextPaints {
         fill: node.style.fill().and_then(|p| text_paint(p, local, fade)),
@@ -956,17 +956,15 @@ mod tests {
             .expect("text draws")
         };
         let mut scene = Scene::new(100.0, 100.0);
-        scene.add_text(Text {
-            style: TextStyle::Fill(ramp()),
-            ..upright(25.0)
+        let mut filled = upright(25.0);
+        filled.style = TextStyle::Fill(ramp());
+        scene.add_text(filled);
+        let mut stroked = upright(75.0);
+        stroked.style = TextStyle::Stroke(TextStroke {
+            paint: ramp(),
+            width: StrokeWidth::new(4.0).unwrap(),
         });
-        scene.add_text(Text {
-            style: TextStyle::Stroke(TextStroke {
-                paint: ramp(),
-                width: StrokeWidth::new(4.0).unwrap(),
-            }),
-            ..upright(75.0)
-        });
+        scene.add_text(stroked);
         let pixmap = render_to_pixmap(&scene, 2.0).expect("pixmap");
         // The text runs down, so every opaque pixel of a column has the
         // color of the ramp at its x.
@@ -997,8 +995,8 @@ mod tests {
         if !installed {
             return;
         }
-        let node = Text {
-            style: TextStyle::Fill(
+        let node = Text::from_parts(
+            TextStyle::Fill(
                 Paint::solid(crate::scene::Rgba {
                     r: 0,
                     g: 0,
@@ -1007,16 +1005,16 @@ mod tests {
                 })
                 .unwrap(),
             ),
-            transform: [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
-            spec: TextSpec {
+            [1.0, 0.0, 0.0, 1.0, 160.0, 60.0],
+            TextSpec {
                 size: 96.0,
                 family: family.into(),
                 text: "gyp".into(),
                 ..TextSpec::default()
             },
-            underline: true,
-        };
-        let layout = crate::text::TextLayout::new(&node.spec).expect("node draws");
+            true,
+        );
+        let layout = crate::text::TextLayout::new(node.spec()).expect("node draws");
         let u = layout.underline_rect();
         let y = (60.0 + (u.top + u.bottom) / 2.0) as u32;
         let left = (160.0 + u.left).ceil() as u32 + 1;
@@ -1402,8 +1400,8 @@ mod tests {
     fn a_text_that_reaches_too_far_draws_nothing() {
         // A glyph 20 units tall at a scale of 1e9 reaches past the canvas.
         let mut scene = Scene::new(100.0, 100.0);
-        scene.add_text(Text {
-            style: TextStyle::Fill(
+        scene.add_text(Text::from_parts(
+            TextStyle::Fill(
                 Paint::solid(Rgba {
                     r: 0,
                     g: 0,
@@ -1412,14 +1410,14 @@ mod tests {
                 })
                 .unwrap(),
             ),
-            transform: [1e9, 0.0, 0.0, 1e9, 0.0, 50.0],
-            spec: TextSpec {
+            [1e9, 0.0, 0.0, 1e9, 0.0, 50.0],
+            TextSpec {
                 size: 20.0,
                 text: "H".into(),
                 ..TextSpec::default()
             },
-            underline: false,
-        });
+            false,
+        ));
         let pm = render_to_pixmap(&scene, 1.0).expect("pixmap");
         assert_eq!(pixel_rgba(&pm, 50, 20).3, 0);
     }
@@ -1475,33 +1473,22 @@ mod tests {
     }
 
     fn text_node(cx: f32, cy: f32, bw: f32, bh: f32, size: f32, text: &str) -> Text {
-        Text {
-            style: TextStyle::Fill(
-                Paint::solid(Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                })
-                .unwrap(),
-            ),
-            ..TextSpec {
-                size,
-                text: text.to_owned(),
-                ..TextSpec::default()
-            }
-            .fit(
-                RotatedRect {
-                    cx,
-                    cy,
-                    w: bw,
-                    h: bh,
-                    angle_deg: 0.0,
-                },
-                TextStyle::black(),
-            )
-            .expect("text fits")
+        TextSpec {
+            size,
+            text: text.to_owned(),
+            ..TextSpec::default()
         }
+        .fit(
+            RotatedRect {
+                cx,
+                cy,
+                w: bw,
+                h: bh,
+                angle_deg: 0.0,
+            },
+            TextStyle::black(),
+        )
+        .expect("text fits")
     }
 
     #[test]
@@ -1610,19 +1597,19 @@ mod tests {
         // cover about four times the pixels.
         let stroked = |size: f32, scale: f32| {
             let mut scene = Scene::new(200.0, 80.0);
-            scene.add_text(Text {
-                style: TextStyle::Stroke(TextStroke {
+            scene.add_text(Text::from_parts(
+                TextStyle::Stroke(TextStroke {
                     paint: Paint::opaque(0, 0, 0),
                     width: StrokeWidth::ONE,
                 }),
-                transform: [scale, 0.0, 0.0, scale, 10.0, 10.0],
-                spec: TextSpec {
+                [scale, 0.0, 0.0, scale, 10.0, 10.0],
+                TextSpec {
                     size,
                     text: "Hi".into(),
                     ..TextSpec::default()
                 },
-                underline: false,
-            });
+                false,
+            ));
             count_opaque_pixels(&rasterize(&scene))
         };
         let large = stroked(48.0, 1.0);
@@ -1635,8 +1622,8 @@ mod tests {
         // TextSpec::fit refuses an empty text, but the wire can still carry
         // one.
         let mut scene = Scene::new(10.0, 10.0);
-        scene.add_text(Text {
-            style: TextStyle::Fill(
+        scene.add_text(Text::from_parts(
+            TextStyle::Fill(
                 Paint::solid(Rgba {
                     r: 0,
                     g: 0,
@@ -1645,13 +1632,13 @@ mod tests {
                 })
                 .unwrap(),
             ),
-            transform: [1.0, 0.0, 0.0, 1.0, 5.0, 5.0],
-            spec: TextSpec {
+            [1.0, 0.0, 0.0, 1.0, 5.0, 5.0],
+            TextSpec {
                 size: 24.0,
                 ..TextSpec::default()
             },
-            underline: false,
-        });
+            false,
+        ));
         let pm = rasterize(&scene);
         assert_eq!(count_opaque_pixels(&pm), 0);
     }

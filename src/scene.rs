@@ -624,8 +624,8 @@ impl From<PathStroke> for TextStroke {
 }
 
 /// A text run. The glyphs are laid out in text space, as [`TextSpec`] says.
-/// `transform` maps them to the canvas in the convention of the PDF `cm`
-/// operator:
+/// [`Text::transform`] maps them to the canvas in the convention of the PDF
+/// `cm` operator:
 ///
 /// ```text
 /// x' = transform[0] * x + transform[2] * y + transform[4]
@@ -633,13 +633,14 @@ impl From<PathStroke> for TextStroke {
 /// ```
 ///
 /// [`TextSpec::fit`] puts the fit to a box, the rotation and the mirroring
-/// in the matrix. A gradient of `style` is in canvas space, as
-/// the gradient of a [`Path`], so it does not turn with the text.
+/// in the matrix. It is the only way to build a text, so the matrix always
+/// fits the measure of the spec. A gradient of `style` is in canvas space,
+/// as the gradient of a [`Path`], so it does not turn with the text.
 #[derive(Clone, Debug)]
 pub struct Text {
     pub style: TextStyle,
-    pub transform: [f32; 6],
-    pub spec: TextSpec,
+    transform: [f32; 6],
+    spec: TextSpec,
     pub underline: bool,
 }
 
@@ -699,6 +700,33 @@ impl From<PathStyle> for TextStyle {
 }
 
 impl Text {
+    /// A text from its parts, for the reader of a wire and for a test. The
+    /// caller keeps `transform` in agreement with `spec`, as the reader does
+    /// with the measure from the engine.
+    pub(crate) fn from_parts(
+        style: TextStyle,
+        transform: [f32; 6],
+        spec: TextSpec,
+        underline: bool,
+    ) -> Self {
+        Self {
+            style,
+            transform,
+            spec,
+            underline,
+        }
+    }
+
+    /// The matrix that maps the text space to the canvas.
+    pub fn transform(&self) -> [f32; 6] {
+        self.transform
+    }
+
+    /// The text, its font and its size, with the family after fallback.
+    pub fn spec(&self) -> &TextSpec {
+        &self.spec
+    }
+
     /// Returns `true` if every float of the text is finite, `false`
     /// otherwise. A [`Paint`] and a [`StrokeWidth`] are always finite.
     pub(crate) fn is_finite(&self) -> bool {

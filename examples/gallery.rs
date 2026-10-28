@@ -761,11 +761,9 @@ fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
         text: "Under".into(),
         ..TextSpec::default()
     };
-    if let Some(node) = text(spec, x + 155.0, y + 20.0, 0.0, opaque(30, 30, 30)) {
-        s.add_text(Text {
-            underline: true,
-            ..node
-        });
+    if let Some(mut node) = text(spec, x + 155.0, y + 20.0, 0.0, opaque(30, 30, 30)) {
+        node.underline = true;
+        s.add_text(node);
     }
     let spec = TextSpec {
         size: 16.0,

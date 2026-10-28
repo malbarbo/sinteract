@@ -261,17 +261,17 @@ impl Canvas<Infallible> for SvgRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        let Some(layout) = TextLayout::new(&node.spec) else {
+        let Some(layout) = TextLayout::new(node.spec()) else {
             return;
         };
         let fill_paint = node.style.fill();
         let fill = fill_paint
-            .and_then(|p| self.text_paint(p, "fill", "fill-opacity", invert(node.transform)));
+            .and_then(|p| self.text_paint(p, "fill", "fill-opacity", invert(node.transform())));
         let stroke = node.style.stroke();
         // The underline paints on its own and after the stroke of the glyphs,
         // as in the other renderers. With no stroke, it fills in the group of
         // the glyphs.
-        let [a, b, c, d, e, f] = node.transform;
+        let [a, b, c, d, e, f] = node.transform();
         if let Some(fill) = &fill {
             _ = writeln!(
                 self.body,
@@ -483,7 +483,7 @@ impl SvgRenderer {
         outline: impl Fn(&mut dyn PathSink),
     ) {
         let mut d = String::new();
-        outline(&mut Moved::new(PathData::new(&mut d), node.transform));
+        outline(&mut Moved::new(PathData::new(&mut d), node.transform()));
         if d.is_empty() {
             return;
         }
@@ -783,16 +783,16 @@ mod tests {
     }
 
     fn text(s: &str) -> Text {
-        Text {
-            style: TextStyle::Fill(Paint::solid(black()).unwrap()),
-            spec: TextSpec {
+        Text::from_parts(
+            TextStyle::Fill(Paint::solid(black()).unwrap()),
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            TextSpec {
                 size: 16.0,
                 text: s.to_owned(),
                 ..TextSpec::default()
             },
-            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            underline: false,
-        }
+            false,
+        )
     }
 
     #[test]
@@ -1011,17 +1011,18 @@ mod tests {
     #[test]
     fn a_text_strokes_its_outline_moved_by_its_transform() {
         let mut scene = Scene::new(60.0, 20.0);
-        scene.add_text(Text {
-            style: TextStyle::Both(
+        scene.add_text(Text::from_parts(
+            TextStyle::Both(
                 Paint::solid(black()).unwrap(),
                 TextStroke {
                     paint: Paint::solid(black()).unwrap(),
                     width: StrokeWidth::ONE,
                 },
             ),
-            transform: [4.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            ..text("ab")
-        });
+            [4.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            text("ab").spec().clone(),
+            false,
+        ));
         let svg = render_to_svg(&scene);
         let fills = svg.find("<g fill=\"#000000\">").expect("a fill group");
         let stroke = svg.find("<path d=\"M").expect("a stroke path");
@@ -1047,11 +1048,12 @@ mod tests {
                 color: Rgba::default(),
             },
         ];
-        let node = Text {
-            style: TextStyle::Fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops).unwrap()),
-            transform: [2.0, 0.0, 0.0, 2.0, 10.0, 4.0],
-            ..text("ab")
-        };
+        let node = Text::from_parts(
+            TextStyle::Fill(Paint::linear(0.0, 0.0, 60.0, 0.0, stops).unwrap()),
+            [2.0, 0.0, 0.0, 2.0, 10.0, 4.0],
+            text("ab").spec().clone(),
+            false,
+        );
         scene.add_text(node);
         let svg = render_to_svg(&scene);
         // A <use> would start the gradient again at each glyph.

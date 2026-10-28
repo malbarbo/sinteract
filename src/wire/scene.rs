@@ -375,18 +375,19 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     } else {
         write_no_paint(b.reborrow().init_stroke());
     }
-    b.set_m0(n.transform[0]);
-    b.set_m1(n.transform[1]);
-    b.set_m2(n.transform[2]);
-    b.set_m3(n.transform[3]);
-    b.set_m4(n.transform[4]);
-    b.set_m5(n.transform[5]);
-    b.set_size(n.spec.size);
-    b.set_family(&*n.spec.family);
-    b.set_weight(n.spec.weight);
-    b.set_style(font_style_to_wire(n.spec.font_style));
+    let m = n.transform();
+    b.set_m0(m[0]);
+    b.set_m1(m[1]);
+    b.set_m2(m[2]);
+    b.set_m3(m[3]);
+    b.set_m4(m[4]);
+    b.set_m5(m[5]);
+    b.set_size(n.spec().size);
+    b.set_family(&*n.spec().family);
+    b.set_weight(n.spec().weight);
+    b.set_style(font_style_to_wire(n.spec().font_style));
     b.set_underline(n.underline);
-    b.set_text(&*n.spec.text);
+    b.set_text(&*n.spec().text);
 }
 
 fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
@@ -410,12 +411,12 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
         text: r.get_text()?.to_str()?.to_owned(),
     };
     // After every field, so damage in one stays an error.
-    Ok(Text {
-        style: style.ok_or(ValueError::NoInk)?,
+    Ok(Text::from_parts(
+        style.ok_or(ValueError::NoInk)?,
         transform,
         spec,
-        underline: r.get_underline(),
-    })
+        r.get_underline(),
+    ))
 }
 
 /// [`ValueError::NotFinite`] unless `is_finite`, the rule of [`Scene`] for

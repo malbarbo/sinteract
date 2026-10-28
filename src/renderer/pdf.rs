@@ -208,7 +208,7 @@ impl Canvas<Infallible> for PdfRenderer {
         if fill.is_none() && stroke.is_none() {
             return;
         }
-        let Some(layout) = TextLayout::new(&node.spec) else {
+        let Some(layout) = TextLayout::new(node.spec()) else {
             return;
         };
         for (fill, stroke_paint) in passes(fill, stroke.map(|s| &s.paint)) {
@@ -385,7 +385,7 @@ impl PdfRenderer {
     ) {
         if do_fill {
             self.content.save_state();
-            self.content.transform(node.transform);
+            self.content.transform(node.transform());
             let mut out = PdfOutline::new(&mut self.content);
             outline(&mut out);
             if !out.empty {
@@ -394,7 +394,7 @@ impl PdfRenderer {
             self.content.restore_state();
         }
         if do_stroke {
-            let mut out = Moved::new(PdfOutline::new(&mut self.content), node.transform);
+            let mut out = Moved::new(PdfOutline::new(&mut self.content), node.transform());
             outline(&mut out);
             if !out.out.empty {
                 self.content.stroke();
@@ -1135,16 +1135,16 @@ mod tests {
     }
 
     fn text(s: &str, size: f32) -> Text {
-        Text {
-            style: TextStyle::Fill(Paint::opaque(0, 0, 0)),
-            spec: TextSpec {
+        Text::from_parts(
+            TextStyle::Fill(Paint::opaque(0, 0, 0)),
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            TextSpec {
                 size,
                 text: s.to_owned(),
                 ..TextSpec::default()
             },
-            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            underline: false,
-        }
+            false,
+        )
     }
 
     /// The document of `scene` as text. pdf-writer does not compress a
@@ -1187,10 +1187,7 @@ mod tests {
             TextStyle::black(),
         )
         .expect("text fits");
-        scene.add_text(Text {
-            style: TextStyle::Fill(Paint::opaque(0, 0, 0)),
-            ..fitted
-        });
+        scene.add_text(fitted);
         let s = pdf_text(&scene);
         assert!(s.starts_with("%PDF-"));
         assert!(s.contains(" cm"), "expected cm transform in content stream");
@@ -1213,10 +1210,9 @@ mod tests {
     fn underline_paints_apart_from_the_glyphs() {
         let fills = |underline: bool| {
             let mut scene = Scene::new(100.0, 30.0);
-            scene.add_text(Text {
-                underline,
-                ..text("Hi", 16.0)
-            });
+            let mut node = text("Hi", 16.0);
+            node.underline = underline;
+            scene.add_text(node);
             pdf_text(&scene).lines().filter(|l| *l == "f").count()
         };
         assert_eq!(fills(false), 1, "the glyphs fill once");

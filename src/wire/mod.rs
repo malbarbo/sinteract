@@ -263,7 +263,7 @@ mod tests {
                 angle_deg: 15.0,
             },
             |clip| {
-                let text = TextSpec {
+                let mut text = TextSpec {
                     size: 12.0,
                     family: "Sinteract Sans".into(),
                     weight: 700,
@@ -281,37 +281,35 @@ mod tests {
                     TextStyle::black(),
                 )
                 .expect("text fits");
-                clip.add_text(Text {
-                    style: TextStyle::Both(
-                        Paint::solid(Rgba {
-                            r: 0,
-                            g: 0,
-                            b: 0,
-                            a: 255,
-                        })
+                text.style = TextStyle::Both(
+                    Paint::solid(Rgba {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    })
+                    .unwrap(),
+                    TextStroke {
+                        paint: Paint::radial(
+                            60.0,
+                            30.0,
+                            25.0,
+                            vec![Stop {
+                                offset: 0.5,
+                                color: Rgba {
+                                    r: 200,
+                                    g: 0,
+                                    b: 0,
+                                    a: 128,
+                                },
+                            }],
+                        )
                         .unwrap(),
-                        TextStroke {
-                            paint: Paint::radial(
-                                60.0,
-                                30.0,
-                                25.0,
-                                vec![Stop {
-                                    offset: 0.5,
-                                    color: Rgba {
-                                        r: 200,
-                                        g: 0,
-                                        b: 0,
-                                        a: 128,
-                                    },
-                                }],
-                            )
-                            .unwrap(),
-                            width: StrokeWidth::ONE,
-                        },
-                    ),
-                    underline: true,
-                    ..text
-                });
+                        width: StrokeWidth::ONE,
+                    },
+                );
+                text.underline = true;
+                clip.add_text(text);
                 // An asset mirrored horizontally, rotated 90°, centred at
                 // (70, 40).
                 clip.add_bitmap(Bitmap::fit(
@@ -1908,15 +1906,15 @@ mod tests {
             clip.add_path(line(PathStyle::black(), mark));
             clip.add_path(line(PathStyle::black(), 1.0));
         });
-        scene.add_text(Text {
-            style: TextStyle::Stroke(TextStroke {
+        scene.add_text(Text::from_parts(
+            TextStyle::Stroke(TextStroke {
                 paint: Paint::opaque(0, 0, 0),
                 width: StrokeWidth::new(mark).unwrap(),
             }),
-            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            spec: TextSpec::default(),
-            underline: false,
-        });
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            TextSpec::default(),
+            false,
+        ));
         scene.add_bitmap(Bitmap {
             transform: [1.0, 0.0, 0.0, 1.0, mark, 0.0],
             ..bitmap(1)

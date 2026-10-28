@@ -991,7 +991,7 @@ mod tests {
         let m = spec
             .fit(rect, TextStyle::black())
             .expect("text fits")
-            .transform;
+            .transform();
         let map = |x: f32, y: f32| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
         let (left, top) = map(u.left, u.top);
         let (right, bottom) = map(u.right, u.bottom);

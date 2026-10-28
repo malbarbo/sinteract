@@ -634,7 +634,7 @@ mod tests {
         };
         assert!(text.underline);
         assert_eq!(text.style, TextStyle::Fill(Paint::opaque(255, 0, 0)));
-        assert_eq!(text.spec.text, "hi");
+        assert_eq!(text.spec().text, "hi");
     }
 
     #[test]

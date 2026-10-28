@@ -351,7 +351,7 @@ impl Canvas<Infallible> for CanvasRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        let Some(layout) = TextLayout::new(&node.spec) else {
+        let Some(layout) = TextLayout::new(node.spec()) else {
             return;
         };
         let fill = node.style.fill();
@@ -362,7 +362,7 @@ impl Canvas<Infallible> for CanvasRenderer {
         // An outline moved by the transform of the text, in the space of the
         // scene.
         let moved = |outline: &dyn Fn(&mut dyn PathSink)| {
-            let mut moved = Moved::new(Calls::new(), node.transform);
+            let mut moved = Moved::new(Calls::new(), node.transform());
             outline(&mut moved);
             moved.out.path
         };
@@ -378,7 +378,7 @@ impl Canvas<Infallible> for CanvasRenderer {
                 // Each glyph keeps its path from frame to frame, and fills
                 // under the transform of the text moved to its origin.
                 let y = layout.baseline_y();
-                let [a, b, c, d, e, f] = node.transform;
+                let [a, b, c, d, e, f] = node.transform();
                 for (g, x) in layout.placed_glyphs() {
                     if let Some(p) = self.glyph(g) {
                         self.set([a, b, c, d, a * x + c * y + e, b * x + d * y + f]);
