@@ -48,14 +48,14 @@ const SIXEL_BACKGROUND: Rgba = Rgba {
 };
 
 /// What an engine adds to [`Terminal::open_with`].
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct TerminalOptions {
     /// Runs on the reader thread when the user presses Ctrl-C, after the
     /// Close goes into the queue. Raw mode turns off the signal of Ctrl-C,
     /// so an engine stops here the code that never calls `wait_event`. With
     /// stdin redirected no reader takes the keys, and Ctrl-C raises SIGINT
     /// instead.
-    pub on_interrupt: Option<Box<dyn FnMut() + Send>>,
+    pub on_interrupt: Option<fn()>,
     /// Print the last frame on the main screen at close, where it stays
     /// with the rest of the output of the program. Without it the frame
     /// goes away with the alt screen.
@@ -1044,7 +1044,7 @@ impl Reader {
         cells: Arc<Mutex<CellMap>>,
         keys: KeyInput,
         footer_rows: u16,
-        on_interrupt: Option<Box<dyn FnMut() + Send>>,
+        on_interrupt: Option<fn()>,
     ) -> io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
@@ -1077,7 +1077,7 @@ fn read_bytes(
     stop: &AtomicBool,
     kitty: bool,
     mut size: SizeWatch,
-    mut on_interrupt: Option<Box<dyn FnMut() + Send>>,
+    on_interrupt: Option<fn()>,
 ) {
     use super::term_input::{Decoder, Input};
 
@@ -1122,7 +1122,7 @@ fn read_bytes(
                 }
                 Input::Interrupt => {
                     let _ = tx.send_close();
-                    if let Some(f) = on_interrupt.as_mut() {
+                    if let Some(f) = on_interrupt {
                         f();
                     }
                     return;

@@ -65,7 +65,7 @@ pub enum StageEvent {
 }
 
 /// Where [`Stage::open`] shows a game that no server runs.
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct StageOptions {
     pub display: Native,
     /// How many players play on a display of this process, each in a
