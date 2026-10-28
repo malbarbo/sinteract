@@ -254,7 +254,7 @@ impl Stage {
     }
 
     fn open_session(players: PlayerRange) -> Result<(Stage, Vec<(Player, String)>), StageError> {
-        let (from_server, to_server) = take_session_fds()?;
+        let (from_server, to_server, taken) = take_session_fds()?;
         // No deadline until the start, since a read that times out there
         // loses the hello.
         let deadline = Rc::new(Cell::new(None));
@@ -262,20 +262,15 @@ impl Stage {
             file: from_server,
             deadline: Rc::clone(&deadline),
         };
-        // A start that fails drops both files, which is a close of the
-        // stage too: without the release, a wasi instance could open no
-        // stage again.
         let (session, players) = Session::start(players, reader, BufWriter::new(to_server))
-            .map_err(|e| {
-                release_session_fds();
-                StageError::Start(e)
-            })?;
+            .map_err(StageError::Start)?;
         let count = session.players();
         let remote = Remote {
             tick_rate: session.tick_rate(),
-            session: Some(session),
+            session,
             deadline,
             ended: false,
+            _taken: taken,
         };
         let stage = Stage {
             inner: Inner::Remote(Box::new(remote)),
@@ -328,8 +323,7 @@ impl Stage {
             Inner::Players(players) => players.present(to, scene),
             Inner::Remote(remote) => {
                 has_player()?;
-                let session = remote.session.as_mut().ok_or(PresentError::Closed)?;
-                session.write_frame(to, &scene).map_err(|e| match e {
+                remote.session.write_frame(to, &scene).map_err(|e| match e {
                     FrameError::Full(e) => PresentError::Full(e),
                     FrameError::Io(e) => PresentError::Io(e),
                 })
@@ -561,9 +555,6 @@ impl Players {
     /// that failed since the last present fails this one, which still
     /// keeps `scene`.
     fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
-        if !self.window.is_open() {
-            return Err(PresentError::Closed);
-        }
         self.pending.keep(to, scene)?;
         self.window.take_failed()
     }
@@ -638,23 +629,25 @@ impl Pending {
 struct Remote {
     /// The rate of the ticks, from the start of the session.
     tick_rate: NonZeroU32,
-    /// `None` after [`Stage::close`].
-    session: Option<Session<DeadlineReader, BufWriter<File>>>,
+    session: Session<DeadlineReader, BufWriter<File>>,
     /// The deadline of the reader of the session, which has no other way
     /// to it.
     deadline: Rc<Cell<Option<Instant>>>,
     /// The stream of the server ended or failed, and every wait returns
     /// Close.
     ended: bool,
+    /// The last field, so fd 3 and fd 4 close before the next stage can
+    /// take them.
+    _taken: Taken,
 }
 
 impl Remote {
     fn wait(&mut self, deadline: Option<Instant>) -> Result<StageEvent, Interrupt> {
-        let Some(session) = self.session.as_mut().filter(|_| !self.ended) else {
+        if self.ended {
             return Err(Interrupt::Close);
-        };
+        }
         self.deadline.set(deadline);
-        let event = session.wait();
+        let event = self.session.wait();
         self.deadline.set(None);
         match event {
             Ok(SessionEvent::Tick) => Ok(StageEvent::Tick),
@@ -673,18 +666,6 @@ impl Remote {
                 Err(Interrupt::Read(e))
             }
         }
-    }
-
-    fn close(&mut self) {
-        if self.session.take().is_some() {
-            release_session_fds();
-        }
-    }
-}
-
-impl Drop for Remote {
-    fn drop(&mut self) {
-        self.close();
     }
 }
 
@@ -747,9 +728,26 @@ fn wait_readable(_file: &File, _deadline: Instant) -> io::Result<()> {
 #[cfg(any(unix, target_os = "wasi"))]
 static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Fd 3 and fd 4, which the server opened for the session.
+/// The hold of a stage on fd 3 and fd 4, which its drop lets go.
+struct Taken;
+
+/// Let the next stage take fd 3 and fd 4. Only a wasi host keeps the
+/// descriptors open after a close, for the next session of the instance.
+/// Elsewhere a closed descriptor may come back as a file of another
+/// owner, so the session of a process stays its only one.
 #[cfg(any(unix, target_os = "wasi"))]
-fn take_session_fds() -> Result<(File, File), StageError> {
+impl Drop for Taken {
+    fn drop(&mut self) {
+        if cfg!(target_os = "wasi") {
+            TAKEN.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+/// Fd 3 and fd 4, which the server opened for the session, and the hold
+/// on them.
+#[cfg(any(unix, target_os = "wasi"))]
+fn take_session_fds() -> Result<(File, File, Taken), StageError> {
     use std::os::fd::FromRawFd;
     use std::sync::atomic::Ordering;
 
@@ -767,6 +765,7 @@ fn take_session_fds() -> Result<(File, File), StageError> {
         (
             File::from_raw_fd(SERVER_TO_ENGINE_FD),
             File::from_raw_fd(ENGINE_TO_SERVER_FD),
+            Taken,
         )
     })
 }
@@ -802,24 +801,10 @@ fn check_session_fd(fd: i32) -> Result<(), StageError> {
     Ok(())
 }
 
-/// Let the next stage take fd 3 and fd 4. Only a wasi host keeps the
-/// descriptors open after a close, for the next session of the instance.
-/// Elsewhere a closed descriptor may come back as a file of another
-/// owner, so the session of a process stays its only one.
-#[cfg(any(unix, target_os = "wasi"))]
-fn release_session_fds() {
-    if cfg!(target_os = "wasi") {
-        TAKEN.store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 #[cfg(not(any(unix, target_os = "wasi")))]
-fn take_session_fds() -> Result<(File, File), StageError> {
+fn take_session_fds() -> Result<(File, File, Taken), StageError> {
     Err(StageError::NoSession)
 }
-
-#[cfg(not(any(unix, target_os = "wasi")))]
-fn release_session_fds() {}
 
 #[cfg(all(test, unix))]
 pub(super) mod tests {
@@ -941,9 +926,10 @@ pub(super) mod tests {
         let count = session.players();
         let remote = Remote {
             tick_rate: session.tick_rate(),
-            session: Some(session),
+            session,
             deadline,
             ended: false,
+            _taken: Taken,
         };
         let stage = Stage {
             inner: Inner::Remote(Box::new(remote)),

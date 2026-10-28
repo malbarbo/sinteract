@@ -85,9 +85,6 @@ pub(super) mod sealed {
 /// Why a frame did not reach the display.
 #[derive(Debug)]
 pub enum PresentError {
-    /// The session ended. [`Display::wait_event`] also reports it, as
-    /// [`Interrupt::Close`].
-    Closed,
     /// Rasterizing the scene failed.
     Alloc(AllocError),
     /// A write to the terminal or to the server failed. Part of the frame
@@ -107,7 +104,6 @@ pub enum PresentError {
 impl fmt::Display for PresentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PresentError::Closed => f.write_str("the session ended"),
             PresentError::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
             PresentError::Io(e) => write!(f, "cannot show the frame: {e}"),
             PresentError::Platform(e) => write!(f, "cannot show the frame: {e}"),
@@ -125,7 +121,7 @@ impl std::error::Error for PresentError {
             PresentError::Alloc(e) => Some(e),
             PresentError::Io(e) => Some(e),
             PresentError::Full(e) => Some(e),
-            PresentError::Closed | PresentError::Platform(_) | PresentError::NoPlayer(_) => None,
+            PresentError::Platform(_) | PresentError::NoPlayer(_) => None,
         }
     }
 }

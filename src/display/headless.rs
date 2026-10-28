@@ -14,7 +14,6 @@ use crate::scene::Scene;
 pub(crate) struct Headless {
     inbox: Inbox,
     clock: TickClock,
-    closed: bool,
 }
 
 impl Headless {
@@ -25,16 +24,12 @@ impl Headless {
         Self {
             inbox: Inbox::new(None),
             clock: TickClock::from_millihertz(Self::TICK_RATE),
-            closed: false,
         }
     }
 }
 
 impl super::Display for Headless {
     fn present(&mut self, _scene: Scene) -> Result<(), PresentError> {
-        if self.closed {
-            return Err(PresentError::Closed);
-        }
         Ok(())
     }
 

@@ -66,8 +66,7 @@ pub struct Terminal {
     /// bitmaps.
     renderer: PixmapRenderer,
     graphics: TerminalGraphics,
-    /// `None` during the drop.
-    active: Option<Active>,
+    active: Active,
     /// The scene of the last present, drawn again after a resize.
     last: Option<Scene>,
     /// How the reader maps a cell to the scene on screen.
@@ -127,7 +126,7 @@ impl Terminal {
                 options.on_interrupt,
             )
         });
-        let reader = match reader {
+        let mut reader = match reader {
             Ok(reader) => reader,
             Err(e) => {
                 leave(graphics, false);
@@ -159,11 +158,11 @@ impl Terminal {
             clock: TickClock::from_millihertz(Self::TICK_RATE),
             renderer,
             graphics,
-            active: Some(Active {
+            active: Active {
                 reader,
                 writer,
                 claim,
-            }),
+            },
             last: None,
             cells,
             keep_last_frame: options.keep_last_frame,
@@ -177,9 +176,6 @@ impl Terminal {
     /// waits for the first frame, and goes away with the alt screen at
     /// close.
     pub fn set_footer<S: AsRef<str>>(&mut self, lines: &[S]) -> Result<(), PresentError> {
-        if self.active.is_none() {
-            return Err(PresentError::Closed);
-        }
         // The writer of the frames takes the two locks in the same order.
         let mut stdout = io::stdout().lock();
         let mut footer = self.footer.lock().unwrap_or_else(PoisonError::into_inner);
@@ -199,9 +195,6 @@ impl Terminal {
     /// screen first when `after_resize` holds. Returns the result of the
     /// write of the frame before.
     fn draw(&mut self, scene: &Scene, after_resize: bool) -> Result<(), PresentError> {
-        let Some(active) = self.active.as_mut() else {
-            return Err(PresentError::Closed);
-        };
         let footer_rows = self
             .footer
             .lock()
@@ -212,7 +205,7 @@ impl Terminal {
         self.renderer.render(scene)?;
         *self.cells.lock().unwrap_or_else(PoisonError::into_inner) =
             CellMap::new(self.graphics, cell_pixels(), scale);
-        active.writer.write(&mut self.renderer, after_resize)?;
+        self.active.writer.write(&mut self.renderer, after_resize)?;
         Ok(())
     }
 
@@ -230,9 +223,6 @@ impl Terminal {
 
 impl super::Display for Terminal {
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        if self.active.is_none() {
-            return Err(PresentError::Closed);
-        }
         // A resize that waits for its redraw still clears the screen.
         let after_resize = self.inbox.take_redraw();
         let drawn = self.draw(&scene, after_resize);
@@ -276,17 +266,14 @@ impl Drop for Terminal {
     /// Stop the reader thread, wait for the frame that the writer holds,
     /// and leave the alt screen and raw mode.
     fn drop(&mut self) {
-        let Some(active) = self.active.take() else {
-            return;
-        };
         self.inbox.close();
-        active.reader.stop();
+        self.active.reader.stop();
         // A writer that panicked hands back nothing, and the panic hook
         // already put the tty back.
-        let Some(state) = active.writer.finish() else {
+        let Some(state) = self.active.writer.finish() else {
             return;
         };
-        if !active.claim.restored() {
+        if !self.active.claim.restored() {
             leave(self.graphics, state.frame_size.is_some());
             // The session is over, and drop has no way to report that
             // the frame did not print.
@@ -406,10 +393,11 @@ impl<S: Send + 'static> FrameWriter<S> {
     }
 
     /// Wait for the thread to write the frame it holds, and take back `S`.
-    /// `None` when the thread panicked.
-    fn finish(self) -> Option<S> {
-        drop(self.frames);
-        self.thread?.join().ok()
+    /// `None` when the thread panicked or after an earlier finish.
+    fn finish(&mut self) -> Option<S> {
+        // The thread ends when its channel closes.
+        drop(std::mem::replace(&mut self.frames, mpsc::channel().0));
+        self.thread.take()?.join().ok()
     }
 }
 
@@ -1003,7 +991,8 @@ impl KeyInput {
 /// The thread that moves the input of the terminal into the queue.
 struct Reader {
     stop: Arc<AtomicBool>,
-    thread: JoinHandle<()>,
+    /// `None` after [`Reader::stop`].
+    thread: Option<JoinHandle<()>>,
 }
 
 /// How long the reader blocks before it checks `stop`, which bounds how
@@ -1029,12 +1018,17 @@ impl Reader {
                 }
                 KeyInput::Off => watch_size(&tx, &flag, SizeWatch::new(footer_rows)),
             })?;
-        Ok(Self { stop, thread })
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
     }
 
-    fn stop(self) {
+    fn stop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        let _ = self.thread.join();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 

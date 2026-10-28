@@ -51,8 +51,7 @@ use crate::session::Target;
 pub struct Window {
     inbox: Inbox,
     clock: TickClock,
-    /// `None` during the drop.
-    active: Option<Active>,
+    active: Active,
     /// The first draw that failed since the last [`Window::take_failed`].
     failed: Option<PresentError>,
 }
@@ -163,7 +162,7 @@ impl Window {
         Ok(Self {
             inbox,
             clock: TickClock::from_millihertz(Self::TICK_RATE),
-            active: Some(Active { lent, seats }),
+            active: Active { lent, seats },
             failed: None,
         })
     }
@@ -174,9 +173,7 @@ impl Window {
     /// or a frame of the display link of macOS, and draw each scene that
     /// waited.
     fn pump(&mut self, timeout: Duration) {
-        let Some(s) = self.active.as_mut() else {
-            return;
-        };
+        let s = &mut self.active;
         if !s.lent.pump(&mut Seats(&mut s.seats), timeout) {
             let _ = self.inbox.sender_without_waker(0).send_close();
         }
@@ -218,9 +215,7 @@ impl Window {
     /// player with no window. A draw that fails goes to
     /// [`Window::take_failed`].
     pub(crate) fn present_to(&mut self, to: Target, scene: Rc<Scene>) -> Result<(), PresentError> {
-        let Some(active) = self.active.as_mut() else {
-            return Err(PresentError::Closed);
-        };
+        let active = &mut self.active;
         let several = active.seats.len() > 1;
         let failed = &mut self.failed;
         let mut keep = |seat: usize, target: &mut Seat, scene| {
@@ -255,11 +250,6 @@ impl Window {
         self.failed.take().map_or(Ok(()), Err)
     }
 
-    /// Returns `true` if the windows are open, `false` after the close.
-    pub(crate) fn is_open(&self) -> bool {
-        self.active.is_some()
-    }
-
     /// Block until the next event, with the seat of an input, as
     /// [`super::Display::wait_event`] does. `draw` runs after the events
     /// that wait, so a frame callback has its time before the draw.
@@ -279,8 +269,7 @@ impl Window {
             match self.inbox.next(&mut self.clock, deadline) {
                 Next::Ready(ready) => return ready,
                 Next::Redraw => {
-                    let seats = self.active.as_mut().map_or(&mut [][..], |s| &mut s.seats);
-                    for seat in seats.iter_mut().filter(|seat| seat.app.dirty) {
+                    for seat in self.active.seats.iter_mut().filter(|seat| seat.app.dirty) {
                         seat.app.dirty = false;
                         if let Err(e) = seat.show() {
                             self.failed.get_or_insert(e);
@@ -320,12 +309,9 @@ impl sealed::Sealed for Window {}
 impl Drop for Window {
     /// Destroy the windows and give the event loop back.
     fn drop(&mut self) {
-        let Some(Active { mut lent, seats }) = self.active.take() else {
-            return;
-        };
         self.inbox.close();
-        drop(seats);
-        lent.destroy_dropped();
+        self.active.seats.clear();
+        self.active.lent.destroy_dropped();
     }
 }
 

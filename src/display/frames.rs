@@ -251,7 +251,7 @@ impl Open {
         for (target, scene) in std::mem::take(&mut self.pending) {
             if let Err(e) = self.stage.present(target, scene) {
                 on_error(&e);
-                if let PresentError::Closed | PresentError::Io(_) = e {
+                if let PresentError::Io(_) = e {
                     self.closed = true;
                     break;
                 }
