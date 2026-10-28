@@ -26,6 +26,7 @@ use tiny_skia::{Pixmap, PremultipliedColorU8};
 use super::driver::{NoGraphics, OpenError, PresentError, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
+use super::stage::{TerminalGraphics, TerminalOptions};
 use super::tick_clock::TickClock;
 use crate::event::{Event, Interrupt, MouseEvent};
 use crate::renderer::pixmap::PixmapRenderer;
@@ -46,27 +47,6 @@ const SIXEL_BACKGROUND: Rgba = Rgba {
     b: 255,
     a: 255,
 };
-
-/// What an engine adds to [`Terminal::open_with`].
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TerminalOptions {
-    /// Runs on the reader thread when the user presses Ctrl-C, after the
-    /// Close goes into the queue. Raw mode turns off the signal of Ctrl-C,
-    /// so an engine stops here the code that never calls `wait_event`. With
-    /// stdin redirected no reader takes the keys, and Ctrl-C raises SIGINT
-    /// instead.
-    pub on_interrupt: Option<fn()>,
-    /// Print the last frame on the main screen at close, where it stays
-    /// with the rest of the output of the program. Without it the frame
-    /// goes away with the alt screen.
-    pub keep_last_frame: bool,
-    /// The rows of text under the frame, which [`Terminal::set_footer`]
-    /// fills. The frame shrinks to leave them free.
-    pub footer_rows: u16,
-    /// The graphics of the frames. `None` asks the terminal which ones it
-    /// shows.
-    pub graphics: Option<TerminalGraphics>,
-}
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
 /// Ctrl-C arrives as [`Interrupt::Close`]. The size of the terminal
@@ -791,18 +771,6 @@ pub(crate) fn kitty_supported() -> bool {
 /// answer comes from the same probe as [`kitty_supported`].
 pub(crate) fn sixel_supported() -> bool {
     super::term_query::caps().sixel
-}
-
-/// How a [`Terminal`] or a [`Printer`] draws a scene.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub enum TerminalGraphics {
-    /// The graphics protocol of Kitty.
-    Kitty,
-    /// DEC Sixel.
-    Sixel,
-    /// Two pixels per cell, as the foreground and background of `▀`. It
-    /// needs truecolor.
-    HalfBlocks,
 }
 
 impl TerminalGraphics {

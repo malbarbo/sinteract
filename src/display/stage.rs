@@ -9,8 +9,6 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
 
-#[cfg(feature = "terminal")]
-use super::TerminalOptions;
 use super::{Display, OpenError, PresentError};
 use crate::event::{Event, InputEvent, Interrupt};
 use crate::scene::Scene;
@@ -74,8 +72,40 @@ pub struct StageOptions {
     /// back to the terminal. A session takes its players from the server.
     pub players: Option<NonZeroU32>,
     /// What the terminal adds, when the game goes there.
-    #[cfg(feature = "terminal")]
     pub terminal: TerminalOptions,
+}
+
+/// What an engine adds to a terminal display.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TerminalOptions {
+    /// Runs on the reader thread when the user presses Ctrl-C, after the
+    /// Close goes into the queue. Raw mode turns off the signal of Ctrl-C,
+    /// so an engine stops here the code that never calls `wait_event`. With
+    /// stdin redirected no reader takes the keys, and Ctrl-C raises SIGINT
+    /// instead.
+    pub on_interrupt: Option<fn()>,
+    /// Print the last frame on the main screen at close, where it stays
+    /// with the rest of the output of the program. Without it the frame
+    /// goes away with the alt screen.
+    pub keep_last_frame: bool,
+    /// The rows of text under the frame, which `Terminal::set_footer`
+    /// fills. The frame shrinks to leave them free.
+    pub footer_rows: u16,
+    /// The graphics of the frames. `None` asks the terminal which ones it
+    /// shows.
+    pub graphics: Option<TerminalGraphics>,
+}
+
+/// How a terminal display or a `Printer` draws a scene.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum TerminalGraphics {
+    /// The graphics protocol of Kitty.
+    Kitty,
+    /// DEC Sixel.
+    Sixel,
+    /// Two pixels per cell, as the foreground and background of `▀`. It
+    /// needs truecolor.
+    HalfBlocks,
 }
 
 /// The display of this process that shows a game.
