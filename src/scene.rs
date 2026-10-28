@@ -510,7 +510,7 @@ pub enum FillRule {
 /// A clip region. A sub-path closes implicitly, so the caller does not add a
 /// line back to its start. `fill_rule` decides what is inside. A clip with
 /// no area, such as one with no segments, hides everything it holds.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClipPath {
     segs: Vec<Segment>,
     pub fill_rule: FillRule,
@@ -1606,6 +1606,180 @@ impl Scene {
             self.elements.push(Element::Bitmap(bitmap));
         }
     }
+
+    /// This scene, with each element that goes in through the result cut to
+    /// `crop`.
+    pub fn cropped<'a>(&'a mut self, crop: &'a Crop) -> Cropped<'a> {
+        Cropped { scene: self, crop }
+    }
+}
+
+/// The part of the canvas that the crops around an element leave visible.
+/// `None` is the whole canvas, and an empty polygon is nothing. Only
+/// [`Crop::intersect`] builds a polygon, so a polygon is always convex.
+///
+/// A crop inside another is one crop of the two boxes, so it costs no
+/// nesting, unlike a [`Scene::clip`] inside another. A front end that crops
+/// in a tree of any depth adds each element through [`Scene::cropped`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Crop(Option<Arc<[(f64, f64)]>>);
+
+/// How far a point may be outside a box and still count as inside, so a box
+/// that matches a crop up to rounding does not cut it.
+const INSIDE_TOLERANCE: f64 = 1.0e-3;
+
+impl Crop {
+    /// The part of `self` inside the box of `rect`, the unit square centred
+    /// on the origin under `rect`. A box with no area, or one that is not
+    /// finite, leaves nothing.
+    pub fn intersect(&self, rect: impl Into<Affine>) -> Crop {
+        let corners = box_corners(rect.into());
+        let finite = corners.iter().all(|&(x, y)| x.is_finite() && y.is_finite());
+        let area = cross(corners[0], corners[1], corners[2]);
+        if !finite || area == 0.0 {
+            return Crop(Some(Arc::new([])));
+        }
+        // The sign makes the distance to an edge positive inside the box,
+        // whichever way its corners turn.
+        let sign = area.signum();
+        let edges = || {
+            corners
+                .iter()
+                .copied()
+                .zip(corners.iter().copied().cycle().skip(1))
+        };
+        let distance = |(p, q): ((f64, f64), (f64, f64)), r: (f64, f64)| {
+            sign * cross(p, q, r) / (q.0 - p.0).hypot(q.1 - p.1)
+        };
+        let Some(polygon) = &self.0 else {
+            return Crop(Some(corners.into()));
+        };
+        let contains = |r: (f64, f64)| edges().all(|e| distance(e, r) >= -INSIDE_TOLERANCE);
+        if polygon.iter().all(|&r| contains(r)) {
+            return self.clone();
+        }
+        // Sutherland-Hodgman. The box is convex, so each of its edges cuts
+        // away what lies outside it.
+        let mut out = polygon.to_vec();
+        for edge in edges() {
+            let points = std::mem::take(&mut out);
+            let sides = points
+                .iter()
+                .copied()
+                .zip(points.iter().copied().cycle().skip(1));
+            for (p, q) in sides {
+                let (dp, dq) = (distance(edge, p), distance(edge, q));
+                if dp >= 0.0 {
+                    out.push(p);
+                }
+                if (dp >= 0.0) != (dq >= 0.0) {
+                    let t = dp / (dp - dq);
+                    out.push((p.0 + t * (q.0 - p.0), p.1 + t * (q.1 - p.1)));
+                }
+            }
+            // A corner on the edge comes back as itself and as the point
+            // where the edge cuts the side.
+            let same =
+                |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1) < INSIDE_TOLERANCE;
+            out.dedup_by(|p, q| same(*p, *q));
+            while let [first, .., last] = out[..]
+                && same(first, last)
+            {
+                out.pop();
+            }
+        }
+        if out.len() < 3 {
+            out.clear();
+        }
+        Crop(Some(out.into()))
+    }
+
+    /// Returns `true` if nothing of the canvas is visible, `false`
+    /// otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.0.as_ref().is_some_and(|polygon| polygon.is_empty())
+    }
+}
+
+/// The clip of the polygon of a [`Crop`], or `None` when the polygon draws
+/// nothing, because it is empty or not finite in `f32`.
+fn polygon_clip(polygon: &[(f64, f64)]) -> Option<ClipPath> {
+    let ((x, y), rest) = polygon.split_first()?;
+    let mut clip = ClipPath::builder(FillRule::default(), *x as f32, *y as f32);
+    for &(x, y) in rest {
+        clip = clip.line_to(x as f32, y as f32);
+    }
+    let clip = clip.build();
+    clip.is_finite().then_some(clip)
+}
+
+/// The corners of the box of `m` in `f64`, from the `f32` coefficients, so
+/// that two crops of the same box agree to the last digit.
+fn box_corners(m: Affine) -> [(f64, f64); 4] {
+    let [a, b, c, d, e, f] = m.coefficients().map(f64::from);
+    [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
+        .map(|(u, v)| (a * u + c * v + e, b * u + d * v + f))
+}
+
+/// Twice the signed area of the triangle `p`, `q`, `r`.
+fn cross(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
+    (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+}
+
+/// A [`Scene`] that cuts each element that goes in to a [`Crop`], from
+/// [`Scene::cropped`]. An element goes into the clip of the last element of
+/// the scene when that clip is the polygon of the crop, so the elements in
+/// a row with one crop share one clip.
+#[must_use = "Cropped adds nothing until an add method takes it"]
+pub struct Cropped<'a> {
+    scene: &'a mut Scene,
+    crop: &'a Crop,
+}
+
+impl Cropped<'_> {
+    pub fn add_path(self, path: Path) {
+        if path.is_finite() {
+            self.add(Element::Path(path));
+        }
+    }
+
+    pub fn add_text(self, text: Text) {
+        if text.is_finite() {
+            self.add(Element::Text(text));
+        }
+    }
+
+    pub fn add_bitmap(self, bitmap: Bitmap) {
+        if bitmap.is_finite() {
+            self.add(Element::Bitmap(bitmap));
+        }
+    }
+
+    /// Adds `element`, which is finite, under the crop.
+    fn add(self, element: Element) {
+        let Some(polygon) = &self.crop.0 else {
+            self.scene.elements.push(element);
+            return;
+        };
+        let Some(clip) = polygon_clip(polygon) else {
+            return;
+        };
+        if let Some(Element::Clipped {
+            clip: last,
+            elements,
+        }) = self.scene.elements.last_mut()
+            && *last == clip
+        {
+            elements.push(element);
+            return;
+        }
+        if !self.scene.is_nested_to_max() {
+            self.scene.elements.push(Element::Clipped {
+                clip,
+                elements: vec![element],
+            });
+        }
+    }
 }
 
 /// A width or a height of a frame. A size that describes no frame, which is
@@ -2676,6 +2850,186 @@ mod tests {
             nest(&mut scene, MAX_NESTING + 1, layer);
             assert_eq!(depth(&scene.elements), None);
         }
+    }
+
+    /// The polygon of `crop`, `None` for the whole canvas.
+    fn polygon(crop: &Crop) -> Option<Vec<(f64, f64)>> {
+        crop.0.as_ref().map(|p| p.to_vec())
+    }
+
+    /// The box from `(x0, y0)` to `(x1, y1)`.
+    fn a_box(x0: f32, y0: f32, x1: f32, y1: f32) -> Affine {
+        Affine {
+            x_axis: (x1 - x0, 0.0),
+            y_axis: (0.0, y1 - y0),
+            origin: ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+        }
+    }
+
+    #[test]
+    fn a_crop_inside_another_is_the_part_of_both_boxes() {
+        let whole = Crop::default();
+        assert_eq!(polygon(&whole), None);
+        let first = whole.intersect(a_box(0.0, 0.0, 10.0, 10.0));
+        assert_eq!(
+            polygon(&first),
+            Some(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)])
+        );
+        let both = first.intersect(a_box(5.0, 5.0, 20.0, 20.0));
+        let mut corners = polygon(&both).expect("a polygon");
+        corners.sort_by(|p, q| p.partial_cmp(q).unwrap());
+        assert_eq!(
+            corners,
+            vec![(5.0, 5.0), (5.0, 10.0), (10.0, 5.0), (10.0, 10.0)]
+        );
+    }
+
+    #[test]
+    fn a_box_that_holds_the_crop_leaves_it_as_it_is() {
+        let crop = Crop::default().intersect(a_box(0.0, 0.0, 10.0, 10.0));
+        assert_eq!(crop.intersect(a_box(-5.0, -5.0, 20.0, 20.0)), crop);
+        // A corner just outside, by less than the tolerance, counts as in.
+        assert_eq!(crop.intersect(a_box(0.0005, 0.0, 10.0, 10.0)), crop);
+    }
+
+    #[test]
+    fn a_crop_of_a_box_with_no_area_or_not_finite_is_empty() {
+        let whole = Crop::default();
+        assert!(!whole.is_empty());
+        assert!(whole.intersect(a_box(0.0, 0.0, 0.0, 10.0)).is_empty());
+        assert!(whole.intersect(a_box(0.0, 0.0, f32::NAN, 10.0)).is_empty());
+        let apart = whole.intersect(a_box(0.0, 0.0, 10.0, 10.0));
+        let empty = apart.intersect(a_box(20.0, 20.0, 30.0, 30.0));
+        assert!(empty.is_empty());
+        assert!(empty.intersect(a_box(0.0, 0.0, 100.0, 100.0)).is_empty());
+    }
+
+    #[test]
+    fn cropped_elements_in_a_row_share_one_clip() {
+        let a = Crop::default().intersect(a_box(0.0, 0.0, 10.0, 10.0));
+        let b = Crop::default().intersect(a_box(0.0, 0.0, 5.0, 5.0));
+        let mut scene = Scene::new(10.0, 10.0);
+        scene
+            .cropped(&a)
+            .add_path(a_line(PathStyle::black(), 5.0, 5.0));
+        scene
+            .cropped(&a)
+            .add_path(a_line(PathStyle::black(), 6.0, 6.0));
+        scene
+            .cropped(&b)
+            .add_path(a_line(PathStyle::black(), 5.0, 5.0));
+        scene.add_path(a_line(PathStyle::black(), 5.0, 5.0));
+        scene
+            .cropped(&b)
+            .add_path(a_line(PathStyle::black(), 5.0, 5.0));
+        let sizes: Vec<_> = scene
+            .elements
+            .iter()
+            .map(|e| match e {
+                Element::Clipped { elements, .. } => Some(elements.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sizes, vec![Some(2), Some(1), None, Some(1)]);
+    }
+
+    #[test]
+    fn cropped_with_no_crop_adds_the_element_as_it_is() {
+        let mut scene = Scene::new(10.0, 10.0);
+        scene
+            .cropped(&Crop::default())
+            .add_path(a_line(PathStyle::black(), 5.0, 5.0));
+        assert!(matches!(scene.elements[..], [Element::Path(_)]));
+    }
+
+    #[test]
+    fn cropped_adds_nothing_for_an_empty_crop_or_a_non_finite_element() {
+        let crop = Crop::default().intersect(a_box(0.0, 0.0, 10.0, 10.0));
+        let mut scene = Scene::new(10.0, 10.0);
+        scene
+            .cropped(&crop.intersect(a_box(20.0, 20.0, 30.0, 30.0)))
+            .add_path(a_line(PathStyle::black(), 5.0, 5.0));
+        scene
+            .cropped(&crop)
+            .add_path(a_line(PathStyle::black(), f32::NAN, 5.0));
+        assert!(scene.elements.is_empty(), "{:?}", scene.elements);
+    }
+
+    #[test]
+    fn a_crop_that_is_not_finite_in_f32_drops_the_element() {
+        // The corners are finite in f64 and past the range of f32.
+        let huge = Affine {
+            x_axis: (f32::MAX, 0.0),
+            y_axis: (0.0, f32::MAX),
+            origin: (f32::MAX, f32::MAX),
+        };
+        let crop = Crop::default().intersect(huge);
+        assert!(!crop.is_empty());
+        let mut scene = Scene::new(10.0, 10.0);
+        scene
+            .cropped(&crop)
+            .add_path(a_line(PathStyle::black(), 5.0, 5.0));
+        assert!(scene.elements.is_empty(), "{:?}", scene.elements);
+    }
+
+    #[test]
+    fn a_cropped_element_joins_a_clip_of_the_same_polygon() {
+        let rect = a_box(0.0, 0.0, 10.0, 10.0);
+        let mut scene = Scene::new(10.0, 10.0);
+        scene.clip(rect, |clip| {
+            clip.add_path(a_line(PathStyle::black(), 5.0, 5.0))
+        });
+        scene
+            .cropped(&Crop::default().intersect(rect))
+            .add_path(a_line(PathStyle::black(), 6.0, 6.0));
+        let [Element::Clipped { elements, .. }] = &scene.elements[..] else {
+            panic!("expected one clip, got {:?}", scene.elements);
+        };
+        assert_eq!(elements.len(), 2);
+    }
+
+    #[test]
+    fn a_crop_past_max_nesting_drops_the_element() {
+        fn nest(scene: &mut Scene, depth: usize, crop: &Crop) {
+            if depth == 0 {
+                scene
+                    .cropped(crop)
+                    .add_path(a_line(PathStyle::black(), 5.0, 5.0));
+            } else {
+                scene.layer(0.5, |s| nest(s, depth - 1, crop));
+            }
+        }
+        let crop = Crop::default().intersect(a_box(0.0, 0.0, 10.0, 10.0));
+        let mut scene = Scene::new(10.0, 10.0);
+        nest(&mut scene, MAX_NESTING - 1, &crop);
+        let mut elements = &scene.elements;
+        for _ in 0..MAX_NESTING - 1 {
+            let [
+                Element::Layer {
+                    elements: inner, ..
+                },
+            ] = &elements[..]
+            else {
+                panic!("expected one layer, got {elements:?}");
+            };
+            elements = inner;
+        }
+        assert!(matches!(elements[..], [Element::Clipped { .. }]));
+        let mut scene = Scene::new(10.0, 10.0);
+        nest(&mut scene, MAX_NESTING, &crop);
+        let mut elements = &scene.elements;
+        for _ in 0..MAX_NESTING {
+            let [
+                Element::Layer {
+                    elements: inner, ..
+                },
+            ] = &elements[..]
+            else {
+                panic!("expected one layer, got {elements:?}");
+            };
+            elements = inner;
+        }
+        assert!(elements.is_empty(), "{elements:?}");
     }
 
     #[test]
