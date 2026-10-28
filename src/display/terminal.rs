@@ -92,17 +92,22 @@ impl Terminal {
 
     /// Enter the alt screen and raw mode, with [`TerminalOptions::default`].
     pub fn open() -> Result<Self, OpenError> {
-        Self::open_with(TerminalOptions::default())
+        Self::open_with(TerminalOptions::default(), None)
     }
 
-    /// Enter the alt screen and raw mode. Fails with [`OpenError::Busy`]
-    /// while another `Terminal` exists, and with [`OpenError::NoGraphics`]
-    /// when the terminal shows neither Kitty, Sixel nor truecolor.
-    pub fn open_with(options: TerminalOptions) -> Result<Self, OpenError> {
+    /// Enter the alt screen and raw mode, and show the frames through
+    /// `graphics`, or through the graphics that the terminal shows when
+    /// `None`. Fails with [`OpenError::Busy`] while another `Terminal`
+    /// exists, and with [`OpenError::NoGraphics`] when `graphics` is
+    /// `None` and the terminal shows neither Kitty, Sixel nor truecolor.
+    pub fn open_with(
+        options: TerminalOptions,
+        graphics: Option<TerminalGraphics>,
+    ) -> Result<Self, OpenError> {
         let claim = Claim::take()?;
         // The probe reads the replies from stdin, so it runs under the
         // claim, where no reader thread takes them.
-        let graphics = options.graphics.or_else(pick_graphics).ok_or(NoGraphics)?;
+        let graphics = graphics.or_else(pick_graphics).ok_or(NoGraphics)?;
         claim.show_through(graphics);
         let stdin_tty = io::IsTerminal::is_terminal(&io::stdin());
         enter_raw_mode(stdin_tty).map_err(OpenError::Io)?;

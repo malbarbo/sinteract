@@ -91,9 +91,6 @@ pub struct TerminalOptions {
     /// The rows of text under the frame, which `Terminal::set_footer`
     /// fills. The frame shrinks to leave them free.
     pub footer_rows: u16,
-    /// The graphics of the frames. `None` asks the terminal which ones it
-    /// shows.
-    pub graphics: Option<TerminalGraphics>,
 }
 
 /// How a terminal display or a `Printer` draws a scene.
@@ -117,7 +114,11 @@ pub enum Native {
     /// Only a window.
     Window,
     /// Only the terminal.
-    Terminal,
+    Terminal {
+        /// The graphics of the frames. `None` asks the terminal which ones
+        /// it shows.
+        graphics: Option<TerminalGraphics>,
+    },
     /// No display. Outside a session, the stage ticks at 60 Hz and draws
     /// nothing, so a game runs without a screen, as in a test. A session
     /// still opens, since the server asks for it.
@@ -213,7 +214,7 @@ impl Stage {
             });
         }
         match options.display {
-            Native::Terminal if local.get() > 1 => Err(StageError::TerminalPlayers),
+            Native::Terminal { .. } if local.get() > 1 => Err(StageError::TerminalPlayers),
             _ => Ok(local),
         }
     }
@@ -360,7 +361,9 @@ fn open_local(title: &str, options: StageOptions) -> Result<Box<dyn Display>, Op
     match options.display {
         Native::Auto => super::driver::window_or_terminal(window, options.terminal),
         Native::Window => Ok(Box::new(window()?)),
-        Native::Terminal => Ok(Box::new(Terminal::open_with(options.terminal)?)),
+        Native::Terminal { graphics } => {
+            Ok(Box::new(Terminal::open_with(options.terminal, graphics)?))
+        }
         Native::Headless => Ok(Box::new(super::headless::Headless::new())),
     }
 }
@@ -919,7 +922,7 @@ pub(super) mod tests {
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn several_local_players_need_a_window() {
-        let result = open_with(2, Some(2), Native::Terminal);
+        let result = open_with(2, Some(2), Native::Terminal { graphics: None });
         assert!(matches!(result, Err(StageError::TerminalPlayers)));
     }
 
@@ -928,7 +931,7 @@ pub(super) mod tests {
     fn no_local_players_means_the_fewest_of_the_game() {
         let range = PlayerRange::new(2, 4).expect("2 to 4 is a range");
         let options = StageOptions {
-            display: Native::Terminal,
+            display: Native::Terminal { graphics: None },
             ..StageOptions::default()
         };
         let result = Stage::open("test", range, options);

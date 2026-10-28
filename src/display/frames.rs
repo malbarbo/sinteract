@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn an_open_that_fails_leaves_the_world_with_no_stage() {
         let mut frames = Frames::new("test", || StageOptions {
-            display: Native::Terminal,
+            display: Native::Terminal { graphics: None },
             players: NonZeroU32::new(2),
             ..StageOptions::default()
         });
