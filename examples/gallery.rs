@@ -328,8 +328,10 @@ fn segments(s: &mut Scene, x: f32, y: f32, _: f32) {
     );
     // A closed shape of every segment kind.
     let shape = PathStyle {
-        closed: true,
-        stroke: Some(solid_stroke(rgb(120, 40, 140), 2.0)),
+        stroke: Some(PathStroke {
+            closed: true,
+            ..solid_stroke(rgb(120, 40, 140), 2.0)
+        }),
         ..fill(rgb(230, 200, 240))
     };
     s.add_path(
@@ -416,8 +418,10 @@ fn fill_rules(s: &mut Scene, x: f32, y: f32, _: f32) {
     {
         let style = PathStyle {
             fill_rule: rule,
-            closed: true,
-            stroke: Some(solid_stroke(rgb(0, 0, 0), 1.5)),
+            stroke: Some(PathStroke {
+                closed: true,
+                ..solid_stroke(rgb(0, 0, 0), 1.5)
+            }),
             ..fill(rgb(240, 180, 40))
         };
         // A star crosses itself.
@@ -953,34 +957,28 @@ fn chevron(s: &mut Scene, style: PathStyle, left: f32, top: f32, w: f32, h: f32)
     );
 }
 
+/// `style` with its stroke closed.
+fn closed(mut style: PathStyle) -> PathStyle {
+    if let Some(stroke) = &mut style.stroke {
+        stroke.closed = true;
+    }
+    style
+}
+
 fn rect(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
-    Path::builder(
-        PathStyle {
-            closed: true,
-            ..style
-        },
-        x,
-        y,
-    )
-    .line_to(x + w, y)
-    .line_to(x + w, y + h)
-    .line_to(x, y + h)
-    .build()
+    Path::builder(closed(style), x, y)
+        .line_to(x + w, y)
+        .line_to(x + w, y + h)
+        .line_to(x, y + h)
+        .build()
 }
 
 fn circle(s: &mut Scene, style: PathStyle, cx: f32, cy: f32, r: f32) {
     s.add_path(
-        Path::builder(
-            PathStyle {
-                closed: true,
-                ..style
-            },
-            cx - r,
-            cy,
-        )
-        .arc_to(r, r, 0.0, false, true, cx + r, cy)
-        .arc_to(r, r, 0.0, false, true, cx - r, cy)
-        .build(),
+        Path::builder(closed(style), cx - r, cy)
+            .arc_to(r, r, 0.0, false, true, cx + r, cy)
+            .arc_to(r, r, 0.0, false, true, cx - r, cy)
+            .build(),
     );
 }
 

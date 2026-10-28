@@ -6,7 +6,7 @@ source: src/image/svg_tests.rs
     <clipPath id="s0-c0"><path d="M0 0 L100 0 L100 100 L0 100"/></clipPath>
   </defs>
   <g clip-path="url(#s0-c0)">
-    <path d="M0 0 L100 0 L100 100 L0 100 Z" fill="#556b2f"/>
+    <path d="M0 0 L100 0 L100 100 L0 100" fill="#556b2f"/>
     <path d="M25 25 L100 100" fill="none" stroke="#daa520" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>

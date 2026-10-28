@@ -351,10 +351,13 @@ pub struct PathStroke {
     pub join: LineJoin,
     /// `None` is a solid stroke.
     pub dash: Option<Dash>,
+    /// Closes every sub-path, so the stroke joins at the start of each one.
+    /// A fill closes them either way, so only a stroke holds the flag.
+    pub closed: bool,
 }
 
 impl PathStroke {
-    /// A solid stroke with the default cap and join.
+    /// A solid open stroke with the default cap and join.
     pub fn new(paint: Paint, width: StrokeWidth) -> Self {
         Self {
             paint,
@@ -362,6 +365,7 @@ impl PathStroke {
             cap: LineCap::default(),
             join: LineJoin::default(),
             dash: None,
+            closed: false,
         }
     }
 }
@@ -370,9 +374,6 @@ impl PathStroke {
 pub struct PathStyle {
     pub fill: Paint,
     pub fill_rule: FillRule,
-    /// Closes every sub-path, so the stroke joins at the start of each one.
-    /// A fill closes them either way.
-    pub closed: bool,
     /// `None` draws no stroke.
     pub stroke: Option<PathStroke>,
 }

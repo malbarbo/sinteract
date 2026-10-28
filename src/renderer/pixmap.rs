@@ -1313,11 +1313,10 @@ mod tests {
         // Two squares, each stroked 6 wide from its top left corner. Only a
         // miter join covers the pixel outside that corner.
         let style = PathStyle {
-            stroke: Some(PathStroke::new(
-                Paint::rgba(0, 0, 255, 255),
-                StrokeWidth::new(6.0).unwrap(),
-            )),
-            closed: true,
+            stroke: Some(PathStroke {
+                closed: true,
+                ..PathStroke::new(Paint::rgba(0, 0, 255, 255), StrokeWidth::new(6.0).unwrap())
+            }),
             ..PathStyle::default()
         };
         let mut scene = Scene::new(80.0, 40.0);

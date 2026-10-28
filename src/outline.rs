@@ -23,10 +23,10 @@ impl Segments<'_> {
 }
 
 impl Path {
-    /// Feeds the segments to `out`. A closed path closes every sub-path, so
-    /// the stroke joins at the start of each one.
+    /// Feeds the segments to `out`. A closed stroke closes every sub-path,
+    /// so the stroke joins at the start of each one.
     pub(crate) fn outline(&self, out: &mut impl PathSink) {
-        if !self.style.closed {
+        if !self.style.stroke.as_ref().is_some_and(|s| s.closed) {
             return self.segments().outline(out);
         }
         let mut open = false;
@@ -99,11 +99,14 @@ fn feed(seg: Segment, out: &mut impl PathSink) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::scene::PathStyle;
+    use crate::scene::{Paint, PathStroke, PathStyle, StrokeWidth};
 
     fn two_squares(closed: bool) -> Path {
         let style = PathStyle {
-            closed,
+            stroke: Some(PathStroke {
+                closed,
+                ..PathStroke::new(Paint::default(), StrokeWidth::ONE)
+            }),
             ..PathStyle::default()
         };
         Path::builder(style, 0.0, 0.0)

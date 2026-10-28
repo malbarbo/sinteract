@@ -243,7 +243,6 @@ fn pad_direction(button: PadButton) -> Option<Direction> {
 fn fill(color: Rgba) -> PathStyle {
     PathStyle {
         fill: Paint::Solid(color),
-        closed: true,
         ..PathStyle::default()
     }
 }

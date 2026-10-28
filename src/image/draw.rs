@@ -146,7 +146,9 @@ impl Image {
                 } => {
                     let style = Resolved::read(style);
                     let mut path_style = style.path_style();
-                    path_style.closed = *closed;
+                    if let Some(stroke) = &mut path_style.stroke {
+                        stroke.closed = *closed;
+                    }
                     path::draw(commands, path_style, pixel_point(&style, at)).map(Leaf::Path)
                 }
                 Node::Line { style, from, to } => {
@@ -404,12 +406,12 @@ impl Resolved {
                     .line_join
                     .unwrap_or(LineJoin::Miter(OUTLINE_MITER_LIMIT)),
                 dash: self.dash.clone().and_then(|a| Dash::new(a, 0.0)),
+                closed: false,
             })
         });
         PathStyle {
             fill: paint(fill, self.fill_opacity),
             fill_rule: self.fill_rule.unwrap_or(FillRule::NonZero),
-            closed: false,
             stroke,
         }
     }
@@ -510,8 +512,8 @@ mod tests {
     fn the_parts_draw_in_order_at_their_places() {
         let pair = Image::beside(YPlace::Top, [solid(5.0, 5.0), solid(10.0, 2.0)]).unwrap();
         let pair = svg(&pair);
-        let first = pair.find(r#"d="M0 0 L5 0 L5 5 L0 5 Z""#).unwrap();
-        let second = pair.find(r#"d="M5 0 L15 0 L15 2 L5 2 Z""#).unwrap();
+        let first = pair.find(r#"d="M0 0 L5 0 L5 5 L0 5""#).unwrap();
+        let second = pair.find(r#"d="M5 0 L15 0 L15 2 L5 2""#).unwrap();
         assert!(first < second, "{pair}");
     }
 
@@ -521,7 +523,7 @@ mod tests {
         let cropped = svg(&cropped);
         assert!(cropped.contains(r#"<path d="M0 0 L4 0 L4 3 L0 3"/></clipPath>"#));
         assert!(
-            cropped.contains(r#"d="M-2 -1 L8 -1 L8 4 L-2 4 Z""#),
+            cropped.contains(r#"d="M-2 -1 L8 -1 L8 4 L-2 4""#),
             "{cropped}"
         );
     }

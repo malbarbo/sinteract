@@ -227,6 +227,7 @@ mod tests {
                     stroke: Some(PathStroke {
                         cap: LineCap::Round,
                         join: LineJoin::Bevel,
+                        closed: true,
                         ..PathStroke::new(
                             Paint::rgba(200, 0, 0, 255),
                             StrokeWidth::new(2.5).unwrap(),
@@ -234,7 +235,6 @@ mod tests {
                     }),
                     fill: Paint::rgba(10, 20, 30, 128),
                     fill_rule: FillRule::EvenOdd,
-                    closed: true,
                 },
                 0.0,
                 0.0,

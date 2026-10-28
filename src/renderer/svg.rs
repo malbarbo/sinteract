@@ -830,9 +830,9 @@ mod tests {
                 cap: LineCap::Round,
                 join: LineJoin::Bevel,
                 dash: Dash::new(vec![3.0, 2.0], 1.0),
+                closed: true,
                 ..PathStroke::new(Paint::rgba(0, 0, 0, 255), StrokeWidth::new(2.0).unwrap())
             }),
-            closed: true,
             ..PathStyle::default()
         };
         scene.add_path(rect(style, 5.0, 5.0, 40.0, 40.0));

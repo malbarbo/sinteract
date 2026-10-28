@@ -2,5 +2,5 @@
 source: src/image/svg_tests.rs
 ---
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="99" height="18" viewBox="0 0 99 18">
-  <path d="M14.570812 0 L98.480774 0 L0 17.364819 Z" fill="#2e8b57"/>
+  <path d="M14.570812 0 L98.480774 0 L0 17.364819" fill="#2e8b57"/>
 </svg>

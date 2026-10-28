@@ -231,9 +231,8 @@ fn read_paint(r: wire_paint::Reader<'_>) -> Result<Paint, ValueError> {
 fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
     write_paint(b.reborrow().init_fill(), &s.fill);
     b.set_fill_rule(fill_rule_to_wire(s.fill_rule));
-    b.set_closed(s.closed);
     // No stroke writes a transparent paint, a width of 0, the default cap
-    // and join and no dash.
+    // and join, no dash and an open path.
     let Some(stroke) = &s.stroke else {
         write_paint(b.reborrow().init_stroke(), &Paint::default());
         let (join, limit) = line_join_to_wire(LineJoin::default());
@@ -247,6 +246,7 @@ fn write_path_style(mut b: wire_path_style::Builder<'_>, s: &PathStyle) {
     let (join, limit) = line_join_to_wire(stroke.join);
     b.set_line_join(join);
     b.set_miter_limit(limit);
+    b.set_closed(stroke.closed);
     if let Some(dash) = &stroke.dash {
         b.set_dash_offset(dash.offset());
         let mut out = b.init_dash_array(dash.array().len() as u32);
@@ -271,13 +271,13 @@ fn read_path_style(r: wire_path_style::Reader<'_>) -> Result<PathStyle, ValueErr
     Ok(PathStyle {
         fill: read_paint(r.get_fill()?)?,
         fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
-        closed: r.get_closed(),
         stroke: stroke.map(|(paint, width)| PathStroke {
             paint,
             width,
             cap,
             join,
             dash,
+            closed: r.get_closed(),
         }),
     })
 }
