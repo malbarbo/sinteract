@@ -794,18 +794,15 @@ pub(crate) fn sixel_supported() -> bool {
 }
 
 /// How a [`Terminal`] or a [`Printer`] draws a scene.
-// The discriminants are the values of `TTY` while a `Terminal` shows through
-// the graphics.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-#[repr(u8)]
 pub enum TerminalGraphics {
     /// The graphics protocol of Kitty.
-    Kitty = 2,
+    Kitty,
     /// DEC Sixel.
-    Sixel = 3,
+    Sixel,
     /// Two pixels per cell, as the foreground and background of `▀`. It
     /// needs truecolor.
-    HalfBlocks = 4,
+    HalfBlocks,
 }
 
 impl TerminalGraphics {
@@ -837,13 +834,25 @@ fn pick_graphics() -> Option<TerminalGraphics> {
 // -----------------------------------------------------------------------------
 
 /// Who holds the tty: [`FREE`], a [`Terminal`] that still probes it
-/// ([`PROBING`]), one that shows through a [`TerminalGraphics`], by its
-/// discriminant, or one whose tty the panic hook put back ([`RESTORED`]).
+/// ([`PROBING`]), one that shows through a [`TerminalGraphics`]
+/// ([`showing`]), or one whose tty the panic hook put back ([`RESTORED`]).
 /// The panic hook changes it, so it is an atomic and not a lock.
 static TTY: AtomicU8 = AtomicU8::new(FREE);
 const FREE: u8 = 0;
 const PROBING: u8 = 1;
+const SHOWING_KITTY: u8 = 2;
+const SHOWING_SIXEL: u8 = 3;
+const SHOWING_HALF_BLOCKS: u8 = 4;
 const RESTORED: u8 = 5;
+
+/// The state of [`TTY`] while a [`Terminal`] shows through `graphics`.
+fn showing(graphics: TerminalGraphics) -> u8 {
+    match graphics {
+        TerminalGraphics::Kitty => SHOWING_KITTY,
+        TerminalGraphics::Sixel => SHOWING_SIXEL,
+        TerminalGraphics::HalfBlocks => SHOWING_HALF_BLOCKS,
+    }
+}
 
 /// The hold of a [`Terminal`] on the tty, released on drop.
 struct Claim;
@@ -858,7 +867,7 @@ impl Claim {
 
     /// Record the graphics that the probe picked, for the panic hook.
     fn show_through(&self, graphics: TerminalGraphics) {
-        TTY.store(graphics as u8, Ordering::Release);
+        TTY.store(showing(graphics), Ordering::Release);
     }
 
     /// Returns `true` if the panic hook put the tty back, `false`
@@ -886,16 +895,11 @@ fn restore_held() -> Option<TerminalGraphics> {
             (tag != FREE && tag != RESTORED).then_some(RESTORED)
         })
         .ok()?;
-    Some(
-        [
-            TerminalGraphics::Kitty,
-            TerminalGraphics::Sixel,
-            TerminalGraphics::HalfBlocks,
-        ]
-        .into_iter()
-        .find(|&b| b as u8 == tag)
-        .unwrap_or(TerminalGraphics::HalfBlocks),
-    )
+    Some(match tag {
+        SHOWING_KITTY => TerminalGraphics::Kitty,
+        SHOWING_SIXEL => TerminalGraphics::Sixel,
+        _ => TerminalGraphics::HalfBlocks,
+    })
 }
 
 /// Enter raw mode. With stdin redirected nobody reads the keys, and Ctrl-C
