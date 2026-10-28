@@ -63,9 +63,9 @@ pub struct TerminalOptions {
     /// The rows of text under the frame, which [`Terminal::set_footer`]
     /// fills. The frame shrinks to leave them free.
     pub footer_rows: u16,
-    /// The backend of the frames. `None` asks the terminal which one it
+    /// The graphics of the frames. `None` asks the terminal which ones it
     /// shows.
-    pub backend: Option<Backend>,
+    pub graphics: Option<TerminalGraphics>,
 }
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
@@ -85,7 +85,7 @@ pub struct Terminal {
     /// The pixmap of the next frame, the clip masks and the images of the
     /// bitmaps.
     renderer: PixmapRenderer,
-    backend: Backend,
+    backend: TerminalGraphics,
     /// `None` after [`super::Display::close`].
     active: Option<Active>,
     /// The scene of the last present, drawn again after a resize.
@@ -122,7 +122,7 @@ impl Terminal {
         let claim = Claim::take()?;
         // The probe reads the replies from stdin, so it runs under the
         // claim, where no reader thread takes them.
-        let backend = options.backend.or_else(pick_backend).ok_or(NoGraphics)?;
+        let backend = options.graphics.or_else(pick_backend).ok_or(NoGraphics)?;
         claim.show_through(backend);
         let stdin_tty = io::IsTerminal::is_terminal(&io::stdin());
         enter_raw_mode(stdin_tty).map_err(OpenError::Io)?;
@@ -546,12 +546,12 @@ impl Printer {
     /// prints its values as text then. The probe runs once per process.
     pub fn new() -> Result<Self, NoGraphics> {
         let backend = pick_backend().ok_or(NoGraphics)?;
-        Ok(Self::with_backend(backend))
+        Ok(Self::with_graphics(backend))
     }
 
-    /// Prints through `backend`, whatever the terminal shows.
-    pub fn with_backend(backend: Backend) -> Self {
-        Self::with_painter(Painter::for_stdout(backend))
+    /// Prints through `graphics`, whatever the terminal shows.
+    pub fn with_graphics(graphics: TerminalGraphics) -> Self {
+        Self::with_painter(Painter::for_stdout(graphics))
     }
 
     /// Print `scene` at the cursor, and leave the cursor on the line below
@@ -566,10 +566,10 @@ impl Printer {
     fn with_painter(painter: Painter) -> Self {
         let mut renderer = PixmapRenderer::default();
         match painter.backend() {
-            Backend::Sixel => renderer.set_background(SIXEL_BACKGROUND),
+            TerminalGraphics::Sixel => renderer.set_background(SIXEL_BACKGROUND),
             // Kitty shows transparency, and a half-block cell reads a
             // premultiplied pixel as the pixel over black.
-            Backend::Kitty | Backend::HalfBlocks => {}
+            TerminalGraphics::Kitty | TerminalGraphics::HalfBlocks => {}
         }
         Self {
             renderer,
@@ -616,29 +616,29 @@ enum Painter {
 
 impl Painter {
     /// The painter of `backend`, which sends a Kitty image as a PNG.
-    fn new(backend: Backend) -> Self {
+    fn new(backend: TerminalGraphics) -> Self {
         match backend {
-            Backend::Kitty => Painter::Kitty(KittyMedium::DirectPng),
-            Backend::Sixel => Painter::Sixel(sixel::Encoder::new()),
-            Backend::HalfBlocks => Painter::HalfBlocks(HalfBlockScreen::default()),
+            TerminalGraphics::Kitty => Painter::Kitty(KittyMedium::DirectPng),
+            TerminalGraphics::Sixel => Painter::Sixel(sixel::Encoder::new()),
+            TerminalGraphics::HalfBlocks => Painter::HalfBlocks(HalfBlockScreen::default()),
         }
     }
 
     /// The painter of `backend` for the terminal on stdout. It sends a
     /// Kitty image through shared memory when the probe found that the
     /// terminal reads it.
-    fn for_stdout(backend: Backend) -> Self {
+    fn for_stdout(backend: TerminalGraphics) -> Self {
         match backend {
-            Backend::Kitty => Painter::Kitty(KittyMedium::for_stdout()),
-            Backend::Sixel | Backend::HalfBlocks => Painter::new(backend),
+            TerminalGraphics::Kitty => Painter::Kitty(KittyMedium::for_stdout()),
+            TerminalGraphics::Sixel | TerminalGraphics::HalfBlocks => Painter::new(backend),
         }
     }
 
-    fn backend(&self) -> Backend {
+    fn backend(&self) -> TerminalGraphics {
         match self {
-            Painter::Kitty(_) => Backend::Kitty,
-            Painter::Sixel(_) => Backend::Sixel,
-            Painter::HalfBlocks(_) => Backend::HalfBlocks,
+            Painter::Kitty(_) => TerminalGraphics::Kitty,
+            Painter::Sixel(_) => TerminalGraphics::Sixel,
+            Painter::HalfBlocks(_) => TerminalGraphics::HalfBlocks,
         }
     }
 
@@ -798,7 +798,7 @@ pub(crate) fn sixel_supported() -> bool {
 // the backend.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
-pub enum Backend {
+pub enum TerminalGraphics {
     /// The graphics protocol of Kitty.
     Kitty = 2,
     /// DEC Sixel.
@@ -808,25 +808,25 @@ pub enum Backend {
     HalfBlocks = 4,
 }
 
-impl Backend {
-    /// Returns `true` if the terminal on stdout shows this backend, `false`
-    /// otherwise.
+impl TerminalGraphics {
+    /// Returns `true` if the terminal on stdout shows these graphics,
+    /// `false` otherwise.
     pub fn is_supported(self) -> bool {
         match self {
-            Backend::Kitty => kitty_supported(),
-            Backend::Sixel => sixel_supported(),
-            Backend::HalfBlocks => half_blocks_supported(),
+            TerminalGraphics::Kitty => kitty_supported(),
+            TerminalGraphics::Sixel => sixel_supported(),
+            TerminalGraphics::HalfBlocks => half_blocks_supported(),
         }
     }
 }
 
-fn pick_backend() -> Option<Backend> {
+fn pick_backend() -> Option<TerminalGraphics> {
     if kitty_supported() {
-        Some(Backend::Kitty)
+        Some(TerminalGraphics::Kitty)
     } else if sixel_supported() {
-        Some(Backend::Sixel)
+        Some(TerminalGraphics::Sixel)
     } else if half_blocks_supported() {
-        Some(Backend::HalfBlocks)
+        Some(TerminalGraphics::HalfBlocks)
     } else {
         None
     }
@@ -837,7 +837,7 @@ fn pick_backend() -> Option<Backend> {
 // -----------------------------------------------------------------------------
 
 /// Who holds the tty: [`FREE`], a [`Terminal`] that still probes it
-/// ([`PROBING`]), one that shows through a [`Backend`], by its
+/// ([`PROBING`]), one that shows through a [`TerminalGraphics`], by its
 /// discriminant, or one whose tty the panic hook put back ([`RESTORED`]).
 /// The panic hook changes it, so it is an atomic and not a lock.
 static TTY: AtomicU8 = AtomicU8::new(FREE);
@@ -857,7 +857,7 @@ impl Claim {
     }
 
     /// Record the backend that the probe picked, for the panic hook.
-    fn show_through(&self, backend: Backend) {
+    fn show_through(&self, backend: TerminalGraphics) {
         TTY.store(backend as u8, Ordering::Release);
     }
 
@@ -880,17 +880,21 @@ impl Drop for Claim {
 /// that holds it. `None` when nobody holds it or the tty is already back,
 /// and half-blocks while the probe runs, since only Kitty needs more than
 /// leaving the alt screen.
-fn restore_held() -> Option<Backend> {
+fn restore_held() -> Option<TerminalGraphics> {
     let tag = TTY
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |tag| {
             (tag != FREE && tag != RESTORED).then_some(RESTORED)
         })
         .ok()?;
     Some(
-        [Backend::Kitty, Backend::Sixel, Backend::HalfBlocks]
-            .into_iter()
-            .find(|&b| b as u8 == tag)
-            .unwrap_or(Backend::HalfBlocks),
+        [
+            TerminalGraphics::Kitty,
+            TerminalGraphics::Sixel,
+            TerminalGraphics::HalfBlocks,
+        ]
+        .into_iter()
+        .find(|&b| b as u8 == tag)
+        .unwrap_or(TerminalGraphics::HalfBlocks),
     )
 }
 
@@ -920,9 +924,9 @@ fn enter_raw_mode(stdin_tty: bool) -> io::Result<()> {
 /// Leave the alt screen and raw mode. Kitty keeps an image across the flip
 /// of the alt screen, so a frame it shows goes by id. Sixel and half-blocks
 /// output lives in the alt screen and goes with it.
-fn leave(backend: Backend, frame_shown: bool) {
+fn leave(backend: TerminalGraphics, frame_shown: bool) {
     let mut stdout = io::stdout().lock();
-    if frame_shown && backend == Backend::Kitty {
+    if frame_shown && backend == TerminalGraphics::Kitty {
         let _ = delete_kitty_image(&mut stdout, KITTY_ANIMATION_ID);
     }
     // A terminal ignores the pop of a protocol that it does not speak and
@@ -1269,12 +1273,12 @@ impl Footer {
 
 /// The rows of cells that a frame `height` pixels high takes on `backend`,
 /// with cells `cell_height` pixels high.
-fn frame_rows(backend: Backend, height: u32, cell_height: u32) -> u16 {
+fn frame_rows(backend: TerminalGraphics, height: u32, cell_height: u32) -> u16 {
     let rows = match backend {
-        Backend::HalfBlocks => height.div_ceil(2),
-        Backend::Kitty => height.div_ceil(cell_height),
+        TerminalGraphics::HalfBlocks => height.div_ceil(2),
+        TerminalGraphics::Kitty => height.div_ceil(cell_height),
         // Sixel draws six rows of pixels at a time.
-        Backend::Sixel => height.next_multiple_of(6).div_ceil(cell_height),
+        TerminalGraphics::Sixel => height.next_multiple_of(6).div_ceil(cell_height),
     };
     u16::try_from(rows).unwrap_or(u16::MAX)
 }
@@ -1302,7 +1306,7 @@ fn cell_pixels() -> (u32, u32) {
 /// `footer_rows` under it. `None` when crossterm cannot read the size, as
 /// when stdout is a file.
 fn target_pixels_for_backend(
-    backend: Backend,
+    backend: TerminalGraphics,
     cell: (u32, u32),
     footer_rows: u16,
 ) -> Option<(u32, u32)> {
@@ -1314,10 +1318,10 @@ fn target_pixels_for_backend(
 /// The pixmap pixels in a cell, across and down. In Kitty and Sixel a
 /// pixmap pixel is a screen pixel, and in half-blocks a cell holds one
 /// pixmap pixel across and two down.
-fn pixmap_per_cell(backend: Backend, cell: (u32, u32)) -> (u32, u32) {
+fn pixmap_per_cell(backend: TerminalGraphics, cell: (u32, u32)) -> (u32, u32) {
     match backend {
-        Backend::Kitty | Backend::Sixel => cell,
-        Backend::HalfBlocks => (1, 2),
+        TerminalGraphics::Kitty | TerminalGraphics::Sixel => cell,
+        TerminalGraphics::HalfBlocks => (1, 2),
     }
 }
 
@@ -1354,7 +1358,7 @@ struct CellMap {
 
 impl CellMap {
     /// A frame at `scale`.
-    fn new(backend: Backend, cell: (u32, u32), scale: f32) -> Self {
+    fn new(backend: TerminalGraphics, cell: (u32, u32), scale: f32) -> Self {
         let (pw, ph) = pixmap_per_cell(backend, cell);
         Self {
             per_cell: (pw as f32 / scale, ph as f32 / scale),
@@ -1362,7 +1366,7 @@ impl CellMap {
     }
 
     /// Before the first frame, the largest scale of the backend.
-    fn before_frames(backend: Backend, cell: (u32, u32)) -> Self {
+    fn before_frames(backend: TerminalGraphics, cell: (u32, u32)) -> Self {
         Self::new(backend, cell, max_scale_for_backend(backend, cell))
     }
 
@@ -1378,7 +1382,7 @@ impl CellMap {
 /// logical pixel never grows past [`pixel_density`] screen pixels. A
 /// pixmap pixel covers `cw / pw` by `ch / ph` screen pixels, so the cap
 /// divides by the larger of the two.
-fn max_scale_for_backend(backend: Backend, (cw, ch): (u32, u32)) -> f32 {
+fn max_scale_for_backend(backend: TerminalGraphics, (cw, ch): (u32, u32)) -> f32 {
     let (pw, ph) = pixmap_per_cell(backend, (cw, ch));
     pixel_density(ch) / (cw as f32 / pw as f32).max(ch as f32 / ph as f32)
 }
@@ -1400,7 +1404,7 @@ fn pixel_density(ch: u32) -> f32 {
 /// under it. The frame shrinks to fit the cell grid when the grid size is
 /// known, and the cap of the backend applies either way, because
 /// half-blocks pack two rows per cell even without a known grid.
-fn scale_for_backend(backend: Backend, width: f32, height: f32, footer_rows: u16) -> f32 {
+fn scale_for_backend(backend: TerminalGraphics, width: f32, height: f32, footer_rows: u16) -> f32 {
     let cell = cell_pixels();
     let target = target_pixels_for_backend(backend, cell, footer_rows);
     capped_scale(width, height, target, max_scale_for_backend(backend, cell))
@@ -1798,11 +1802,11 @@ mod tests {
     #[test]
     fn a_cell_maps_to_the_center_of_its_part_of_the_scene() {
         // Kitty at scale 0.5 with 10 by 20 cells: a cell covers 20 by 40 units.
-        let kitty = CellMap::new(Backend::Kitty, (10, 20), 0.5);
+        let kitty = CellMap::new(TerminalGraphics::Kitty, (10, 20), 0.5);
         assert_eq!(kitty.to_scene(0, 0), (10.0, 20.0));
         assert_eq!(kitty.to_scene(3, 1), (70.0, 60.0));
         // Half-blocks at scale 0.25: one pixmap pixel across and two down.
-        let blocks = CellMap::new(Backend::HalfBlocks, (10, 20), 0.25);
+        let blocks = CellMap::new(TerminalGraphics::HalfBlocks, (10, 20), 0.25);
         assert_eq!(blocks.to_scene(0, 0), (2.0, 4.0));
     }
 
@@ -1822,10 +1826,10 @@ mod tests {
 
     #[test]
     fn a_frame_takes_the_rows_of_its_backend() {
-        assert_eq!(frame_rows(Backend::HalfBlocks, 5, 16), 3);
-        assert_eq!(frame_rows(Backend::Kitty, 33, 16), 3);
+        assert_eq!(frame_rows(TerminalGraphics::HalfBlocks, 5, 16), 3);
+        assert_eq!(frame_rows(TerminalGraphics::Kitty, 33, 16), 3);
         // 32 pixels make six bands of six, which reach 36.
-        assert_eq!(frame_rows(Backend::Sixel, 32, 16), 3);
+        assert_eq!(frame_rows(TerminalGraphics::Sixel, 32, 16), 3);
     }
 
     #[test]
@@ -1874,7 +1878,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             state.footer.lock().unwrap().top,
-            Some(frame_rows(Backend::Sixel, 32, cell_pixels().1))
+            Some(frame_rows(TerminalGraphics::Sixel, 32, cell_pixels().1))
         );
         assert!(String::from_utf8_lossy(&out).ends_with("log\x1b[?7h"));
     }
@@ -1895,22 +1899,31 @@ mod tests {
     fn half_blocks_cap_a_logical_pixel_at_a_screen_pixel() {
         // An 8 by 16 cell holds one pixmap pixel of 8 by 8 screen pixels.
         assert_eq!(
-            max_scale_for_backend(Backend::HalfBlocks, (8, 16)),
+            max_scale_for_backend(TerminalGraphics::HalfBlocks, (8, 16)),
             1.0 / 8.0
         );
-        assert_eq!(max_scale_for_backend(Backend::Kitty, (8, 16)), 1.0);
+        assert_eq!(max_scale_for_backend(TerminalGraphics::Kitty, (8, 16)), 1.0);
     }
 
     #[test]
     fn a_taller_cell_than_the_reference_raises_the_cap() {
         // A cell of 38 pixels is twice the reference, as at a HiDPI of 2.
-        assert_eq!(max_scale_for_backend(Backend::Kitty, (18, 38)), 2.0);
-        assert_eq!(max_scale_for_backend(Backend::Sixel, (18, 38)), 2.0);
         assert_eq!(
-            max_scale_for_backend(Backend::HalfBlocks, (18, 38)),
+            max_scale_for_backend(TerminalGraphics::Kitty, (18, 38)),
+            2.0
+        );
+        assert_eq!(
+            max_scale_for_backend(TerminalGraphics::Sixel, (18, 38)),
+            2.0
+        );
+        assert_eq!(
+            max_scale_for_backend(TerminalGraphics::HalfBlocks, (18, 38)),
             2.0 / 19.0
         );
-        assert_eq!(max_scale_for_backend(Backend::Kitty, (10, 19)), 1.0);
+        assert_eq!(
+            max_scale_for_backend(TerminalGraphics::Kitty, (10, 19)),
+            1.0
+        );
     }
 
     #[test]
@@ -2093,7 +2106,7 @@ mod tests {
     /// a frame that does not replace the one before.
     fn sixel_state() -> FrameState {
         FrameState {
-            painter: Painter::new(Backend::Sixel),
+            painter: Painter::new(TerminalGraphics::Sixel),
             bytes: Vec::new(),
             frame_size: None,
             footer: Arc::new(Mutex::new(Footer::new(0))),
@@ -2152,7 +2165,7 @@ mod tests {
 
     #[test]
     fn a_printer_prints_nothing_while_a_session_holds_the_tty() {
-        let mut printer = Printer::with_painter(Painter::new(Backend::HalfBlocks));
+        let mut printer = Printer::with_painter(Painter::new(TerminalGraphics::HalfBlocks));
         let claim = Claim::take().expect("no session runs in a test");
         assert!(matches!(
             printer.print(&Scene::new(4.0, 4.0)),
@@ -2164,14 +2177,14 @@ mod tests {
     /// The mark of each backend in what it writes, which the other two
     /// never write. A Kitty image is a graphics escape, a Sixel image a
     /// device control string, and half-blocks are cells of one character.
-    const MARKS: [(Backend, &[u8]); 3] = [
-        (Backend::Kitty, b"\x1b_Ga=T"),
-        (Backend::Sixel, b"\x1bP"),
-        (Backend::HalfBlocks, "▀".as_bytes()),
+    const MARKS: [(TerminalGraphics, &[u8]); 3] = [
+        (TerminalGraphics::Kitty, b"\x1b_Ga=T"),
+        (TerminalGraphics::Sixel, b"\x1bP"),
+        (TerminalGraphics::HalfBlocks, "▀".as_bytes()),
     ];
 
     /// What [`Painter::write_image`] writes for a small blue image.
-    fn dispatch(backend: Backend, placement: Placement) -> Vec<u8> {
+    fn dispatch(backend: TerminalGraphics, placement: Placement) -> Vec<u8> {
         let pixmap = solid(4, 4, 0, 0, 255);
         let mut out: Vec<u8> = Vec::new();
         Painter::new(backend)
@@ -2187,8 +2200,8 @@ mod tests {
             let pixmap = printer.renderer.render(&Scene::new(4.0, 4.0)).unwrap();
             let p = pixmap.pixels()[0];
             let expected = match backend {
-                Backend::Sixel => [255, 255, 255, 255],
-                Backend::Kitty | Backend::HalfBlocks => [0, 0, 0, 0],
+                TerminalGraphics::Sixel => [255, 255, 255, 255],
+                TerminalGraphics::Kitty | TerminalGraphics::HalfBlocks => [0, 0, 0, 0],
             };
             assert_eq!(
                 [p.red(), p.green(), p.blue(), p.alpha()],
@@ -2271,7 +2284,7 @@ mod tests {
                 .expect("write ok");
             assert_eq!(
                 contains(&out, b"\x1b[2J"),
-                backend != Backend::Kitty,
+                backend != TerminalGraphics::Kitty,
                 "{backend:?}"
             );
         }
@@ -2280,7 +2293,7 @@ mod tests {
     #[test]
     fn a_cleared_half_block_frame_writes_every_cell_again() {
         let pixmap = solid(4, 2, 0, 0, 255);
-        let mut painter = Painter::new(Backend::HalfBlocks);
+        let mut painter = Painter::new(TerminalGraphics::HalfBlocks);
         let cells = |painter: &mut Painter| {
             let mut out: Vec<u8> = Vec::new();
             painter
@@ -2352,11 +2365,11 @@ mod tests {
     fn the_kitty_frame_carries_the_animation_id_and_the_still_image_none() {
         let id = format!(",i={KITTY_ANIMATION_ID};");
         assert!(contains(
-            &dispatch(Backend::Kitty, Placement::Frame),
+            &dispatch(TerminalGraphics::Kitty, Placement::Frame),
             id.as_bytes()
         ));
         assert!(!contains(
-            &dispatch(Backend::Kitty, Placement::Still),
+            &dispatch(TerminalGraphics::Kitty, Placement::Still),
             b",i="
         ));
     }
@@ -2485,9 +2498,9 @@ mod tests {
         assert_eq!(restore_held(), None);
         let claim = Claim::take().expect("free");
         assert!(matches!(Claim::take(), Err(OpenError::Busy)));
-        claim.show_through(Backend::Kitty);
+        claim.show_through(TerminalGraphics::Kitty);
         assert!(!claim.restored());
-        assert_eq!(restore_held(), Some(Backend::Kitty));
+        assert_eq!(restore_held(), Some(TerminalGraphics::Kitty));
         assert!(claim.restored());
         assert_eq!(restore_held(), None);
         assert!(matches!(Claim::take(), Err(OpenError::Busy)));
