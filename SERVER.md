@@ -56,9 +56,12 @@ A engine lê as mensagens do servidor (`SIS1`) no fd 3 e escreve as suas
 (`SIE1`) no fd 4. Os números são fixos, porque as permissões do Deno já
 nomeiam `/dev/fd/3` e `/dev/fd/4`. O módulo `session` dá esses nomes como
 `SESSION_VAR`, `SERVER_TO_ENGINE_FD` e `ENGINE_TO_SERVER_FD`. O crate
-`command-fds` põe os pipes no lugar. O `Command` guarda as pontas da
-engine, então o servidor o descarta logo depois do `spawn`. Senão, o
-servidor guarda a ponta de escrita do fd 4 e nunca vê o fim dele.
+`command-fds` põe os pipes no lugar. Num unix, a engine confere que o
+fd 3 e o fd 4 são pipes ou sockets, e um descritor de outro tipo, como o
+de um `3>arquivo` num shell, faz o `Stage::open` falhar com o
+`StageError::NotSessionFd`. O `Command` guarda as pontas da engine,
+então o servidor o descarta logo depois do `spawn`. Senão, o servidor
+guarda a ponta de escrita do fd 4 e nunca vê o fim dele.
 
 O `stdin`, o `stdout` e o `stderr` ficam livres para o programa. Um `print`
 do aluno não passa pelos pipes da sessão e não estraga a partida. O

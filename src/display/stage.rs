@@ -182,6 +182,10 @@ pub enum StageError {
     /// of its own, and fd 3 or fd 4 is not open, or the platform has no such
     /// descriptors.
     NoSession,
+    /// `fd`, which is fd 3 or fd 4, is open and is not a pipe or a socket,
+    /// so no server opened it for the session, as with a `3>file` in a
+    /// shell.
+    NotSessionFd { fd: i32 },
 }
 
 impl Stage {
@@ -478,6 +482,12 @@ impl fmt::Display for StageError {
             StageError::NoSession => {
                 write!(f, "{SESSION_VAR} is set, and fd 3 or fd 4 is not open")
             }
+            StageError::NotSessionFd { fd } => {
+                write!(
+                    f,
+                    "fd {fd} is not a pipe or a socket, so no server opened it"
+                )
+            }
         }
     }
 }
@@ -490,7 +500,8 @@ impl std::error::Error for StageError {
             StageError::Players { .. }
             | StageError::TerminalPlayers { .. }
             | StageError::NoWindowPlayers
-            | StageError::NoSession => None,
+            | StageError::NoSession
+            | StageError::NotSessionFd { .. } => None,
         }
     }
 }
@@ -722,24 +733,50 @@ fn take_session_fds() -> Result<(File, File), StageError> {
 
     use crate::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD};
 
-    // SAFETY: F_GETFD only reads the flags of a descriptor, and fails on
-    // one that is not open.
-    let open = |fd| unsafe { libc::fcntl(fd, libc::F_GETFD) } != -1;
-    if !open(SERVER_TO_ENGINE_FD) || !open(ENGINE_TO_SERVER_FD) {
-        return Err(StageError::NoSession);
-    }
+    check_session_fd(SERVER_TO_ENGINE_FD)?;
+    check_session_fd(ENGINE_TO_SERVER_FD)?;
     if TAKEN.swap(true, Ordering::SeqCst) {
         return Err(StageError::Open(OpenError::Busy));
     }
-    // SAFETY: both are open, SINTERACT_SESSION or a build with no display
-    // of its own says that the server opened them for the session, and
-    // TAKEN gives them to one stage.
+    // SAFETY: both are open, and on unix both are a pipe or a socket, which
+    // a server gives and a shell does not. TAKEN gives them to one stage.
     Ok(unsafe {
         (
             File::from_raw_fd(SERVER_TO_ENGINE_FD),
             File::from_raw_fd(ENGINE_TO_SERVER_FD),
         )
     })
+}
+
+/// Fails unless `fd` is a pipe or a socket, which only a server gives a
+/// process. A closed `fd` gives [`StageError::NoSession`].
+#[cfg(unix)]
+fn check_session_fd(fd: i32) -> Result<(), StageError> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: fstat writes one stat, and fails on a descriptor that is not
+    // open.
+    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
+        return Err(StageError::NoSession);
+    }
+    // SAFETY: fstat succeeded, so it wrote the stat.
+    let kind = unsafe { stat.assume_init() }.st_mode & libc::S_IFMT;
+    if kind == libc::S_IFIFO || kind == libc::S_IFSOCK {
+        Ok(())
+    } else {
+        Err(StageError::NotSessionFd { fd })
+    }
+}
+
+/// Fails unless `fd` is open. The hosts of wasi have no fstat, so the type
+/// of `fd` goes unchecked.
+#[cfg(target_os = "wasi")]
+fn check_session_fd(fd: i32) -> Result<(), StageError> {
+    // SAFETY: F_GETFD only reads the flags of a descriptor, and fails on
+    // one that is not open.
+    if unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1 {
+        return Err(StageError::NoSession);
+    }
+    Ok(())
 }
 
 /// Let the next stage take fd 3 and fd 4. Only a wasi host keeps the
@@ -779,6 +816,30 @@ pub(super) mod tests {
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
         // SAFETY: pipe opened both, and nothing else owns them.
         unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) }
+    }
+
+    #[test]
+    fn a_pipe_or_a_socket_can_carry_a_session() {
+        let (read, write) = pipe();
+        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+        for fd in [
+            read.as_raw_fd(),
+            write.as_raw_fd(),
+            a.as_raw_fd(),
+            b.as_raw_fd(),
+        ] {
+            assert!(check_session_fd(fd).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_file_cannot_carry_a_session() {
+        let file = File::open(file!()).unwrap();
+        let fd = file.as_raw_fd();
+        let Err(StageError::NotSessionFd { fd: got }) = check_session_fd(fd) else {
+            panic!("a file carries a session");
+        };
+        assert_eq!(got, fd);
     }
 
     /// The server side of a session on two pipes.
