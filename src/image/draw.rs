@@ -185,6 +185,12 @@ fn affine(region: ImageBox, at: Point) -> Affine {
     }
 }
 
+/// `v` for the scene, at most the largest `f32`, so a stroke too wide for
+/// an `f32` covers the canvas and the path keeps its fill.
+fn to_f32(v: Length) -> f32 {
+    v.get().min(f64::from(f32::MAX)) as f32
+}
+
 /// A point of a path with `style`, moved by `at`, for the scene. A thin
 /// outline on a half pixel covers one row of pixels, and on a whole pixel it
 /// blurs over two, so an aligned style puts the point on the center of its
@@ -234,12 +240,12 @@ impl Resolved {
                 Attribute::FillOpacity(o) => _ = s.fill_opacity.get_or_insert(o.get() as f32),
                 Attribute::FillRule(r) => _ = s.fill_rule.get_or_insert(*r),
                 Attribute::Stroke(c) => _ = s.stroke.get_or_insert(*c),
-                Attribute::StrokeWidth(w) => _ = s.stroke_width.get_or_insert(w.get() as f32),
+                Attribute::StrokeWidth(w) => _ = s.stroke_width.get_or_insert(to_f32(*w)),
                 Attribute::StrokeOpacity(o) => _ = s.stroke_opacity.get_or_insert(o.get() as f32),
                 Attribute::StrokeDashArray(values) => {
                     _ = s
                         .dash
-                        .get_or_insert_with(|| values.iter().map(|v| v.get() as f32).collect());
+                        .get_or_insert_with(|| values.iter().copied().map(to_f32).collect());
                 }
                 Attribute::StrokeLineCap(c) => _ = s.line_cap.get_or_insert(*c),
                 Attribute::StrokeLineJoin(j) => _ = s.line_join.get_or_insert(*j),
@@ -489,6 +495,21 @@ mod tests {
         assert_eq!(path_style.fill(), None);
         assert_eq!(stroke.cap, LineCap::Round);
         assert_eq!(stroke.join, LineJoin::Miter(OUTLINE_MITER_LIMIT));
+    }
+
+    #[test]
+    fn a_stroke_too_wide_for_an_f32_keeps_the_path() {
+        let style = Style::new([
+            Attribute::Fill(red()),
+            Attribute::Stroke(red()),
+            Attribute::StrokeWidth(length(1.0e300)),
+            Attribute::StrokeDashArray([length(1.0), length(1.0e300)].into()),
+        ]);
+        let path_style = Resolved::read(&style).path_style(true).unwrap();
+        let stroke = path_style.stroke().unwrap();
+        assert!(path_style.fill().is_some());
+        assert_eq!(stroke.width.get(), f32::MAX);
+        assert_eq!(stroke.dash.as_ref().unwrap().array(), [1.0, f32::MAX]);
     }
 
     #[test]
