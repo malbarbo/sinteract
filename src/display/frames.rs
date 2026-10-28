@@ -6,7 +6,7 @@ use std::collections::{HashMap, VecDeque};
 use std::thread;
 use std::time::Instant;
 
-use super::{Native, PresentError, Stage, StageError, StageEvent};
+use super::{PresentError, Stage, StageError, StageEvent, StageMode};
 use crate::event::{InputEvent, Interrupt, KeyEvent, KeyKind, PadEvent};
 use crate::scene::Scene;
 use crate::session::{Player, PlayerRange, Target};
@@ -24,7 +24,7 @@ use crate::session::{Player, PlayerRange, Target};
 /// frame per tick of the server.
 pub struct Frames {
     title: String,
-    display: Box<dyn FnMut() -> Native>,
+    mode: Box<dyn FnMut() -> StageMode>,
     state: State,
     /// The lines of [`Frames::print_line`] while a stage keeps rows for
     /// them, at most as many as the rows.
@@ -83,14 +83,14 @@ const PLAYERS: PlayerRange = PlayerRange::new(1, 1).expect("1 to 1 is a range");
 
 impl Frames {
     /// The frames of a program, with `title` on the window, and the
-    /// display of each stage from `display`, with the local players. The
-    /// call comes when a world opens its stage, so a `display` that calls
-    /// [`Native::auto`] checks for a window only in a program that shows
+    /// mode of each stage from `mode`, with the local players. The
+    /// call comes when a world opens its stage, so a `mode` that calls
+    /// [`StageMode::auto`] checks for a window only in a program that shows
     /// one.
-    pub fn new(title: impl Into<String>, display: impl FnMut() -> Native + 'static) -> Self {
+    pub fn new(title: impl Into<String>, mode: impl FnMut() -> StageMode + 'static) -> Self {
         Frames {
             title: title.into(),
-            display: Box::new(display),
+            mode: Box::new(mode),
             state: State::Closed,
             footer: Vec::new(),
         }
@@ -118,7 +118,7 @@ impl Frames {
     /// [`ShowError::Unavailable`].
     pub fn open(&mut self, players: PlayerRange) -> Result<Vec<(Player, String)>, StageError> {
         debug_assert!(!self.is_open(), "the stage of the last world is open");
-        match Stage::open(&self.title, players, (self.display)()) {
+        match Stage::open(&self.title, players, (self.mode)()) {
             Ok((stage, players)) => {
                 self.state = State::Open(Open {
                     stage,
@@ -310,8 +310,8 @@ mod tests {
 
     /// A display that never opens a screen, so no test opens the tty or
     /// connects to a window system.
-    fn headless() -> Native {
-        Native::Headless { players: None }
+    fn headless() -> StageMode {
+        StageMode::Headless { players: None }
     }
 
     /// Frames with the stage of a session open, as after a first show.
@@ -402,7 +402,7 @@ mod tests {
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn a_show_with_more_players_in_the_options_fails() {
-        let mut frames = Frames::new("test", || Native::Headless {
+        let mut frames = Frames::new("test", || StageMode::Headless {
             players: NonZeroU32::new(2),
         });
         assert!(matches!(
@@ -414,7 +414,7 @@ mod tests {
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn an_open_that_fails_leaves_the_world_with_no_stage() {
-        let mut frames = Frames::new("test", || Native::Terminal {
+        let mut frames = Frames::new("test", || StageMode::Terminal {
             options: crate::display::TerminalOptions::default(),
             graphics: None,
         });

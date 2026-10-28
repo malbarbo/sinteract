@@ -664,12 +664,12 @@ O esboço deixa de fora:
 A engine abre um `Stage`. Com `SINTERACT_SESSION` no ambiente, ou num
 build sem tela própria, como o de wasi, o `Stage` manda o `hello`, espera
 o `start`, lê o fd 3 e escreve no fd 4. Sem ela, ele abre uma janela ou o
-terminal, como o `Native` pede, e o usuário é o jogador 1, então o
-mesmo jogo roda sem servidor. O `Native::auto` monta o event loop das
+terminal, como o `StageMode` pede, e o usuário é o jogador 1, então o
+mesmo jogo roda sem servidor. O `StageMode::auto` monta o event loop das
 janelas e escolhe o terminal quando o loop não monta, como num ssh sem
-servidor gráfico. O `players` do `Native::Window` pede mais jogadores,
+servidor gráfico. O `players` do `StageMode::Window` pede mais jogadores,
 até `MAX_LOCAL_PLAYERS`, e um jogo com mínimo acima de 1 tem esse mínimo
-sem pedir. O `Native::Terminal` mostra um jogador só, e um jogo com
+sem pedir. O `StageMode::Terminal` mostra um jogador só, e um jogo com
 mínimo acima de 1 falha nele com o `StageError::TerminalPlayers`, que
 traz a faixa do jogo. Cada jogador ganha uma janela, com o número dele no
 título e um apelido vazio, e o usuário testa o jogo trocando o foco. Fechar
@@ -685,13 +685,13 @@ sai. O `Stage::opens_session` diz antes do `open` qual dos dois caminhos
 ele segue:
 
 ```rust
-use sinteract::display::{Native, Stage, StageEvent, TerminalOptions};
+use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
 use sinteract::event::Interrupt;
 use sinteract::session::{PlayerRange, Target};
 
 let players = PlayerRange::new(1, 4).expect("1 a 4 é uma faixa");
-let display = Native::auto(None, TerminalOptions::default());
-let (mut stage, jogadores) = Stage::open("jogo", players, display)?;
+let mode = StageMode::auto(None, TerminalOptions::default());
+let (mut stage, jogadores) = Stage::open("jogo", players, mode)?;
 mundo.start(&jogadores); // cada Player com o apelido, o jogador 1 primeiro
 loop {
     match stage.wait(None) {
@@ -740,14 +740,15 @@ depois de mandar as cenas guardadas. Um mundo que desenha só no `Tick`
 mostra a cena no tick seguinte, com um quadro de atraso. Um
 mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
 vários jogadores abre o stage com o `open`, que devolve cada jogador com
-o apelido, e manda a cena de cada um com o `show_to`. Os jogadores locais
-vêm só do `Native` da função que o `Frames::new` recebe, tanto no `open`
-quanto no `show`, que falha com o `StageError::Players` quando ele pede
-mais de um. O `Frames` chama a função quando um mundo abre o stage, então
-um programa que não mostra nada não monta o event loop das janelas. A janela de cada
-jogador ganha o tamanho da cena do primeiro `show_to`. O `players` dá os
-jogadores do mundo. Com o `Native::Headless`, fora de uma sessão, o stage
-abre sem tela, como num teste. Ele dá um `Tick` a 60 Hz e não desenha
+o apelido, e manda a cena de cada um com o `show_to`. Os jogadores
+locais vêm só do `StageMode` da função que o `Frames::new` recebe, tanto
+no `open` quanto no `show`, que falha com o `StageError::Players` quando
+ele pede mais de um. O `Frames` chama a função quando um mundo abre o
+stage, então um programa que não mostra nada não monta o event loop das
+janelas. A janela de cada jogador ganha o tamanho da cena do primeiro
+`show_to`. O `players` dá os jogadores do mundo. Com o
+`StageMode::Headless`, fora de uma sessão, o stage abre sem tela, como
+num teste. Ele dá um `Tick` a 60 Hz e não desenha
 nada, e os jogadores vêm do `players` dele como numa janela.
 Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
 `ShowError::Unavailable`, e o `wait_event` dorme até o prazo.

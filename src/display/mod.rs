@@ -60,7 +60,7 @@ pub use driver::{Display, NoGraphics, OpenError, PresentError};
 pub use frames::{FrameEvent, Frames, ShowError};
 pub use inbox::{Closed, Sender};
 pub use stage::{
-    MAX_LOCAL_PLAYERS, Native, Stage, StageError, StageEvent, TerminalGraphics, TerminalOptions,
+    MAX_LOCAL_PLAYERS, Stage, StageError, StageEvent, StageMode, TerminalGraphics, TerminalOptions,
 };
 #[cfg(feature = "terminal")]
 pub use terminal::{PrintError, Printer, Terminal};

@@ -34,7 +34,7 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 use sinteract::display::{
-    Display, Native, Printer, Stage, StageEvent, Terminal, TerminalOptions, Window, open_native,
+    Display, Printer, Stage, StageEvent, StageMode, Terminal, TerminalOptions, Window, open_native,
 };
 use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
 use sinteract::renderer::Renderer;
@@ -201,9 +201,9 @@ fn pdf() -> Result<(), String> {
 /// stage, until the stage closes.
 fn stage() -> Result<(), String> {
     let players = PlayerRange::new(1, 8).expect("1 to 8 is a range");
-    let display = Native::auto(None, TerminalOptions::default());
+    let mode = StageMode::auto(None, TerminalOptions::default());
     let (mut stage, _players) =
-        Stage::open("sinteract gallery", players, display).map_err(|e| e.to_string())?;
+        Stage::open("sinteract gallery", players, mode).map_err(|e| e.to_string())?;
     loop {
         match stage.wait(None) {
             Ok(StageEvent::Tick) => stage
