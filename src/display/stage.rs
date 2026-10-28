@@ -254,7 +254,7 @@ impl Stage {
     }
 
     fn open_session(players: PlayerRange) -> Result<(Stage, Vec<(Player, String)>), StageError> {
-        let (from_server, to_server, taken) = take_session_fds()?;
+        let (from_server, to_server, taken) = session_fds::take()?;
         // No deadline until the start, since a read that times out there
         // loses the hello.
         let deadline = Rc::new(Cell::new(None));
@@ -638,7 +638,7 @@ struct Remote {
     ended: bool,
     /// The last field, so fd 3 and fd 4 close before the next stage can
     /// take them.
-    _taken: Taken,
+    _taken: session_fds::Taken,
 }
 
 impl Remote {
@@ -723,87 +723,105 @@ fn wait_readable(_file: &File, _deadline: Instant) -> io::Result<()> {
     Ok(())
 }
 
-/// Set while a stage owns fd 3 and fd 4, since a second owner of the
-/// same descriptors would close them twice.
-#[cfg(any(unix, target_os = "wasi"))]
-static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Fd 3 and fd 4, in a module of their own, so that only [`session_fds::take`]
+/// builds a [`session_fds::Taken`].
+mod session_fds {
+    use std::fs::File;
 
-/// The hold of a stage on fd 3 and fd 4, which its drop lets go.
-struct Taken;
+    use super::{OpenError, StageError};
 
-/// Let the next stage take fd 3 and fd 4. Only a wasi host keeps the
-/// descriptors open after a close, for the next session of the instance.
-/// Elsewhere a closed descriptor may come back as a file of another
-/// owner, so the session of a process stays its only one.
-#[cfg(any(unix, target_os = "wasi"))]
-impl Drop for Taken {
-    fn drop(&mut self) {
-        if cfg!(target_os = "wasi") {
-            TAKEN.store(false, std::sync::atomic::Ordering::SeqCst);
+    /// Set while a stage owns fd 3 and fd 4, since a second owner of the
+    /// same descriptors would close them twice.
+    #[cfg(any(unix, target_os = "wasi"))]
+    static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// The hold of a stage on fd 3 and fd 4, which its drop lets go. Only
+    /// [`take`] builds one, after it sets [`TAKEN`].
+    pub(super) struct Taken(());
+
+    impl Taken {
+        /// A hold on no descriptors, for a test that runs a session on pipes.
+        /// The drop of a hold does nothing on unix.
+        #[cfg(all(test, unix))]
+        pub(super) fn for_test() -> Self {
+            Taken(())
         }
     }
-}
 
-/// Fd 3 and fd 4, which the server opened for the session, and the hold
-/// on them.
-#[cfg(any(unix, target_os = "wasi"))]
-fn take_session_fds() -> Result<(File, File, Taken), StageError> {
-    use std::os::fd::FromRawFd;
-    use std::sync::atomic::Ordering;
-
-    use crate::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD};
-
-    check_session_fd(SERVER_TO_ENGINE_FD)?;
-    check_session_fd(ENGINE_TO_SERVER_FD)?;
-    if TAKEN.swap(true, Ordering::SeqCst) {
-        return Err(StageError::Open(OpenError::Busy));
+    /// Let the next stage take fd 3 and fd 4. Only a wasi host keeps the
+    /// descriptors open after a close, for the next session of the instance.
+    /// Elsewhere a closed descriptor may come back as a file of another
+    /// owner, so the session of a process stays its only one.
+    #[cfg(any(unix, target_os = "wasi"))]
+    impl Drop for Taken {
+        fn drop(&mut self) {
+            if cfg!(target_os = "wasi") {
+                TAKEN.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
     }
-    // SAFETY: both are open, StageMode::Session says that a server opened
-    // them, and on unix both are a pipe or a socket, which a server gives
-    // and a shell does not. TAKEN gives them to one stage.
-    Ok(unsafe {
-        (
-            File::from_raw_fd(SERVER_TO_ENGINE_FD),
-            File::from_raw_fd(ENGINE_TO_SERVER_FD),
-            Taken,
-        )
-    })
-}
 
-/// Fails unless `fd` is a pipe or a socket, which only a server gives a
-/// process. A closed `fd` gives [`StageError::NoSession`].
-#[cfg(unix)]
-fn check_session_fd(fd: i32) -> Result<(), StageError> {
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: fstat writes one stat, and fails on a descriptor that is not
-    // open.
-    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
-        return Err(StageError::NoSession);
+    /// Fd 3 and fd 4, which the server opened for the session, and the hold
+    /// on them.
+    #[cfg(any(unix, target_os = "wasi"))]
+    pub(super) fn take() -> Result<(File, File, Taken), StageError> {
+        use std::os::fd::FromRawFd;
+        use std::sync::atomic::Ordering;
+
+        use crate::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD};
+
+        check_session_fd(SERVER_TO_ENGINE_FD)?;
+        check_session_fd(ENGINE_TO_SERVER_FD)?;
+        if TAKEN.swap(true, Ordering::SeqCst) {
+            return Err(StageError::Open(OpenError::Busy));
+        }
+        // SAFETY: both are open, StageMode::Session says that a server opened
+        // them, and on unix both are a pipe or a socket, which a server gives
+        // and a shell does not. TAKEN gives them to one stage.
+        Ok(unsafe {
+            (
+                File::from_raw_fd(SERVER_TO_ENGINE_FD),
+                File::from_raw_fd(ENGINE_TO_SERVER_FD),
+                Taken(()),
+            )
+        })
     }
-    // SAFETY: fstat succeeded, so it wrote the stat.
-    let kind = unsafe { stat.assume_init() }.st_mode & libc::S_IFMT;
-    if kind == libc::S_IFIFO || kind == libc::S_IFSOCK {
+
+    /// Fails unless `fd` is a pipe or a socket, which only a server gives a
+    /// process. A closed `fd` gives [`StageError::NoSession`].
+    #[cfg(unix)]
+    pub(super) fn check_session_fd(fd: i32) -> Result<(), StageError> {
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: fstat writes one stat, and fails on a descriptor that is not
+        // open.
+        if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
+            return Err(StageError::NoSession);
+        }
+        // SAFETY: fstat succeeded, so it wrote the stat.
+        let kind = unsafe { stat.assume_init() }.st_mode & libc::S_IFMT;
+        if kind == libc::S_IFIFO || kind == libc::S_IFSOCK {
+            Ok(())
+        } else {
+            Err(StageError::NotSessionFd { fd })
+        }
+    }
+
+    /// Fails unless `fd` is open. The hosts of wasi have no fstat, so the type
+    /// of `fd` goes unchecked.
+    #[cfg(target_os = "wasi")]
+    pub(super) fn check_session_fd(fd: i32) -> Result<(), StageError> {
+        // SAFETY: F_GETFD only reads the flags of a descriptor, and fails on
+        // one that is not open.
+        if unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1 {
+            return Err(StageError::NoSession);
+        }
         Ok(())
-    } else {
-        Err(StageError::NotSessionFd { fd })
     }
-}
 
-/// Fails unless `fd` is open. The hosts of wasi have no fstat, so the type
-/// of `fd` goes unchecked.
-#[cfg(target_os = "wasi")]
-fn check_session_fd(fd: i32) -> Result<(), StageError> {
-    // SAFETY: F_GETFD only reads the flags of a descriptor, and fails on
-    // one that is not open.
-    if unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1 {
-        return Err(StageError::NoSession);
+    #[cfg(not(any(unix, target_os = "wasi")))]
+    pub(super) fn take() -> Result<(File, File, Taken), StageError> {
+        Err(StageError::NoSession)
     }
-    Ok(())
-}
-
-#[cfg(not(any(unix, target_os = "wasi")))]
-fn take_session_fds() -> Result<(File, File, Taken), StageError> {
-    Err(StageError::NoSession)
 }
 
 #[cfg(all(test, unix))]
@@ -836,7 +854,7 @@ pub(super) mod tests {
             a.as_raw_fd(),
             b.as_raw_fd(),
         ] {
-            assert!(check_session_fd(fd).is_ok());
+            assert!(session_fds::check_session_fd(fd).is_ok());
         }
     }
 
@@ -844,7 +862,7 @@ pub(super) mod tests {
     fn a_file_cannot_carry_a_session() {
         let file = File::open(file!()).unwrap();
         let fd = file.as_raw_fd();
-        let Err(StageError::NotSessionFd { fd: got }) = check_session_fd(fd) else {
+        let Err(StageError::NotSessionFd { fd: got }) = session_fds::check_session_fd(fd) else {
             panic!("a file carries a session");
         };
         assert_eq!(got, fd);
@@ -929,7 +947,7 @@ pub(super) mod tests {
             session,
             deadline,
             ended: false,
-            _taken: Taken,
+            _taken: session_fds::Taken::for_test(),
         };
         let stage = Stage {
             inner: Inner::Remote(Box::new(remote)),
