@@ -372,10 +372,12 @@ impl Canvas<Infallible> for CanvasRenderer {
                 // Each glyph keeps its path from frame to frame, and fills
                 // under the transform of the text moved to its origin.
                 let y = layout.baseline_y();
-                let [a, b, c, d, e, f] = node.transform().coefficients();
+                let transform = node.transform();
+                let [a, b, c, d, ..] = transform.coefficients();
                 for (g, x) in layout.placed_glyphs() {
                     if let Some(p) = self.glyph(g) {
-                        self.set([a, b, c, d, a * x + c * y + e, b * x + d * y + f]);
+                        let (e, f) = transform.apply(x, y);
+                        self.set([a, b, c, d, e, f]);
                         self.ctx().fill_with_path_2d(&p);
                     }
                 }
