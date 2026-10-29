@@ -128,14 +128,9 @@ pub enum LobbyError {
     BeforeStart,
 }
 
-/// What went wrong with the bytes of the engine after the start.
+/// Why the core dropped a message of the engine after the start.
 #[derive(Debug)]
 pub enum EngineError {
-    /// The stream broke, with a header that is not one of the engine or
-    /// with the end inside a message. The room is over, and the engine may
-    /// still run, blocked on a write, so the host closes its pipe or kills
-    /// it.
-    Broken(io::Error),
     /// A message does not decode. The core drops it and goes on.
     Payload(wire::Error),
     /// The asset `id` is not an image that a view decodes, or is larger
@@ -197,7 +192,6 @@ impl std::error::Error for LobbyError {
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EngineError::Broken(e) => write!(f, "broken stream: {e}"),
             EngineError::Payload(e) => write!(f, "message does not decode: {e}"),
             EngineError::Asset { id, error } => write!(f, "asset {id}: {error}"),
             EngineError::LiveId(id) => write!(f, "asset {id}: the id already names a live asset"),
@@ -211,7 +205,6 @@ impl std::fmt::Display for EngineError {
 impl std::error::Error for EngineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            EngineError::Broken(e) => Some(e),
             EngineError::Payload(e) => Some(e),
             EngineError::Asset { error, .. } => Some(error),
             EngineError::LiveId(_) | EngineError::NoSeat(_) => None,
@@ -468,13 +461,16 @@ impl ServerCore {
     /// player, or to every player, with the assets that it draws. At each
     /// frame the core drops the assets that the frames used longest ago to
     /// fit the limits of the room, with a lost to the engine for each. A
-    /// frame for a player with no seat is an error. A broken stream ends
-    /// the room, and the core ignores what comes after the end. Returns
-    /// what went wrong, in the order of the stream.
-    pub fn from_engine(&mut self, bytes: &[u8]) -> Vec<EngineError> {
+    /// frame for a player with no seat is an error. Returns the messages
+    /// that the core dropped, in the order of the stream. A header that is
+    /// not one of the engine breaks the stream, which comes back as `Err`
+    /// and ends the room. The engine
+    /// may still run, blocked on a write, so the host closes its pipe or
+    /// kills it. The core ignores the bytes after the end.
+    pub fn from_engine(&mut self, bytes: &[u8]) -> io::Result<Vec<EngineError>> {
         let mut errors = Vec::new();
         let Some(engine) = &mut self.engine else {
-            return errors;
+            return Ok(errors);
         };
         // Out of `engine`, so the loop reads it while the messages go in.
         let mut buffer = std::mem::take(&mut engine.input);
@@ -485,9 +481,8 @@ impl ServerCore {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(e) => {
-                    errors.push(EngineError::Broken(e));
                     self.engine = None;
-                    return errors;
+                    return Err(e);
                 }
             };
             rest = after;
@@ -522,14 +517,17 @@ impl ServerCore {
         let taken = buffer.len() - rest.len();
         buffer.drain(..taken);
         engine.input = buffer;
-        errors
+        Ok(errors)
     }
 
     /// Say that the stream of the engine ended, which ends the room. The
-    /// part of a message that is left breaks the stream.
-    pub fn engine_ended(&mut self) -> Option<EngineError> {
-        let engine = self.engine.take()?;
-        (!engine.input.is_empty()).then(|| EngineError::Broken(io::ErrorKind::UnexpectedEof.into()))
+    /// part of a message that is left breaks the stream, and comes back as
+    /// [`io::ErrorKind::UnexpectedEof`].
+    pub fn engine_ended(&mut self) -> io::Result<()> {
+        match self.engine.take() {
+            Some(engine) if !engine.input.is_empty() => Err(io::ErrorKind::UnexpectedEof.into()),
+            _ => Ok(()),
+        }
     }
 
     /// The next message for the view of `conn`. The view gets the newest
@@ -904,7 +902,12 @@ mod tests {
                 rest = after;
             }
             assert!(rest.is_empty());
-            assert!(self.core.from_engine(&self.from_engine.drain()).is_empty());
+            assert!(
+                self.core
+                    .from_engine(&self.from_engine.drain())
+                    .unwrap()
+                    .is_empty()
+            );
             events
         }
 
@@ -1150,7 +1153,7 @@ mod tests {
     #[test]
     fn the_views_of_a_frame_for_every_player_share_its_bytes() {
         let (mut room, conns) = Room::playing(&["Ana", "Beto"]);
-        assert!(room.core.from_engine(&frame(0, 1.0)).is_empty());
+        assert!(room.core.from_engine(&frame(0, 1.0)).unwrap().is_empty());
         let mut next = |conn| match room.core.next_for(conn) {
             Next::Send(payload) => payload,
             other => panic!("expected a frame, got {other:?}"),
@@ -1205,7 +1208,7 @@ mod tests {
         let mut buf = Vec::new();
         assert!(!core.take_engine_output(&mut buf));
         let mut core = started(&["Ana"]);
-        assert!(core.engine_ended().is_none());
+        assert!(core.engine_ended().is_ok());
         assert!(!core.take_engine_output(&mut buf));
         assert!(buf.is_empty());
     }
@@ -1255,13 +1258,13 @@ mod tests {
         stream.extend_from_slice(&drawing(1, 2.0, &[8]));
         stream.extend_from_slice(&drawing(0, 3.0, &[7]));
         stream.extend_from_slice(&drawing(2, 4.0, &[7, 8]));
-        assert!(core.from_engine(&stream).is_empty());
+        assert!(core.from_engine(&stream).unwrap().is_empty());
         assert_eq!(sent(core, conns[0]), ["asset 7", "frame 3", "idle"]);
         assert_eq!(
             sent(core, conns[1]),
             ["asset 7", "asset 8", "frame 4", "idle"]
         );
-        core.from_engine(&drawing(1, 5.0, &[7]));
+        core.from_engine(&drawing(1, 5.0, &[7])).unwrap();
         assert_eq!(sent(core, conns[0]), ["frame 5", "idle"]);
         assert_eq!(sent(core, conns[1]), ["idle"]);
     }
@@ -1272,7 +1275,7 @@ mod tests {
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(0, 1.0, &[1]));
         stream.extend_from_slice(&frame(2, 2.0));
-        core.from_engine(&stream);
+        core.from_engine(&stream).unwrap();
         let ana = core.connect(player(1)).unwrap();
         assert_eq!(sent(&mut core, ana), ["asset 1", "frame 1", "idle"]);
     }
@@ -1283,19 +1286,19 @@ mod tests {
         let core = &mut room.core;
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 1.0, &[1]));
-        core.from_engine(&stream);
+        core.from_engine(&stream).unwrap();
         assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1", "idle"]);
         let mut stream = asset(2);
         stream.extend_from_slice(&drawing(1, 2.0, &[1, 2]));
         stream.extend_from_slice(&drawing(1, 3.0, &[2]));
-        assert!(core.from_engine(&stream).is_empty());
+        assert!(core.from_engine(&stream).unwrap().is_empty());
         assert_eq!(
             sent(core, conns[0]),
             ["asset 2", "frame 3", "forget 1", "idle"]
         );
         // The asset stays in the room, and comes back with a frame that
         // draws it.
-        core.from_engine(&drawing(1, 4.0, &[1]));
+        core.from_engine(&drawing(1, 4.0, &[1])).unwrap();
         assert_eq!(
             sent(core, conns[0]),
             ["asset 1", "frame 4", "forget 2", "idle"]
@@ -1310,7 +1313,7 @@ mod tests {
         for i in 1..=12 {
             let mut stream = asset(i);
             stream.extend_from_slice(&drawing(1, i as f32, &[i]));
-            assert!(core.from_engine(&stream).is_empty());
+            assert!(core.from_engine(&stream).unwrap().is_empty());
             // The view takes one message for each frame of the engine.
             got.push(one(core, conns[0]));
         }
@@ -1324,14 +1327,14 @@ mod tests {
         let core = &mut room.core;
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 1.0, &[1]));
-        core.from_engine(&stream);
+        core.from_engine(&stream).unwrap();
         assert_eq!(sent(core, conns[0]), ["asset 1", "frame 1", "idle"]);
         let mut stream = asset(2);
         stream.extend_from_slice(&drawing(1, 2.0, &[2]));
-        core.from_engine(&stream);
+        core.from_engine(&stream).unwrap();
         let again = core.connect(player(1)).unwrap();
         assert_eq!(sent(core, again), ["asset 2", "frame 2", "idle"]);
-        core.from_engine(&drawing(1, 3.0, &[2]));
+        core.from_engine(&drawing(1, 3.0, &[2])).unwrap();
         assert_eq!(sent(core, again), ["frame 3", "idle"]);
     }
 
@@ -1343,7 +1346,7 @@ mod tests {
         stream.extend_from_slice(&drawing(1, 2.0, &[]));
         stream.extend_from_slice(&asset(9));
         stream.extend_from_slice(&drawing(1, 3.0, &[9, 3]));
-        assert!(room.core.from_engine(&stream).is_empty());
+        assert!(room.core.from_engine(&stream).unwrap().is_empty());
         assert_eq!(room.events(), ["lost 1"]);
         assert_eq!(
             sent(&mut room.core, conns[0]),
@@ -1358,7 +1361,7 @@ mod tests {
         stream.extend_from_slice(&drawing(1, 1.0, &[2, 3, 4, 5, 6, 7, 8]));
         stream.extend_from_slice(&asset(9));
         stream.extend_from_slice(&drawing(1, 2.0, &[1, 9]));
-        assert!(room.core.from_engine(&stream).is_empty());
+        assert!(room.core.from_engine(&stream).unwrap().is_empty());
         assert_eq!(room.events(), ["lost 2"]);
         assert_eq!(
             sent(&mut room.core, conns[0]),
@@ -1372,7 +1375,7 @@ mod tests {
         let mut stream = fill(1);
         stream.extend_from_slice(&asset(9));
         stream.extend_from_slice(&drawing(1, 1.0, &[9]));
-        assert!(room.core.from_engine(&stream).is_empty());
+        assert!(room.core.from_engine(&stream).unwrap().is_empty());
         assert_eq!(room.events(), ["lost 9"]);
         // The frame goes without the image.
         assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "idle"]);
@@ -1386,7 +1389,7 @@ mod tests {
         stream.extend_from_slice(&asset(3));
         stream.extend_from_slice(&asset(3));
         assert!(matches!(
-            room.core.from_engine(&stream)[..],
+            room.core.from_engine(&stream).unwrap()[..],
             [
                 EngineError::Asset {
                     id: 1,
@@ -1409,7 +1412,7 @@ mod tests {
         let mut stream = frame(2, 1.0);
         stream.extend_from_slice(&frame(1, 2.0));
         assert!(matches!(
-            core.from_engine(&stream)[..],
+            core.from_engine(&stream).unwrap()[..],
             [EngineError::NoSeat(p)] if p.get() == 2
         ));
         assert_eq!(sent(&mut core, ana), ["frame 2", "idle"]);
@@ -1425,7 +1428,7 @@ mod tests {
         payload.truncate(8 + 5 * 8);
         let mut stream = framing::header(Side::Engine, payload.len() as u32).to_vec();
         stream.extend_from_slice(&payload);
-        let errors = core.from_engine(&stream);
+        let errors = core.from_engine(&stream).unwrap();
         assert!(matches!(errors[..], [EngineError::Payload(_)]));
     }
 
@@ -1439,7 +1442,11 @@ mod tests {
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 2.0, &[1]));
         for byte in &stream {
-            assert!(core.from_engine(std::slice::from_ref(byte)).is_empty());
+            assert!(
+                core.from_engine(std::slice::from_ref(byte))
+                    .unwrap()
+                    .is_empty()
+            );
         }
         assert_eq!(sent(&mut core, ana), ["asset 1", "frame 2", "idle"]);
     }
@@ -1448,12 +1455,12 @@ mod tests {
     fn the_end_of_the_engine_ends_the_room_after_the_last_frame() {
         let (mut room, conns) = Room::playing(&["Ana"]);
         room.core.tick();
-        room.core.from_engine(&frame(0, 1.0));
-        assert!(room.core.engine_ended().is_none());
+        room.core.from_engine(&frame(0, 1.0)).unwrap();
+        assert!(room.core.engine_ended().is_ok());
         assert!(room.core.is_over());
         room.core.tick();
-        room.core.from_engine(&frame(0, 2.0));
-        assert!(room.core.engine_ended().is_none());
+        room.core.from_engine(&frame(0, 2.0)).unwrap();
+        assert!(room.core.engine_ended().is_ok());
         assert!(room.events().is_empty());
         assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "gone"]);
         assert_eq!(sent(&mut room.core, conns[0]), ["gone"]);
@@ -1465,7 +1472,7 @@ mod tests {
         room.core.leave(conns[0]);
         room.core.leave(conns[0]);
         room.core.input(conns[0], &key("a"));
-        assert!(room.core.from_engine(&frame(1, 1.0)).is_empty());
+        assert!(room.core.from_engine(&frame(1, 1.0)).unwrap().is_empty());
         assert_eq!(sent(&mut room.core, conns[0]), ["gone"]);
         assert!(room.events().is_empty());
         let again = room.core.connect(player(1)).unwrap();
@@ -1478,12 +1485,12 @@ mod tests {
         let core = &mut room.core;
         let mut stream = asset(1);
         stream.extend_from_slice(&drawing(1, 2.0, &[1]));
-        core.from_engine(&stream);
+        core.from_engine(&stream).unwrap();
         assert_eq!(sent(core, conns[0]), ["asset 1", "frame 2", "idle"]);
         core.leave(conns[0]);
         let again = core.connect(player(1)).unwrap();
         assert_eq!(sent(core, again), ["asset 1", "frame 2", "idle"]);
-        core.from_engine(&frame(0, 3.0));
+        core.from_engine(&frame(0, 3.0)).unwrap();
         assert_eq!(sent(core, again), ["frame 3", "forget 1", "idle"]);
     }
 
@@ -1503,7 +1510,7 @@ mod tests {
     fn a_connect_to_no_seat_or_to_a_room_that_is_over_is_refused() {
         let mut core = started(&["Ana"]);
         assert!(core.connect(player(2)).is_none());
-        assert!(core.engine_ended().is_none());
+        assert!(core.engine_ended().is_ok());
         assert!(core.connect(player(1)).is_none());
     }
 
@@ -1577,7 +1584,7 @@ mod tests {
         let mut stream = framing::header(Side::Engine, 8).to_vec();
         stream.extend_from_slice(&[0xff; 8]);
         stream.extend_from_slice(&frame(0, 1.0));
-        let errors = room.core.from_engine(&stream);
+        let errors = room.core.from_engine(&stream).unwrap();
         assert!(matches!(errors[..], [EngineError::Payload(_)]));
         assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "idle"]);
     }
@@ -1587,21 +1594,28 @@ mod tests {
         let (mut room, conns) = Room::playing(&["Ana"]);
         let mut stream = frame(0, 1.0);
         stream.extend_from_slice(b"SIS1\0\0\0\0");
-        let errors = room.core.from_engine(&stream);
-        assert!(matches!(errors[..], [EngineError::Broken(_)]));
+        let error = room.core.from_engine(&stream).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(room.core.is_over());
         assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "gone"]);
+    }
+
+    #[test]
+    fn the_core_ignores_the_engine_after_a_broken_stream() {
+        let (mut room, conns) = Room::playing(&["Ana"]);
+        assert!(room.core.from_engine(b"SIS1\0\0\0\0").is_err());
+        assert!(room.core.from_engine(&frame(0, 1.0)).unwrap().is_empty());
+        assert!(room.core.engine_ended().is_ok());
+        assert_eq!(sent(&mut room.core, conns[0]), ["gone"]);
     }
 
     #[test]
     fn the_end_inside_a_message_breaks_the_stream() {
         let mut core = started(&["Ana"]);
         let stream = frame(0, 1.0);
-        core.from_engine(&stream[..stream.len() - 1]);
-        let error = core.engine_ended();
-        assert!(
-            matches!(error, Some(EngineError::Broken(e)) if e.kind() == io::ErrorKind::UnexpectedEof)
-        );
+        core.from_engine(&stream[..stream.len() - 1]).unwrap();
+        let error = core.engine_ended().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
         assert!(core.is_over());
     }
 }

@@ -231,13 +231,14 @@ fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Vec<u8>>, wake: S
 /// Pass the reads of the engine that arrived to the core.
 fn take_engine(core: &mut ServerCore, from_reader: &Receiver<Vec<u8>>) {
     loop {
-        let errors = match from_reader.try_recv() {
+        let taken = match from_reader.try_recv() {
             Ok(bytes) => core.from_engine(&bytes),
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => core.engine_ended().into_iter().collect(),
+            Err(TryRecvError::Disconnected) => core.engine_ended().map(|()| Vec::new()),
         };
-        for e in errors {
-            eprintln!("view: {e}");
+        match taken {
+            Ok(dropped) => dropped.iter().for_each(|e| eprintln!("view: {e}")),
+            Err(e) => eprintln!("view: broken stream: {e}"),
         }
         if core.is_over() {
             return;

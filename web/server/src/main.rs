@@ -292,11 +292,14 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
             vec!["the engine ended before the start".into()],
         ),
         (Phase::Game(mut game), read) => {
-            let errors = match read {
+            let taken = match read {
                 Some(bytes) => game.core.from_engine(bytes),
-                None => game.core.engine_ended().into_iter().collect(),
+                None => game.core.engine_ended().map(|()| Vec::new()),
             };
-            let errors = errors.iter().map(ToString::to_string).collect();
+            let errors = match taken {
+                Ok(dropped) => dropped.iter().map(ToString::to_string).collect(),
+                Err(e) => vec![format!("broken stream: {e}")],
+            };
             (Phase::Game(game), errors)
         }
         (Phase::Over, _) => (Phase::Over, Vec::new()),

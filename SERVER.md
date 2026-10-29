@@ -144,7 +144,7 @@ let conn: Conn = core.connect(player)?;   // uma view com o token do jogador
 core.from_view(conn, &payload)?;          // uma mensagem do WebSocket
 core.tick();                              // pelo timer
 core.take_engine_output(&mut buf);        // bytes para o fd 3, ou false
-let errors: Vec<EngineError> = core.from_engine(&bytes); // bytes do fd 4
+let dropped: Vec<EngineError> = core.from_engine(&bytes)?; // bytes do fd 4
 match core.next_for(conn) {               // o que mandar à view
     Next::Send(payload) => { /* uma mensagem binária */ }
     Next::Idle => { /* esperar */ }
@@ -152,15 +152,16 @@ match core.next_for(conn) {               // o que mandar à view
 }
 core.leave(conn);                         // a conexão caiu
 core.close();                             // o servidor encerra
-core.engine_ended();                      // o fd 4 acabou
+core.engine_ended()?;                     // o fd 4 acabou
 core.is_over();                           // a engine acabou
 ```
 
 O `LobbyCore::from_engine` consome o lobby e devolve o lobby com os bytes
 novos, ou um `LobbyError`, e todo `LobbyError` acaba a sala. O
-`ServerCore::from_engine` devolve os erros na ordem do fluxo. Só o
-`EngineError::Broken` acaba a sala, e o core descarta a mensagem dos
-outros e segue.
+`ServerCore::from_engine` devolve as mensagens que o core descartou, na
+ordem do fluxo, e o core segue. Um fluxo quebrado volta no `Err` e acaba
+a sala, assim como o `Err` do `engine_ended`, que vem quando o fd 4
+acaba no meio de uma mensagem.
 
 O core escreve as mensagens para a engine num buffer, na ordem das
 chamadas. O `take_engine_output(&mut buf)` move tudo para o fim de `buf`,
@@ -258,8 +259,8 @@ cena:
   (`EngineError::NoSeat`).
 - Um **`tickTaken`** libera o próximo `tick`.
 - Um payload que não decodifica volta como `EngineError::Payload`, e o
-  fluxo segue. Um fluxo quebrado volta como `EngineError::Broken`, e a sala
-  acaba.
+  fluxo segue. Um fluxo quebrado volta no `Err` do `from_engine`, e a
+  sala acaba.
 
 ### Os limites das imagens
 
@@ -535,12 +536,15 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
         },
         (Phase::Lobby(_), None) => vec!["a engine acabou antes do start".into()],
         (Phase::Game(mut core), read) => {
-            let errors: Vec<EngineError> = match read {
+            let taken: io::Result<Vec<EngineError>> = match read {
                 Some(bytes) => core.from_engine(bytes),
-                None => core.engine_ended().into_iter().collect(),
+                None => core.engine_ended().map(|()| Vec::new()),
             };
             *phase = Phase::Game(core);
-            errors.iter().map(ToString::to_string).collect()
+            match taken {
+                Ok(dropped) => dropped.iter().map(ToString::to_string).collect(),
+                Err(e) => vec![format!("fluxo quebrado: {e}")],
+            }
         }
         (Phase::Over, _) => Vec::new(),
     };
