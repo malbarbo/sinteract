@@ -3,11 +3,12 @@
 
 use std::f64::consts::PI;
 use std::fmt;
+use std::num::NonZeroU32;
 
 use super::geometry::Point;
 use super::path::PathCmd;
 use super::tree::{Image, Overflow};
-use super::{Finite, Length, PointCount, SideCount, StepCount, Style, TriangleAngle, WedgeAngle};
+use super::{Finite, Length, PointCount, SideCount, Style, TriangleAngle, WedgeAngle};
 
 /// `side * sqrt(3) / 2` is the height of an equilateral triangle.
 const SQRT3_2: f64 = 0.8660254037844386;
@@ -283,7 +284,7 @@ impl Image {
     pub fn star_polygon(
         side: Length,
         side_count: SideCount,
-        step_count: StepCount,
+        step_count: NonZeroU32,
         style: Style,
     ) -> Result<Self, StarPolygonError> {
         let (n, step) = (u64::from(side_count.get()), u64::from(step_count.get()));
@@ -629,7 +630,7 @@ mod tests {
     #[test]
     fn a_star_polygon_visits_every_vertex() {
         let sides = SideCount::new(6).unwrap();
-        let star = Image::star_polygon(length(10.0), sides, StepCount::new(2).unwrap(), style());
+        let star = Image::star_polygon(length(10.0), sides, NonZeroU32::new(2).unwrap(), style());
         assert_eq!(star, Err(StarPolygonError::CommonDivisor));
         let square = Image::regular_polygon(length(10.0), SideCount::new(4).unwrap(), style());
         let (w, h) = square.unwrap().dimension();

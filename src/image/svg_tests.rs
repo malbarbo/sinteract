@@ -2,6 +2,8 @@
 //! `cli/tests/images` that prints an svg, with the same name. `rhombus3`
 //! comes from the tests of sgleam, since spython refuses its angle.
 
+use std::num::NonZeroU32;
+
 use super::*;
 use crate::scene::{FontStyle, LineCap, LineJoin};
 use insta::assert_snapshot;
@@ -100,7 +102,7 @@ fn triangle(side: f64, style: Style) -> Image {
 }
 
 fn star_polygon(side: f64, side_count: u32, step_count: u32, style: Style) -> Image {
-    let (n, step) = (SideCount::new(side_count), StepCount::new(step_count));
+    let (n, step) = (SideCount::new(side_count), NonZeroU32::new(step_count));
     Image::star_polygon(len(side), n.unwrap(), step.unwrap(), style).unwrap()
 }
 

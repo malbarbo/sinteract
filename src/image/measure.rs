@@ -233,10 +233,6 @@ pub type SideCount = Count<3, MAX_VERTICES>;
 /// The points of a radial star, from 2 to [`MAX_VERTICES`].
 pub type PointCount = Count<2, MAX_VERTICES>;
 
-/// How many vertices a star polygon skips from one point to the next, at
-/// least 1.
-pub type StepCount = Count<1, { u32::MAX }>;
-
 /// The count is outside the range of its type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CountError {
@@ -325,7 +321,5 @@ mod tests {
         assert_eq!(PointCount::new(2).unwrap().get(), 2);
         assert_eq!(PointCount::new(1), Err(CountError::TooFew));
         assert_eq!(PointCount::new(MAX_VERTICES + 1), Err(CountError::TooMany));
-        assert_eq!(StepCount::new(0), Err(CountError::TooFew));
-        assert_eq!(StepCount::new(u32::MAX).unwrap().get(), u32::MAX);
     }
 }
