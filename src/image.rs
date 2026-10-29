@@ -8,6 +8,7 @@ mod font;
 mod geometry;
 mod measure;
 mod path;
+mod path_bounds;
 #[cfg(feature = "pixmap")]
 mod same;
 mod shape;

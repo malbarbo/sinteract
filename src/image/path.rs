@@ -1,8 +1,9 @@
 //! The commands of a path.
 
 use super::geometry::{Bounds, Point};
+use super::path_bounds::PathBounds;
 use super::{Finite, Length};
-use crate::scene::{ArcSize, Path, PathBounds, PathStyle, Sweep};
+use crate::scene::{ArcSize, Path, PathStyle, Sweep};
 
 /// The other way of `sweep`, as a mirror turns it.
 pub(super) fn reverse(sweep: Sweep) -> Sweep {
@@ -220,12 +221,12 @@ pub(super) fn bounds(start: Point, commands: &[PathCmd]) -> Option<Bounds> {
     let drawn = bounds.get()?;
     Some(Bounds {
         min: Point {
-            x: drawn.min_x,
-            y: drawn.min_y,
+            x: drawn.x0,
+            y: drawn.y0,
         },
         max: Point {
-            x: drawn.max_x,
-            y: drawn.max_y,
+            x: drawn.x1,
+            y: drawn.y1,
         },
     })
 }
