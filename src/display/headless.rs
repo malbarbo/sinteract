@@ -5,27 +5,27 @@ use std::num::NonZeroU32;
 use std::time::Instant;
 
 use super::driver::{PresentError, sealed};
+use super::frame_clock::FrameClock;
 use super::inbox::{Inbox, Next, Sender};
-use super::tick_clock::TickClock;
 use crate::event::Event;
 use crate::scene::Scene;
 use crate::session::FrameRate;
 
-/// A display that ticks and draws nothing, so a game runs on its clock
+/// A display that starts frames and draws nothing, so a game runs on its clock
 /// with no screen, as in a test.
 pub(crate) struct Headless {
     inbox: Inbox,
-    clock: TickClock,
+    clock: FrameClock,
 }
 
 impl Headless {
-    /// The rate of the ticks, which no screen paces.
-    const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    /// The rate of the frames, which no screen paces.
+    const FRAME_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
     pub(crate) fn new() -> Self {
         Self {
             inbox: Inbox::new(None),
-            clock: TickClock::from_millihertz(Self::TICK_RATE),
+            clock: FrameClock::from_millihertz(Self::FRAME_RATE),
         }
     }
 }

@@ -30,7 +30,7 @@ of a room under the limits, for the server.
 
 `display/` shows a scene and reads the input back. `driver.rs` holds the
 sealed `Display` trait, `inbox.rs` the queue and the `Sender` behind
-`Display::wait`, `tick_clock.rs` the clock that paces the tick,
+`Display::wait`, `frame_clock.rs` the clock that paces the frames,
 `terminal.rs` and `window.rs` are the two displays, `display_link.rs`
 paces the window on macOS, and
 `sixel.rs` and `term_query.rs` support them. `stage.rs` runs a game on a

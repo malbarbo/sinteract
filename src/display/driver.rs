@@ -58,9 +58,9 @@ pub trait Display: sealed::Sealed {
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;
 
-    /// The rate of the ticks. A window ticks at the rate of its monitor,
-    /// which changes when the window moves to another monitor, so a game
-    /// reads it again at each tick.
+    /// The rate of the frames. A window starts a frame at the rate of its
+    /// monitor, which changes when the window moves to another monitor, so
+    /// a game reads it again at each frame.
     fn frame_rate(&self) -> FrameRate;
 
     /// The rows of text under the frame. Only the terminal keeps them, as

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use super::tick_clock::TickClock;
+use super::frame_clock::FrameClock;
 use crate::event::{Event, InputEvent, KeyEvent, MouseEvent};
 
 /// Pushes into the queue of a display from any thread, and wakes a
@@ -227,7 +227,7 @@ impl Inbox {
     ///
     /// A tick that fell due on `clock` goes in behind what arrived so
     /// far, so the input that waited on a busy engine goes out first.
-    pub(crate) fn next(&mut self, clock: &mut TickClock, deadline: Option<Instant>) -> Next {
+    pub(crate) fn next(&mut self, clock: &mut FrameClock, deadline: Option<Instant>) -> Next {
         let now = Instant::now();
         if let Some(ready) = self.pop(clock, now) {
             return Next::Ready(ready);
@@ -273,7 +273,7 @@ impl Inbox {
     /// drains and a tick goes in at the back if `clock` has one due by
     /// `now`, or `None` when nothing waits. At most one tick waits, so a
     /// flood of input delays the tick but never drops it.
-    fn pop(&mut self, clock: &mut TickClock, now: Instant) -> Option<io::Result<Seated>> {
+    fn pop(&mut self, clock: &mut FrameClock, now: Instant) -> Option<io::Result<Seated>> {
         let Some(queue) = &mut self.queue else {
             return Some(Ok(Seated::Close));
         };
@@ -386,14 +386,14 @@ mod tests {
     /// as the terminal does.
     struct TestDisplay {
         inbox: Inbox,
-        clock: TickClock,
+        clock: FrameClock,
     }
 
     impl TestDisplay {
         fn new(rate: u32) -> Self {
             Self {
                 inbox: Inbox::new(None),
-                clock: TickClock::from_millihertz(NonZeroU32::new(rate).unwrap()),
+                clock: FrameClock::from_millihertz(NonZeroU32::new(rate).unwrap()),
             }
         }
 

@@ -114,7 +114,7 @@ pub enum StageMode {
         /// it shows.
         graphics: Option<TerminalGraphics>,
     },
-    /// No display. The stage ticks at 60 Hz and draws nothing, so a game
+    /// No display. The stage starts a frame at 60 Hz and draws nothing, so a game
     /// runs without a screen, as in a test.
     Headless {
         /// How many players play, or the fewest that the game takes when
@@ -401,14 +401,14 @@ impl Stage {
         }
     }
 
-    /// The rate of the ticks. In a session the rate is the one of the
+    /// The rate of the frames. In a session the rate is the one of the
     /// server, the same until the
     /// end. A server with a timer ticks at this rate, so a game may move by
     /// a step of it at each tick. A page that ticks at each refresh of the
     /// screen gives a nominal rate, and a game that keeps time measures it
     /// with its own clock. On a display of this process it is
     /// [`Display::frame_rate`], which changes with the monitor, so a game
-    /// reads it again at each tick.
+    /// reads it again at each frame.
     pub fn frame_rate(&self) -> FrameRate {
         match &self.inner {
             Inner::Local(display) => display.frame_rate(),
@@ -687,7 +687,7 @@ impl Pending {
 
 /// A session with a server, on fd 3 and fd 4.
 struct Remote {
-    /// The rate of the ticks, from the start of the session.
+    /// The rate of the frames, from the start of the session.
     frame_rate: FrameRate,
     session: Session<DeadlineReader, BufWriter<File>>,
     /// The deadline of the reader of the session, which has no other way

@@ -1,17 +1,17 @@
-//! The software clock that paces the ticks of a display.
+//! The software clock that paces the frames of a display.
 
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
-/// When the next tick of a display falls due. The first one is due at
-/// once.
-pub(crate) struct TickClock {
+/// When the next frame of a display falls due, at the next tick of the
+/// clock. The first tick is due at once.
+pub(crate) struct FrameClock {
     rate: NonZeroU32,
     period: Duration,
     due: Instant,
 }
 
-impl TickClock {
+impl FrameClock {
     /// A clock at `rate` thousandths of a hertz, the unit of a refresh rate
     /// in winit.
     pub(crate) fn from_millihertz(rate: NonZeroU32) -> Self {
@@ -82,8 +82,8 @@ fn period(rate: NonZeroU32) -> Duration {
 mod tests {
     use super::*;
 
-    fn at_60_hz() -> TickClock {
-        TickClock::from_millihertz(NonZeroU32::new(60_000).unwrap())
+    fn at_60_hz() -> FrameClock {
+        FrameClock::from_millihertz(NonZeroU32::new(60_000).unwrap())
     }
 
     #[test]

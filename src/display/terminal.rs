@@ -24,10 +24,10 @@ use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 use super::driver::{NoGraphics, PresentError, TerminalError, sealed};
+use super::frame_clock::FrameClock;
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use super::stage::{TerminalGraphics, TerminalOptions};
-use super::tick_clock::TickClock;
 use crate::event::{Event, MouseEvent};
 use crate::renderer::pixmap::PixmapRenderer;
 use crate::renderer::{AllocError, Renderer};
@@ -62,7 +62,7 @@ const SIXEL_BACKGROUND: Rgba = Rgba {
 /// a caller that holds the lock across a `present` waits forever.
 pub struct Terminal {
     inbox: Inbox,
-    clock: TickClock,
+    clock: FrameClock,
     /// The pixmap of the next frame, the clip masks and the images of the
     /// bitmaps.
     renderer: PixmapRenderer,
@@ -88,7 +88,7 @@ struct Active {
 impl Terminal {
     /// There is no hardware refresh in a terminal. 60 Hz is smooth for
     /// half-block animation and does not flood the pty with escape codes.
-    const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    const FRAME_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
     /// Enter the alt screen and raw mode, and show the frames through
     /// `graphics`, or through the graphics that the terminal shows when
@@ -156,7 +156,7 @@ impl Terminal {
         };
         Ok(Self {
             inbox,
-            clock: TickClock::from_millihertz(Self::TICK_RATE),
+            clock: FrameClock::from_millihertz(Self::FRAME_RATE),
             renderer,
             graphics,
             active: Active {

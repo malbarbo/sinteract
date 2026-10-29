@@ -31,8 +31,8 @@ use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
 use super::driver::{PresentError, WindowError, sealed};
+use super::frame_clock::FrameClock;
 use super::inbox::{Inbox, Next, Seated, Sender};
-use super::tick_clock::TickClock;
 use crate::event::{
     Event, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
 };
@@ -51,7 +51,7 @@ use crate::session::{FrameRate, Target};
 /// of a [`super::Stage`] of several players, with one clock and one queue.
 pub struct Window {
     inbox: Inbox,
-    clock: TickClock,
+    clock: FrameClock,
     active: Active,
     /// The first draw that failed since the last [`Window::take_failed`].
     failed: Option<PresentError>,
@@ -81,8 +81,8 @@ struct Seat {
 }
 
 impl Window {
-    /// The rate of the ticks on a monitor that gives no refresh rate.
-    const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    /// The rate of the frames on a monitor that gives no refresh rate.
+    const FRAME_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
 
     /// How long [`Window::open`] waits for the platform to create the window.
     const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -166,7 +166,7 @@ impl Window {
             .collect();
         Ok(Self {
             inbox,
-            clock: TickClock::from_millihertz(Self::TICK_RATE),
+            clock: FrameClock::from_millihertz(Self::FRAME_RATE),
             active: Active { lent, seats },
             failed: None,
         })
@@ -193,7 +193,7 @@ impl Window {
         {
             pace.app.refresh_rate_stale = false;
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
-            self.clock.set_millihertz(rate.unwrap_or(Self::TICK_RATE));
+            self.clock.set_millihertz(rate.unwrap_or(Self::FRAME_RATE));
         }
         let mut shown = None;
         for (index, seat) in s.seats.iter_mut().enumerate() {
