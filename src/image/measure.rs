@@ -151,7 +151,8 @@ impl Opacity {
     }
 }
 
-/// The value is out of the range of its type. NaN is out of every range.
+/// The value is out of the range of its type. NaN and the infinities are
+/// out of every bounded range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfRange;
 
@@ -170,9 +171,7 @@ pub struct WedgeAngle(f64);
 
 impl WedgeAngle {
     pub fn new(v: f64) -> Result<Self, WedgeAngleError> {
-        if !v.is_finite() {
-            Err(WedgeAngleError::NotFinite)
-        } else if v == 0.0 {
+        if v == 0.0 {
             Err(WedgeAngleError::Zero)
         } else if !(-360.0..=360.0).contains(&v) {
             Err(WedgeAngleError::OutOfRange)
@@ -188,15 +187,14 @@ impl WedgeAngle {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WedgeAngleError {
-    NotFinite,
     Zero,
+    /// The angle is below -360 or above 360, or is NaN.
     OutOfRange,
 }
 
 impl fmt::Display for WedgeAngleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WedgeAngleError::NotFinite => NotFinite.fmt(f),
             WedgeAngleError::Zero => f.write_str("the angle is 0"),
             WedgeAngleError::OutOfRange => OutOfRange.fmt(f),
         }
@@ -299,7 +297,7 @@ mod tests {
     fn opacity_keeps_both_ends() {
         assert_eq!(Opacity::new(0.0).unwrap(), Opacity::TRANSPARENT);
         assert_eq!(Opacity::new(1.0).unwrap(), Opacity::OPAQUE);
-        for v in [-0.1, 1.1, f64::NAN] {
+        for v in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
             assert_eq!(Opacity::new(v), Err(OutOfRange), "{v}");
         }
     }
@@ -313,7 +311,9 @@ mod tests {
         assert_eq!(WedgeAngle::new(-0.0), Err(WedgeAngleError::Zero));
         assert_eq!(WedgeAngle::new(400.0), Err(WedgeAngleError::OutOfRange));
         assert_eq!(WedgeAngle::new(-360.5), Err(WedgeAngleError::OutOfRange));
-        assert_eq!(WedgeAngle::new(f64::NAN), Err(WedgeAngleError::NotFinite));
+        for v in [f64::NAN, f64::INFINITY] {
+            assert_eq!(WedgeAngle::new(v), Err(WedgeAngleError::OutOfRange), "{v}");
+        }
     }
 
     #[test]
