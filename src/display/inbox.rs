@@ -258,7 +258,6 @@ impl Inbox {
 
     /// Take the next message of the channel, or wait until `timeout`
     /// passes. A [`Sender`] ends the wait.
-    #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub(crate) fn wait_for_message(&mut self, timeout: Duration) {
         let Some(queue) = &mut self.queue else {
             return;
