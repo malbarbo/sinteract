@@ -1001,7 +1001,7 @@ mod tests {
                 })
                 .unwrap(),
             ),
-            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 160.0, 60.0]),
+            Affine::translate(160.0, 60.0),
             spec,
             true,
         );
@@ -1400,15 +1400,7 @@ mod tests {
         // A glyph 20 units tall at a scale of 1e9 reaches past the canvas.
         let mut scene = Scene::new(100.0, 100.0);
         scene.add_text(Text::from_parts(
-            TextStyle::Fill(
-                Paint::solid(Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                })
-                .unwrap(),
-            ),
+            TextStyle::Fill(Paint::opaque(0, 0, 0)),
             Affine::from_coefficients([1e9, 0.0, 0.0, 1e9, 0.0, 50.0]),
             TextSpec {
                 size: 20.0,
@@ -1630,16 +1622,8 @@ mod tests {
         // one.
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_text(Text::from_parts(
-            TextStyle::Fill(
-                Paint::solid(Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                })
-                .unwrap(),
-            ),
-            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 5.0, 5.0]),
+            TextStyle::Fill(Paint::opaque(0, 0, 0)),
+            Affine::translate(5.0, 5.0),
             TextSpec {
                 size: 24.0,
                 ..TextSpec::default()

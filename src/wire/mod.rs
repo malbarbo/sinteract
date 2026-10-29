@@ -291,13 +291,7 @@ mod tests {
                 )
                 .expect("text fits");
                 text.style = TextStyle::Both(
-                    Paint::solid(Rgba {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                        a: 255,
-                    })
-                    .unwrap(),
+                    Paint::opaque(0, 0, 0),
                     TextStroke {
                         paint: Paint::radial(
                             60.0,
@@ -380,7 +374,7 @@ mod tests {
     fn bitmap(id: u32) -> Bitmap {
         Bitmap {
             image: crate::asset::png_image(id, 1),
-            transform: Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            transform: Affine::translate(0.0, 0.0),
             sampling: Sampling::Smooth,
         }
     }
@@ -1995,12 +1989,12 @@ mod tests {
                 paint: Paint::opaque(0, 0, 0),
                 width: StrokeWidth::new(mark).unwrap(),
             }),
-            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            Affine::translate(0.0, 0.0),
             TextSpec::default(),
             false,
         ));
         scene.add_bitmap(Bitmap {
-            transform: Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, mark, 0.0]),
+            transform: Affine::translate(mark, 0.0),
             ..bitmap(1)
         });
         scene.add_path(

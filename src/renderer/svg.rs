@@ -788,7 +788,7 @@ mod tests {
     fn text(s: &str) -> Text {
         Text::from_parts(
             TextStyle::Fill(Paint::solid(black()).unwrap()),
-            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            Affine::translate(0.0, 0.0),
             TextSpec {
                 size: 16.0,
                 text: s.to_owned(),

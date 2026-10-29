@@ -1130,8 +1130,8 @@ mod tests {
 
     fn text(s: &str, size: f32) -> Text {
         Text::from_parts(
-            TextStyle::Fill(Paint::opaque(0, 0, 0)),
-            Affine::from_coefficients([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            TextStyle::black(),
+            Affine::translate(0.0, 0.0),
             TextSpec {
                 size,
                 text: s.to_owned(),
