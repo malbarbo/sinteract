@@ -357,25 +357,18 @@ impl Stage {
     /// image that the server does not have, and still writes after the
     /// end of the stream of the server, so the views get the last frames.
     pub fn present(&mut self, to: Target, scene: Scene) -> Result<(), StagePresentError> {
-        let has_player = || match to {
-            Target::Player(player) if player.number() > self.players => {
-                Err(StagePresentError::NoPlayer(player))
-            }
-            _ => Ok(()),
-        };
+        if let Target::Player(player) = to
+            && player.number() > self.players
+        {
+            return Err(StagePresentError::NoPlayer(player));
+        }
         match &mut self.inner {
-            Inner::Local(display) => {
-                has_player()?;
-                display.present(scene).map_err(StagePresentError::Display)
-            }
+            Inner::Local(display) => display.present(scene).map_err(StagePresentError::Display),
             #[cfg(feature = "window")]
             Inner::Players(players) => players.present(to, scene),
-            Inner::Remote(remote) => {
-                has_player()?;
-                (remote.session)
-                    .write_frame(to, &scene)
-                    .map_err(StagePresentError::Session)
-            }
+            Inner::Remote(remote) => (remote.session)
+                .write_frame(to, &scene)
+                .map_err(StagePresentError::Session),
         }
     }
 
@@ -607,7 +600,7 @@ impl Players {
     /// that failed since the last present fails this one, which still
     /// keeps `scene`.
     fn present(&mut self, to: Target, scene: Scene) -> Result<(), StagePresentError> {
-        self.pending.keep(to, scene)?;
+        self.pending.keep(to, scene);
         self.window
             .take_failed()
             .map_err(StagePresentError::Display)
@@ -657,20 +650,16 @@ impl Pending {
     }
 
     /// Keep `scene` for the players of `to`, in place of the scene that
-    /// each one had.
-    fn keep(&mut self, to: Target, scene: Scene) -> Result<(), StagePresentError> {
+    /// each one had. [`Stage::present`] checks that the player is here.
+    fn keep(&mut self, to: Target, scene: Scene) {
         let scene = Rc::new(scene);
         match to {
             Target::All => self.scenes.fill(Some(scene)),
             Target::Player(player) => {
                 let seat = player.number().get() as usize - 1;
-                let Some(pending) = self.scenes.get_mut(seat) else {
-                    return Err(StagePresentError::NoPlayer(player));
-                };
-                *pending = Some(scene);
+                *self.scenes.get_mut(seat).expect("the stage has the player") = Some(scene);
             }
         }
-        Ok(())
     }
 
     /// Hand each scene that waits to `draw`, with its player.
@@ -1183,8 +1172,8 @@ pub(super) mod tests {
     #[test]
     fn a_scene_to_a_player_after_one_to_all_replaces_only_its_own() {
         let mut pending = two_pending();
-        pending.keep(Target::All, Scene::new(1.0, 1.0)).unwrap();
-        pending.keep(second(), Scene::new(2.0, 1.0)).unwrap();
+        pending.keep(Target::All, Scene::new(1.0, 1.0));
+        pending.keep(second(), Scene::new(2.0, 1.0));
         assert_eq!(drawn(&mut pending), [(1, 1.0), (2, 2.0)]);
         assert_eq!(drawn(&mut pending), []);
     }
@@ -1193,20 +1182,8 @@ pub(super) mod tests {
     #[test]
     fn a_scene_to_all_after_one_to_a_player_replaces_it() {
         let mut pending = two_pending();
-        pending.keep(second(), Scene::new(2.0, 1.0)).unwrap();
-        pending.keep(Target::All, Scene::new(1.0, 1.0)).unwrap();
+        pending.keep(second(), Scene::new(2.0, 1.0));
+        pending.keep(Target::All, Scene::new(1.0, 1.0));
         assert_eq!(drawn(&mut pending), [(1, 1.0), (2, 1.0)]);
-    }
-
-    #[cfg(feature = "window")]
-    #[test]
-    fn a_scene_to_a_player_the_stage_lacks_fails_and_keeps_nothing() {
-        let mut pending = two_pending();
-        let third = Player(NonZeroU32::new(3).expect("3 is not zero"));
-        assert!(matches!(
-            pending.keep(Target::Player(third), Scene::new(3.0, 1.0)),
-            Err(StagePresentError::NoPlayer(p)) if p == third
-        ));
-        assert_eq!(drawn(&mut pending), []);
     }
 }
