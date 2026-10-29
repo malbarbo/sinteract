@@ -1699,7 +1699,17 @@ impl Scene {
 /// nesting, unlike a [`Scene::clip`] inside another. A front end that crops
 /// in a tree of any depth adds each element through [`Scene::cropped`].
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Crop(Option<Arc<[(f64, f64)]>>);
+pub struct Crop(Option<Arc<Polygon>>);
+
+/// The polygon of a [`Crop`], with its clip, which an element under the
+/// crop shares, so a crop builds its clip once.
+#[derive(Debug, PartialEq)]
+struct Polygon {
+    points: Box<[(f64, f64)]>,
+    /// `None` when the polygon draws nothing, because it is empty or not
+    /// finite in `f32`.
+    clip: Option<ClipPath>,
+}
 
 /// How far a point may be outside a box and still count as inside, so a box
 /// that matches a crop up to rounding does not cut it.
@@ -1714,7 +1724,7 @@ impl Crop {
         let finite = corners.iter().all(|&(x, y)| x.is_finite() && y.is_finite());
         let area = cross(corners[0], corners[1], corners[2]);
         if !finite || area == 0.0 {
-            return Crop(Some(Arc::new([])));
+            return Crop::polygon(Vec::new());
         }
         // The sign makes the distance to an edge positive inside the box,
         // whichever way its corners turn.
@@ -1729,15 +1739,15 @@ impl Crop {
             sign * cross(p, q, r) / (q.0 - p.0).hypot(q.1 - p.1)
         };
         let Some(polygon) = &self.0 else {
-            return Crop(Some(corners.into()));
+            return Crop::polygon(corners.into());
         };
         let contains = |r: (f64, f64)| edges().all(|e| distance(e, r) >= -INSIDE_TOLERANCE);
-        if polygon.iter().all(|&r| contains(r)) {
+        if polygon.points.iter().all(|&r| contains(r)) {
             return self.clone();
         }
         // Sutherland-Hodgman. The box is convex, so each of its edges cuts
         // away what lies outside it.
-        let mut out = polygon.to_vec();
+        let mut out = polygon.points.to_vec();
         for edge in edges() {
             let points = std::mem::take(&mut out);
             let sides = points
@@ -1768,13 +1778,23 @@ impl Crop {
         if out.len() < 3 {
             out.clear();
         }
-        Crop(Some(out.into()))
+        Crop::polygon(out)
     }
 
     /// Returns `true` if nothing of the canvas is visible, `false`
     /// otherwise.
     pub fn is_empty(&self) -> bool {
-        self.0.as_ref().is_some_and(|polygon| polygon.is_empty())
+        self.0
+            .as_ref()
+            .is_some_and(|polygon| polygon.points.is_empty())
+    }
+
+    fn polygon(points: Vec<(f64, f64)>) -> Crop {
+        let clip = polygon_clip(&points);
+        Crop(Some(Arc::new(Polygon {
+            points: points.into(),
+            clip,
+        })))
     }
 }
 
@@ -1838,21 +1858,21 @@ impl Cropped<'_> {
             self.scene.elements.push(element);
             return;
         };
-        let Some(clip) = polygon_clip(polygon) else {
+        let Some(clip) = &polygon.clip else {
             return;
         };
         if let Some(Element::Clipped {
             clip: last,
             elements,
         }) = self.scene.elements.last_mut()
-            && *last == clip
+            && last == clip
         {
             elements.push(element);
             return;
         }
         if !self.scene.is_nested_to_max() {
             self.scene.elements.push(Element::Clipped {
-                clip,
+                clip: clip.clone(),
                 elements: vec![element],
             });
         }
@@ -2547,7 +2567,7 @@ mod tests {
 
     /// The polygon of `crop`, `None` for the whole canvas.
     fn polygon(crop: &Crop) -> Option<Vec<(f64, f64)>> {
-        crop.0.as_ref().map(|p| p.to_vec())
+        crop.0.as_ref().map(|p| p.points.to_vec())
     }
 
     /// The box from `(x0, y0)` to `(x1, y1)`.
