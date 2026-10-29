@@ -244,9 +244,6 @@ impl Canvas<AllocError> for PixmapRenderer {
         let style = &path.style;
         let fill = style.fill();
         let stroke = style.stroke();
-        if fill.is_none() && stroke.is_none() {
-            return;
-        }
         let mask = match in_effect(&self.clip_stack) {
             InEffect::Nothing => return,
             InEffect::Everything => None,
@@ -292,9 +289,6 @@ impl Canvas<AllocError> for PixmapRenderer {
     }
 
     fn draw_text(&mut self, node: &Text) {
-        if node.style.fill().is_none() && node.style.stroke().is_none() {
-            return;
-        }
         let mask = match in_effect(&self.clip_stack) {
             InEffect::Nothing => return,
             InEffect::Everything => None,

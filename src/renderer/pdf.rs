@@ -190,9 +190,6 @@ impl Canvas<Infallible> for PdfRenderer {
         let style = &path.style;
         let fill = style.fill().map(|f| &f.paint);
         let stroke = style.stroke();
-        if fill.is_none() && stroke.is_none() {
-            return;
-        }
         // A path with no segments must not leave a `q ... Q` with no geometry.
         if path.segments().next().is_none() {
             return;
@@ -205,9 +202,6 @@ impl Canvas<Infallible> for PdfRenderer {
     fn draw_text(&mut self, node: &Text) {
         let fill = node.style.fill();
         let stroke = node.style.stroke();
-        if fill.is_none() && stroke.is_none() {
-            return;
-        }
         let Some(layout) = TextLayout::new(node.spec()) else {
             return;
         };

@@ -307,9 +307,6 @@ impl Canvas<Infallible> for CanvasRenderer {
         let style = &path.style;
         let fill = style.fill();
         let stroke = style.stroke();
-        if fill.is_none() && stroke.is_none() {
-            return;
-        }
         let mut sink = Calls::new();
         path.outline(&mut sink);
         if sink.empty {
@@ -356,9 +353,6 @@ impl Canvas<Infallible> for CanvasRenderer {
         };
         let fill = node.style.fill();
         let stroke = node.style.stroke();
-        if fill.is_none() && stroke.is_none() {
-            return;
-        }
         // An outline moved by the transform of the text, in the space of the
         // scene.
         let moved = |outline: &dyn Fn(&mut dyn PathSink)| {

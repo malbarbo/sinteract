@@ -210,9 +210,6 @@ impl Canvas<Infallible> for SvgRenderer {
         let style = &path.style;
         let fill = style.fill();
         let stroke = style.stroke();
-        if fill.is_none() && stroke.is_none() {
-            return;
-        }
         // A path with no segments would write an empty `<path>`.
         if path.segments().next().is_none() {
             return;
