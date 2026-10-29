@@ -1868,10 +1868,14 @@ impl PathBounds {
         self
     }
 
-    /// The least x, the least y, the greatest x and the greatest y of the
-    /// path, or `None` when it draws no segment.
-    pub fn get(&self) -> Option<(f64, f64, f64, f64)> {
-        self.rect.map(|r| (r.x0, r.y0, r.x1, r.y1))
+    /// The bounds of the path, or `None` when it draws no segment.
+    pub fn get(&self) -> Option<Bounds> {
+        self.rect.map(|r| Bounds {
+            min_x: r.x0,
+            min_y: r.y0,
+            max_x: r.x1,
+            max_y: r.y1,
+        })
     }
 
     fn add(mut self, rect: kurbo::Rect, to: kurbo::Point) -> Self {
@@ -1879,6 +1883,15 @@ impl PathBounds {
         self.last_point = to;
         self
     }
+}
+
+/// The least and the greatest x and y of a path, from [`PathBounds::get`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bounds {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
 }
 
 fn cubic([p0, p1, p2, p3]: [kurbo::Point; 4]) -> kurbo::CubicBez {
@@ -2224,6 +2237,7 @@ mod tests {
                 PathBounds::new(0.0, 0.0)
                     .arc_to(r, r, 0.0, large_arc, true, 10.0, 0.0)
                     .get()
+                    .map(corners)
                     .unwrap()
             };
             let (x0, y0, x1, y1) = arc(false);
@@ -2241,6 +2255,7 @@ mod tests {
             PathBounds::new(0.0, 0.0)
                 .arc_to(1e300, 1e300, 0.0, large_arc, true, 1e-10, 0.0)
                 .get()
+                .map(corners)
                 .unwrap()
         };
         assert_eq!(arc(false), (0.0, 0.0, 1e-10, 0.0));
@@ -2265,9 +2280,9 @@ mod tests {
                 near(x0, r.x0) && near(y0, r.y0) && near(x1, r.x1) && near(y1, r.y1)
             };
             let cubic = PathBounds::new(p0.x, p0.y).cubic_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
-            assert!(near(cubic.get(), cubic_rect));
+            assert!(near(cubic.get().map(corners), cubic_rect));
             let quad = PathBounds::new(p0.x, p0.y).quad_to(p1.x, p1.y, p3.x, p3.y);
-            assert!(near(quad.get(), quad_rect));
+            assert!(near(quad.get().map(corners), quad_rect));
         }
     }
 
@@ -2278,7 +2293,8 @@ mod tests {
         let rect = kurbo::CubicBez::new(p0, p1, p2, p3).bounding_box();
         let bounds = PathBounds::new(p0.x, p0.y)
             .cubic_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y)
-            .get();
+            .get()
+            .map(corners);
         assert_eq!(bounds, Some((rect.x0, rect.y0, rect.x1, rect.y1)));
     }
 
@@ -2287,11 +2303,13 @@ mod tests {
         // The radii squared overflow, and so do the ends added together.
         let half = PathBounds::new(0.0, 0.0)
             .arc_to(1e80, 1e80, 0.0, false, true, 2e80, 0.0)
-            .get();
+            .get()
+            .map(corners);
         let x = f64::MAX * 0.6;
         let far = PathBounds::new(x, 0.0)
             .arc_to(10.0, 10.0, 0.0, false, true, x, 20.0)
-            .get();
+            .get()
+            .map(corners);
         let (x0, y0, x1, y1) = half.unwrap();
         assert!(x0.abs() < 1e68 && (x1 - 2e80).abs() < 1e68);
         assert!((y0 + 1e80).abs() < 1e68 && y1.abs() < 1e68);
@@ -2323,6 +2341,10 @@ mod tests {
         }
     }
 
+    fn corners(b: Bounds) -> (f64, f64, f64, f64) {
+        (b.min_x, b.min_y, b.max_x, b.max_y)
+    }
+
     /// The bounds of the f32 segments of `path`.
     fn segment_bounds(path: &Path) -> Option<(f64, f64, f64, f64)> {
         let f = f64::from;
@@ -2346,7 +2368,7 @@ mod tests {
                 } => bounds.cubic_to(f(c1x), f(c1y), f(c2x), f(c2y), f(x), f(y)),
             };
         }
-        bounds.get()
+        bounds.get().map(corners)
     }
 
     #[test]
@@ -2355,7 +2377,7 @@ mod tests {
             .move_to(0.0, 0.0)
             .line_to(10.0, 5.0)
             .move_to(50.0, 50.0);
-        assert_eq!(bounds.get(), Some((0.0, 0.0, 10.0, 5.0)));
+        assert_eq!(bounds.get().map(corners), Some((0.0, 0.0, 10.0, 5.0)));
         assert_eq!(PathBounds::new(5.0, 5.0).move_to(9.0, 9.0).get(), None);
     }
 
@@ -2365,16 +2387,16 @@ mod tests {
             let bounds = PathBounds::new(0.0, 0.0)
                 .arc_to(f64::NAN, 1.0, 0.0, large_arc, true, 10.0, 0.0)
                 .line_to(10.0, 5.0);
-            assert_eq!(bounds.get(), Some((0.0, 0.0, 10.0, 5.0)));
+            assert_eq!(bounds.get().map(corners), Some((0.0, 0.0, 10.0, 5.0)));
         }
     }
 
     #[test]
     fn path_bounds_cover_the_extremes_of_a_curve() {
         let quad = PathBounds::new(0.0, 0.0).quad_to(5.0, 10.0, 10.0, 0.0);
-        assert_eq!(quad.get(), Some((0.0, 0.0, 10.0, 5.0)));
+        assert_eq!(quad.get().map(corners), Some((0.0, 0.0, 10.0, 5.0)));
         let cubic = PathBounds::new(0.0, 0.0).cubic_to(0.0, -8.0, 10.0, -8.0, 10.0, 0.0);
-        assert_eq!(cubic.get(), Some((0.0, -6.0, 10.0, 0.0)));
+        assert_eq!(cubic.get().map(corners), Some((0.0, -6.0, 10.0, 0.0)));
     }
 
     #[test]
@@ -2400,6 +2422,7 @@ mod tests {
                     f64::from(y),
                 )
                 .get()
+                .map(corners)
                 .unwrap();
             let drawn = segment_bounds(&path).unwrap();
             let (b, d) = (

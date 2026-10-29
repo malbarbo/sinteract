@@ -212,10 +212,16 @@ pub(super) fn bounds(commands: &[PathCmd]) -> Option<Bounds> {
             }
         };
     }
-    let (x0, y0, x1, y1) = bounds.get()?;
+    let drawn = bounds.get()?;
     Some(Bounds {
-        min: Point { x: x0, y: y0 },
-        max: Point { x: x1, y: y1 },
+        min: Point {
+            x: drawn.min_x,
+            y: drawn.min_y,
+        },
+        max: Point {
+            x: drawn.max_x,
+            y: drawn.max_y,
+        },
     })
 }
 
