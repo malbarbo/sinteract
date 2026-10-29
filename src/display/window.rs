@@ -12,6 +12,7 @@
 //! long as the process, such as the main thread.
 
 use std::cell::RefCell;
+use std::io;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -33,7 +34,7 @@ use super::driver::{OpenError, PresentError, sealed};
 use super::inbox::{Inbox, Next, Seated, Sender};
 use super::tick_clock::TickClock;
 use crate::event::{
-    Event, Interrupt, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
+    Event, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent, key,
 };
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
@@ -41,7 +42,7 @@ use crate::scene::Scene;
 use crate::session::Target;
 
 /// A [`super::Display`] over a winit window. Closing the window arrives
-/// as [`Interrupt::Close`], and the window stays until the drop of the
+/// as [`Event::Close`], and the window stays until the drop of the
 /// `Window`. The size of the window arrives as an
 /// [`InputEvent::Resize`](crate::event::InputEvent::Resize) ahead of the
 /// first tick, and again after each change.
@@ -251,13 +252,13 @@ impl Window {
     }
 
     /// Block until the next event, with the seat of an input, as
-    /// [`super::Display::wait_event`] does. `draw` runs after the events
+    /// [`super::Display::wait`] does. `draw` runs after the events
     /// that wait, so a frame callback has its time before the draw.
     pub(crate) fn wait_seated(
         &mut self,
         deadline: Option<Instant>,
         draw: impl FnOnce(&mut Self),
-    ) -> Result<Seated, Interrupt> {
+    ) -> io::Result<Seated> {
         // A frame that draws for longer than the period finds the next tick
         // due, so the wait returns it without a pump, and the platform takes
         // a window that never answers for hung. So every call pumps once.
@@ -291,7 +292,7 @@ impl super::Display for Window {
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
+    fn wait(&mut self, deadline: Option<Instant>) -> io::Result<Event> {
         self.wait_seated(deadline, |_| {}).map(Event::from)
     }
 

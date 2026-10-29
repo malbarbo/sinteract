@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Instant;
 
 use super::{OpenError, PresentError, Stage, StageError, StageEvent, StageMode};
-use crate::event::{InputEvent, Interrupt, KeyEvent, KeyKind, PadEvent};
+use crate::event::{InputEvent, KeyEvent, KeyKind, PadEvent};
 use crate::scene::Scene;
 use crate::session::{Player, PlayerRange, Target};
 
@@ -205,13 +205,12 @@ impl Frames {
                 }) => open.events.push_back(FrameEvent::Pad(player, pad)),
                 Ok(StageEvent::Input { .. }) => {}
                 Ok(StageEvent::Error(e)) => on_error(&e),
-                Err(Interrupt::Timeout) => return FrameEvent::Timeout,
-                Err(Interrupt::Wake) => {}
-                Err(Interrupt::Read(e)) => {
+                Ok(StageEvent::Timeout) => return FrameEvent::Timeout,
+                Ok(StageEvent::Close) => open.closed = true,
+                Err(e) => {
                     on_error(&e);
                     open.closed = true;
                 }
-                Err(Interrupt::Close) => open.closed = true,
             }
         }
     }

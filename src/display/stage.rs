@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use super::{Display, OpenError, PresentError};
-use crate::event::{Event, InputEvent, Interrupt};
+use crate::event::{Event, InputEvent};
 use crate::scene::Scene;
 use crate::session::PlayerRange;
 use crate::session::{FrameError, Player, Session, SessionError, SessionEvent, StartError, Target};
@@ -22,7 +22,6 @@ use crate::session::{FrameError, Player, Session, SessionError, SessionEvent, St
 ///
 /// ```no_run
 /// # use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
-/// # use sinteract::event::Interrupt;
 /// # use sinteract::scene::Scene;
 /// # use sinteract::session::Target;
 /// # use sinteract::session::PlayerRange;
@@ -31,13 +30,12 @@ use crate::session::{FrameError, Player, Session, SessionError, SessionEvent, St
 /// let mode = StageMode::auto(None, TerminalOptions::default());
 /// let (mut stage, _players) = Stage::open("My game", players, mode)?;
 /// loop {
-///     match stage.wait(None) {
-///         Ok(StageEvent::Tick) => stage.present(Target::All, Scene::new(400.0, 300.0))?,
-///         Ok(StageEvent::Input { player, event }) => {}
-///         Ok(StageEvent::Error(e)) => eprintln!("{e}"),
-///         Err(Interrupt::Read(e)) => eprintln!("{e}"),
-///         Err(Interrupt::Close) => break,
-///         Err(Interrupt::Wake | Interrupt::Timeout) => {}
+///     match stage.wait(None)? {
+///         StageEvent::Tick => stage.present(Target::All, Scene::new(400.0, 300.0))?,
+///         StageEvent::Input { player, event } => {}
+///         StageEvent::Error(e) => eprintln!("{e}"),
+///         StageEvent::Timeout => {}
+///         StageEvent::Close => break,
 ///     }
 /// }
 /// stage.close();
@@ -60,6 +58,11 @@ pub enum StageEvent {
     /// The session dropped a message that broke a rule, and goes on. Only
     /// a session sends it.
     Error(SessionError),
+    /// The deadline passed with nothing to deliver.
+    Timeout,
+    /// The user or the platform ended the input, or the server ended the
+    /// session. Every wait from now on returns it.
+    Close,
 }
 
 /// What an engine adds to a terminal display.
@@ -67,7 +70,7 @@ pub enum StageEvent {
 pub struct TerminalOptions {
     /// Runs on the reader thread when the user presses Ctrl-C, after the
     /// Close goes into the queue. Raw mode turns off the signal of Ctrl-C,
-    /// so an engine stops here the code that never calls `wait_event`. With
+    /// so an engine stops here the code that never calls `wait`. With
     /// stdin redirected no reader takes the keys, and Ctrl-C raises SIGINT
     /// instead.
     pub on_interrupt: Option<fn()>,
@@ -280,18 +283,24 @@ impl Stage {
     }
 
     /// Block until the next event, or until `deadline` and then return
-    /// [`Interrupt::Timeout`], as [`Display::wait_event`] does. A session
-    /// never returns [`Interrupt::Wake`]. The end of the session is
-    /// [`Interrupt::Close`], and a stream that fails or breaks is
-    /// [`Interrupt::Read`], with a Close right after.
-    pub fn wait(&mut self, deadline: Option<Instant>) -> Result<StageEvent, Interrupt> {
+    /// [`StageEvent::Timeout`], as [`Display::wait`] does. The end of the
+    /// session is [`StageEvent::Close`]. A read of the input that fails, a
+    /// stream of the server that breaks or a write to the server that
+    /// fails returns its error, and every wait after it returns Close.
+    pub fn wait(&mut self, deadline: Option<Instant>) -> io::Result<StageEvent> {
         match &mut self.inner {
-            Inner::Local(display) => match display.wait_event(deadline)? {
-                Event::Tick => Ok(StageEvent::Tick),
-                Event::Input(event) => Ok(StageEvent::Input {
-                    player: Player::LOCAL,
-                    event,
-                }),
+            Inner::Local(display) => loop {
+                return Ok(match display.wait(deadline)? {
+                    Event::Tick => StageEvent::Tick,
+                    Event::Input(event) => StageEvent::Input {
+                        player: Player::LOCAL,
+                        event,
+                    },
+                    // No Sender of the display leaves the stage.
+                    Event::Wake => continue,
+                    Event::Timeout => StageEvent::Timeout,
+                    Event::Close => StageEvent::Close,
+                });
             },
             #[cfg(feature = "window")]
             Inner::Players(players) => players.wait(deadline),
@@ -560,21 +569,28 @@ impl Players {
     }
 
     /// Draw the scenes that wait, and block until the next event.
-    fn wait(&mut self, deadline: Option<Instant>) -> Result<StageEvent, Interrupt> {
-        let pending = &mut self.pending;
-        let seated = self.window.wait_seated(deadline, |window| {
-            pending.draw(|player, scene| {
-                // Pending has the players of the window, and a closed window
-                // ends the wait with Close.
-                let _ = window.present_to(Target::Player(player), scene);
+    fn wait(&mut self, deadline: Option<Instant>) -> io::Result<StageEvent> {
+        use super::inbox::Seated;
+        loop {
+            let pending = &mut self.pending;
+            let seated = self.window.wait_seated(deadline, |window| {
+                pending.draw(|player, scene| {
+                    // Pending has the players of the window, and a closed window
+                    // ends the wait with Close.
+                    let _ = window.present_to(Target::Player(player), scene);
+                });
             });
-        });
-        match seated? {
-            super::inbox::Seated::Tick => Ok(StageEvent::Tick),
-            super::inbox::Seated::Input(seat, event) => Ok(StageEvent::Input {
-                player: Player(NonZeroU32::MIN.saturating_add(seat)),
-                event,
-            }),
+            return Ok(match seated? {
+                Seated::Tick => StageEvent::Tick,
+                Seated::Input(seat, event) => StageEvent::Input {
+                    player: Player(NonZeroU32::MIN.saturating_add(seat)),
+                    event,
+                },
+                // No Sender of the window leaves the stage.
+                Seated::Wake => continue,
+                Seated::Timeout => StageEvent::Timeout,
+                Seated::Close => StageEvent::Close,
+            });
         }
     }
 }
@@ -642,9 +658,9 @@ struct Remote {
 }
 
 impl Remote {
-    fn wait(&mut self, deadline: Option<Instant>) -> Result<StageEvent, Interrupt> {
+    fn wait(&mut self, deadline: Option<Instant>) -> io::Result<StageEvent> {
         if self.ended {
-            return Err(Interrupt::Close);
+            return Ok(StageEvent::Close);
         }
         self.deadline.set(deadline);
         let event = self.session.wait();
@@ -655,15 +671,15 @@ impl Remote {
             Ok(SessionEvent::Error(e)) => Ok(StageEvent::Error(e)),
             Ok(SessionEvent::End) => {
                 self.ended = true;
-                Err(Interrupt::Close)
+                Ok(StageEvent::Close)
             }
             // The session keeps its bytes over an error of the reader, so
             // the next wait goes on from there.
-            Err(e) if e.kind() == io::ErrorKind::TimedOut => Err(Interrupt::Timeout),
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(StageEvent::Timeout),
             // A read of a file that fails does not come back.
             Err(e) => {
                 self.ended = true;
-                Err(Interrupt::Read(e))
+                Err(e)
             }
         }
     }
@@ -969,7 +985,7 @@ pub(super) mod tests {
         let deadline = Instant::now() + Duration::from_millis(20);
         assert!(matches!(
             stage.wait(Some(deadline)),
-            Err(Interrupt::Timeout)
+            Ok(StageEvent::Timeout)
         ));
         assert!(Instant::now() >= deadline);
         server.tick();
@@ -998,7 +1014,7 @@ pub(super) mod tests {
         });
         assert!(matches!(stage.wait(None), Ok(StageEvent::Tick)));
         writer.join().unwrap();
-        assert!(matches!(stage.wait(None), Err(Interrupt::Close)));
+        assert!(matches!(stage.wait(None), Ok(StageEvent::Close)));
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]

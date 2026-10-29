@@ -690,7 +690,6 @@ sai:
 
 ```rust
 use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
-use sinteract::event::Interrupt;
 use sinteract::session::{PlayerRange, Target};
 
 let players = PlayerRange::new(1, 4).expect("1 a 4 é uma faixa");
@@ -703,18 +702,17 @@ let mode = if servidor {
 let (mut stage, jogadores) = Stage::open("jogo", players, mode)?;
 mundo.start(&jogadores); // cada Player com o apelido, o jogador 1 primeiro
 loop {
-    match stage.wait(None) {
-        Ok(StageEvent::Tick) => {
+    match stage.wait(None)? { // o fd 3 quebrou ou o fd 4 falhou
+        StageEvent::Tick => {
             mundo.on_tick(1000.0 / stage.tick_rate().get() as f32); // segundos por tick
             for (p, _) in &jogadores {
                 stage.present(Target::Player(*p), mundo.cena_de(*p))?;
             }
         }
-        Ok(StageEvent::Input { player, event }) => mundo.on_input(player, event),
-        Ok(StageEvent::Error(e)) => eprintln!("{e}"), // mensagem estragada, a sessão segue
-        Err(Interrupt::Read(e)) => eprintln!("{e}"),  // o fd 3 quebrou, e o Close vem depois
-        Err(Interrupt::Close) => break,               // o fd 3 acabou
-        Err(Interrupt::Wake | Interrupt::Timeout) => {} // o prazo do wait passou
+        StageEvent::Input { player, event } => mundo.on_input(player, event),
+        StageEvent::Error(e) => eprintln!("{e}"), // mensagem estragada, a sessão segue
+        StageEvent::Timeout => {}                 // o prazo do wait passou
+        StageEvent::Close => break,               // o fd 3 acabou
     }
 }
 stage.close(); // fecha o fd 3 e o fd 4, e a sala acaba
@@ -728,14 +726,16 @@ conta com isso passa no teste local e quebra no servidor. Um movimento do mouse 
 que ainda não foi lido é substituído pelo mais novo do mesmo jogador, sem
 passar por cima da entrada de outro jogador. A sessão guarda os `lost` do
 servidor e manda de novo a imagem perdida no próximo frame que a desenha.
-Uma escrita que falha no fd 4 fecha o fd 4 e encerra a sessão. O
+Uma escrita que falha no fd 4 fecha o fd 4 e encerra a sessão, e o `wait`
+devolve o erro dela, como devolve o de uma leitura do fd 3 que falha.
+Depois de um erro, todo `wait` devolve `Close`. O
 `tick_rate` dá a taxa do `start` numa sessão, e a taxa do monitor numa
 janela, que muda quando a janela passa para outro monitor. Por isso o
 jogo lê a taxa de novo a cada `Tick`. O `examples/engine.rs` do
 `sinteract` é uma engine completa.
 
 O `wait` respeita o prazo também numa sessão. Ele espera o fd 3 até o
-prazo e devolve `Interrupt::Timeout`, e a sessão segue do ponto em que
+prazo e devolve `StageEvent::Timeout`, e a sessão segue do ponto em que
 estava, então a engine roda o relógio do jogo mesmo sem `tick`, como numa
 aba escondida. O `close` consome o `Stage`, e o drop do `Stage` também
 fecha o fd 3 e o fd 4. Num build de wasi, o host mantém o fd 3 e o fd 4 abertos

@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use super::inbox::Sender;
 use crate::asset::RoomFull;
-use crate::event::{Event, Interrupt};
+use crate::event::Event;
 use crate::renderer::AllocError;
 use crate::scene::Scene;
 use crate::session::Player;
@@ -18,21 +18,20 @@ use crate::session::Player;
 ///
 /// ```no_run
 /// # use sinteract::display::Display;
-/// # use sinteract::event::{Event, InputEvent, KeyEvent, MouseEvent, Interrupt};
+/// # use sinteract::event::{Event, InputEvent, KeyEvent, MouseEvent};
 /// # use sinteract::scene::Scene;
 /// # fn next_scene() -> Scene { Scene::new(400.0, 300.0) }
 /// # fn on_key(_: KeyEvent) {}
 /// # fn on_mouse(_: MouseEvent) {}
 /// # fn run(display: &mut dyn Display) -> Result<(), Box<dyn std::error::Error>> {
 /// loop {
-///     match display.wait_event(None) {
-///         Ok(Event::Tick) => display.present(next_scene())?,
-///         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
-///         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
-///         Ok(Event::Input(InputEvent::Resize { .. } | InputEvent::Pad(_))) => {}
-///         Err(Interrupt::Wake | Interrupt::Timeout) => {}
-///         Err(Interrupt::Read(e)) => eprintln!("{e}"),
-///         Err(Interrupt::Close) => break,
+///     match display.wait(None)? {
+///         Event::Tick => display.present(next_scene())?,
+///         Event::Input(InputEvent::Key(k)) => on_key(k),
+///         Event::Input(InputEvent::Mouse(m)) => on_mouse(m),
+///         Event::Input(InputEvent::Resize { .. } | InputEvent::Pad(_)) => {}
+///         Event::Wake | Event::Timeout => {}
+///         Event::Close => break,
 ///     }
 /// }
 /// # Ok(())
@@ -51,11 +50,12 @@ pub trait Display: sealed::Sealed {
     fn present(&mut self, scene: Scene) -> Result<(), PresentError>;
 
     /// Block until the next event, or until `deadline` and then return
-    /// [`Interrupt::Timeout`], or with no limit when it is `None`. The events
-    /// go out in the order of arrival. After a Close, every call returns
-    /// [`Interrupt::Close`]. A `while let Ok(ev)` over it also stops at the
-    /// first Wake or Timeout.
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt>;
+    /// [`Event::Timeout`], or with no limit when it is `None`. The events
+    /// go out in the order of arrival. A read of the input that fails
+    /// returns its error, and after the error or a Close every call returns
+    /// [`Event::Close`]. So a loop ends at Close, since the wait does not
+    /// fail there.
+    fn wait(&mut self, deadline: Option<Instant>) -> io::Result<Event>;
 
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;

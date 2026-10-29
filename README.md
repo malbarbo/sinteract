@@ -47,7 +47,7 @@ For an animation, a `Display` owns the terminal or the window, presents a
 scene per frame and delivers the input as a stream of `Event`s, a key, the
 mouse, a resize or a tick. A frame that does not reach the display comes
 back as a `PresentError`, and a read of the terminal that fails comes back
-as an `Interrupt`, both with the error that caused them. The library
+as the error of the wait, both with the error that caused them. The library
 writes nothing to stderr and ends no session on its own, so the program
 chooses the words and decides whether to stop. A `Sender` wakes the loop
 from another thread with a close or a bare wake.
@@ -61,13 +61,12 @@ player 1. A window takes the size of the scene of its first present:
 ```rust,ignore
 let (mut stage, _players) = Stage::open("My game", players, options)?;
 loop {
-    match stage.wait(None) {
-        Ok(StageEvent::Tick) => stage.present(Target::All, draw())?,
-        Ok(StageEvent::Input { player, event }) => update(player, event),
-        Ok(StageEvent::Error(e)) => eprintln!("{e}"),
-        Err(Interrupt::Read(e)) => eprintln!("{e}"),
-        Err(Interrupt::Close) => break,
-        Err(Interrupt::Wake | Interrupt::Timeout) => {}
+    match stage.wait(None)? {
+        StageEvent::Tick => stage.present(Target::All, draw())?,
+        StageEvent::Input { player, event } => update(player, event),
+        StageEvent::Error(e) => eprintln!("{e}"),
+        StageEvent::Timeout => {}
+        StageEvent::Close => break,
     }
 }
 ```

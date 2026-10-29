@@ -25,7 +25,7 @@ use std::num::NonZeroU32;
 use std::process::ExitCode;
 
 use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
-use sinteract::event::{InputEvent, Interrupt, KeyKind, key};
+use sinteract::event::{InputEvent, KeyKind, key};
 use sinteract::scene::{
     Bitmap, FillRule, Image, Paint, Path, PathFill, PathStyle, RotatedRect, Scene,
 };
@@ -81,9 +81,9 @@ fn main() -> ExitCode {
             // A message the engine cannot read is a bug in the server, and
             // the game goes on without it.
             Ok(StageEvent::Error(e)) => eprintln!("engine: {e}"),
-            Err(Interrupt::Read(e)) => eprintln!("engine: {e}"),
-            Err(Interrupt::Close) => break,
-            Err(Interrupt::Wake | Interrupt::Timeout) => {}
+            Err(e) => eprintln!("engine: {e}"),
+            Ok(StageEvent::Close) => break,
+            Ok(StageEvent::Timeout) => {}
         }
     }
     // In a session, the end of fd 4 ends the room for the server.

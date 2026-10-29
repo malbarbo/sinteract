@@ -36,7 +36,7 @@ use std::time::Instant;
 use sinteract::display::{
     Display, Printer, Stage, StageEvent, StageMode, Terminal, TerminalOptions, Window, open_native,
 };
-use sinteract::event::{Event, InputEvent, Interrupt, KeyKind, key};
+use sinteract::event::{Event, InputEvent, KeyKind, key};
 use sinteract::renderer::Renderer;
 use sinteract::renderer::pdf::PdfRenderer;
 use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
@@ -140,7 +140,7 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
     let mut frames = 0u32;
     let mut presenting = std::time::Duration::ZERO;
     loop {
-        match display.wait_event(None) {
+        match display.wait(None) {
             Ok(Event::Tick) => {
                 let scene = gallery(start.elapsed().as_secs_f32());
                 let before = Instant::now();
@@ -153,9 +153,9 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
             {
                 break;
             }
-            Ok(Event::Input(_)) | Err(Interrupt::Wake | Interrupt::Timeout) => {}
-            Err(Interrupt::Read(e)) => eprintln!("gallery: {e}"),
-            Err(Interrupt::Close) => break,
+            Ok(Event::Input(_) | Event::Wake | Event::Timeout) => {}
+            Err(e) => eprintln!("gallery: {e}"),
+            Ok(Event::Close) => break,
         }
     }
     drop(display);
@@ -209,10 +209,10 @@ fn stage() -> Result<(), String> {
             Ok(StageEvent::Tick) => stage
                 .present(Target::All, gallery(STILL))
                 .map_err(|e| e.to_string())?,
-            Ok(StageEvent::Input { .. }) | Err(Interrupt::Wake | Interrupt::Timeout) => {}
+            Ok(StageEvent::Input { .. } | StageEvent::Timeout) => {}
             Ok(StageEvent::Error(e)) => eprintln!("gallery: {e}"),
-            Err(Interrupt::Read(e)) => eprintln!("gallery: {e}"),
-            Err(Interrupt::Close) => break,
+            Err(e) => eprintln!("gallery: {e}"),
+            Ok(StageEvent::Close) => break,
         }
     }
     stage.close();

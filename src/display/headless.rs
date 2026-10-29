@@ -1,12 +1,13 @@
 //! [`Headless`], the display of a stage under [`super::StageMode::Headless`].
 
+use std::io;
 use std::num::NonZeroU32;
 use std::time::Instant;
 
 use super::driver::{PresentError, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::tick_clock::TickClock;
-use crate::event::{Event, Interrupt};
+use crate::event::Event;
 use crate::scene::Scene;
 
 /// A display that ticks and draws nothing, so a game runs on its clock
@@ -33,7 +34,7 @@ impl super::Display for Headless {
         Ok(())
     }
 
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
+    fn wait(&mut self, deadline: Option<Instant>) -> io::Result<Event> {
         loop {
             match self.inbox.next(&mut self.clock, deadline) {
                 Next::Ready(ready) => return ready.map(Event::from),
@@ -65,24 +66,18 @@ mod tests {
     fn ticks_and_takes_a_scene() {
         let mut display = Headless::new();
         let deadline = Instant::now() + Duration::from_secs(1);
-        assert!(matches!(
-            display.wait_event(Some(deadline)),
-            Ok(Event::Tick)
-        ));
-        assert!(matches!(
-            display.wait_event(Some(deadline)),
-            Ok(Event::Tick)
-        ));
+        assert!(matches!(display.wait(Some(deadline)), Ok(Event::Tick)));
+        assert!(matches!(display.wait(Some(deadline)), Ok(Event::Tick)));
         assert!(display.present(Scene::new(10.0, 10.0)).is_ok());
     }
 
     #[test]
     fn a_deadline_before_the_tick_times_out() {
         let mut display = Headless::new();
-        assert!(matches!(display.wait_event(None), Ok(Event::Tick)));
+        assert!(matches!(display.wait(None), Ok(Event::Tick)));
         assert!(matches!(
-            display.wait_event(Some(Instant::now())),
-            Err(Interrupt::Timeout)
+            display.wait(Some(Instant::now())),
+            Ok(Event::Timeout)
         ));
     }
 }

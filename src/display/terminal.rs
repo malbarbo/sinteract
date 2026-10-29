@@ -28,7 +28,7 @@ use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use super::stage::{TerminalGraphics, TerminalOptions};
 use super::tick_clock::TickClock;
-use crate::event::{Event, Interrupt, MouseEvent};
+use crate::event::{Event, MouseEvent};
 use crate::renderer::pixmap::PixmapRenderer;
 use crate::renderer::{AllocError, Renderer};
 use crate::scene::{Rgba, Scene};
@@ -49,7 +49,7 @@ const SIXEL_BACKGROUND: Rgba = Rgba {
 };
 
 /// A [`super::Display`] over the alt screen of the terminal, in raw mode.
-/// Ctrl-C arrives as [`Interrupt::Close`]. The size of the terminal
+/// Ctrl-C arrives as [`Event::Close`]. The size of the terminal
 /// arrives as an [`InputEvent::Resize`](crate::event::InputEvent::Resize)
 /// ahead of the first tick, and again after each change. A mouse event
 /// gives the center of its cell.
@@ -230,7 +230,7 @@ impl super::Display for Terminal {
         drawn
     }
 
-    fn wait_event(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
+    fn wait(&mut self, deadline: Option<Instant>) -> io::Result<Event> {
         loop {
             match self.inbox.next(&mut self.clock, deadline) {
                 Next::Ready(ready) => return ready.map(Event::from),

@@ -1,21 +1,20 @@
 //! The events that a display delivers.
 //!
 //! Every display turns its input into the same [`InputEvent`] stream, adds
-//! a [`Event::Tick`] at each frame, and the engine loop blocks on
-//! `wait_event` and dispatches:
+//! a [`Event::Tick`] at each frame, and the engine loop blocks on `wait`
+//! and dispatches:
 //!
 //! ```text
 //! loop {
-//!     match display.wait_event(deadline) {
-//!         Ok(Event::Tick) => on_tick(),
-//!         Ok(Event::Input(InputEvent::Key(k))) => on_key(k),
-//!         Ok(Event::Input(InputEvent::Mouse(m))) => on_mouse(m),
-//!         Ok(Event::Input(InputEvent::Resize { width, height })) => on_resize(width, height),
-//!         Ok(Event::Input(InputEvent::Pad(p))) => on_pad(p),
-//!         Err(Interrupt::Wake) => on_wake(),
-//!         Err(Interrupt::Timeout) => check_signals(),
-//!         Err(Interrupt::Read(e)) => report(e),
-//!         Err(Interrupt::Close) => break,
+//!     match display.wait(deadline)? {
+//!         Event::Tick => on_tick(),
+//!         Event::Input(InputEvent::Key(k)) => on_key(k),
+//!         Event::Input(InputEvent::Mouse(m)) => on_mouse(m),
+//!         Event::Input(InputEvent::Resize { width, height }) => on_resize(width, height),
+//!         Event::Input(InputEvent::Pad(p)) => on_pad(p),
+//!         Event::Wake => on_wake(),
+//!         Event::Timeout => check_signals(),
+//!         Event::Close => break,
 //!     }
 //! }
 //! ```
@@ -25,28 +24,19 @@
 //! tick of the server arrives as a `SessionEvent::Tick`. The engine
 //! derives a simulation tick from the time between two.
 
-/// What happened, as `wait_event` delivers it.
+/// What happened, as `wait` delivers it.
 #[derive(Clone, Debug)]
 pub enum Event {
     /// From the user or the platform.
     Input(InputEvent),
     /// Time for the next frame.
     Tick,
-}
-
-/// What interrupted a `wait_event` that delivered no event. A failure comes
-/// with the error that caused it, since the library writes no message of its
-/// own.
-#[derive(Debug)]
-pub enum Interrupt {
-    /// A `Sender` woke the loop, with no data.
+    /// A `Sender` woke the wait, with no data.
     Wake,
     /// The deadline passed with nothing to deliver.
     Timeout,
-    /// A read from the tty failed, and a `Close` comes right after.
-    Read(std::io::Error),
-    /// The user or the platform ended the session, or the server ended
-    /// it. Every wait from now on returns it.
+    /// The user or the platform ended the input. Every wait from now on
+    /// returns it.
     Close,
 }
 

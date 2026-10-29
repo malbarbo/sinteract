@@ -1,6 +1,6 @@
 //! The queue behind every [`super::Display`]. A display owns an [`Inbox`]
 //! and hands out [`Sender`]s. Its input threads, the engine and any other
-//! thread push through a `Sender`, and `wait_event` pops from the `Inbox`,
+//! thread push through a `Sender`, and `wait` pops from the `Inbox`,
 //! in the order of arrival.
 
 use std::collections::VecDeque;
@@ -12,14 +12,14 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use super::tick_clock::TickClock;
-use crate::event::{Event, InputEvent, Interrupt, KeyEvent, MouseEvent};
+use crate::event::{Event, InputEvent, KeyEvent, MouseEvent};
 
 /// Pushes into the queue of a display from any thread, and wakes a
-/// `wait_event` that blocks on it. Get one from
+/// `wait` that blocks on it. Get one from
 /// [`super::Display::sender`].
 ///
-/// The queue has no bound. Once the display closes or delivers
-/// [`Interrupt::Close`] or [`Interrupt::Read`], every send returns
+/// The queue has no bound. Once the display closes, delivers
+/// [`Event::Close`] or fails a wait with a read error, every send returns
 /// [`Closed`]. A message sent after
 /// a Close that has not gone out yet is lost.
 #[derive(Clone)]
@@ -40,21 +40,22 @@ pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 pub struct Closed;
 
 impl Sender {
-    /// Queue [`Interrupt::Close`], in order with the events. A Ctrl-C handler
-    /// of the engine calls it to end a `wait_event` that blocks.
+    /// Queue [`Event::Close`], in order with the events. A Ctrl-C handler
+    /// of the engine calls it to end a `wait` that blocks.
     pub fn send_close(&self) -> Result<(), Closed> {
         self.send(Entry::Close)
     }
 
-    /// Queue [`Interrupt::Wake`], in order with the events. A thread that
+    /// Queue [`Event::Wake`], in order with the events. A thread that
     /// hands its data over a channel of its own calls it, so the loop looks
     /// at that channel.
     pub fn wake(&self) -> Result<(), Closed> {
         self.send(Entry::Wake)
     }
 
-    /// Queue [`Interrupt::Read`], in order with the events. The inbox
-    /// closes when it delivers it, so a Close comes right after.
+    /// Queue a read error, which a wait returns as its `Err`, in order with
+    /// the events. The inbox closes when it delivers it, so a Close comes
+    /// right after.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub(crate) fn send_read_error(&self, e: io::Error) -> Result<(), Closed> {
         self.send(Entry::Read(e))
@@ -128,7 +129,7 @@ enum Msg {
     Redraw,
 }
 
-/// What waits in the queue for `wait_event`.
+/// What waits in the queue for `wait`.
 enum Entry {
     /// The input of a seat.
     Input(u32, InputEvent),
@@ -148,6 +149,9 @@ pub(crate) enum Seated {
         #[cfg_attr(not(feature = "window"), allow(dead_code))] u32,
         InputEvent,
     ),
+    Wake,
+    Timeout,
+    Close,
 }
 
 /// A display with one seat drops the seat.
@@ -156,14 +160,17 @@ impl From<Seated> for Event {
         match seated {
             Seated::Tick => Event::Tick,
             Seated::Input(_, event) => Event::Input(event),
+            Seated::Wake => Event::Wake,
+            Seated::Timeout => Event::Timeout,
+            Seated::Close => Event::Close,
         }
     }
 }
 
 /// What [`Inbox::next`] asks of the display.
 pub(crate) enum Next {
-    /// Return this from `wait_event`.
-    Ready(Result<Seated, Interrupt>),
+    /// Return this from `wait`.
+    Ready(io::Result<Seated>),
     /// Draw the last scene again.
     Redraw,
     /// Wait for a message for at most this long, and ask again.
@@ -212,9 +219,9 @@ impl Inbox {
         self.queue = None;
     }
 
-    /// The next step of `wait_event`, which calls it in a loop until it
+    /// The next step of `wait`, which calls it in a loop until it
     /// gets [`Next::Ready`]. The oldest event goes out first, then a
-    /// redraw, then [`Interrupt::Timeout`] once `deadline` passes. A
+    /// redraw, then [`Event::Timeout`] once `deadline` passes. A
     /// `deadline` of `None` waits for as long as it takes. So an engine
     /// that presents anyway skips the redraw.
     ///
@@ -233,7 +240,7 @@ impl Inbox {
             return Next::Redraw;
         }
         if deadline.is_some_and(|d| now >= d) {
-            return Next::Ready(Err(Interrupt::Timeout));
+            return Next::Ready(Ok(Seated::Timeout));
         }
         let wake_at = deadline.map_or(clock.due(), |d| d.min(clock.due()));
         Next::Block(wake_at.saturating_duration_since(now))
@@ -266,9 +273,9 @@ impl Inbox {
     /// drains and a tick goes in at the back if `clock` has one due by
     /// `now`, or `None` when nothing waits. At most one tick waits, so a
     /// flood of input delays the tick but never drops it.
-    fn pop(&mut self, clock: &mut TickClock, now: Instant) -> Option<Result<Seated, Interrupt>> {
+    fn pop(&mut self, clock: &mut TickClock, now: Instant) -> Option<io::Result<Seated>> {
         let Some(queue) = &mut self.queue else {
-            return Some(Err(Interrupt::Close));
+            return Some(Ok(Seated::Close));
         };
         queue.receive_all();
         if !queue.pending.iter().any(|e| matches!(e, Entry::Tick)) && clock.take_due(now) {
@@ -277,14 +284,14 @@ impl Inbox {
         Some(match queue.pending.pop_front()? {
             Entry::Input(seat, ev) => Ok(Seated::Input(seat, ev)),
             Entry::Tick => Ok(Seated::Tick),
-            Entry::Wake => Err(Interrupt::Wake),
+            Entry::Wake => Ok(Seated::Wake),
             Entry::Read(e) => {
                 self.close();
-                Err(Interrupt::Read(e))
+                Err(e)
             }
             Entry::Close => {
                 self.close();
-                Err(Interrupt::Close)
+                Ok(Seated::Close)
             }
         })
     }
@@ -335,7 +342,7 @@ mod tests {
         }
     }
 
-    fn key_name(ready: &Result<Event, Interrupt>) -> Option<&str> {
+    fn key_name(ready: &io::Result<Event>) -> Option<&str> {
         match ready {
             Ok(Event::Input(InputEvent::Key(k))) => Some(&k.key),
             _ => None,
@@ -352,30 +359,30 @@ mod tests {
         }
     }
 
-    fn mouse_x(ready: &Result<Event, Interrupt>) -> f32 {
+    fn mouse_x(ready: &io::Result<Event>) -> f32 {
         match ready {
             Ok(Event::Input(InputEvent::Mouse(m))) => m.x,
             other => panic!("got {other:?}"),
         }
     }
 
-    fn is_tick(ready: &Result<Event, Interrupt>) -> bool {
+    fn is_tick(ready: &io::Result<Event>) -> bool {
         matches!(ready, Ok(Event::Tick))
     }
 
-    fn is_close(ready: &Result<Event, Interrupt>) -> bool {
-        matches!(ready, Err(Interrupt::Close))
+    fn is_close(ready: &io::Result<Event>) -> bool {
+        matches!(ready, Ok(Event::Close))
     }
 
-    fn is_timeout(ready: &Result<Event, Interrupt>) -> bool {
-        matches!(ready, Err(Interrupt::Timeout))
+    fn is_timeout(ready: &io::Result<Event>) -> bool {
+        matches!(ready, Ok(Event::Timeout))
     }
 
     fn soon() -> Option<Instant> {
         Some(Instant::now() + Duration::from_millis(20))
     }
 
-    /// The loop of `wait_event` in a display that blocks on the channel,
+    /// The loop of `wait` in a display that blocks on the channel,
     /// as the terminal does.
     struct TestDisplay {
         inbox: Inbox,
@@ -409,7 +416,7 @@ mod tests {
         }
 
         /// The next event, with no redraw.
-        fn wait(&mut self, deadline: Option<Instant>) -> Result<Event, Interrupt> {
+        fn wait(&mut self, deadline: Option<Instant>) -> io::Result<Event> {
             loop {
                 if let Next::Ready(ready) = self.next(deadline) {
                     return ready.map(Event::from);
@@ -434,7 +441,7 @@ mod tests {
         tx.wake().unwrap();
         tx.send_key(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
+        assert!(matches!(inbox.wait(None), Ok(Event::Wake)));
         assert_eq!(key_name(&inbox.wait(None)), Some("b"));
     }
 
@@ -447,7 +454,7 @@ mod tests {
             .unwrap();
         tx.send_key(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Err(Interrupt::Read(_))));
+        assert!(inbox.wait(None).is_err());
         assert!(is_close(&inbox.wait(None)));
         assert_eq!(tx.send_key(key("c")), Err(Closed));
     }
@@ -459,7 +466,7 @@ mod tests {
             .sender()
             .send_read_error(io::Error::other("the tty went away"))
             .unwrap();
-        assert!(matches!(inbox.wait(None), Err(Interrupt::Read(_))));
+        assert!(inbox.wait(None).is_err());
         thread::sleep(Duration::from_millis(5));
         assert!(is_close(&inbox.wait(None)));
     }
@@ -522,7 +529,7 @@ mod tests {
         tx.wake().unwrap();
         tx.send_mouse(move_to(2.0)).unwrap();
         assert_eq!(mouse_x(&inbox.wait(None)), 1.0);
-        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
+        assert!(matches!(inbox.wait(None), Ok(Event::Wake)));
         assert_eq!(mouse_x(&inbox.wait(None)), 2.0);
     }
 
@@ -545,9 +552,9 @@ mod tests {
         tx.wake().unwrap();
         tx.send_key(key("a")).unwrap();
         tx.wake().unwrap();
-        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
+        assert!(matches!(inbox.wait(None), Ok(Event::Wake)));
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
-        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
+        assert!(matches!(inbox.wait(None), Ok(Event::Wake)));
         assert!(is_timeout(&inbox.wait(soon())));
     }
 
@@ -584,7 +591,7 @@ mod tests {
         assert!(matches!(inbox.next(deadline), Next::Redraw));
         assert!(matches!(
             inbox.next(deadline),
-            Next::Ready(Err(Interrupt::Timeout))
+            Next::Ready(Ok(Seated::Timeout))
         ));
     }
 
@@ -603,7 +610,7 @@ mod tests {
         assert!(!inbox.inbox.take_redraw());
         assert!(matches!(
             inbox.next(soon()),
-            Next::Ready(Err(Interrupt::Timeout))
+            Next::Ready(Ok(Seated::Timeout))
         ));
     }
 
@@ -615,7 +622,7 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
             tx.wake().unwrap();
         });
-        assert!(matches!(inbox.wait(None), Err(Interrupt::Wake)));
+        assert!(matches!(inbox.wait(None), Ok(Event::Wake)));
         t.join().unwrap();
     }
 
@@ -639,7 +646,7 @@ mod tests {
         inbox.inbox.sender().send_key(key(name)).unwrap();
     }
 
-    fn pop(inbox: &mut TestDisplay, now: Instant) -> Option<Result<Event, Interrupt>> {
+    fn pop(inbox: &mut TestDisplay, now: Instant) -> Option<io::Result<Event>> {
         inbox
             .inbox
             .pop(&mut inbox.clock, now)

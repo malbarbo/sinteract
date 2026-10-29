@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
-use sinteract::event::{Event, Interrupt};
+use sinteract::event::Event;
 use sinteract::server::{Conn, LobbyCore, Next, ServerCore};
 use sinteract::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD};
 use sinteract::view::FrameReader;
@@ -90,7 +90,7 @@ fn main() -> ExitCode {
     let mut stats = Stats::default();
     let mut next_tick = Instant::now();
     loop {
-        let event = display.wait_event(Some(next_tick));
+        let event = display.wait(Some(next_tick));
         let now = Instant::now();
         if now >= next_tick {
             stats.tick();
@@ -104,7 +104,7 @@ fn main() -> ExitCode {
             Ok(Event::Input(ev)) => core.input(conn, &ev),
             // The bytes of the engine come through the channel, and the
             // reader thread wakes the loop after each read.
-            Err(Interrupt::Wake) => {
+            Ok(Event::Wake) => {
                 take_engine(&mut core, &from_reader);
                 if let Err(e) = show(display.as_mut(), &mut core, conn, &mut reader, &mut stats) {
                     if let Some(e) = e {
@@ -113,9 +113,9 @@ fn main() -> ExitCode {
                     break;
                 }
             }
-            Err(Interrupt::Close) => break,
-            Err(Interrupt::Read(e)) => eprintln!("view: {e}"),
-            Err(Interrupt::Timeout) => {}
+            Ok(Event::Close) => break,
+            Err(e) => eprintln!("view: {e}"),
+            Ok(Event::Timeout) => {}
         }
         if let Err(e) = send_engine(&mut core, &mut to_engine) {
             eprintln!("view: {e}");

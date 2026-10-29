@@ -29,7 +29,7 @@ use std::num::NonZeroU32;
 use std::process::ExitCode;
 
 use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
-use sinteract::event::{InputEvent, Interrupt, KeyKind, PadButton, PadEvent, key};
+use sinteract::event::{InputEvent, KeyKind, PadButton, PadEvent, key};
 use sinteract::scene::{
     FillRule, Paint, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Scene, StrokeWidth,
     Text, TextSpec, TextStyle,
@@ -71,9 +71,9 @@ fn main() -> ExitCode {
             // A message the engine cannot read is a bug in the server, and
             // the game goes on without it.
             Ok(StageEvent::Error(e)) => eprintln!("players: {e}"),
-            Err(Interrupt::Read(e)) => eprintln!("players: {e}"),
-            Err(Interrupt::Close) => break,
-            Err(Interrupt::Wake | Interrupt::Timeout) => {}
+            Err(e) => eprintln!("players: {e}"),
+            Ok(StageEvent::Close) => break,
+            Ok(StageEvent::Timeout) => {}
         }
     }
     stage.close();

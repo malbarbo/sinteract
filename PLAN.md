@@ -154,8 +154,8 @@ exemplo em Tokio.
 
 ## Loop e ritmo
 
-`Display::wait_event(deadline)` devolve um `Event` ou um `Interrupt`
-(`Wake`, `Timeout`, `Read` ou `Close`). O ritmo vem de um evento `Tick` na
+`Display::wait(deadline)` devolve um `Event` (`Input`, `Tick`, `Wake`,
+`Timeout` ou `Close`), ou o erro de uma leitura que falhou. O ritmo vem de um evento `Tick` na
 fila. O terminal e a janela fazem o próprio `Tick`, e a `Session` recebe o
 `tick` do servidor, que marca o ritmo de todos os jogadores, porque cada
 view tem o seu ritmo. O `Tick` é um `Event` e não um `InputEvent`, então a
@@ -242,7 +242,7 @@ Feito no sinteract:
   schema mais novo;
 - o protocolo por direção, com os três lados e o player no payload;
 - o trait `Display`, com `Terminal` e `Window`, as features `terminal` e
-  `window`, e o `wait_event` com `Interrupt`;
+  `window`, e o `wait` com `Event`;
 - a entrada com teclado, mouse, resize e pad de 12 botões;
 - a `Session`, com o `tick` do servidor e a fila que junta
   movimentos por jogador;

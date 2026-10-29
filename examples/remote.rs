@@ -26,7 +26,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use sinteract::display::{Display, TerminalOptions, open_native};
-use sinteract::event::{Event, Interrupt};
+use sinteract::event::Event;
 use sinteract::view::{FrameReader, SUBPROTOCOL, encode_input};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::http::HeaderValue;
@@ -68,7 +68,7 @@ fn main() -> ExitCode {
     let mut reader = FrameReader::new();
     let mut stats = Stats::default();
     loop {
-        match display.wait_event(None) {
+        match display.wait(None) {
             // The server keeps the time, so the ticks of the display go
             // nowhere.
             Ok(Event::Tick) => {}
@@ -77,14 +77,14 @@ fn main() -> ExitCode {
                     break;
                 }
             }
-            Err(Interrupt::Wake) => {
+            Ok(Event::Wake) => {
                 if !show(display.as_mut(), &from_net, &mut reader, &mut stats) {
                     break;
                 }
             }
-            Err(Interrupt::Close) => break,
-            Err(Interrupt::Read(e)) => eprintln!("remote: {e}"),
-            Err(Interrupt::Timeout) => {}
+            Ok(Event::Close) => break,
+            Err(e) => eprintln!("remote: {e}"),
+            Ok(Event::Timeout) => {}
         }
     }
     // Without the receiver, the network thread fails its next send and
