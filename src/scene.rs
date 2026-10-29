@@ -1130,6 +1130,22 @@ impl Iterator for Segments<'_> {
 
 impl ExactSizeIterator for Segments<'_> {}
 
+/// The smaller or the larger of the two arcs that join the ends, as the
+/// large-arc flag of SVG.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArcSize {
+    Small,
+    Large,
+}
+
+/// The way an arc turns from its start to its end on the screen, where y
+/// grows downward, as the sweep flag of SVG.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sweep {
+    Clockwise,
+    Counterclockwise,
+}
+
 /// The tolerance of the arc to cubic conversion.
 const ARC_TOLERANCE: f64 = 0.1;
 
@@ -1205,8 +1221,8 @@ impl<T> GeometryBuilder<T> {
         rx: f32,
         ry: f32,
         rotation_deg: f32,
-        large_arc: bool,
-        sweep: bool,
+        size: ArcSize,
+        sweep: Sweep,
         x: f32,
         y: f32,
     ) -> Self {
@@ -1219,8 +1235,7 @@ impl<T> GeometryBuilder<T> {
         let from = kurbo::Point::new(x1 as f64, y1 as f64);
         let to = kurbo::Point::new(x as f64, y as f64);
         let radii = kurbo::Vec2::new(rx as f64, ry as f64);
-        let Some(cubics) = arc_cubics(from, radii, rotation_deg as f64, large_arc, sweep, to)
-        else {
+        let Some(cubics) = arc_cubics(from, radii, rotation_deg as f64, size, sweep, to) else {
             return self.line_to(x, y);
         };
         for [c1, c2, end] in cubics {
@@ -1279,8 +1294,8 @@ fn arc_cubics(
     from: kurbo::Point,
     radii: kurbo::Vec2,
     rotation_deg: f64,
-    large_arc: bool,
-    sweep: bool,
+    size: ArcSize,
+    sweep: Sweep,
     to: kurbo::Point,
 ) -> Option<Vec<[kurbo::Point; 3]>> {
     let arc = kurbo::SvgArc {
@@ -1288,8 +1303,8 @@ fn arc_cubics(
         to,
         radii,
         x_rotation: rotation_deg.to_radians(),
-        large_arc,
-        sweep,
+        large_arc: size == ArcSize::Large,
+        sweep: sweep == Sweep::Clockwise,
     };
     if arc.is_straight_line() {
         return None;
@@ -1890,15 +1905,14 @@ impl PathBounds {
         rx: f64,
         ry: f64,
         rotation_deg: f64,
-        large_arc: bool,
-        sweep: bool,
+        size: ArcSize,
+        sweep: Sweep,
         x: f64,
         y: f64,
     ) -> Self {
         let to = kurbo::Point::new(x, y);
         let radii = kurbo::Vec2::new(rx, ry);
-        let Some(cubics) = arc_cubics(self.last_point, radii, rotation_deg, large_arc, sweep, to)
-        else {
+        let Some(cubics) = arc_cubics(self.last_point, radii, rotation_deg, size, sweep, to) else {
             return self.line_to(x, y);
         };
         for [c1, c2, end] in cubics {
@@ -2080,7 +2094,7 @@ mod tests {
     #[test]
     fn clip_builder_arc_to_expands_to_cubics() {
         let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
-            .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0)
+            .arc_to(5.0, 5.0, 0.0, ArcSize::Small, Sweep::Clockwise, 10.0, 0.0)
             .build();
         // The tolerance decides how many cubics the arc becomes.
         let kinds: Vec<_> = clip.segments().map(|s| s.kind()).collect();
@@ -2116,7 +2130,7 @@ mod tests {
         // Nearly a whole turn, since the two ends are close on the circle.
         let arc = |r: f32| {
             Path::builder(PathStyle::black(), 0.0, 0.0)
-                .arc_to(r, r, 0.0, true, true, r * 1e-3, 0.0)
+                .arc_to(r, r, 0.0, ArcSize::Large, Sweep::Clockwise, r * 1e-3, 0.0)
                 .build()
                 .segments()
                 .len()
@@ -2170,17 +2184,17 @@ mod tests {
     #[test]
     fn an_arc_of_a_radius_far_above_its_chord_keeps_its_shape() {
         for r in [1e15, 1e17, 1e20, 1e100, 1e200, 1e300] {
-            let arc = |large_arc| {
+            let arc = |size| {
                 PathBounds::new(0.0, 0.0)
-                    .arc_to(r, r, 0.0, large_arc, true, 10.0, 0.0)
+                    .arc_to(r, r, 0.0, size, Sweep::Clockwise, 10.0, 0.0)
                     .get()
                     .map(corners)
                     .unwrap()
             };
-            let (x0, y0, x1, y1) = arc(false);
+            let (x0, y0, x1, y1) = arc(ArcSize::Small);
             let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
             assert!(near(x0, 0.0) && near(y0, 0.0) && near(x1, 10.0) && near(y1, 0.0));
-            let (x0, y0, x1, y1) = arc(true);
+            let (x0, y0, x1, y1) = arc(ArcSize::Large);
             let near = |a: f64, b: f64| (a - b).abs() <= r * 1e-12;
             assert!(near(x0, -r) && near(y0, -2.0 * r) && near(x1, r) && near(y1, 0.0));
         }
@@ -2188,15 +2202,15 @@ mod tests {
 
     #[test]
     fn an_arc_with_a_subnormal_reach_keeps_its_shape() {
-        let arc = |large_arc| {
+        let arc = |size| {
             PathBounds::new(0.0, 0.0)
-                .arc_to(1e300, 1e300, 0.0, large_arc, true, 1e-10, 0.0)
+                .arc_to(1e300, 1e300, 0.0, size, Sweep::Clockwise, 1e-10, 0.0)
                 .get()
                 .map(corners)
                 .unwrap()
         };
-        assert_eq!(arc(false), (0.0, 0.0, 1e-10, 0.0));
-        let (x0, y0, x1, y1) = arc(true);
+        assert_eq!(arc(ArcSize::Small), (0.0, 0.0, 1e-10, 0.0));
+        let (x0, y0, x1, y1) = arc(ArcSize::Large);
         let near = |a: f64, b: f64| (a - b).abs() <= 1e288;
         assert!(near(x0, -1e300) && near(y0, -2e300) && near(x1, 1e300) && near(y1, 0.0));
     }
@@ -2239,12 +2253,12 @@ mod tests {
     fn an_arc_too_large_for_kurbo_keeps_its_shape() {
         // The radii squared overflow, and so do the ends added together.
         let half = PathBounds::new(0.0, 0.0)
-            .arc_to(1e80, 1e80, 0.0, false, true, 2e80, 0.0)
+            .arc_to(1e80, 1e80, 0.0, ArcSize::Small, Sweep::Clockwise, 2e80, 0.0)
             .get()
             .map(corners);
         let x = f64::MAX * 0.6;
         let far = PathBounds::new(x, 0.0)
-            .arc_to(10.0, 10.0, 0.0, false, true, x, 20.0)
+            .arc_to(10.0, 10.0, 0.0, ArcSize::Small, Sweep::Clockwise, x, 20.0)
             .get()
             .map(corners);
         let (x0, y0, x1, y1) = half.unwrap();
@@ -2258,8 +2272,16 @@ mod tests {
     #[test]
     fn an_arc_through_0_puts_its_points_at_0() {
         let path = Path::builder(PathStyle::black(), 20.0, 10.0)
-            .arc_to(10.0, 10.0, 0.0, false, true, 0.0, 10.0)
-            .arc_to(10.0, 10.0, 0.0, false, true, 20.0, 10.0)
+            .arc_to(10.0, 10.0, 0.0, ArcSize::Small, Sweep::Clockwise, 0.0, 10.0)
+            .arc_to(
+                10.0,
+                10.0,
+                0.0,
+                ArcSize::Small,
+                Sweep::Clockwise,
+                20.0,
+                10.0,
+            )
             .build();
         for seg in path.segments() {
             if let Segment::Cubic {
@@ -2320,9 +2342,9 @@ mod tests {
 
     #[test]
     fn path_bounds_take_an_arc_with_a_nan_radius_as_a_line() {
-        for large_arc in [false, true] {
+        for size in [ArcSize::Small, ArcSize::Large] {
             let bounds = PathBounds::new(0.0, 0.0)
-                .arc_to(f64::NAN, 1.0, 0.0, large_arc, true, 10.0, 0.0)
+                .arc_to(f64::NAN, 1.0, 0.0, size, Sweep::Clockwise, 10.0, 0.0)
                 .line_to(10.0, 5.0);
             assert_eq!(bounds.get().map(corners), Some((0.0, 0.0, 10.0, 5.0)));
         }
@@ -2339,21 +2361,29 @@ mod tests {
     #[test]
     fn path_bounds_of_an_arc_fit_the_cubics_that_the_builder_draws() {
         let arcs = [
-            (10.0, 10.0, 0.0, false, true, 0.0, 10.0),
-            (30.0, 10.0, 30.0, true, false, 5.0, 40.0),
-            (1e9, 1e9, 0.0, false, true, 3.0, 4.0),
-            (0.0, 10.0, 0.0, false, true, 7.0, 7.0),
+            (10.0, 10.0, 0.0, ArcSize::Small, Sweep::Clockwise, 0.0, 10.0),
+            (
+                30.0,
+                10.0,
+                30.0,
+                ArcSize::Large,
+                Sweep::Counterclockwise,
+                5.0,
+                40.0,
+            ),
+            (1e9, 1e9, 0.0, ArcSize::Small, Sweep::Clockwise, 3.0, 4.0),
+            (0.0, 10.0, 0.0, ArcSize::Small, Sweep::Clockwise, 7.0, 7.0),
         ];
-        for (rx, ry, rotation, large_arc, sweep, x, y) in arcs {
+        for (rx, ry, rotation, size, sweep, x, y) in arcs {
             let path = Path::builder(PathStyle::black(), 20.0, 10.0)
-                .arc_to(rx, ry, rotation, large_arc, sweep, x, y)
+                .arc_to(rx, ry, rotation, size, sweep, x, y)
                 .build();
             let bounds = PathBounds::new(20.0, 10.0)
                 .arc_to(
                     f64::from(rx),
                     f64::from(ry),
                     f64::from(rotation),
-                    large_arc,
+                    size,
                     sweep,
                     f64::from(x),
                     f64::from(y),
@@ -2380,7 +2410,7 @@ mod tests {
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(
             Path::builder(PathStyle::black(), 0.0, 0.0)
-                .arc_to(5.0, 5.0, 0.0, false, true, 10.0, 0.0)
+                .arc_to(5.0, 5.0, 0.0, ArcSize::Small, Sweep::Clockwise, 10.0, 0.0)
                 .build(),
         );
         let Element::Path(p) = &scene.elements[0] else {
@@ -2756,17 +2786,41 @@ mod tests {
         ] {
             scene.add_path(
                 Path::builder(PathStyle::black(), 0.0, 0.0)
-                    .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
+                    .arc_to(
+                        rx,
+                        5.0,
+                        rotation_deg,
+                        ArcSize::Small,
+                        Sweep::Clockwise,
+                        x,
+                        0.0,
+                    )
                     .line_to(0.0, 9.0)
                     .build(),
             );
             scene.add_path(
                 Path::builder(PathStyle::black(), 0.0, 0.0)
-                    .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
+                    .arc_to(
+                        rx,
+                        5.0,
+                        rotation_deg,
+                        ArcSize::Small,
+                        Sweep::Clockwise,
+                        x,
+                        0.0,
+                    )
                     .build(),
             );
             let clip = ClipPath::builder(FillRule::NonZero, 0.0, 0.0)
-                .arc_to(rx, 5.0, rotation_deg, false, true, x, 0.0)
+                .arc_to(
+                    rx,
+                    5.0,
+                    rotation_deg,
+                    ArcSize::Small,
+                    Sweep::Clockwise,
+                    x,
+                    0.0,
+                )
                 .build();
             scene.clip(clip, |c| c.add_path(a_line(PathStyle::black(), 5.0, 5.0)));
         }

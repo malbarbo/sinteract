@@ -42,9 +42,9 @@ use sinteract::renderer::pdf::PdfRenderer;
 use sinteract::renderer::pixmap::{PixmapRenderer, render_to_pixmap};
 use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
-    Bitmap, ClipPath, Dash, FillRule, FontStyle, Image, LineCap, LineJoin, MiterLimit, Paint, Path,
-    PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode, Stop,
-    StrokeWidth, Text, TextSpec, TextStroke, TextStyle,
+    ArcSize, Bitmap, ClipPath, Dash, FillRule, FontStyle, Image, LineCap, LineJoin, MiterLimit,
+    Paint, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode,
+    Stop, StrokeWidth, Sweep, Text, TextSpec, TextStroke, TextStyle,
 };
 use sinteract::session::{PlayerRange, Target};
 
@@ -348,7 +348,15 @@ fn segments(s: &mut Scene, x: f32, y: f32, _: f32) {
     );
     s.add_path(
         Path::builder(pen, x + 30.0, y + 110.0)
-            .arc_to(40.0, 25.0, 0.0, true, true, x + 110.0, y + 110.0)
+            .arc_to(
+                40.0,
+                25.0,
+                0.0,
+                ArcSize::Large,
+                Sweep::Clockwise,
+                x + 110.0,
+                y + 110.0,
+            )
             .build(),
     );
     // A closed shape of every segment kind.
@@ -371,7 +379,15 @@ fn segments(s: &mut Scene, x: f32, y: f32, _: f32) {
                 x + 180.0,
                 y + 95.0,
             )
-            .arc_to(25.0, 25.0, 0.0, false, true, x + 130.0, y + 95.0)
+            .arc_to(
+                25.0,
+                25.0,
+                0.0,
+                ArcSize::Small,
+                Sweep::Clockwise,
+                x + 130.0,
+                y + 95.0,
+            )
             .build(),
     );
 }
@@ -469,11 +485,27 @@ fn fill_rules(s: &mut Scene, x: f32, y: f32, _: f32) {
         let (cy, r) = (y + 100.0, 26.0);
         s.add_path(
             Path::builder(style, cx - r, cy)
-                .arc_to(r, r, 0.0, false, true, cx + r, cy)
-                .arc_to(r, r, 0.0, false, true, cx - r, cy)
+                .arc_to(r, r, 0.0, ArcSize::Small, Sweep::Clockwise, cx + r, cy)
+                .arc_to(r, r, 0.0, ArcSize::Small, Sweep::Clockwise, cx - r, cy)
                 .move_to(cx - r / 2.0, cy)
-                .arc_to(r / 2.0, r / 2.0, 0.0, false, true, cx + r / 2.0, cy)
-                .arc_to(r / 2.0, r / 2.0, 0.0, false, true, cx - r / 2.0, cy)
+                .arc_to(
+                    r / 2.0,
+                    r / 2.0,
+                    0.0,
+                    ArcSize::Small,
+                    Sweep::Clockwise,
+                    cx + r / 2.0,
+                    cy,
+                )
+                .arc_to(
+                    r / 2.0,
+                    r / 2.0,
+                    0.0,
+                    ArcSize::Small,
+                    Sweep::Clockwise,
+                    cx - r / 2.0,
+                    cy,
+                )
                 .build(),
         );
     }
@@ -644,11 +676,43 @@ fn nested_clip(s: &mut Scene, x: f32, y: f32, _: f32) {
     // Two circles under the even-odd rule make a ring.
     let (cx, cy) = (x + 100.0, y + 62.0);
     let ring = ClipPath::builder(FillRule::EvenOdd, cx - 55.0, cy)
-        .arc_to(55.0, 55.0, 0.0, false, true, cx + 55.0, cy)
-        .arc_to(55.0, 55.0, 0.0, false, true, cx - 55.0, cy)
+        .arc_to(
+            55.0,
+            55.0,
+            0.0,
+            ArcSize::Small,
+            Sweep::Clockwise,
+            cx + 55.0,
+            cy,
+        )
+        .arc_to(
+            55.0,
+            55.0,
+            0.0,
+            ArcSize::Small,
+            Sweep::Clockwise,
+            cx - 55.0,
+            cy,
+        )
         .move_to(cx - 30.0, cy)
-        .arc_to(30.0, 30.0, 0.0, false, true, cx + 30.0, cy)
-        .arc_to(30.0, 30.0, 0.0, false, true, cx - 30.0, cy)
+        .arc_to(
+            30.0,
+            30.0,
+            0.0,
+            ArcSize::Small,
+            Sweep::Clockwise,
+            cx + 30.0,
+            cy,
+        )
+        .arc_to(
+            30.0,
+            30.0,
+            0.0,
+            ArcSize::Small,
+            Sweep::Clockwise,
+            cx - 30.0,
+            cy,
+        )
         .build();
     s.clip(ring, |outer| {
         let sweep = Paint::linear(
@@ -1027,8 +1091,8 @@ fn rect(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
 fn circle(s: &mut Scene, style: PathStyle, cx: f32, cy: f32, r: f32) {
     s.add_path(
         Path::builder(closed(style), cx - r, cy)
-            .arc_to(r, r, 0.0, false, true, cx + r, cy)
-            .arc_to(r, r, 0.0, false, true, cx - r, cy)
+            .arc_to(r, r, 0.0, ArcSize::Small, Sweep::Clockwise, cx + r, cy)
+            .arc_to(r, r, 0.0, ArcSize::Small, Sweep::Clockwise, cx - r, cy)
             .build(),
     );
 }

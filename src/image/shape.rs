@@ -6,9 +6,10 @@ use std::fmt;
 use std::num::NonZeroU32;
 
 use super::geometry::Point;
-use super::path::{ArcSize, PathCmd, Sweep};
+use super::path::PathCmd;
 use super::tree::{Image, Overflow};
 use super::{Finite, Length, PointCount, SideCount, Style, TriangleAngle, WedgeAngle};
+use crate::scene::{ArcSize, Sweep};
 
 /// `side * sqrt(3) / 2` is the height of an equilateral triangle.
 const SQRT3_2: f64 = 0.8660254037844386;

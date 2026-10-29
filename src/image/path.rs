@@ -2,31 +2,13 @@
 
 use super::geometry::{Bounds, Point};
 use super::{Finite, Length};
-use crate::scene::{Path, PathBounds, PathStyle};
+use crate::scene::{ArcSize, Path, PathBounds, PathStyle, Sweep};
 
-/// The smaller or the larger of the two arcs that join the ends, as the
-/// large-arc flag of SVG.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ArcSize {
-    Small,
-    Large,
-}
-
-/// The way an arc turns from its start to its end on the screen, where y
-/// grows downward, as the sweep flag of SVG.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Sweep {
-    Clockwise,
-    Counterclockwise,
-}
-
-impl Sweep {
-    /// The other way, as a mirror turns it.
-    pub(super) fn reverse(self) -> Self {
-        match self {
-            Sweep::Clockwise => Sweep::Counterclockwise,
-            Sweep::Counterclockwise => Sweep::Clockwise,
-        }
+/// The other way of `sweep`, as a mirror turns it.
+pub(super) fn reverse(sweep: Sweep) -> Sweep {
+    match sweep {
+        Sweep::Clockwise => Sweep::Counterclockwise,
+        Sweep::Counterclockwise => Sweep::Clockwise,
     }
 }
 
@@ -227,8 +209,8 @@ pub(super) fn bounds(start: Point, commands: &[PathCmd]) -> Option<Bounds> {
                     without_residue(rx),
                     without_residue(ry),
                     without_residue(rotation),
-                    size == ArcSize::Large,
-                    sweep == Sweep::Clockwise,
+                    size,
+                    sweep,
                     x,
                     y,
                 )
@@ -286,8 +268,7 @@ pub(super) fn draw(
             } => {
                 let (x, y) = point(end);
                 let v = |v: f64| without_residue(v) as f32;
-                let (large, clockwise) = (size == ArcSize::Large, sweep == Sweep::Clockwise);
-                builder.arc_to(v(rx), v(ry), v(rotation), large, clockwise, x, y)
+                builder.arc_to(v(rx), v(ry), v(rotation), size, sweep, x, y)
             }
         };
     }

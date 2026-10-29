@@ -870,8 +870,8 @@ mod tests {
     use super::*;
     use crate::renderer::tests::rect;
     use crate::scene::{
-        Dash, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Scene, Stop, StrokeWidth,
-        Text, TextSpec, TextStroke, TextStyle,
+        ArcSize, Dash, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Scene, Stop,
+        StrokeWidth, Sweep, Text, TextSpec, TextStroke, TextStyle,
     };
 
     fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -1501,8 +1501,16 @@ mod tests {
         let mut scene = Scene::new(40.0, 40.0);
         scene.add_path(
             Path::builder(solid(255, 0, 0), 40.0, 20.0)
-                .arc_to(20.0, 20.0, 0.0, false, true, 0.0, 20.0)
-                .arc_to(20.0, 20.0, 0.0, false, true, 40.0, 20.0)
+                .arc_to(20.0, 20.0, 0.0, ArcSize::Small, Sweep::Clockwise, 0.0, 20.0)
+                .arc_to(
+                    20.0,
+                    20.0,
+                    0.0,
+                    ArcSize::Small,
+                    Sweep::Clockwise,
+                    40.0,
+                    20.0,
+                )
                 .build(),
         );
         let pm = rasterize(&scene);
@@ -1522,8 +1530,8 @@ mod tests {
         let mut dot = Scene::new(4.0, 4.0);
         dot.add_path(
             Path::builder(solid(255, 0, 0), 4.0, 2.0)
-                .arc_to(2.0, 2.0, 0.0, false, true, 0.0, 2.0)
-                .arc_to(2.0, 2.0, 0.0, false, true, 4.0, 2.0)
+                .arc_to(2.0, 2.0, 0.0, ArcSize::Small, Sweep::Clockwise, 0.0, 2.0)
+                .arc_to(2.0, 2.0, 0.0, ArcSize::Small, Sweep::Clockwise, 4.0, 2.0)
                 .build(),
         );
         let pm = renderer.render(&dot).unwrap();

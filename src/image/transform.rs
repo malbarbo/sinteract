@@ -1,7 +1,7 @@
 //! Rotation, scale and flip.
 
 use super::geometry::{ImageBox, Point};
-use super::path::PathCmd;
+use super::path::{self, PathCmd};
 use super::shape::{cos_deg, sin_deg};
 use super::tree::{Image, Overflow, Transform};
 use super::{Factor, Finite, Style};
@@ -210,7 +210,7 @@ impl Transform for Flip {
     fn command(&self, c: PathCmd, (): ()) -> PathCmd {
         c.map(
             |p| self.apply(p),
-            |rx, ry, rotation, sweep| (rx, ry, -rotation, sweep.reverse()),
+            |rx, ry, rotation, sweep| (rx, ry, -rotation, path::reverse(sweep)),
         )
     }
 

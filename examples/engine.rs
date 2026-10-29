@@ -26,7 +26,7 @@ use std::process::ExitCode;
 use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
 use sinteract::event::{InputEvent, KeyKind, key};
 use sinteract::scene::{
-    Bitmap, FillRule, Image, Paint, Path, PathFill, PathStyle, RotatedRect, Scene,
+    ArcSize, Bitmap, FillRule, Image, Paint, Path, PathFill, PathStyle, RotatedRect, Scene, Sweep,
 };
 use sinteract::session::Target;
 use sinteract::session::{FrameRate, PlayerRange};
@@ -198,8 +198,24 @@ impl Game {
         for b in &self.balls {
             scene.add_path(
                 Path::builder(fill(240, 180, 40), b.x - RADIUS, b.y)
-                    .arc_to(RADIUS, RADIUS, 0.0, false, true, b.x + RADIUS, b.y)
-                    .arc_to(RADIUS, RADIUS, 0.0, false, true, b.x - RADIUS, b.y)
+                    .arc_to(
+                        RADIUS,
+                        RADIUS,
+                        0.0,
+                        ArcSize::Small,
+                        Sweep::Clockwise,
+                        b.x + RADIUS,
+                        b.y,
+                    )
+                    .arc_to(
+                        RADIUS,
+                        RADIUS,
+                        0.0,
+                        ArcSize::Small,
+                        Sweep::Clockwise,
+                        b.x - RADIUS,
+                        b.y,
+                    )
                     .build(),
             );
         }
