@@ -59,13 +59,14 @@ pub(super) enum Node {
     },
 }
 
-/// A measure of the image is too large for an `f64`.
+/// A measure of the image is too large for an `f64`, or the measure of a
+/// text is too large for an `f32`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Overflow;
 
 impl fmt::Display for Overflow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the image is too large")
+        f.write_str("a measure of the image is too large")
     }
 }
 
