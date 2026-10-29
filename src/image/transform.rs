@@ -412,7 +412,6 @@ mod tests {
                 p(-1e308, 0.0),
                 p(1e308, 0.0),
             )],
-            false,
             stroke(1.0),
         );
         assert_eq!(curve.unwrap().flip_horizontal(), Err(Overflow));

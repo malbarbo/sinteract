@@ -114,14 +114,24 @@ impl Image {
         EMPTY.clone()
     }
 
-    /// The path from `start` through `commands`.
+    /// The open path from `start` through `commands`.
     pub fn path(
         start: Point,
         commands: impl Into<Box<[PathCmd]>>,
-        closed: bool,
         style: Style,
     ) -> Result<Self, Overflow> {
-        Ok(Self::path_at(start, commands, closed, style)?.0)
+        Ok(Self::path_at(start, commands, false, style)?.0)
+    }
+
+    /// The path from `start` through `commands`, with each sub-path closed.
+    /// Only the outline changes, because a fill closes a sub-path either
+    /// way.
+    pub fn closed_path(
+        start: Point,
+        commands: impl Into<Box<[PathCmd]>>,
+        style: Style,
+    ) -> Result<Self, Overflow> {
+        Ok(Self::path_at(start, commands, true, style)?.0)
     }
 
     /// The line from the origin to `(x, y)`. As in 2htdp, a line takes one
@@ -741,7 +751,7 @@ mod tests {
             .map(|&(x, y)| PathCmd::line_to(p(x, y)))
             .collect();
         let red = Style::new([Attribute::Stroke(Color::rgb(255, 0, 0))]);
-        Image::path(start, commands, false, red)
+        Image::path(start, commands, red)
     }
 
     fn square(side: f64) -> Image {
@@ -762,7 +772,7 @@ mod tests {
 
     #[test]
     fn a_path_measures_what_it_draws() {
-        let no_segment = Image::path(p(10.0, 10.0), [], false, Style::default());
+        let no_segment = Image::path(p(10.0, 10.0), [], Style::default());
         assert_eq!(no_segment.unwrap().dimension(), (length(0.0), length(0.0)));
         let loose_move = Image::path(
             p(0.0, 0.0),
@@ -770,7 +780,6 @@ mod tests {
                 PathCmd::line_to(p(10.0, 0.0)),
                 PathCmd::move_to(p(50.0, 50.0)),
             ],
-            false,
             Style::default(),
         );
         assert_eq!(loose_move.unwrap().dimension(), (length(10.0), length(0.0)));

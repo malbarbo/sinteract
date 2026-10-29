@@ -111,7 +111,7 @@ impl Image {
         // A quarter arc ends away from where it starts even when the width
         // or the height is 0, so the bounds keep the other side.
         let commands = [arc(rx, h), arc(0.0, ry), arc(rx, 0.0), arc(w, ry)];
-        Image::path(Point { x: w, y: ry }, commands, true, style)
+        Image::closed_path(Point { x: w, y: ry }, commands, style)
     }
 
     pub fn circle(radius: Length, style: Style) -> Result<Self, Overflow> {
@@ -349,14 +349,14 @@ impl Image {
             pulled_edge(vertex(i), to, pull, angle)
         });
         let commands: Box<[PathCmd]> = edges.collect();
-        Image::path(first, commands, true, style)
+        Image::closed_path(first, commands, style)
     }
 
     /// The slice of a circle of `radius` from the horizontal radius on the
     /// right to the radius at `angle` degrees. A positive angle turns
     /// counterclockwise and a negative one clockwise.
     pub fn wedge(radius: Length, angle: WedgeAngle, style: Style) -> Result<Self, Overflow> {
-        Image::path(Point::ORIGIN, wedge(radius, angle), true, style)
+        Image::closed_path(Point::ORIGIN, wedge(radius, angle), style)
     }
 }
 
@@ -397,7 +397,7 @@ pub(super) fn wedge(radius: Length, angle: WedgeAngle) -> Vec<PathCmd> {
 /// The path through `points`, closed when there are three or more.
 fn polygon(points: impl IntoIterator<Item = Point>, style: Style) -> Result<Image, Overflow> {
     let (start, commands, closed) = polygon_commands(points);
-    Image::path(start, commands, closed, style)
+    Ok(Image::path_at(start, commands, closed, style)?.0)
 }
 
 /// The start and the commands of the path through `points`, and whether

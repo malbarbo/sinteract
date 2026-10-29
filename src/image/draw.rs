@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn a_path_that_draws_nothing_adds_nothing() {
-        let no_segment = Image::path(Point::ORIGIN, [], false, Style::default());
+        let no_segment = Image::path(Point::ORIGIN, [], Style::default());
         assert!(scene(&no_segment.unwrap()).elements().is_empty());
     }
 
