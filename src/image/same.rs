@@ -16,7 +16,7 @@ impl Image {
     /// The pixmap decodes only a PNG and draws a mark for any other image,
     /// so the bitmaps of such images also have to show the same images in
     /// the same order. Returns `CanvasTooLarge` when the canvas does not
-    /// fit in a pixmap.
+    /// fit in a pixmap. It needs the feature `pixmap`.
     pub fn same(&self, other: &Image) -> Result<bool, CanvasTooLarge> {
         if self == other {
             return Ok(true);

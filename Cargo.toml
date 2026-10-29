@@ -9,9 +9,9 @@ readme = "README.md"
 
 [features]
 default = ["image", "native-fonts", "render", "terminal", "window"]
-# The image model of spython and sgleam, in `image`. It compares two
-# images by their pixels with the pixmap.
-image = ["pixmap"]
+# The image model of spython and sgleam, in `image`. `Image::same`, which
+# compares two images by their pixels, also needs `pixmap`.
+image = []
 # The pixmap renderer alone, which decodes only a PNG. A program that
 # compares the pixels of two scenes needs no more.
 pixmap = ["dep:tiny-skia"]

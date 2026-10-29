@@ -65,6 +65,7 @@ cargo clippy --all-targets
 cargo clippy --all-targets --no-default-features   # without the displays
 cargo clippy --all-targets --no-default-features --features terminal
 cargo clippy --all-targets --no-default-features --features window
+cargo clippy --all-targets --no-default-features --features image
 cargo test
 cargo build --target wasm32-unknown-unknown   # the part a browser client uses
 cargo clippy --all-targets --target wasm32-unknown-unknown
