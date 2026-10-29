@@ -19,7 +19,8 @@ use crate::event::{Event, InputEvent, Interrupt, KeyEvent, MouseEvent};
 /// [`super::Display::sender`].
 ///
 /// The queue has no bound. Once the display closes or delivers
-/// [`Interrupt::Close`], every send returns [`Closed`]. A message sent after
+/// [`Interrupt::Close`] or [`Interrupt::Read`], every send returns
+/// [`Closed`]. A message sent after
 /// a Close that has not gone out yet is lost.
 #[derive(Clone)]
 pub struct Sender {
@@ -52,8 +53,8 @@ impl Sender {
         self.send(Entry::Wake)
     }
 
-    /// Queue [`Interrupt::Read`], in order with the events. A reader that
-    /// sends a read error sends a close right after.
+    /// Queue [`Interrupt::Read`], in order with the events. The inbox
+    /// closes when it delivers it, so a Close comes right after.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub(crate) fn send_read_error(&self, e: io::Error) -> Result<(), Closed> {
         self.send(Entry::Read(e))
@@ -277,7 +278,10 @@ impl Inbox {
             Entry::Input(seat, ev) => Ok(Seated::Input(seat, ev)),
             Entry::Tick => Ok(Seated::Tick),
             Entry::Wake => Err(Interrupt::Wake),
-            Entry::Read(e) => Err(Interrupt::Read(e)),
+            Entry::Read(e) => {
+                self.close();
+                Err(Interrupt::Read(e))
+            }
             Entry::Close => {
                 self.close();
                 Err(Interrupt::Close)
@@ -435,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn a_read_error_keeps_its_place() {
+    fn a_read_error_keeps_its_place_and_closes() {
         let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         tx.send_key(key("a")).unwrap();
@@ -444,7 +448,20 @@ mod tests {
         tx.send_key(key("b")).unwrap();
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(matches!(inbox.wait(None), Err(Interrupt::Read(_))));
-        assert_eq!(key_name(&inbox.wait(None)), Some("b"));
+        assert!(is_close(&inbox.wait(None)));
+        assert_eq!(tx.send_key(key("c")), Err(Closed));
+    }
+
+    #[test]
+    fn a_read_error_closes_before_a_tick_that_falls_due() {
+        let mut inbox = TestDisplay::new(1_000_000);
+        inbox
+            .sender()
+            .send_read_error(io::Error::other("the tty went away"))
+            .unwrap();
+        assert!(matches!(inbox.wait(None), Err(Interrupt::Read(_))));
+        thread::sleep(Duration::from_millis(5));
+        assert!(is_close(&inbox.wait(None)));
     }
 
     #[test]
