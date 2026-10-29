@@ -306,7 +306,7 @@ impl Stage {
         };
         let (session, players) = Session::start(players, reader, BufWriter::new(to_server))
             .map_err(StageError::Start)?;
-        let count = session.players();
+        let count = session.player_count();
         let remote = Remote {
             tick_rate: session.tick_rate(),
             session,
@@ -1012,7 +1012,7 @@ pub(super) mod tests {
         };
         let players = PlayerRange::new(1, 1).unwrap();
         let (session, _) = Session::start(players, reader, BufWriter::new(to_server)).unwrap();
-        let count = session.players();
+        let count = session.player_count();
         let remote = Remote {
             tick_rate: session.tick_rate(),
             session,

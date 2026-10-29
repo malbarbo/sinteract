@@ -321,7 +321,7 @@ impl<R: Read, W: Write> Session<R, W> {
 
     /// The number of players, from the start. The players are 1 to this
     /// one until the end.
-    pub fn players(&self) -> NonZeroU32 {
+    pub fn player_count(&self) -> NonZeroU32 {
         self.players
     }
 
@@ -690,7 +690,7 @@ mod tests {
         let (session, players) =
             Session::start(players(), server.clone(), engine.clone()).expect("the session starts");
         assert_eq!(members(&players), ["1 Ana", "2 Beto"]);
-        assert_eq!(session.players().get(), 2);
+        assert_eq!(session.player_count().get(), 2);
         assert_eq!(session.tick_rate(), RATE);
         engine.drain();
         (session, server, engine)
