@@ -58,7 +58,7 @@ pub use driver::{Display, NoGraphics, PresentError, TerminalError, WindowError};
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub use driver::{NativeError, open_native};
 pub use frames::{FrameEvent, Frames, ShowError};
-pub use inbox::{Closed, Sender};
+pub use inbox::{SendError, Sender};
 pub use stage::{
     MAX_LOCAL_PLAYERS, Stage, StageError, StageEvent, StageMode, StagePresentError,
     TerminalGraphics, TerminalOptions,

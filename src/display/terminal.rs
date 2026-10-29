@@ -1129,7 +1129,7 @@ impl SizeWatch {
     }
 
     /// Send a resize when the size changed since the last check.
-    fn check(&mut self, tx: &Sender) -> Result<(), super::Closed> {
+    fn check(&mut self, tx: &Sender) -> Result<(), super::SendError> {
         let now = terminal::size().ok();
         if now == self.size {
             return Ok(());
@@ -1141,7 +1141,7 @@ impl SizeWatch {
 
 /// Send the size of the scene for a terminal of `(cols, rows)` with
 /// `footer_rows` under the frame, and draw the last frame again.
-fn resized(tx: &Sender, size: (u16, u16), footer_rows: u16) -> Result<(), super::Closed> {
+fn resized(tx: &Sender, size: (u16, u16), footer_rows: u16) -> Result<(), super::SendError> {
     if let Some((width, height)) = scene_size(size, cell_pixels(), footer_rows) {
         let _ = tx.send_resize(width, height);
     }

@@ -20,7 +20,7 @@ use crate::event::{Event, InputEvent, KeyEvent, MouseEvent};
 ///
 /// The queue has no bound. Once the display closes, delivers
 /// [`Event::Close`] or fails a wait with a read error, every send returns
-/// [`Closed`]. A message sent after
+/// [`SendError`]. A message sent after
 /// a Close that has not gone out yet is lost.
 #[derive(Clone)]
 pub struct Sender {
@@ -37,19 +37,19 @@ pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 
 /// The error of a [`Sender`] whose display was closed or dropped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Closed;
+pub struct SendError;
 
 impl Sender {
     /// Queue [`Event::Close`], in order with the events. A Ctrl-C handler
     /// of the engine calls it to end a `wait` that blocks.
-    pub fn send_close(&self) -> Result<(), Closed> {
+    pub fn send_close(&self) -> Result<(), SendError> {
         self.send(Entry::Close)
     }
 
     /// Queue [`Event::Wake`], in order with the events. A thread that
     /// hands its data over a channel of its own calls it, so the loop looks
     /// at that channel.
-    pub fn wake(&self) -> Result<(), Closed> {
+    pub fn wake(&self) -> Result<(), SendError> {
         self.send(Entry::Wake)
     }
 
@@ -57,39 +57,39 @@ impl Sender {
     /// the events. The inbox closes when it delivers it, so a Close comes
     /// right after.
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
-    pub(crate) fn send_read_error(&self, e: io::Error) -> Result<(), Closed> {
+    pub(crate) fn send_read_error(&self, e: io::Error) -> Result<(), SendError> {
         self.send(Entry::Read(e))
     }
 
     /// Ask the display to draw the last scene again, as after a resize.
     /// The request never reaches the engine. Only the terminal and the
     /// window redraw.
-    pub(crate) fn request_redraw(&self) -> Result<(), Closed> {
+    pub(crate) fn request_redraw(&self) -> Result<(), SendError> {
         self.put(Msg::Redraw)
     }
 
-    pub(crate) fn send_key(&self, key: KeyEvent) -> Result<(), Closed> {
+    pub(crate) fn send_key(&self, key: KeyEvent) -> Result<(), SendError> {
         self.send(Entry::Input(self.seat, InputEvent::Key(key)))
     }
 
-    pub(crate) fn send_mouse(&self, mouse: MouseEvent) -> Result<(), Closed> {
+    pub(crate) fn send_mouse(&self, mouse: MouseEvent) -> Result<(), SendError> {
         self.send(Entry::Input(self.seat, InputEvent::Mouse(mouse)))
     }
 
     /// Queue a Resize to the scene size `width` by `height`.
-    pub(crate) fn send_resize(&self, width: f32, height: f32) -> Result<(), Closed> {
+    pub(crate) fn send_resize(&self, width: f32, height: f32) -> Result<(), SendError> {
         self.send(Entry::Input(
             self.seat,
             InputEvent::Resize { width, height },
         ))
     }
 
-    fn send(&self, entry: Entry) -> Result<(), Closed> {
+    fn send(&self, entry: Entry) -> Result<(), SendError> {
         self.put(Msg::Entry(entry))
     }
 
-    fn put(&self, msg: Msg) -> Result<(), Closed> {
-        self.tx.send(msg).map_err(|_| Closed)?;
+    fn put(&self, msg: Msg) -> Result<(), SendError> {
+        self.tx.send(msg).map_err(|_| SendError)?;
         if let Some(wake) = &self.wake {
             wake();
         }
@@ -97,13 +97,13 @@ impl Sender {
     }
 }
 
-impl fmt::Display for Closed {
+impl fmt::Display for SendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("the display is closed")
     }
 }
 
-impl std::error::Error for Closed {}
+impl std::error::Error for SendError {}
 
 /// The receiving end. It holds a sender of its own for [`Inbox::sender`].
 pub(crate) struct Inbox {
@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(key_name(&inbox.wait(None)), Some("a"));
         assert!(inbox.wait(None).is_err());
         assert!(is_close(&inbox.wait(None)));
-        assert_eq!(tx.send_key(key("c")), Err(Closed));
+        assert_eq!(tx.send_key(key("c")), Err(SendError));
     }
 
     #[test]
@@ -564,7 +564,7 @@ mod tests {
         let tx = inbox.sender();
         tx.send_close().unwrap();
         assert!(is_close(&inbox.wait(None)));
-        assert_eq!(tx.wake(), Err(Closed));
+        assert_eq!(tx.wake(), Err(SendError));
     }
 
     #[test]
@@ -572,8 +572,8 @@ mod tests {
         let mut inbox = past_the_first_tick();
         let tx = inbox.sender();
         inbox.close();
-        assert_eq!(tx.send_close(), Err(Closed));
-        assert_eq!(inbox.sender().send_close(), Err(Closed));
+        assert_eq!(tx.send_close(), Err(SendError));
+        assert_eq!(inbox.sender().send_close(), Err(SendError));
         assert!(is_close(&inbox.wait(None)));
     }
 
@@ -629,7 +629,7 @@ mod tests {
     #[test]
     fn a_sender_fails_once_the_inbox_is_gone() {
         let tx = past_the_first_tick().sender();
-        assert_eq!(tx.send_close(), Err(Closed));
+        assert_eq!(tx.send_close(), Err(SendError));
     }
 
     #[test]
