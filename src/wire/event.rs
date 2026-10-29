@@ -114,8 +114,9 @@ fn write_modifiers(mut b: wire_modifiers::Builder<'_>, m: Modifiers) {
 }
 
 /// `None` for an event of an arm from a newer schema, for one that holds a
-/// value from a newer schema, such as a key kind, and for one that holds a
-/// float that is not finite. The reader skips all three.
+/// value from a newer schema, such as a key kind, for one that holds a
+/// float that is not finite, and for one that holds a value that no writer
+/// sends, such as an empty key. The reader skips them all.
 pub(super) fn read_input_event(r: input_event::Reader<'_>) -> Result<Option<InputEvent>, Error> {
     let Ok(which) = r.which() else {
         return Ok(None);
@@ -128,9 +129,13 @@ fn read_known_input_event(which: input_event::WhichReader<'_>) -> Result<InputEv
     Ok(match which {
         Which::Key(k) => {
             let k = k?;
+            let key = k.get_key()?.to_str()?;
+            if key.is_empty() {
+                return Err(ValueError::Impossible);
+            }
             InputEvent::Key(KeyEvent {
                 kind: key_kind_from_wire(k.get_kind()?),
-                key: k.get_key()?.to_str()?.to_owned(),
+                key: key.to_owned(),
                 modifiers: read_modifiers(k.get_modifiers()?),
             })
         }

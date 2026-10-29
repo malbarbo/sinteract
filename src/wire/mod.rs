@@ -159,6 +159,9 @@ enum ValueError {
     /// A path or a text with no fill and no stroke that marks the canvas.
     /// The reader skips it, since it draws nothing.
     NoInk,
+    /// A value that no writer sends, such as an empty key. The reader skips
+    /// the event that holds it.
+    Impossible,
 }
 
 impl From<Error> for ValueError {
@@ -186,13 +189,18 @@ impl From<std::str::Utf8Error> for ValueError {
 }
 
 /// `None` when reading an element or an event met a value from a newer
-/// schema, a float that is not finite, a bitmap with no image or an element
-/// with no ink, so the reader skips what holds it. Damage stays an error.
+/// schema, a float that is not finite, a bitmap with no image, an element
+/// with no ink or a value that no writer sends, so the reader skips what
+/// holds it. Damage stays an error.
 fn skip_unusable<T>(read: Result<T, ValueError>) -> Result<Option<T>, Error> {
     match read {
         Ok(v) => Ok(Some(v)),
         Err(
-            ValueError::Newer | ValueError::NotFinite | ValueError::NoImage | ValueError::NoInk,
+            ValueError::Newer
+            | ValueError::NotFinite
+            | ValueError::NoImage
+            | ValueError::NoInk
+            | ValueError::Impossible,
         ) => Ok(None),
         Err(ValueError::Malformed(e)) => Err(e),
     }
@@ -1344,6 +1352,16 @@ mod tests {
         for ev in events {
             assert!(is_event_skipped(&encode_event(&ev)), "{ev:?}");
         }
+    }
+
+    #[test]
+    fn a_key_event_with_an_empty_key_is_skipped() {
+        let key = InputEvent::Key(KeyEvent {
+            kind: KeyKind::Press,
+            key: String::new(),
+            modifiers: Modifiers::default(),
+        });
+        assert!(is_event_skipped(&encode_event(&key)));
     }
 
     #[test]
