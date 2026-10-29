@@ -108,6 +108,9 @@ change is more than one, and it becomes more than one commit.
   Damage is still an error. A reader walks a message once. The traversal
   limit is the size of the message, so a second walk opens the message
   again.
+- A public enum or struct is exhaustive, with no `#[non_exhaustive]`, so
+  a new variant or field is a compile error that shows a front end where
+  to decide.
 - `src/wire/*_capnp.rs` are generated and committed, so the build does not
   need the `capnp` CLI. Regenerate them with the command at the top of
   `schema/scene.capnp`. Do not edit them by hand.
