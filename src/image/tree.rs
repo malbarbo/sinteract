@@ -88,7 +88,14 @@ impl fmt::Display for BitmapError {
     }
 }
 
-impl std::error::Error for BitmapError {}
+impl std::error::Error for BitmapError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            BitmapError::NotDataUri => None,
+            BitmapError::Image(e) => Some(e),
+        }
+    }
+}
 
 static EMPTY: LazyLock<Image> = LazyLock::new(|| {
     Image(Arc::new(Node::Path {
