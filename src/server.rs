@@ -38,7 +38,7 @@ use crate::event::{
     InputEvent, KeyEvent, KeyKind, Modifiers, MouseAction, MouseButton, MouseButtons, MouseEvent,
     PadButton, PadEvent,
 };
-use crate::session::{Player, PlayerRange};
+use crate::session::{FrameRate, Player, PlayerRange};
 use crate::wire;
 use crate::wire::engine_to_server::{self, Arm};
 use crate::wire::framing::{self, Side};
@@ -306,7 +306,7 @@ impl LobbyCore {
 
     /// Start the room with a player for each of `nicknames`, numbered from
     /// 1 in their order, and give the engine the start, with ticks at
-    /// `tick_rate` thousandths of a hertz. The server calls
+    /// `frame_rate`. The server calls
     /// [`ServerCore::tick`] at that rate until the end. A nickname loses
     /// its control characters, so it cannot move the cursor of a terminal
     /// that prints it, and is cut to 64 bytes. The error gives the lobby
@@ -314,7 +314,7 @@ impl LobbyCore {
     pub fn start<S: AsRef<str>>(
         self,
         nicknames: &[S],
-        tick_rate: NonZeroU32,
+        frame_rate: FrameRate,
     ) -> Result<ServerCore, (LobbyCore, StartError)> {
         let Stage::Ready(range) = self.stage else {
             return Err((self, StartError::NoHello));
@@ -332,7 +332,8 @@ impl LobbyCore {
             .collect();
         let nicknames: Vec<&str> = seats.values().map(|s| s.nickname.as_str()).collect();
         let mut buf = Vec::new();
-        server_to_engine::write_start(&mut buf, &nicknames, tick_rate).expect(UNDER_THE_CAP);
+        server_to_engine::write_start(&mut buf, &nicknames, frame_rate.millihertz())
+            .expect(UNDER_THE_CAP);
         let engine = Engine {
             input: Vec::new(),
             cache: Cache::new(),
@@ -841,6 +842,8 @@ fn clean_nickname(nickname: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU16;
+
     use super::*;
     use crate::scene::{Bitmap, Image, RotatedRect, Scene};
     use crate::session::{Session, SessionEvent};
@@ -919,7 +922,7 @@ mod tests {
                     .expect("the first message of the core is a start");
             // The tests send the hello that they need.
             self.from_engine.drain();
-            let rate = engine.tick_rate();
+            let rate = engine.frame_rate().millihertz();
             self.engine = Some(engine);
             let members: Vec<_> = players
                 .iter()
@@ -1067,7 +1070,7 @@ mod tests {
     }
 
     /// The tick rate of the tests, 60 Hz.
-    const RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    const RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
     /// A core of `nicknames`, after a hello of 1 to 9 players.
     fn started(nicknames: &[&str]) -> ServerCore {

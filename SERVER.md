@@ -138,7 +138,7 @@ use sinteract::server::{Conn, EngineError, LobbyCore, LobbyError, Next, ServerCo
 let mut lobby = LobbyCore::new();
 lobby = lobby.from_engine(&bytes)?;       // bytes do fd 4; um erro acaba a sala
 lobby.player_range();                     // a faixa do hello, ou None antes dele
-let mut core: ServerCore = lobby.start(&nicknames, tick_rate).map_err(|(lobby, e)| e)?;
+let mut core: ServerCore = lobby.start(&nicknames, frame_rate).map_err(|(lobby, e)| e)?;
 core.players();                           // cada jogador com o apelido
 let conn: Conn = core.connect(player)?;   // uma view com o token do jogador
 core.from_view(conn, &payload)?;          // uma mensagem do WebSocket
@@ -175,11 +175,11 @@ engine.
 - O `sinteract` não tem sala de espera. Depois do `hello`, o
   `LobbyCore::player_range()` devolve a faixa de jogadores do jogo, de 1 a 1024
   (`session::MAX_PLAYERS`), e o lobby do servidor junta os apelidos.
-- O `LobbyCore::start(&nicknames, tick_rate)` numera os jogadores a partir
-  de 1, na ordem da lista, e manda o `start` à engine, com a taxa do
-  `tick`. Ele recusa um número de jogadores fora da faixa e um `start`
-  antes do `hello` (`StartError`), e devolve o lobby junto com o erro,
-  para outra tentativa.
+- O `LobbyCore::start(&nicknames, frame_rate)` numera os jogadores a
+  partir de 1, na ordem da lista, e manda o `start` à engine, com a taxa
+  do `tick`, um `FrameRate`. Ele recusa um número de jogadores fora da
+  faixa e um `start` antes do `hello` (`StartError`), e devolve o lobby
+  junto com o erro, para outra tentativa.
 - O `start` tira os caracteres de controle do apelido e o corta em 64
   bytes. O apelido vem do login ou do lobby, nunca da engine. O
   `ServerCore::players()` dá cada jogador com o apelido que a engine
@@ -354,7 +354,7 @@ num enum, porque o `LobbyCore::start` consome o lobby e devolve o
 ```rust
 use std::collections::HashMap;
 use std::io;
-use std::num::NonZeroU32;
+use std::num::NonZeroU16;
 use std::os::fd::OwnedFd;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -371,7 +371,7 @@ use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
 use sinteract::server::{EngineError, LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
-use sinteract::session::{ENGINE_TO_SERVER_FD, Player, SERVER_TO_ENGINE_FD};
+use sinteract::session::{ENGINE_TO_SERVER_FD, FrameRate, Player, SERVER_TO_ENGINE_FD};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
 use tokio::process::{Child, Command};
@@ -555,12 +555,12 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
     errors
 }
 
-/// A taxa do tick em milésimos de hertz, 30 Hz, que o start dá à engine.
-const TICK_RATE: NonZeroU32 = NonZeroU32::new(30_000).unwrap();
+/// A taxa do tick, 30 Hz, que o start dá à engine.
+const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(30).unwrap());
 
 /// O tick. Um tick atrasado não vira rajada.
 async fn tick(room: Arc<Room>) {
-    let period = Duration::from_nanos(1_000_000_000_000 / u64::from(TICK_RATE.get()));
+    let period = Duration::from_nanos(1_000_000_000_000 / u64::from(FRAME_RATE.millihertz().get()));
     let mut every = tokio::time::interval(period);
     every.set_missed_tick_behavior(MissedTickBehavior::Skip);
     while !room.is_over() {
@@ -582,7 +582,7 @@ async fn start(State(room): State<Arc<Room>>) -> Response {
     let Phase::Lobby(core) = std::mem::replace(&mut *phase, Phase::Over) else {
         return (StatusCode::CONFLICT, "a sala não está no lobby").into_response();
     };
-    let core = match core.start(&lobby, TICK_RATE) {
+    let core = match core.start(&lobby, FRAME_RATE) {
         Ok(core) => core,
         Err((core, e)) => {
             *phase = Phase::Lobby(core);
@@ -709,7 +709,7 @@ mundo.start(&jogadores); // cada Player com o apelido, o jogador 1 primeiro
 loop {
     match stage.wait(None)? { // o fd 3 quebrou ou o fd 4 falhou
         StageEvent::Tick => {
-            mundo.on_tick(1000.0 / stage.tick_rate().get() as f32); // segundos por tick
+            mundo.on_tick(1000.0 / stage.frame_rate().millihertz().get() as f32); // segundos por tick
             for (p, _) in &jogadores {
                 stage.present(Target::Player(*p), mundo.cena_de(*p))?;
             }
@@ -734,7 +734,7 @@ servidor e manda de novo a imagem perdida no próximo frame que a desenha.
 Uma escrita que falha no fd 4 fecha o fd 4 e encerra a sessão, e o `wait`
 devolve o erro dela, como devolve o de uma leitura do fd 3 que falha.
 Depois de um erro, todo `wait` devolve `Close`. O
-`tick_rate` dá a taxa do `start` numa sessão, e a taxa do monitor numa
+`frame_rate` dá a taxa do `start` numa sessão, e a taxa do monitor numa
 janela, que muda quando a janela passa para outro monitor. Por isso o
 jogo lê a taxa de novo a cada `Tick`. O `examples/engine.rs` do
 `sinteract` é uma engine completa.
@@ -770,7 +770,7 @@ Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
 `ShowError::Unavailable`, e o `wait_event` dorme até o prazo.
 
 Uma engine sem `Stage` usa a `session::Session` direto, com o
-`Session::start(players, r, w)`, o `tick_rate`, o `players`, que dá o
+`Session::start(players, r, w)`, o `frame_rate`, o `players`, que dá o
 número de jogadores do start, o `wait` e o `write_frame`, sobre o `Read` e o `Write` que ela tiver.
 
 ## O que o navegador mostra

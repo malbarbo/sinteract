@@ -32,6 +32,7 @@ use crate::event::{Event, MouseEvent};
 use crate::renderer::pixmap::PixmapRenderer;
 use crate::renderer::{AllocError, Renderer};
 use crate::scene::{Rgba, Scene};
+use crate::session::FrameRate;
 
 const KITTY_ANIMATION_ID: u32 = 1042;
 
@@ -244,8 +245,8 @@ impl super::Display for Terminal {
         self.inbox.sender()
     }
 
-    fn tick_rate(&self) -> NonZeroU32 {
-        self.clock.millihertz()
+    fn frame_rate(&self) -> FrameRate {
+        FrameRate::from_millihertz(self.clock.millihertz())
     }
 
     fn footer_rows(&self) -> u16 {

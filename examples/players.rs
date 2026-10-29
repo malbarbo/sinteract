@@ -25,7 +25,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::HashSet;
-use std::num::NonZeroU32;
 use std::process::ExitCode;
 
 use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
@@ -34,7 +33,7 @@ use sinteract::scene::{
     FillRule, Paint, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Scene, StrokeWidth,
     Text, TextSpec, TextStyle,
 };
-use sinteract::session::{Player, PlayerRange, Target};
+use sinteract::session::{FrameRate, Player, PlayerRange, Target};
 
 const WIDTH: f32 = 480.0;
 const HEIGHT: f32 = 360.0;
@@ -57,7 +56,7 @@ fn main() -> ExitCode {
     loop {
         match stage.wait(None) {
             Ok(StageEvent::Tick) => {
-                game.tick(stage.tick_rate());
+                game.tick(stage.frame_rate());
                 for square in &game.squares {
                     let scene = game.scene_for(square.player);
                     if let Err(e) = stage.present(Target::Player(square.player), scene) {
@@ -145,9 +144,9 @@ impl Game {
         Self { squares }
     }
 
-    /// Move each square by one tick at `rate` thousandths of a hertz.
-    fn tick(&mut self, rate: NonZeroU32) {
-        let step = SPEED * 1000.0 / rate.get() as f32;
+    /// Move each square by one tick at `rate`.
+    fn tick(&mut self, rate: FrameRate) {
+        let step = SPEED * 1000.0 / rate.millihertz().get() as f32;
         for s in &mut self.squares {
             let axis = |minus, plus| {
                 f32::from(u8::from(s.held.contains(&plus)))

@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
-use std::num::NonZeroU32;
+use std::num::NonZeroU16;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::process::{ExitCode, Stdio};
@@ -33,7 +33,7 @@ use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
 use sinteract::server::{LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
-use sinteract::session::{ENGINE_TO_SERVER_FD, Player, SERVER_TO_ENGINE_FD};
+use sinteract::session::{ENGINE_TO_SERVER_FD, FrameRate, Player, SERVER_TO_ENGINE_FD};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
 use tokio::process::{Child, Command};
@@ -43,12 +43,12 @@ use tokio::time::MissedTickBehavior;
 const USAGE: &str = "usage: sinteract-test-server [--addr ADDR] [--players N] \
                      [--page FILE] ENGINE [ARGS...]";
 
-/// The rate of the tick in thousandths of a hertz, 60 Hz, which the start
-/// gives the engine.
-const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+/// The rate of the tick, 60 Hz, which the start gives the engine.
+const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
 /// The period of the tick.
-const TICK: Duration = Duration::from_nanos(1_000_000_000_000 / TICK_RATE.get() as u64);
+const TICK: Duration =
+    Duration::from_nanos(1_000_000_000_000 / FRAME_RATE.millihertz().get() as u64);
 
 struct Options {
     addr: SocketAddr,
@@ -314,7 +314,7 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
 /// each one.
 fn start(room: &Room, lobby: LobbyCore) -> (Phase, Vec<String>) {
     let nicknames: Vec<String> = (1..=room.players).map(|n| format!("player {n}")).collect();
-    let core = match lobby.start(&nicknames, TICK_RATE) {
+    let core = match lobby.start(&nicknames, FRAME_RATE) {
         Ok(core) => core,
         Err((_, e)) => return (Phase::Over, vec![e.to_string()]),
     };

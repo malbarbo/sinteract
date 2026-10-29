@@ -13,7 +13,9 @@ use super::{Display, PresentError, TerminalError, WindowError};
 use crate::event::{Event, InputEvent};
 use crate::scene::Scene;
 use crate::session::PlayerRange;
-use crate::session::{FrameError, Player, Session, SessionError, SessionEvent, StartError, Target};
+use crate::session::{
+    FrameError, FrameRate, Player, Session, SessionError, SessionEvent, StartError, Target,
+};
 
 /// The game of an engine, in a session with a server when the server runs
 /// the engine, and on a window or the terminal otherwise, where the user is
@@ -308,7 +310,7 @@ impl Stage {
             .map_err(StageError::Start)?;
         let count = session.player_count();
         let remote = Remote {
-            tick_rate: session.tick_rate(),
+            frame_rate: session.frame_rate(),
             session,
             deadline,
             ended: false,
@@ -399,20 +401,20 @@ impl Stage {
         }
     }
 
-    /// The rate of the ticks in thousandths of a hertz, 60000 for 60 Hz. In
-    /// a session the rate is the one of the server, the same until the
+    /// The rate of the ticks. In a session the rate is the one of the
+    /// server, the same until the
     /// end. A server with a timer ticks at this rate, so a game may move by
     /// a step of it at each tick. A page that ticks at each refresh of the
     /// screen gives a nominal rate, and a game that keeps time measures it
     /// with its own clock. On a display of this process it is
-    /// [`Display::tick_rate`], which changes with the monitor, so a game
+    /// [`Display::frame_rate`], which changes with the monitor, so a game
     /// reads it again at each tick.
-    pub fn tick_rate(&self) -> NonZeroU32 {
+    pub fn frame_rate(&self) -> FrameRate {
         match &self.inner {
-            Inner::Local(display) => display.tick_rate(),
+            Inner::Local(display) => display.frame_rate(),
             #[cfg(feature = "window")]
-            Inner::Players(players) => players.window.tick_rate(),
-            Inner::Remote(remote) => remote.tick_rate,
+            Inner::Players(players) => players.window.frame_rate(),
+            Inner::Remote(remote) => remote.frame_rate,
         }
     }
 
@@ -686,7 +688,7 @@ impl Pending {
 /// A session with a server, on fd 3 and fd 4.
 struct Remote {
     /// The rate of the ticks, from the start of the session.
-    tick_rate: NonZeroU32,
+    frame_rate: FrameRate,
     session: Session<DeadlineReader, BufWriter<File>>,
     /// The deadline of the reader of the session, which has no other way
     /// to it.
@@ -1014,7 +1016,7 @@ pub(super) mod tests {
         let (session, _) = Session::start(players, reader, BufWriter::new(to_server)).unwrap();
         let count = session.player_count();
         let remote = Remote {
-            tick_rate: session.tick_rate(),
+            frame_rate: session.frame_rate(),
             session,
             deadline,
             ended: false,

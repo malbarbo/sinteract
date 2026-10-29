@@ -21,7 +21,6 @@
 #![cfg_attr(target_arch = "wasm32", no_main)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
 use std::process::ExitCode;
 
 use sinteract::display::{Stage, StageEvent, StageMode, TerminalOptions};
@@ -29,8 +28,8 @@ use sinteract::event::{InputEvent, KeyKind, key};
 use sinteract::scene::{
     Bitmap, FillRule, Image, Paint, Path, PathFill, PathStyle, RotatedRect, Scene,
 };
-use sinteract::session::PlayerRange;
 use sinteract::session::Target;
+use sinteract::session::{FrameRate, PlayerRange};
 
 const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 300.0;
@@ -62,7 +61,7 @@ fn main() -> ExitCode {
     loop {
         match stage.wait(None) {
             Ok(StageEvent::Tick) => {
-                game.tick(stage.tick_rate());
+                game.tick(stage.frame_rate());
                 if let Err(e) = stage.present(Target::All, game.scene()) {
                     eprintln!("engine: {e}");
                     break;
@@ -148,11 +147,11 @@ impl Game {
         }
     }
 
-    /// Move each ball by one tick at `rate` thousandths of a hertz. A tick
-    /// carries no time, so a ball moves by the same step at each tick, and
-    /// at the same speed at any rate.
-    fn tick(&mut self, rate: NonZeroU32) {
-        let dt = 1000.0 / rate.get() as f32;
+    /// Move each ball by one tick at `rate`. A tick carries no time, so a
+    /// ball moves by the same step at each tick, and at the same speed at
+    /// any rate.
+    fn tick(&mut self, rate: FrameRate) {
+        let dt = 1000.0 / rate.millihertz().get() as f32;
         for b in &mut self.balls {
             b.x += b.vx * dt;
             b.y += b.vy * dt;

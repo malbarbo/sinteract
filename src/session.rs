@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
-use std::num::NonZeroU32;
+use std::num::{NonZeroU16, NonZeroU32};
 
 use crate::asset::{RoomFull, check_room};
 use crate::event::InputEvent;
@@ -47,14 +47,37 @@ pub struct Session<R, W> {
     scratch: Vec<u8>,
     /// The number of players, from the start.
     players: NonZeroU32,
-    /// The rate of the ticks in thousandths of a hertz, from the start.
-    tick_rate: NonZeroU32,
+    /// The rate of the ticks, from the start.
+    frame_rate: FrameRate,
     /// Whether the session still reads the server.
     reading: Reading,
     events: VecDeque<SessionEvent>,
     /// The id of each image that went out and that the server did not lose.
     sent: HashMap<Image, u32>,
     next_id: u32,
+}
+
+/// The rate of the ticks, which pace the frames. It keeps thousandths of a
+/// hertz, the unit of the refresh rate of a monitor, such as 59940 for
+/// 59.94 Hz.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FrameRate(NonZeroU32);
+
+impl FrameRate {
+    /// A rate of `hz` hertz. A `u16` times 1000 fits in a `u32`.
+    pub const fn from_hz(hz: NonZeroU16) -> Self {
+        FrameRate(NonZeroU32::new(hz.get() as u32 * 1000).expect("hz is not zero"))
+    }
+
+    /// A rate of `millihertz` thousandths of a hertz.
+    pub const fn from_millihertz(millihertz: NonZeroU32) -> Self {
+        FrameRate(millihertz)
+    }
+
+    /// The rate in thousandths of a hertz.
+    pub const fn millihertz(self) -> NonZeroU32 {
+        self.0
+    }
 }
 
 /// A player of the session. Only the session and the server make one, from
@@ -282,13 +305,13 @@ impl<R: Read, W: Write> Session<R, W> {
             bytes: Vec::new(),
             scratch: Vec::new(),
             players: NonZeroU32::MIN,
-            tick_rate: NonZeroU32::MIN,
+            frame_rate: FrameRate::from_millihertz(NonZeroU32::MIN),
             reading: Reading::Open,
             events: VecDeque::new(),
             sent: HashMap::new(),
             next_id: 0,
         };
-        let (nicknames, tick_rate) = session.read_start()?;
+        let (nicknames, millihertz) = session.read_start()?;
         if !players.contains(nicknames.len()) {
             return Err(StartError::Players {
                 players: nicknames.len(),
@@ -299,7 +322,7 @@ impl<R: Read, W: Write> Session<R, W> {
             .ok()
             .and_then(NonZeroU32::new)
             .expect("a range has from 1 to 1024 players");
-        session.tick_rate = tick_rate;
+        session.frame_rate = FrameRate::from_millihertz(millihertz);
         let players = (1..)
             .map_while(NonZeroU32::new)
             .map(Player)
@@ -310,13 +333,12 @@ impl<R: Read, W: Write> Session<R, W> {
         Ok((session, players))
     }
 
-    /// The rate of the ticks in thousandths of a hertz, 60000 for 60 Hz,
-    /// the same from the start to the end. A server with a timer ticks at
+    /// The rate of the ticks, the same from the start to the end. A server with a timer ticks at
     /// this rate, so a game may move by a step of it at each tick. A page
     /// that ticks at each refresh of the screen gives a nominal rate, and a
     /// game that keeps time measures it with its own clock.
-    pub fn tick_rate(&self) -> NonZeroU32 {
-        self.tick_rate
+    pub fn frame_rate(&self) -> FrameRate {
+        self.frame_rate
     }
 
     /// The number of players, from the start. The players are 1 to this
@@ -691,7 +713,7 @@ mod tests {
             Session::start(players(), server.clone(), engine.clone()).expect("the session starts");
         assert_eq!(members(&players), ["1 Ana", "2 Beto"]);
         assert_eq!(session.player_count().get(), 2);
-        assert_eq!(session.tick_rate(), RATE);
+        assert_eq!(session.frame_rate().millihertz(), RATE);
         engine.drain();
         (session, server, engine)
     }

@@ -3,13 +3,13 @@
 
 use std::fmt;
 use std::io;
-use std::num::NonZeroU32;
 use std::time::Instant;
 
 use super::inbox::Sender;
 use crate::event::Event;
 use crate::renderer::AllocError;
 use crate::scene::Scene;
+use crate::session::FrameRate;
 
 /// A session that shows scenes and delivers events. Opening is the
 /// constructor of the implementation, and the session ends at drop:
@@ -58,11 +58,10 @@ pub trait Display: sealed::Sealed {
     /// A handle that pushes into this queue from any thread.
     fn sender(&self) -> Sender;
 
-    /// The rate of the ticks in thousandths of a hertz, 60000 for 60 Hz.
-    /// A window ticks at the rate of its monitor, which changes when the
-    /// window moves to another monitor, so a game reads it again at each
-    /// tick.
-    fn tick_rate(&self) -> NonZeroU32;
+    /// The rate of the ticks. A window ticks at the rate of its monitor,
+    /// which changes when the window moves to another monitor, so a game
+    /// reads it again at each tick.
+    fn frame_rate(&self) -> FrameRate;
 
     /// The rows of text under the frame. Only the terminal keeps them, as
     /// many as [`TerminalOptions::footer_rows`](super::TerminalOptions::footer_rows).

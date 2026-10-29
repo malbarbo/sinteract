@@ -9,6 +9,7 @@ use super::inbox::{Inbox, Next, Sender};
 use super::tick_clock::TickClock;
 use crate::event::Event;
 use crate::scene::Scene;
+use crate::session::FrameRate;
 
 /// A display that ticks and draws nothing, so a game runs on its clock
 /// with no screen, as in a test.
@@ -48,8 +49,8 @@ impl super::Display for Headless {
         self.inbox.sender()
     }
 
-    fn tick_rate(&self) -> NonZeroU32 {
-        self.clock.millihertz()
+    fn frame_rate(&self) -> FrameRate {
+        FrameRate::from_millihertz(self.clock.millihertz())
     }
 }
 

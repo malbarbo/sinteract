@@ -17,7 +17,7 @@
 
 use std::fmt;
 use std::io::{self, PipeReader, PipeWriter, Read, Write};
-use std::num::NonZeroU32;
+use std::num::NonZeroU16;
 use std::os::fd::OwnedFd;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
@@ -28,7 +28,7 @@ use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::Event;
 use sinteract::server::{Conn, LobbyCore, Next, ServerCore};
-use sinteract::session::{ENGINE_TO_SERVER_FD, SERVER_TO_ENGINE_FD};
+use sinteract::session::{ENGINE_TO_SERVER_FD, FrameRate, SERVER_TO_ENGINE_FD};
 use sinteract::view::FrameReader;
 
 /// How many reads of the engine the reader thread holds before it waits
@@ -39,14 +39,14 @@ const BACKLOG: usize = 4;
 /// How much the view asks of the pipe of the engine at a time.
 const READ_BYTES: usize = 64 * 1024;
 
-/// The rate of the tick of the room in thousandths of a hertz, 60 Hz. A
-/// server keeps one rate for the whole session, and the rate of a display
-/// changes with its monitor, so the ticks of the display do not pace the
-/// room.
-const TICK_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+/// The rate of the tick of the room, 60 Hz. A server keeps one rate for
+/// the whole session, and the rate of a display changes with its monitor,
+/// so the ticks of the display do not pace the room.
+const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
 /// The period of the tick of the room.
-const TICK: Duration = Duration::from_nanos(1_000_000_000_000 / TICK_RATE.get() as u64);
+const TICK: Duration =
+    Duration::from_nanos(1_000_000_000_000 / FRAME_RATE.millihertz().get() as u64);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -154,7 +154,7 @@ fn start(
             .map_err(|e| e.to_string())?;
     }
     let mut core = lobby
-        .start(&["view"], TICK_RATE)
+        .start(&["view"], FRAME_RATE)
         .map_err(|(_, e)| e.to_string())?;
     let (player, _) = core.players().next().expect("the room has one player");
     let conn = core.connect(player).expect("the player has a seat");

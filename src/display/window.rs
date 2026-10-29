@@ -39,7 +39,7 @@ use crate::event::{
 use crate::renderer::Renderer;
 use crate::renderer::pixmap::{PixmapRenderer, fit_scale, frame_px};
 use crate::scene::Scene;
-use crate::session::Target;
+use crate::session::{FrameRate, Target};
 
 /// A [`super::Display`] over a winit window. Closing the window arrives
 /// as [`Event::Close`], and the window stays until the drop of the
@@ -301,8 +301,8 @@ impl super::Display for Window {
         self.inbox.sender()
     }
 
-    fn tick_rate(&self) -> NonZeroU32 {
-        self.clock.millihertz()
+    fn frame_rate(&self) -> FrameRate {
+        FrameRate::from_millihertz(self.clock.millihertz())
     }
 }
 
