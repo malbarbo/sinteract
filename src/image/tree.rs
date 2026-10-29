@@ -156,7 +156,7 @@ impl Image {
     /// original.
     pub fn bitmap_data_uri(uri: &str) -> Result<Self, BitmapError> {
         let blob = decode_data_uri(uri).ok_or(BitmapError::NotDataUri)?;
-        let (image, head) = scene::Image::load_with_head(blob).map_err(BitmapError::Image)?;
+        let (image, head) = scene::Image::fit_with_head(blob).map_err(BitmapError::Image)?;
         let length = |v: u32| Length::new(f64::from(v)).expect("a u32 is a length");
         let bitmap = Self::new(Node::Bitmap {
             region: ImageBox::of_size(length(head.width), length(head.height)),

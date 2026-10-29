@@ -879,22 +879,22 @@ impl Image {
     /// and keeps the image. An image shrinks, with the feature `render`, up
     /// to [`MAX_SHRINK_PIXELS`](crate::asset::MAX_SHRINK_PIXELS), and is an
     /// error past that or without the feature.
-    pub fn load(blob: Vec<u8>) -> Result<Image, ImageError> {
+    pub fn fit(blob: Vec<u8>) -> Result<Image, ImageError> {
         crate::asset::fit_image(blob).and_then(Image::new)
     }
 
-    /// [`Image::load`], together with the header of `blob`. The size in the
+    /// [`Image::fit`], together with the header of `blob`. The size in the
     /// header is the one of the original, before the image shrinks, which
     /// is the size that a front end shows.
-    pub fn load_with_head(blob: Vec<u8>) -> Result<(Image, ImageHead), ImageError> {
+    pub fn fit_with_head(blob: Vec<u8>) -> Result<(Image, ImageHead), ImageError> {
         let head = crate::asset::image_head(&blob)?;
-        Ok((Image::load(blob)?, head))
+        Ok((Image::fit(blob)?, head))
     }
 
     /// Read the header of `blob` and hash it. Returns an error if `blob` is
     /// not a PNG, a JPEG, a GIF, a WebP or a BMP, or has more than
     /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS).
-    /// [`Image::load`] shrinks a larger one first. The size is
+    /// [`Image::fit`] shrinks a larger one first. The size is
     /// the one after the EXIF orientation of a JPEG.
     pub fn new(blob: Vec<u8>) -> Result<Image, ImageError> {
         let (width, height) = crate::asset::screen_size(&blob)?;
@@ -2069,22 +2069,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_image_that_loads_under_the_limit_is_the_blob_as_it_is() {
+    fn an_image_that_fits_under_the_limit_is_the_blob_as_it_is() {
         let blob = crate::asset::png_head(2, 3);
-        assert_eq!(Image::load(blob.clone()), Image::new(blob));
-        assert_eq!(Image::load(b"GIF".to_vec()), Err(ImageError::Unsupported));
+        assert_eq!(Image::fit(blob.clone()), Image::new(blob));
+        assert_eq!(Image::fit(b"GIF".to_vec()), Err(ImageError::Unsupported));
     }
 
     #[test]
-    fn an_image_loads_with_the_head_of_its_blob() {
+    fn an_image_fits_with_the_head_of_its_blob() {
         let blob = crate::asset::png_head(2, 3);
         let head = crate::asset::image_head(&blob);
         assert_eq!(
-            Image::load_with_head(blob.clone()),
-            Ok((Image::load(blob).unwrap(), head.unwrap()))
+            Image::fit_with_head(blob.clone()),
+            Ok((Image::fit(blob).unwrap(), head.unwrap()))
         );
         assert_eq!(
-            Image::load_with_head(b"GIF".to_vec()),
+            Image::fit_with_head(b"GIF".to_vec()),
             Err(ImageError::Unsupported)
         );
     }

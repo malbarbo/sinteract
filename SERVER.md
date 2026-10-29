@@ -283,7 +283,7 @@ uma imagem que o servidor perdeu. Um frame cujas imagens juntas passam dos
 limites não sai (`FrameError::Full`, que o `Stage` devolve dentro do
 `StagePresentError::Session`), porque o servidor perderia uma delas a
 cada frame. O front end carrega
-cada imagem uma vez com `Image::load`, que reduz uma imagem acima de
+cada imagem uma vez com `Image::fit`, que reduz uma imagem acima de
 2048×2048 pixels, e guarda a `Image`.
 
 ### O que vai para cada view
