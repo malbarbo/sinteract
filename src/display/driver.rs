@@ -126,15 +126,14 @@ impl From<io::Error> for PresentError {
 /// A window of `width` by `height` logical pixels, and the terminal when no
 /// window opens, as over ssh. `title` only matters for a window, because a
 /// terminal keeps the title of the shell, and `options` only for a
-/// terminal. When neither opens, the error is the one of the terminal,
-/// which names the terminals that show graphics.
+/// terminal. When neither opens, the error holds the error of each one.
 ///
 /// ```no_run
 /// # use sinteract::display::{Display, TerminalOptions, open_native};
 /// let options = TerminalOptions::default();
 /// let mut display = open_native("My game", 400.0, 300.0, options)?;
 /// # drop(display);
-/// # Ok::<(), sinteract::display::TerminalError>(())
+/// # Ok::<(), sinteract::display::NativeError>(())
 /// ```
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub fn open_native(
@@ -142,7 +141,7 @@ pub fn open_native(
     width: f32,
     height: f32,
     options: super::TerminalOptions,
-) -> Result<Box<dyn Display>, TerminalError> {
+) -> Result<Box<dyn Display>, NativeError> {
     window_or_terminal(|| super::Window::open(title, width, height), options)
 }
 
@@ -152,10 +151,39 @@ pub fn open_native(
 pub(crate) fn window_or_terminal(
     window: impl FnOnce() -> Result<super::Window, WindowError>,
     options: super::TerminalOptions,
-) -> Result<Box<dyn Display>, TerminalError> {
+) -> Result<Box<dyn Display>, NativeError> {
     match window() {
         Ok(window) => Ok(Box::new(window)),
-        Err(_) => Ok(Box::new(super::Terminal::open(options, None)?)),
+        Err(window) => match super::Terminal::open(options, None) {
+            Ok(terminal) => Ok(Box::new(terminal)),
+            Err(terminal) => Err(NativeError { window, terminal }),
+        },
+    }
+}
+
+/// Why [`open_native`] opened neither a window nor the terminal.
+#[cfg(all(feature = "terminal", feature = "window"))]
+#[derive(Debug)]
+pub struct NativeError {
+    /// Why the window did not open.
+    pub window: WindowError,
+    /// Why the terminal did not open.
+    pub terminal: TerminalError,
+}
+
+#[cfg(all(feature = "terminal", feature = "window"))]
+impl fmt::Display for NativeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}, and {}", self.window, self.terminal)
+    }
+}
+
+/// The source is the error of the terminal, the display that the
+/// function tried last.
+#[cfg(all(feature = "terminal", feature = "window"))]
+impl std::error::Error for NativeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.terminal)
     }
 }
 

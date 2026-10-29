@@ -54,9 +54,9 @@ mod tick_clock;
 #[cfg(feature = "window")]
 pub mod window;
 
-#[cfg(all(feature = "terminal", feature = "window"))]
-pub use driver::open_native;
 pub use driver::{Display, NoGraphics, PresentError, TerminalError, WindowError};
+#[cfg(all(feature = "terminal", feature = "window"))]
+pub use driver::{NativeError, open_native};
 pub use frames::{FrameEvent, Frames, ShowError};
 pub use inbox::{Closed, Sender};
 pub use stage::{
