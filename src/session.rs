@@ -47,7 +47,7 @@ pub struct Session<R, W> {
     scratch: Vec<u8>,
     /// The number of players, from the start.
     players: NonZeroU32,
-    /// The rate of the ticks, from the start.
+    /// The rate of the frames, from the start.
     frame_rate: FrameRate,
     /// Whether the session still reads the server.
     reading: Reading,
@@ -57,9 +57,8 @@ pub struct Session<R, W> {
     next_id: u32,
 }
 
-/// The rate of the ticks, which pace the frames. It keeps thousandths of a
-/// hertz, the unit of the refresh rate of a monitor, such as 59940 for
-/// 59.94 Hz.
+/// The rate of the frames. It keeps thousandths of a hertz, the unit of
+/// the refresh rate of a monitor, such as 59940 for 59.94 Hz.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FrameRate(NonZeroU32);
 
@@ -333,10 +332,11 @@ impl<R: Read, W: Write> Session<R, W> {
         Ok((session, players))
     }
 
-    /// The rate of the ticks, the same from the start to the end. A server with a timer ticks at
-    /// this rate, so a game may move by a step of it at each tick. A page
-    /// that ticks at each refresh of the screen gives a nominal rate, and a
-    /// game that keeps time measures it with its own clock.
+    /// The rate of the frames, the same from the start to the end. A server
+    /// with a timer ticks at this rate, so a game may move by a step of it at
+    /// each frame. A page that ticks at each refresh of the screen gives a
+    /// nominal rate, and a game that keeps time measures it with its own
+    /// clock.
     pub fn frame_rate(&self) -> FrameRate {
         self.frame_rate
     }
