@@ -485,8 +485,9 @@ fn read_geometry(
             coords: coords.len() as usize,
         })
     };
-    // A move of the wire replaces this one.
-    let mut geometry = Geometry::builder(0.0, 0.0);
+    // A move of the wire replaces this one, and each verb is at most one
+    // segment.
+    let mut geometry = Geometry::builder(0.0, 0.0).reserve(verbs.len());
     let mut i = 0;
     for &b in verbs {
         let kind = SegmentKind::from_u8(b).ok_or(ValueError::Newer)?;

@@ -1199,6 +1199,12 @@ impl<T> GeometryBuilder<T> {
         }
     }
 
+    /// Make room for `additional` more segments.
+    pub(crate) fn reserve(mut self, additional: usize) -> Self {
+        self.segs.reserve(additional);
+        self
+    }
+
     pub fn move_to(mut self, x: f32, y: f32) -> Self {
         let seg = Segment::Move { x, y };
         match self.segs.last_mut() {
