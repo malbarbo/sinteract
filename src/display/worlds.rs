@@ -268,7 +268,7 @@ impl Worlds {
 
 impl Open {
     fn present(&mut self, on_error: &mut impl FnMut(&dyn std::error::Error)) {
-        for (target, scene) in std::mem::take(&mut self.pending) {
+        for (target, scene) in self.pending.drain(..) {
             if let Err(e) = self.stage.present(target, scene) {
                 on_error(&e);
                 if let StagePresentError::Display(PresentError::Io(_))
