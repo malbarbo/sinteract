@@ -1802,6 +1802,13 @@ impl Crop {
             .is_some_and(|polygon| polygon.points.is_empty())
     }
 
+    /// Returns `true` if an element under this crop can draw, `false`
+    /// otherwise. A crop that is empty or not finite in `f32` has no clip,
+    /// and [`Cropped`] drops each element under it.
+    pub fn draws(&self) -> bool {
+        self.0.as_ref().is_none_or(|polygon| polygon.clip.is_some())
+    }
+
     fn polygon(points: Vec<(f64, f64)>) -> Crop {
         let clip = polygon_clip(&points);
         Crop(Some(Arc::new(Polygon {
@@ -2691,6 +2698,7 @@ mod tests {
         };
         let crop = Crop::default().intersect(huge);
         assert!(!crop.is_empty());
+        assert!(!crop.draws());
         let mut scene = Scene::new(10.0, 10.0);
         scene
             .cropped(&crop)

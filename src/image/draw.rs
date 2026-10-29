@@ -63,8 +63,11 @@ impl Image {
                     image,
                     at: inner,
                 } => {
+                    // A crop that draws nothing skips its whole subtree.
                     let inside = crop.intersect(affine(*region, at));
-                    pending.push((image, at.plus(*inner), inside));
+                    if inside.draws() {
+                        pending.push((image, at.plus(*inner), inside));
+                    }
                 }
                 Node::Path { drawn: None, .. } => {}
                 Node::Path {
