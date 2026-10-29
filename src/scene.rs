@@ -859,7 +859,8 @@ fn all_finite(values: &[f32]) -> bool {
 /// [`MAX_IMAGE_PIXELS`](crate::asset::MAX_IMAGE_PIXELS), with its size on
 /// the screen. A clone shares the blob. Two images are equal when their
 /// blobs are, so a renderer or a session finds an image again by its
-/// content.
+/// content. The picture of spython and sgleam, which a program combines,
+/// is the `Image` of the `image` module, and its bitmaps hold this one.
 #[derive(Clone)]
 pub struct Image(Arc<ImageData>);
 

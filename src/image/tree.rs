@@ -15,6 +15,11 @@ use super::{Finite, Font, Length, Style};
 use crate::asset::{ImageError, decode_data_uri};
 use crate::scene;
 
+/// A picture of spython and sgleam, a tree of shapes, text, bitmaps and
+/// crops that a program builds and combines. [`Image::draw`] and
+/// [`Image::to_scene`] turn it into a [`Scene`](crate::scene::Scene). A
+/// bitmap of the tree holds a [`scene::Image`], the encoded file that a
+/// scene draws. A clone shares the tree.
 #[derive(Clone)]
 pub struct Image(Arc<Node>);
 
