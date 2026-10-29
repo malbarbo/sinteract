@@ -271,8 +271,17 @@ pub struct ImageHead {
     pub width: u32,
     /// The height on the screen, after the EXIF orientation of a JPEG.
     pub height: u32,
-    /// The media type, such as `image/png`.
-    pub mime: &'static str,
+    pub format: ImageFormat,
+}
+
+/// The format of an image that a scene draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ImageFormat {
+    Png,
+    Jpeg,
+    Gif,
+    WebP,
+    Bmp,
 }
 
 /// The header of the image in `blob`, or an error if it is not a PNG, a
@@ -286,7 +295,7 @@ pub fn image_head(blob: &[u8]) -> Result<ImageHead, ImageError> {
     Ok(ImageHead {
         width,
         height,
-        mime: head.format.mime(),
+        format: head.format.public(),
     })
 }
 
@@ -374,6 +383,16 @@ enum Format {
 }
 
 impl Format {
+    fn public(self) -> ImageFormat {
+        match self {
+            Format::Png => ImageFormat::Png,
+            Format::Jpeg { .. } => ImageFormat::Jpeg,
+            Format::Gif => ImageFormat::Gif,
+            Format::WebP => ImageFormat::WebP,
+            Format::Bmp => ImageFormat::Bmp,
+        }
+    }
+
     fn mime(self) -> &'static str {
         match self {
             Format::Png => "image/png",
@@ -1086,13 +1105,13 @@ mod tests {
             Ok(ImageHead {
                 width: 480,
                 height: 640,
-                mime: "image/jpeg"
+                format: ImageFormat::Jpeg,
             })
         );
         let large = image_head(&png_head(4096, 4096)).unwrap();
         assert_eq!(
-            (large.width, large.height, large.mime),
-            (4096, 4096, "image/png")
+            (large.width, large.height, large.format),
+            (4096, 4096, ImageFormat::Png)
         );
         assert_eq!(image_head(b"GIF"), Err(ImageError::Unsupported));
     }

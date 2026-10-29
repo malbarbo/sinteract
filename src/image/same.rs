@@ -1,6 +1,7 @@
 //! The comparison of two images by their pixels.
 
 use super::{CanvasTooLarge, Image};
+use crate::asset::ImageFormat;
 use crate::renderer::pixmap::render_to_pixmap;
 use crate::scene::{self, Element, Scene};
 
@@ -49,7 +50,7 @@ fn not_png(elements: &[Element]) -> Vec<&scene::Image> {
         match element {
             Element::Bitmap(bitmap) => {
                 let head = crate::asset::image_head(bitmap.image.blob());
-                if head.is_ok_and(|head| head.mime != "image/png") {
+                if head.is_ok_and(|head| head.format != ImageFormat::Png) {
                     images.push(&bitmap.image);
                 }
             }
