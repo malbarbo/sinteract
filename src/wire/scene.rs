@@ -9,10 +9,10 @@ use std::collections::BTreeSet;
 use capnp::message::{Builder, HeapAllocator};
 
 use crate::scene::{
-    Affine, Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Geometry, GeometryBuilder,
-    GradientGeometry, Image, LineCap, LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathFill,
-    PathStroke, PathStyle, Rgba, Sampling, Scene, SegmentKind, Segments, SpreadMode, Stop, Stops,
-    StrokeWidth, Text, TextSpec, TextStroke, TextStyle,
+    Affine, Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Geometry, GradientGeometry,
+    Image, LineCap, LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathFill, PathStroke,
+    PathStyle, Rgba, Sampling, Scene, SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth,
+    Text, TextSpec, TextStroke, TextStyle,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -481,7 +481,7 @@ fn read_geometry(
         })
     };
     // A move of the wire replaces this one.
-    let mut geometry = GeometryBuilder::new(0.0, 0.0);
+    let mut geometry = Geometry::builder(0.0, 0.0);
     let mut i = 0;
     for &b in verbs {
         let kind = SegmentKind::from_u8(b).ok_or(ValueError::Newer)?;
@@ -489,19 +489,19 @@ fn read_geometry(
             return Err(mismatch());
         }
         let c = |k: u32| coords.get(i + k);
-        match kind {
+        geometry = match kind {
             SegmentKind::Move => geometry.move_to(c(0), c(1)),
             SegmentKind::Line => geometry.line_to(c(0), c(1)),
             SegmentKind::Quad => geometry.quad_to(c(0), c(1), c(2), c(3)),
             SegmentKind::Cubic => geometry.cubic_to(c(0), c(1), c(2), c(3), c(4), c(5)),
-        }
+        };
         i += kind.coord_count() as u32;
     }
     // Coords that no verb claims are a mismatch too.
     if i != coords.len() {
         return Err(mismatch());
     }
-    Ok(geometry.finish())
+    Ok(geometry.build())
 }
 
 fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {

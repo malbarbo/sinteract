@@ -519,7 +519,7 @@ pub struct ClipPath {
 impl ClipPath {
     /// Begin a clip at `(x, y)`.
     pub fn builder(fill_rule: FillRule, x: f32, y: f32) -> ClipPathBuilder {
-        ClipPathBuilder::new(fill_rule, x, y)
+        GeometryBuilder::new(fill_rule, x, y)
     }
 
     pub fn segments(&self) -> Segments<'_> {
@@ -1096,6 +1096,11 @@ pub struct Geometry {
 }
 
 impl Geometry {
+    /// Begin a geometry at `(x, y)`.
+    pub fn builder(x: f32, y: f32) -> GeometryBuilder {
+        GeometryBuilder::new((), x, y)
+    }
+
     pub fn segments(&self) -> Segments<'_> {
         Segments(self.segs.iter())
     }
@@ -1131,44 +1136,56 @@ const ARC_TOLERANCE: f64 = 0.1;
 /// The most cubics that one turn of an arc becomes.
 const ARC_CUBICS_PER_TURN: f64 = 64.0;
 
-/// The geometry half of [`PathBuilder`] and [`ClipPathBuilder`], so the arc
-/// expansion is written once. It begins with a move to the start point, so
-/// there is always a current point. A move that no segment follows draws
-/// nothing, so a move replaces a move before it and [`Self::finish`] drops
-/// a move at the end.
-pub(crate) struct GeometryBuilder {
+/// Builds a [`Geometry`] by value, and with it the [`Path`] or the
+/// [`ClipPath`] that `T` stands for. It begins with a move to the start
+/// point, so there is always a current point. A move that no segment
+/// follows draws nothing, so a move replaces a move before it and `build`
+/// drops a move at the end.
+#[must_use = "a builder yields nothing until build() is called"]
+pub struct GeometryBuilder<T = ()> {
+    extra: T,
     segs: Vec<Segment>,
     last_point: (f32, f32),
 }
 
-impl GeometryBuilder {
-    pub(crate) fn new(x: f32, y: f32) -> Self {
+/// Builds a [`Path`], from [`Path::builder`].
+pub type PathBuilder = GeometryBuilder<PathStyle>;
+
+/// Builds a [`ClipPath`], from [`ClipPath::builder`].
+pub type ClipPathBuilder = GeometryBuilder<FillRule>;
+
+impl<T> GeometryBuilder<T> {
+    fn new(extra: T, x: f32, y: f32) -> Self {
         Self {
+            extra,
             segs: vec![Segment::Move { x, y }],
             last_point: (x, y),
         }
     }
 
-    pub(crate) fn move_to(&mut self, x: f32, y: f32) {
+    pub fn move_to(mut self, x: f32, y: f32) -> Self {
         let seg = Segment::Move { x, y };
         match self.segs.last_mut() {
             Some(last @ Segment::Move { .. }) => *last = seg,
             _ => self.segs.push(seg),
         }
         self.last_point = (x, y);
+        self
     }
 
-    pub(crate) fn line_to(&mut self, x: f32, y: f32) {
+    pub fn line_to(mut self, x: f32, y: f32) -> Self {
         self.segs.push(Segment::Line { x, y });
         self.last_point = (x, y);
+        self
     }
 
-    pub(crate) fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+    pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
         self.segs.push(Segment::Quad { cx, cy, x, y });
         self.last_point = (x, y);
+        self
     }
 
-    pub(crate) fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+    pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
         self.segs.push(Segment::Cubic {
             c1x,
             c1y,
@@ -1178,12 +1195,13 @@ impl GeometryBuilder {
             y,
         });
         self.last_point = (x, y);
+        self
     }
 
     /// Append an SVG endpoint arc as cubics. A degenerate arc becomes a line.
     #[allow(clippy::too_many_arguments)]
-    fn arc_to(
-        &mut self,
+    pub fn arc_to(
+        mut self,
         rx: f32,
         ry: f32,
         rotation_deg: f32,
@@ -1191,7 +1209,7 @@ impl GeometryBuilder {
         sweep: bool,
         x: f32,
         y: f32,
-    ) {
+    ) -> Self {
         // kurbo turns a float that is not finite into no segment at all. A
         // line to NaN keeps it, so the scene drops the element.
         if !all_finite(&[rx, ry, rotation_deg, x, y]) {
@@ -1216,15 +1234,38 @@ impl GeometryBuilder {
             });
         }
         self.last_point = (x, y);
+        self
     }
 
-    /// Take the segments, with no move at the end.
-    pub(crate) fn finish(&mut self) -> Geometry {
-        let mut segs = std::mem::take(&mut self.segs);
-        if matches!(segs.last(), Some(Segment::Move { .. })) {
-            segs.pop();
+    /// The extra value and the segments, with no move at the end.
+    fn finish(mut self) -> (T, Geometry) {
+        if matches!(self.segs.last(), Some(Segment::Move { .. })) {
+            self.segs.pop();
         }
-        Geometry { segs }
+        (self.extra, Geometry { segs: self.segs })
+    }
+}
+
+impl GeometryBuilder {
+    pub fn build(self) -> Geometry {
+        self.finish().1
+    }
+}
+
+impl PathBuilder {
+    pub fn build(self) -> Path {
+        let (style, geometry) = self.finish();
+        Path { style, geometry }
+    }
+}
+
+impl ClipPathBuilder {
+    pub fn build(self) -> ClipPath {
+        let (fill_rule, geometry) = self.finish();
+        ClipPath {
+            geometry,
+            fill_rule,
+        }
     }
 }
 
@@ -1423,7 +1464,7 @@ pub struct Path {
 impl Path {
     /// Begin a path at `(x, y)`.
     pub fn builder(style: PathStyle, x: f32, y: f32) -> PathBuilder {
-        PathBuilder::new(style, x, y)
+        GeometryBuilder::new(style, x, y)
     }
 
     pub fn segments(&self) -> Segments<'_> {
@@ -1943,127 +1984,6 @@ fn times_pow2(p: kurbo::Point, e: i32) -> kurbo::Point {
     kurbo::Point::new(p.x * a * b, p.y * a * b)
 }
 
-/// Builds a [`Path`] by value.
-#[must_use = "PathBuilder yields a Path only when build() is called"]
-pub struct PathBuilder {
-    style: PathStyle,
-    geom: GeometryBuilder,
-}
-
-impl PathBuilder {
-    fn new(style: PathStyle, x: f32, y: f32) -> Self {
-        Self {
-            style,
-            geom: GeometryBuilder::new(x, y),
-        }
-    }
-
-    pub fn move_to(mut self, x: f32, y: f32) -> Self {
-        self.geom.move_to(x, y);
-        self
-    }
-
-    pub fn line_to(mut self, x: f32, y: f32) -> Self {
-        self.geom.line_to(x, y);
-        self
-    }
-
-    pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
-        self.geom.quad_to(cx, cy, x, y);
-        self
-    }
-
-    pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
-        self.geom.cubic_to(c1x, c1y, c2x, c2y, x, y);
-        self
-    }
-
-    /// Append an SVG endpoint arc as cubics. A degenerate arc becomes a line.
-    #[allow(clippy::too_many_arguments)]
-    pub fn arc_to(
-        mut self,
-        rx: f32,
-        ry: f32,
-        rotation_deg: f32,
-        large_arc: bool,
-        sweep: bool,
-        x: f32,
-        y: f32,
-    ) -> Self {
-        self.geom
-            .arc_to(rx, ry, rotation_deg, large_arc, sweep, x, y);
-        self
-    }
-
-    pub fn build(mut self) -> Path {
-        Path {
-            style: self.style,
-            geometry: self.geom.finish(),
-        }
-    }
-}
-
-/// Builds a [`ClipPath`] by value. A sub-path closes implicitly, so no
-/// closing line is needed.
-#[must_use = "ClipPathBuilder yields a ClipPath only when build() is called"]
-pub struct ClipPathBuilder {
-    geom: GeometryBuilder,
-    fill_rule: FillRule,
-}
-
-impl ClipPathBuilder {
-    fn new(fill_rule: FillRule, x: f32, y: f32) -> Self {
-        Self {
-            geom: GeometryBuilder::new(x, y),
-            fill_rule,
-        }
-    }
-
-    pub fn move_to(mut self, x: f32, y: f32) -> Self {
-        self.geom.move_to(x, y);
-        self
-    }
-
-    pub fn line_to(mut self, x: f32, y: f32) -> Self {
-        self.geom.line_to(x, y);
-        self
-    }
-
-    pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
-        self.geom.quad_to(cx, cy, x, y);
-        self
-    }
-
-    pub fn cubic_to(mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) -> Self {
-        self.geom.cubic_to(c1x, c1y, c2x, c2y, x, y);
-        self
-    }
-
-    /// Append an SVG endpoint arc as cubics. A degenerate arc becomes a line.
-    #[allow(clippy::too_many_arguments)]
-    pub fn arc_to(
-        mut self,
-        rx: f32,
-        ry: f32,
-        rotation_deg: f32,
-        large_arc: bool,
-        sweep: bool,
-        x: f32,
-        y: f32,
-    ) -> Self {
-        self.geom
-            .arc_to(rx, ry, rotation_deg, large_arc, sweep, x, y);
-        self
-    }
-
-    pub fn build(mut self) -> ClipPath {
-        ClipPath {
-            geometry: self.geom.finish(),
-            fill_rule: self.fill_rule,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2107,6 +2027,23 @@ mod tests {
             ]
         );
         assert_eq!(clip.fill_rule, FillRule::EvenOdd);
+    }
+
+    #[test]
+    fn a_geometry_keeps_the_last_of_two_moves_and_drops_a_move_at_the_end() {
+        let geometry = Geometry::builder(0.0, 0.0)
+            .move_to(1.0, 2.0)
+            .line_to(3.0, 4.0)
+            .move_to(5.0, 6.0)
+            .build();
+        let segs: Vec<_> = geometry.segments().collect();
+        assert_eq!(
+            segs,
+            [
+                Segment::Move { x: 1.0, y: 2.0 },
+                Segment::Line { x: 3.0, y: 4.0 }
+            ]
+        );
     }
 
     #[test]
