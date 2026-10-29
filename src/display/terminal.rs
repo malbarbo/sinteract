@@ -764,15 +764,13 @@ impl TerminalGraphics {
 }
 
 fn pick_graphics() -> Option<TerminalGraphics> {
-    if kitty_supported() {
-        Some(TerminalGraphics::Kitty)
-    } else if sixel_supported() {
-        Some(TerminalGraphics::Sixel)
-    } else if half_blocks_supported() {
-        Some(TerminalGraphics::HalfBlocks)
-    } else {
-        None
-    }
+    [
+        TerminalGraphics::Kitty,
+        TerminalGraphics::Sixel,
+        TerminalGraphics::HalfBlocks,
+    ]
+    .into_iter()
+    .find(|graphics| graphics.is_supported())
 }
 
 // -----------------------------------------------------------------------------
