@@ -159,8 +159,8 @@ enum ValueError {
     /// A path or a text with no fill and no stroke that marks the canvas.
     /// The reader skips it, since it draws nothing.
     NoInk,
-    /// A value that no writer sends, such as an empty key. The reader skips
-    /// the event that holds it.
+    /// A value that no writer sends, such as an empty key or a negative
+    /// size. The reader skips the event that holds it.
     Impossible,
 }
 
@@ -1362,6 +1362,18 @@ mod tests {
             modifiers: Modifiers::default(),
         });
         assert!(is_event_skipped(&encode_event(&key)));
+    }
+
+    #[test]
+    fn a_resize_with_a_negative_size_is_skipped() {
+        let resize = |width, height| InputEvent::Resize { width, height };
+        for ev in [resize(-1.0, 10.0), resize(10.0, -1.0)] {
+            assert!(is_event_skipped(&encode_event(&ev)), "{ev:?}");
+        }
+        match decode_event(&encode_event(&resize(0.0, 0.0))).unwrap() {
+            InputEvent::Resize { width, height } => assert_eq!((width, height), (0.0, 0.0)),
+            other => panic!("got {other:?}"),
+        }
     }
 
     #[test]
