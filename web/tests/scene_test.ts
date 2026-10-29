@@ -63,6 +63,18 @@ Deno.test("an unknown verb, enum value or float that is not finite skips the ele
   assertEquals(decode(bytes).length, 1);
 });
 
+Deno.test("a text with a weight out of 1 to 1000 is skipped", () => {
+  const bytes = sceneBytes(4, (l) => {
+    [0, 1, 1000, 1001].forEach((weight, i) => {
+      const text = l.get(i)._initText();
+      text._initFill()._initSolid().a = 255;
+      text.weight = weight;
+    });
+  });
+  const weights = decode(bytes).map((e) => e.kind === "text" ? e.weight : 0);
+  assertEquals(weights, [1, 1000]);
+});
+
 Deno.test("an element of an unknown arm is skipped", () => {
   const bytes = sceneBytes(2, (l) => {
     writePath(l.get(0), [1], [1, 2]);

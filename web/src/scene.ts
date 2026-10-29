@@ -285,7 +285,7 @@ function readDash(array: number[], offset: number): Dash | null {
 }
 
 function readText(r: Reader, t: Struct): TextElement {
-  return {
+  const text: TextElement = {
     kind: "text",
     fill: readPaint(r, r.struct(t, 0)),
     stroke: readPaint(r, r.struct(t, 1)),
@@ -298,6 +298,9 @@ function readText(r: Reader, t: Struct): TextElement {
     underline: r.bit(t, 288),
     text: r.text(t, 3),
   };
+  // After every field, so damage in one stays an error.
+  if (text.weight < 1 || text.weight > 1000) throw new Skip();
+  return text;
 }
 
 // A gradient with no extent, a radius or an axis of 2^-15 or less, paints
