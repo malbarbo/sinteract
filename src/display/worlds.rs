@@ -48,14 +48,17 @@ pub enum WorldEvent {
     Timeout,
 }
 
-/// Why [`Worlds::show`] showed nothing.
+/// Why [`Worlds::show`] or [`Worlds::show_to`] kept no scene.
 #[derive(Debug)]
 pub enum ShowError {
     /// The stage of the world did not open, and the world goes on without
     /// one.
     Open(StageError),
-    /// The stage did not open for an earlier show of the same world.
+    /// The world has no stage open. An earlier show or open did not open
+    /// it, or [`Worlds::show_to`] came before an open or after a close.
     Unavailable,
+    /// The world has no such player.
+    NoPlayer(Player),
 }
 
 enum State {
@@ -171,6 +174,11 @@ impl Worlds {
         let State::Open(open) = &mut self.state else {
             return Err(ShowError::Unavailable);
         };
+        if let Target::Player(player) = target
+            && !open.players.contains(&player)
+        {
+            return Err(ShowError::NoPlayer(player));
+        }
         open.pending.retain(|(t, _)| *t != target);
         open.pending.push((target, scene));
         Ok(())
@@ -290,6 +298,7 @@ impl std::fmt::Display for ShowError {
         match self {
             ShowError::Open(e) => e.fmt(f),
             ShowError::Unavailable => f.write_str("the display did not open"),
+            ShowError::NoPlayer(p) => write!(f, "the world has no player {}", p.number()),
         }
     }
 }
@@ -298,7 +307,7 @@ impl std::error::Error for ShowError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ShowError::Open(e) => Some(e),
-            ShowError::Unavailable => None,
+            ShowError::Unavailable | ShowError::NoPlayer(_) => None,
         }
     }
 }
@@ -413,6 +422,11 @@ mod tests {
         assert_eq!(worlds.player(1), Some(Player(NonZeroU32::MIN)));
         assert_eq!(worlds.player(0), None);
         assert_eq!(worlds.player(2), None);
+        let bia = Player(NonZeroU32::new(2).unwrap());
+        assert!(matches!(
+            worlds.show_to(bia, Scene::new(10.0, 10.0)),
+            Err(ShowError::NoPlayer(p)) if p == bia
+        ));
         assert_eq!(wait(&mut worlds), WorldEvent::Frame);
     }
 
