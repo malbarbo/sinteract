@@ -566,8 +566,7 @@ const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(30).unwrap());
 
 /// O tick. Um tick atrasado não vira rajada.
 async fn tick(room: Arc<Room>) {
-    let period = Duration::from_nanos(1_000_000_000_000 / u64::from(FRAME_RATE.millihertz().get()));
-    let mut every = tokio::time::interval(period);
+    let mut every = tokio::time::interval(FRAME_RATE.period());
     every.set_missed_tick_behavior(MissedTickBehavior::Skip);
     while !room.is_over() {
         every.tick().await;

@@ -47,8 +47,7 @@ const USAGE: &str = "usage: sinteract-test-server [--addr ADDR] [--players N] \
 const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
 /// The period of the tick.
-const TICK: Duration =
-    Duration::from_nanos(1_000_000_000_000 / FRAME_RATE.millihertz().get() as u64);
+const TICK: Duration = FRAME_RATE.period();
 
 struct Options {
     addr: SocketAddr,

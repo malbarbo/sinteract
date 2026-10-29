@@ -45,8 +45,7 @@ const READ_BYTES: usize = 64 * 1024;
 const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
 /// The period of the tick of the room.
-const TICK: Duration =
-    Duration::from_nanos(1_000_000_000_000 / FRAME_RATE.millihertz().get() as u64);
+const TICK: Duration = FRAME_RATE.period();
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

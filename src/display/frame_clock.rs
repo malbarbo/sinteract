@@ -3,6 +3,8 @@
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
+use crate::session::FrameRate;
+
 /// When the next frame of a display falls due, at the next tick of the
 /// clock. The first tick is due at once.
 pub(crate) struct FrameClock {
@@ -17,7 +19,7 @@ impl FrameClock {
     pub(crate) fn from_millihertz(rate: NonZeroU32) -> Self {
         Self {
             rate,
-            period: period(rate),
+            period: FrameRate::from_millihertz(rate).period(),
             due: Instant::now(),
         }
     }
@@ -27,7 +29,7 @@ impl FrameClock {
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn set_millihertz(&mut self, rate: NonZeroU32) {
         self.rate = rate;
-        self.period = period(rate);
+        self.period = FrameRate::from_millihertz(rate).period();
     }
 
     /// The rate in thousandths of a hertz.
@@ -72,10 +74,6 @@ impl FrameClock {
 /// The whole number of periods nearest to `d`.
 fn nearest_multiple(d: Duration, period: Duration) -> Duration {
     period.mul_f64((d.as_secs_f64() / period.as_secs_f64()).round())
-}
-
-fn period(rate: NonZeroU32) -> Duration {
-    Duration::from_nanos(1_000_000_000_000 / u64::from(rate.get()))
 }
 
 #[cfg(test)]

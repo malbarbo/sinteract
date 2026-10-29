@@ -15,6 +15,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::num::{NonZeroU16, NonZeroU32};
+use std::time::Duration;
 
 use crate::asset::{RoomFull, check_room};
 use crate::event::InputEvent;
@@ -76,6 +77,11 @@ impl FrameRate {
     /// The rate in thousandths of a hertz.
     pub const fn millihertz(self) -> NonZeroU32 {
         self.0
+    }
+
+    /// The time between two frames, to the nanosecond.
+    pub const fn period(self) -> Duration {
+        Duration::from_nanos(1_000_000_000_000 / self.0.get() as u64)
     }
 }
 
