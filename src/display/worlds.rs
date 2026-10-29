@@ -179,7 +179,9 @@ impl Worlds {
         {
             return Err(ShowError::NoPlayer(player));
         }
-        open.pending.retain(|(t, _)| *t != target);
+        // A scene for every player replaces the scenes of each player.
+        open.pending
+            .retain(|(t, _)| target != Target::All && *t != target);
         open.pending.push((target, scene));
         Ok(())
     }
@@ -411,6 +413,17 @@ mod tests {
             })
             .collect();
         assert_eq!(players, [(Some(NonZeroU32::MIN), 20.0)]);
+    }
+
+    #[test]
+    fn a_show_replaces_the_shows_to_a_player() {
+        let (mut worlds, mut server) = worlds();
+        let ana = Player(NonZeroU32::MIN);
+        worlds.show_to(ana, Scene::new(10.0, 10.0)).unwrap();
+        worlds.show(Scene::new(20.0, 10.0)).unwrap();
+        server.tick();
+        assert_eq!(wait(&mut worlds), WorldEvent::Frame);
+        assert_eq!(widths(&server.read()), ["taken", "frame 20"]);
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]
