@@ -56,7 +56,7 @@ pub mod window;
 
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub use driver::open_native;
-pub use driver::{Display, NoGraphics, OpenError, PresentError};
+pub use driver::{Display, NoGraphics, PresentError, TerminalError, WindowError};
 pub use frames::{FrameEvent, Frames, ShowError};
 pub use inbox::{Closed, Sender};
 pub use stage::{

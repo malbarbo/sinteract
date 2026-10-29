@@ -23,7 +23,7 @@ use crossterm::style::Print;
 use crossterm::{cursor, execute, queue, terminal};
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
-use super::driver::{NoGraphics, OpenError, PresentError, sealed};
+use super::driver::{NoGraphics, PresentError, TerminalError, sealed};
 use super::inbox::{Inbox, Next, Sender};
 use super::sixel;
 use super::stage::{TerminalGraphics, TerminalOptions};
@@ -91,20 +91,20 @@ impl Terminal {
 
     /// Enter the alt screen and raw mode, and show the frames through
     /// `graphics`, or through the graphics that the terminal shows when
-    /// `None`. Fails with [`OpenError::Busy`] while another `Terminal`
-    /// exists, and with [`OpenError::NoGraphics`] when `graphics` is
+    /// `None`. Fails with [`TerminalError::Busy`] while another `Terminal`
+    /// exists, and with [`TerminalError::NoGraphics`] when `graphics` is
     /// `None` and the terminal shows neither Kitty, Sixel nor truecolor.
     pub fn open(
         options: TerminalOptions,
         graphics: Option<TerminalGraphics>,
-    ) -> Result<Self, OpenError> {
+    ) -> Result<Self, TerminalError> {
         let claim = Claim::take()?;
         // The probe reads the replies from stdin, so it runs under the
         // claim, where no reader thread takes them.
         let graphics = graphics.or_else(pick_graphics).ok_or(NoGraphics)?;
         claim.show_through(graphics);
         let stdin_tty = io::IsTerminal::is_terminal(&io::stdin());
-        enter_raw_mode(stdin_tty).map_err(OpenError::Io)?;
+        enter_raw_mode(stdin_tty).map_err(TerminalError::Io)?;
         install_panic_hook();
         let keys = execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
             .and_then(|()| KeyInput::start(stdin_tty));
@@ -130,7 +130,7 @@ impl Terminal {
             Ok(reader) => reader,
             Err(e) => {
                 leave(graphics, false);
-                return Err(OpenError::Io(e));
+                return Err(TerminalError::Io(e));
             }
         };
         let Printer {
@@ -150,7 +150,7 @@ impl Terminal {
             Err(e) => {
                 reader.stop();
                 leave(graphics, false);
-                return Err(OpenError::Io(e));
+                return Err(TerminalError::Io(e));
             }
         };
         Ok(Self {
@@ -810,10 +810,10 @@ fn showing(graphics: TerminalGraphics) -> u8 {
 struct Claim;
 
 impl Claim {
-    fn take() -> Result<Self, OpenError> {
+    fn take() -> Result<Self, TerminalError> {
         match TTY.compare_exchange(FREE, PROBING, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => Ok(Claim),
-            Err(_) => Err(OpenError::Busy),
+            Err(_) => Err(TerminalError::Busy),
         }
     }
 
@@ -2472,13 +2472,13 @@ mod tests {
     fn a_claim_holds_the_tty_and_the_panic_hook_restores_it_once() {
         assert_eq!(restore_held(), None);
         let claim = Claim::take().expect("free");
-        assert!(matches!(Claim::take(), Err(OpenError::Busy)));
+        assert!(matches!(Claim::take(), Err(TerminalError::Busy)));
         claim.show_through(TerminalGraphics::Kitty);
         assert!(!claim.restored());
         assert_eq!(restore_held(), Some(TerminalGraphics::Kitty));
         assert!(claim.restored());
         assert_eq!(restore_held(), None);
-        assert!(matches!(Claim::take(), Err(OpenError::Busy)));
+        assert!(matches!(Claim::take(), Err(TerminalError::Busy)));
         drop(claim);
         assert_eq!(restore_held(), None);
         assert!(Claim::take().is_ok());

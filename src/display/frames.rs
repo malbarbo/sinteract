@@ -6,7 +6,7 @@ use std::collections::{HashMap, VecDeque};
 use std::thread;
 use std::time::Instant;
 
-use super::{OpenError, PresentError, Stage, StageError, StageEvent, StageMode};
+use super::{PresentError, Stage, StageError, StageEvent, StageMode};
 use crate::event::{InputEvent, KeyEvent, KeyKind, PadEvent};
 use crate::scene::Scene;
 use crate::session::{Player, PlayerRange, Target};
@@ -115,11 +115,11 @@ impl Frames {
     /// with its nickname. When the stage does not open, the
     /// world goes on without one, and each show returns
     /// [`ShowError::Unavailable`]. While the stage of the last world is
-    /// open, it fails with [`OpenError::Busy`] and leaves that stage as
-    /// it is, as a second stage of a window, a terminal or a session does.
+    /// open, it fails with [`StageError::Busy`] and leaves that stage as
+    /// it is.
     pub fn open(&mut self, players: PlayerRange) -> Result<Vec<(Player, String)>, StageError> {
         if self.is_open() {
-            return Err(StageError::Open(OpenError::Busy));
+            return Err(StageError::Busy);
         }
         match Stage::open(&self.title, players, (self.mode)()) {
             Ok((stage, players)) => {
@@ -436,10 +436,7 @@ mod tests {
     #[test]
     fn a_second_open_is_busy_and_keeps_the_stage() {
         let (mut frames, mut server) = frames();
-        assert!(matches!(
-            frames.open(PLAYERS),
-            Err(StageError::Open(OpenError::Busy))
-        ));
+        assert!(matches!(frames.open(PLAYERS), Err(StageError::Busy)));
         assert!(frames.is_open());
         server.tick();
         assert_eq!(wait(&mut frames), FrameEvent::Tick);

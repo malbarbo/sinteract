@@ -30,7 +30,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{OpenError, PresentError, sealed};
+use super::driver::{PresentError, WindowError, sealed};
 use super::inbox::{Inbox, Next, Seated, Sender};
 use super::tick_clock::TickClock;
 use crate::event::{
@@ -91,15 +91,15 @@ impl Window {
     const GAP: f64 = 16.0;
 
     /// Open a window of `width` by `height` logical pixels. Fails with
-    /// [`OpenError::Busy`] while another `Window` exists, with
-    /// [`OpenError::NoWindow`] when the session has no graphical display,
-    /// and with [`OpenError::Platform`] when the platform has no window for
+    /// [`WindowError::Busy`] while another `Window` exists, with
+    /// [`WindowError::NoWindowSystem`] when the session has no graphical display,
+    /// and with [`WindowError::Platform`] when the platform has no window for
     /// us or, on macOS, off the main thread. On another platform a thread
     /// other than the one of the first window fails with
-    /// [`OpenError::WrongThread`]. Fails with [`OpenError::LoopEnded`] after
-    /// the event loop of the windows ended, and with [`OpenError::Timeout`]
+    /// [`WindowError::WrongThread`]. Fails with [`WindowError::LoopEnded`] after
+    /// the event loop of the windows ended, and with [`WindowError::Timeout`]
     /// when the platform does not create the window in time.
-    pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
+    pub fn open(title: &str, width: f32, height: f32) -> Result<Self, WindowError> {
         let (w, h) = frame_px(width, height);
         let attrs = WindowAttributes::default()
             .with_title(title)
@@ -111,7 +111,7 @@ impl Window {
     /// does. Each window shows at its first present, with the size of its
     /// scene and side by side with the others. The input of the window at
     /// index k comes from seat k.
-    pub(crate) fn open_seats(titles: &[String]) -> Result<Self, OpenError> {
+    pub(crate) fn open_seats(titles: &[String]) -> Result<Self, WindowError> {
         let attrs = titles
             .iter()
             .map(|title| {
@@ -125,7 +125,7 @@ impl Window {
 
     /// Open a window for each of `attrs`. A window that is not visible
     /// shows at its first present.
-    fn open_attrs(attrs: Vec<WindowAttributes>) -> Result<Self, OpenError> {
+    fn open_attrs(attrs: Vec<WindowAttributes>) -> Result<Self, WindowError> {
         let hidden: Vec<_> = attrs.iter().map(|attrs| !attrs.visible).collect();
         let mut lent = Lent::take()?;
         let proxy = lent.proxy.clone();
@@ -437,13 +437,13 @@ fn layout(
 
 fn new_surface(
     window: &Rc<WinitWindow>,
-) -> Result<Surface<Rc<WinitWindow>, Rc<WinitWindow>>, OpenError> {
+) -> Result<Surface<Rc<WinitWindow>, Rc<WinitWindow>>, WindowError> {
     let context = Context::new(window.clone()).map_err(platform_error)?;
     Surface::new(&context, window.clone()).map_err(platform_error)
 }
 
-fn platform_error(e: impl std::fmt::Display) -> OpenError {
-    OpenError::Platform(e.to_string())
+fn platform_error(e: impl std::fmt::Display) -> WindowError {
+    WindowError::Platform(e.to_string())
 }
 
 fn surface_error(e: impl std::fmt::Display) -> PresentError {
@@ -482,7 +482,7 @@ struct Lent {
 }
 
 impl Lent {
-    fn take() -> Result<Self, OpenError> {
+    fn take() -> Result<Self, WindowError> {
         LOOP.with_borrow_mut(|state| match state {
             Loop::Unbuilt => match build_loop() {
                 Ok(event_loop) => {
@@ -493,21 +493,21 @@ impl Lent {
                     };
                     Ok(Self { proxy })
                 }
-                Err(OpenError::Platform(e)) => {
+                Err(WindowError::Platform(e)) => {
                     *state = Loop::Failed(e.clone());
-                    Err(OpenError::Platform(e))
+                    Err(WindowError::Platform(e))
                 }
                 Err(e) => Err(e),
             },
-            Loop::Failed(e) => Err(OpenError::Platform(e.clone())),
-            Loop::Ready { held: true, .. } => Err(OpenError::Busy),
+            Loop::Failed(e) => Err(WindowError::Platform(e.clone())),
+            Loop::Ready { held: true, .. } => Err(WindowError::Busy),
             Loop::Ready { event_loop, held } => {
                 *held = true;
                 Ok(Self {
                     proxy: event_loop.create_proxy(),
                 })
             }
-            Loop::Dead => Err(OpenError::LoopEnded),
+            Loop::Dead => Err(WindowError::LoopEnded),
         })
     }
 
@@ -547,7 +547,7 @@ impl Lent {
         &mut self,
         windows: Vec<(WindowAttributes, Sender)>,
         timeout: Duration,
-    ) -> Result<Opened, OpenError> {
+    ) -> Result<Opened, WindowError> {
         let mut opener = Opener {
             windows,
             opened: None,
@@ -555,15 +555,15 @@ impl Lent {
         let deadline = Instant::now() + timeout;
         loop {
             if !self.pump(&mut opener, Duration::from_millis(16)) {
-                return Err(OpenError::LoopEnded);
+                return Err(WindowError::LoopEnded);
             }
             match opener.opened.take() {
                 Some(Ok(opened)) => return Ok(opened),
                 Some(Err(e)) => {
                     self.destroy_dropped();
-                    return Err(OpenError::Platform(e));
+                    return Err(WindowError::Platform(e));
                 }
-                None if Instant::now() >= deadline => return Err(OpenError::Timeout),
+                None if Instant::now() >= deadline => return Err(WindowError::Timeout),
                 None => {}
             }
         }
@@ -601,10 +601,10 @@ fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
 /// other than the main one unless told otherwise, so Linux and Windows allow
 /// any thread, and macOS, which cannot, gets an error. A second build means
 /// that another thread built the loop.
-fn build_loop() -> Result<EventLoop<()>, OpenError> {
+fn build_loop() -> Result<EventLoop<()>, WindowError> {
     #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
     if !has_display(|name| std::env::var_os(name)) {
-        return Err(OpenError::NoWindow);
+        return Err(WindowError::NoWindowSystem);
     }
     let mut builder = EventLoop::<()>::with_user_event();
     #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
@@ -621,7 +621,7 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
     {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
         if unsafe { libc::pthread_main_np() } != 1 {
-            return Err(OpenError::Platform(
+            return Err(WindowError::Platform(
                 "on macOS a window opens only on the main thread".into(),
             ));
         }
@@ -630,8 +630,8 @@ fn build_loop() -> Result<EventLoop<()>, OpenError> {
         builder.with_default_menu(false);
     }
     let event_loop = builder.build().map_err(|e| match e {
-        EventLoopError::RecreationAttempt => OpenError::WrongThread,
-        e => OpenError::Platform(format!("the window event loop did not build: {e}")),
+        EventLoopError::RecreationAttempt => WindowError::WrongThread,
+        e => WindowError::Platform(format!("the window event loop did not build: {e}")),
     })?;
     event_loop.set_control_flow(ControlFlow::Wait);
     Ok(event_loop)
@@ -650,7 +650,7 @@ pub(crate) fn has_window_system() -> bool {
     #[cfg(not(target_os = "macos"))]
     match Lent::take() {
         Ok(_) => true,
-        Err(OpenError::NoWindow | OpenError::Platform(_)) => false,
+        Err(WindowError::NoWindowSystem | WindowError::Platform(_)) => false,
         Err(_) => true,
     }
 }

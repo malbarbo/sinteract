@@ -755,7 +755,7 @@ mostra a cena no tick seguinte, com um quadro de atraso. Um
 mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
 vários jogadores abre o stage com o `open`, que devolve cada jogador com
 o apelido, e manda a cena de cada um com o `show_to`. Um `open` com o
-stage de outro mundo aberto falha com o `OpenError::Busy` e deixa esse
+stage de outro mundo aberto falha com o `StageError::Busy` e deixa esse
 stage como está. Os jogadores locais vêm só do `StageMode` da função que o `Frames::new` recebe, tanto
 no `open` quanto no `show`, que falha com o `StageError::Players` quando
 ele pede mais de um. O `Frames` chama a função quando um mundo abre o

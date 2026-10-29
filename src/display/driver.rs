@@ -149,7 +149,7 @@ impl From<io::Error> for PresentError {
 /// let options = TerminalOptions::default();
 /// let mut display = open_native("My game", 400.0, 300.0, options)?;
 /// # drop(display);
-/// # Ok::<(), sinteract::display::OpenError>(())
+/// # Ok::<(), sinteract::display::TerminalError>(())
 /// ```
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub fn open_native(
@@ -157,7 +157,7 @@ pub fn open_native(
     width: f32,
     height: f32,
     options: super::TerminalOptions,
-) -> Result<Box<dyn Display>, OpenError> {
+) -> Result<Box<dyn Display>, TerminalError> {
     window_or_terminal(|| super::Window::open(title, width, height), options)
 }
 
@@ -165,22 +165,22 @@ pub fn open_native(
 /// [`open_native`] says.
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub(crate) fn window_or_terminal(
-    window: impl FnOnce() -> Result<super::Window, OpenError>,
+    window: impl FnOnce() -> Result<super::Window, WindowError>,
     options: super::TerminalOptions,
-) -> Result<Box<dyn Display>, OpenError> {
+) -> Result<Box<dyn Display>, TerminalError> {
     match window() {
         Ok(window) => Ok(Box::new(window)),
         Err(_) => Ok(Box::new(super::Terminal::open(options, None)?)),
     }
 }
 
-/// Why a display did not open.
+/// Why a [`Window`](super::Window) did not open.
 #[derive(Debug)]
-pub enum OpenError {
-    /// Another session holds the terminal or the event loop of the windows.
+pub enum WindowError {
+    /// Another window is open.
     Busy,
-    /// The terminal shows neither Kitty, Sixel nor truecolor.
-    NoGraphics,
+    /// The session has no graphical display, as in a terminal over ssh.
+    NoWindowSystem,
     /// Another thread opened the first window, and winit keeps the event
     /// loop of the process on that one.
     WrongThread,
@@ -189,44 +189,55 @@ pub enum OpenError {
     LoopEnded,
     /// The window did not open in time.
     Timeout,
-    /// A read or a write failed, or a thread did not start.
-    Io(io::Error),
-    /// The session has no graphical display, as in a terminal over ssh.
-    NoWindow,
     /// The platform has no window for us.
     Platform(String),
 }
 
-impl fmt::Display for OpenError {
+impl fmt::Display for WindowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenError::Busy => f.write_str("another session is open"),
-            OpenError::NoGraphics => NoGraphics.fmt(f),
-            OpenError::WrongThread => {
+            WindowError::Busy => f.write_str("another window is open"),
+            WindowError::NoWindowSystem => f.write_str("this session has no graphical display"),
+            WindowError::WrongThread => {
                 f.write_str("a window opens only on the thread of the first window")
             }
-            OpenError::LoopEnded => {
+            WindowError::LoopEnded => {
                 f.write_str("the window event loop ended, and it cannot start again")
             }
-            OpenError::Timeout => f.write_str("the window did not open in time"),
-            OpenError::Io(e) => write!(f, "cannot open the display: {e}"),
-            OpenError::NoWindow => f.write_str("this session has no graphical display"),
-            OpenError::Platform(e) => write!(f, "cannot open a window: {e}"),
+            WindowError::Timeout => f.write_str("the window did not open in time"),
+            WindowError::Platform(e) => write!(f, "cannot open a window: {e}"),
         }
     }
 }
 
-impl std::error::Error for OpenError {
+impl std::error::Error for WindowError {}
+
+/// Why a [`Terminal`](super::Terminal) did not open.
+#[derive(Debug)]
+pub enum TerminalError {
+    /// Another session holds the terminal.
+    Busy,
+    /// The terminal shows neither Kitty, Sixel nor truecolor.
+    NoGraphics,
+    /// A read or a write failed, or a thread did not start.
+    Io(io::Error),
+}
+
+impl fmt::Display for TerminalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TerminalError::Busy => f.write_str("another session holds the terminal"),
+            TerminalError::NoGraphics => NoGraphics.fmt(f),
+            TerminalError::Io(e) => write!(f, "cannot open the terminal: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for TerminalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            OpenError::Io(e) => Some(e),
-            OpenError::Busy
-            | OpenError::NoGraphics
-            | OpenError::WrongThread
-            | OpenError::LoopEnded
-            | OpenError::Timeout
-            | OpenError::NoWindow
-            | OpenError::Platform(_) => None,
+            TerminalError::Io(e) => Some(e),
+            TerminalError::Busy | TerminalError::NoGraphics => None,
         }
     }
 }
@@ -248,8 +259,8 @@ impl fmt::Display for NoGraphics {
 
 impl std::error::Error for NoGraphics {}
 
-impl From<NoGraphics> for OpenError {
+impl From<NoGraphics> for TerminalError {
     fn from(_: NoGraphics) -> Self {
-        OpenError::NoGraphics
+        TerminalError::NoGraphics
     }
 }

@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
 
-use super::{Display, OpenError, PresentError};
+use super::{Display, PresentError, TerminalError, WindowError};
 use crate::event::{Event, InputEvent};
 use crate::scene::Scene;
 use crate::session::PlayerRange;
@@ -159,8 +159,13 @@ pub const MAX_LOCAL_PLAYERS: u32 = 8;
 /// Why [`Stage::open`] did not open a stage.
 #[derive(Debug)]
 pub enum StageError {
-    /// Neither a window nor the terminal opened.
-    Open(OpenError),
+    /// A window did not open.
+    Window(WindowError),
+    /// The terminal did not open.
+    Terminal(TerminalError),
+    /// Another stage of this process holds fd 3 and fd 4, or the
+    /// [`Frames`](super::Frames) already has an open stage.
+    Busy,
     /// The session did not start.
     Start(StartError),
     /// The game takes `range`, and `players` play on a display of this
@@ -198,7 +203,7 @@ impl Stage {
     /// number of the player in the title and an empty nickname, and closing
     /// any of them ends the stage. A window stays hidden until its first
     /// present, which gives it the size of the scene. A second stage in a
-    /// session fails with [`OpenError::Busy`] while the first one owns fd 3
+    /// session fails with [`StageError::Busy`] while the first one owns fd 3
     /// and fd 4.
     pub fn open(
         title: &str,
@@ -388,7 +393,7 @@ impl Stage {
 /// A window for one player, with `title`.
 #[cfg(feature = "window")]
 fn open_window(title: &str) -> Result<Box<dyn Display>, StageError> {
-    let window = super::Window::open_seats(&[title.to_owned()]).map_err(StageError::Open)?;
+    let window = super::Window::open_seats(&[title.to_owned()]).map_err(StageError::Window)?;
     Ok(Box::new(window))
 }
 
@@ -402,7 +407,7 @@ fn open_terminal(
     options: TerminalOptions,
     graphics: Option<TerminalGraphics>,
 ) -> Result<Box<dyn Display>, StageError> {
-    let terminal = super::Terminal::open(options, graphics).map_err(StageError::Open)?;
+    let terminal = super::Terminal::open(options, graphics).map_err(StageError::Terminal)?;
     Ok(Box::new(terminal))
 }
 
@@ -456,8 +461,8 @@ fn open_players(
         .map(|(player, _)| format!("{title} (player {})", player.number()))
         .collect();
     let window = super::Window::open_seats(&titles).map_err(|e| match e {
-        OpenError::NoWindow => StageError::NoWindowPlayers,
-        e => StageError::Open(e),
+        WindowError::NoWindowSystem => StageError::NoWindowPlayers,
+        e => StageError::Window(e),
     })?;
     let stage = Stage {
         inner: Inner::Players(Box::new(Players {
@@ -480,7 +485,9 @@ fn open_players(
 impl fmt::Display for StageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StageError::Open(e) => e.fmt(f),
+            StageError::Window(e) => e.fmt(f),
+            StageError::Terminal(e) => e.fmt(f),
+            StageError::Busy => f.write_str("another stage of this process is open"),
             StageError::Start(e) => e.fmt(f),
             StageError::Players { players, .. } if players.get() > MAX_LOCAL_PLAYERS => write!(
                 f,
@@ -519,9 +526,11 @@ impl fmt::Display for StageError {
 impl std::error::Error for StageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            StageError::Open(e) => Some(e),
+            StageError::Window(e) => Some(e),
+            StageError::Terminal(e) => Some(e),
             StageError::Start(e) => Some(e),
-            StageError::Players { .. }
+            StageError::Busy
+            | StageError::Players { .. }
             | StageError::TerminalPlayers { .. }
             | StageError::NoWindowPlayers
             | StageError::NoSession
@@ -757,7 +766,7 @@ fn wait_readable(_file: &File, _deadline: Instant) -> io::Result<bool> {
 mod session_fds {
     use std::fs::File;
 
-    use super::{OpenError, StageError};
+    use super::StageError;
 
     /// Set while a stage owns fd 3 and fd 4, since a second owner of the
     /// same descriptors would close them twice.
@@ -802,7 +811,7 @@ mod session_fds {
         check_session_fd(SERVER_TO_ENGINE_FD)?;
         check_session_fd(ENGINE_TO_SERVER_FD)?;
         if TAKEN.swap(true, Ordering::SeqCst) {
-            return Err(StageError::Open(OpenError::Busy));
+            return Err(StageError::Busy);
         }
         // SAFETY: both are open, StageMode::Session says that a server opened
         // them, and on unix both are a pipe or a socket, which a server gives
