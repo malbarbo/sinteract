@@ -260,7 +260,7 @@ impl Stage {
         let (from_server, to_server, taken) = session_fds::take()?;
         // No deadline until the start, since a read that times out there
         // loses the hello.
-        let deadline = Rc::new(Cell::new(None));
+        let deadline = Rc::new(Deadline::default());
         let reader = DeadlineReader {
             file: from_server,
             deadline: Rc::clone(&deadline),
@@ -648,7 +648,7 @@ struct Remote {
     session: Session<DeadlineReader, BufWriter<File>>,
     /// The deadline of the reader of the session, which has no other way
     /// to it.
-    deadline: Rc<Cell<Option<Instant>>>,
+    deadline: Rc<Deadline>,
     /// The stream of the server ended or failed, and every wait returns
     /// Close.
     ended: bool,
@@ -662,9 +662,10 @@ impl Remote {
         if self.ended {
             return Ok(StageEvent::Close);
         }
-        self.deadline.set(deadline);
+        self.deadline.at.set(deadline);
         let event = self.session.wait();
-        self.deadline.set(None);
+        self.deadline.at.set(None);
+        let passed = self.deadline.passed.take();
         match event {
             Ok(SessionEvent::Tick) => Ok(StageEvent::Tick),
             Ok(SessionEvent::Input { player, event }) => Ok(StageEvent::Input { player, event }),
@@ -675,8 +676,8 @@ impl Remote {
             }
             // The session keeps its bytes over an error of the reader, so
             // the next wait goes on from there.
-            Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(StageEvent::Timeout),
-            // A read of a file that fails does not come back.
+            Err(_) if passed => Ok(StageEvent::Timeout),
+            // A read of a file or a write that fails does not come back.
             Err(e) => {
                 self.ended = true;
                 Err(e)
@@ -685,26 +686,38 @@ impl Remote {
     }
 }
 
+/// The deadline of a wait of a session, and whether the reader saw it pass.
+/// A `TimedOut` from elsewhere, such as from fd 4, is a failure.
+#[derive(Default)]
+struct Deadline {
+    at: Cell<Option<Instant>>,
+    passed: Cell<bool>,
+}
+
 /// Fd 3, which a read waits on until a deadline. The read fails with
-/// [`io::ErrorKind::TimedOut`] when the deadline passes first.
+/// [`io::ErrorKind::TimedOut`] and marks the deadline passed when the
+/// deadline passes first.
 struct DeadlineReader {
     file: File,
-    deadline: Rc<Cell<Option<Instant>>>,
+    deadline: Rc<Deadline>,
 }
 
 impl Read for DeadlineReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if let Some(deadline) = self.deadline.get() {
-            wait_readable(&self.file, deadline)?;
+        if let Some(at) = self.deadline.at.get()
+            && !wait_readable(&self.file, at)?
+        {
+            self.deadline.passed.set(true);
+            return Err(io::ErrorKind::TimedOut.into());
         }
         self.file.read(buf)
     }
 }
 
-/// Wait until `file` has bytes, its end or an error to read, or fail with
-/// [`io::ErrorKind::TimedOut`] at `deadline`.
+/// Wait until `file` has bytes, its end or an error to read. Returns
+/// `true` if it has, `false` if `deadline` passes first.
 #[cfg(any(unix, target_os = "wasi"))]
-fn wait_readable(file: &File, deadline: Instant) -> io::Result<()> {
+fn wait_readable(file: &File, deadline: Instant) -> io::Result<bool> {
     use std::os::fd::AsRawFd;
 
     loop {
@@ -720,9 +733,9 @@ fn wait_readable(file: &File, deadline: Instant) -> io::Result<()> {
         };
         // SAFETY: `fd` is one valid pollfd, and the call reads one.
         match unsafe { libc::poll(&mut fd, 1, timeout) } {
-            0 if Instant::now() >= deadline => return Err(io::ErrorKind::TimedOut.into()),
+            0 if Instant::now() >= deadline => return Ok(false),
             0 => {}
-            n if n > 0 => return Ok(()),
+            n if n > 0 => return Ok(true),
             _ => {
                 let e = io::Error::last_os_error();
                 if e.kind() != io::ErrorKind::Interrupted {
@@ -735,8 +748,8 @@ fn wait_readable(file: &File, deadline: Instant) -> io::Result<()> {
 
 /// A platform with no poll reads with no deadline.
 #[cfg(not(any(unix, target_os = "wasi")))]
-fn wait_readable(_file: &File, _deadline: Instant) -> io::Result<()> {
-    Ok(())
+fn wait_readable(_file: &File, _deadline: Instant) -> io::Result<bool> {
+    Ok(true)
 }
 
 /// Fd 3 and fd 4, in a module of their own, so that only [`session_fds::take`]
@@ -950,7 +963,7 @@ pub(super) mod tests {
         // SAFETY: F_SETFL only sets the flags of an open descriptor.
         unsafe { libc::fcntl(from_engine.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
         server_to_engine::write_start(&mut to_engine, &["Ana"], RATE).unwrap();
-        let deadline = Rc::new(Cell::new(None));
+        let deadline = Rc::new(Deadline::default());
         let reader = DeadlineReader {
             file: from_server,
             deadline: Rc::clone(&deadline),
