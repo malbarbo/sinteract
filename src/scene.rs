@@ -512,7 +512,7 @@ pub enum FillRule {
 /// no area, such as one with no segments, hides everything it holds.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClipPath {
-    segs: Vec<Segment>,
+    pub geometry: Geometry,
     pub fill_rule: FillRule,
 }
 
@@ -522,19 +522,14 @@ impl ClipPath {
         ClipPathBuilder::new(fill_rule, x, y)
     }
 
-    /// For the wire decoder, which refills a clip in place.
-    pub(crate) fn segments_mut(&mut self) -> &mut Vec<Segment> {
-        &mut self.segs
-    }
-
     pub fn segments(&self) -> Segments<'_> {
-        Segments(self.segs.iter())
+        self.geometry.segments()
     }
 
     /// Returns `true` if every coordinate of the clip is finite, `false`
     /// otherwise.
     pub(crate) fn is_finite(&self) -> bool {
-        self.segs.iter().all(|s| s.is_finite())
+        self.geometry.is_finite()
     }
 }
 
@@ -1090,10 +1085,29 @@ impl Segment {
     }
 }
 
-/// An iterator over the segments of a path. They are empty or begin with a
-/// [`Segment::Move`], and a segment that is not a move follows every move.
-/// The builders take the start point, the decoder begins a path of the wire
-/// that lacks one at `(0, 0)`, and both drop a move that no segment follows.
+/// The segments of a [`Path`] or a [`ClipPath`]. They are empty or begin
+/// with a [`Segment::Move`], and a segment that is not a move follows every
+/// move. The builders take the start point, the decoder begins a path of the
+/// wire that lacks one at `(0, 0)`, and both drop a move that no segment
+/// follows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Geometry {
+    segs: Vec<Segment>,
+}
+
+impl Geometry {
+    pub fn segments(&self) -> Segments<'_> {
+        Segments(self.segs.iter())
+    }
+
+    /// Returns `true` if every coordinate of the segments is finite, `false`
+    /// otherwise.
+    pub(crate) fn is_finite(&self) -> bool {
+        self.segs.iter().all(|s| s.is_finite())
+    }
+}
+
+/// An iterator over the segments of a [`Geometry`].
 #[must_use = "Segments yields nothing unless iterated"]
 pub struct Segments<'a>(std::slice::Iter<'a, Segment>);
 
@@ -1122,35 +1136,39 @@ const ARC_CUBICS_PER_TURN: f64 = 64.0;
 /// there is always a current point. A move that no segment follows draws
 /// nothing, so a move replaces a move before it and [`Self::finish`] drops
 /// a move at the end.
-struct GeometryBuilder {
+pub(crate) struct GeometryBuilder {
     segs: Vec<Segment>,
     last_point: (f32, f32),
 }
 
 impl GeometryBuilder {
-    fn new(x: f32, y: f32) -> Self {
+    pub(crate) fn new(x: f32, y: f32) -> Self {
         Self {
             segs: vec![Segment::Move { x, y }],
             last_point: (x, y),
         }
     }
 
-    fn move_to(&mut self, x: f32, y: f32) {
-        push_segment(&mut self.segs, Segment::Move { x, y });
+    pub(crate) fn move_to(&mut self, x: f32, y: f32) {
+        let seg = Segment::Move { x, y };
+        match self.segs.last_mut() {
+            Some(last @ Segment::Move { .. }) => *last = seg,
+            _ => self.segs.push(seg),
+        }
         self.last_point = (x, y);
     }
 
-    fn line_to(&mut self, x: f32, y: f32) {
+    pub(crate) fn line_to(&mut self, x: f32, y: f32) {
         self.segs.push(Segment::Line { x, y });
         self.last_point = (x, y);
     }
 
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+    pub(crate) fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
         self.segs.push(Segment::Quad { cx, cy, x, y });
         self.last_point = (x, y);
     }
 
-    fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+    pub(crate) fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
         self.segs.push(Segment::Cubic {
             c1x,
             c1y,
@@ -1201,10 +1219,12 @@ impl GeometryBuilder {
     }
 
     /// Take the segments, with no move at the end.
-    fn finish(&mut self) -> Vec<Segment> {
+    pub(crate) fn finish(&mut self) -> Geometry {
         let mut segs = std::mem::take(&mut self.segs);
-        end_segments(&mut segs);
-        segs
+        if matches!(segs.last(), Some(Segment::Move { .. })) {
+            segs.pop();
+        }
+        Geometry { segs }
     }
 }
 
@@ -1392,27 +1412,12 @@ fn arc_tolerance(radius: f64) -> f64 {
     ARC_TOLERANCE.max(1.1163 * radius / ARC_CUBICS_PER_TURN.powi(6))
 }
 
-/// Append `seg` to `segs`. A move replaces a move that ends `segs`.
-pub(crate) fn push_segment(segs: &mut Vec<Segment>, seg: Segment) {
-    match (seg, segs.last_mut()) {
-        (Segment::Move { .. }, Some(last @ Segment::Move { .. })) => *last = seg,
-        _ => segs.push(seg),
-    }
-}
-
-/// Drop the move that ends `segs`, since no segment follows it.
-pub(crate) fn end_segments(segs: &mut Vec<Segment>) {
-    if matches!(segs.last(), Some(Segment::Move { .. })) {
-        segs.pop();
-    }
-}
-
 /// A style and the [`Segment`]s it applies to. [`Path::builder`] builds
 /// one, and [`Path::segments`] reads it back.
 #[derive(Clone, Debug)]
 pub struct Path {
     pub style: PathStyle,
-    segs: Vec<Segment>,
+    pub geometry: Geometry,
 }
 
 impl Path {
@@ -1421,19 +1426,14 @@ impl Path {
         PathBuilder::new(style, x, y)
     }
 
-    /// For the wire decoder, which reads the segments as they are.
-    pub(crate) fn from_segments(style: PathStyle, segs: Vec<Segment>) -> Self {
-        Self { style, segs }
-    }
-
     pub fn segments(&self) -> Segments<'_> {
-        Segments(self.segs.iter())
+        self.geometry.segments()
     }
 
     /// Returns `true` if every coordinate of the segments is finite, `false`
     /// otherwise. A [`PathStyle`] is always finite.
     pub(crate) fn is_finite(&self) -> bool {
-        self.segs.iter().all(|s| s.is_finite())
+        self.geometry.is_finite()
     }
 }
 
@@ -1998,7 +1998,7 @@ impl PathBuilder {
     pub fn build(mut self) -> Path {
         Path {
             style: self.style,
-            segs: self.geom.finish(),
+            geometry: self.geom.finish(),
         }
     }
 }
@@ -2058,7 +2058,7 @@ impl ClipPathBuilder {
 
     pub fn build(mut self) -> ClipPath {
         ClipPath {
-            segs: self.geom.finish(),
+            geometry: self.geom.finish(),
             fill_rule: self.fill_rule,
         }
     }

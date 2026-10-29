@@ -9,10 +9,10 @@ use std::collections::BTreeSet;
 use capnp::message::{Builder, HeapAllocator};
 
 use crate::scene::{
-    Affine, Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, GradientGeometry, Image, LineCap,
-    LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathFill, PathStroke, PathStyle, Rgba,
-    Sampling, Scene, Segment, SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth, Text,
-    TextSpec, TextStroke, TextStyle, end_segments, push_segment,
+    Affine, Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Geometry, GeometryBuilder,
+    GradientGeometry, Image, LineCap, LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathFill,
+    PathStroke, PathStyle, Rgba, Sampling, Scene, SegmentKind, Segments, SpreadMode, Stop, Stops,
+    StrokeWidth, Text, TextSpec, TextStroke, TextStyle,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -305,10 +305,10 @@ fn write_clip_path(mut b: wire_clip_path::Builder<'_>, c: &ClipPath) {
 }
 
 fn read_clip_path(r: wire_clip_path::Reader<'_>) -> Result<ClipPath, ValueError> {
-    let mut clip = ClipPath::default();
-    clip.fill_rule = fill_rule_from_wire(r.get_fill_rule()?);
-    read_segments(clip.segments_mut(), r.get_verbs()?, r.get_coords()?)?;
-    Ok(clip)
+    Ok(ClipPath {
+        fill_rule: fill_rule_from_wire(r.get_fill_rule()?),
+        geometry: read_geometry(r.get_verbs()?, r.get_coords()?)?,
+    })
 }
 
 fn write_bitmap(mut b: bitmap::Builder<'_>, n: &Bitmap, ids: &dyn Fn(&Image) -> u32) {
@@ -453,7 +453,7 @@ fn write_verbs(out: capnp::data::Builder<'_>, segs: Segments<'_>) {
 }
 
 /// Write the coordinates in verb order, the layout that
-/// [`read_segments`] reads.
+/// [`read_geometry`] reads.
 fn write_coords(out: &mut capnp::primitive_list::Builder<'_, f32>, segs: Segments<'_>) {
     let mut i = 0;
     for seg in segs {
@@ -466,26 +466,22 @@ fn write_coords(out: &mut capnp::primitive_list::Builder<'_, f32>, segs: Segment
     }
 }
 
-/// Rebuild the segments into `out`, reusing its allocation. A path whose
-/// first verb is not a move begins at `(0, 0)`, and a move that no segment
-/// follows is dropped, as the builders do. An unknown verb byte is a
+/// The geometry of `verbs` and `coords`. A path whose first verb is not a
+/// move begins at `(0, 0)`. An unknown verb byte is a
 /// value from a newer schema, and a coord stream that does not hold exactly
 /// what the verbs claim is damage.
-fn read_segments(
-    out: &mut Vec<Segment>,
+fn read_geometry(
     verbs: &[u8],
     coords: capnp::primitive_list::Reader<'_, f32>,
-) -> Result<(), ValueError> {
+) -> Result<Geometry, ValueError> {
     let mismatch = || {
         ValueError::Malformed(Error::PathLengthMismatch {
             verbs: verbs.len(),
             coords: coords.len() as usize,
         })
     };
-    out.clear();
-    out.reserve(verbs.len() + 1);
     // A move of the wire replaces this one.
-    out.push(Segment::Move { x: 0.0, y: 0.0 });
+    let mut geometry = GeometryBuilder::new(0.0, 0.0);
     let mut i = 0;
     for &b in verbs {
         let kind = SegmentKind::from_u8(b).ok_or(ValueError::Newer)?;
@@ -493,33 +489,19 @@ fn read_segments(
             return Err(mismatch());
         }
         let c = |k: u32| coords.get(i + k);
-        let seg = match kind {
-            SegmentKind::Move => Segment::Move { x: c(0), y: c(1) },
-            SegmentKind::Line => Segment::Line { x: c(0), y: c(1) },
-            SegmentKind::Quad => Segment::Quad {
-                cx: c(0),
-                cy: c(1),
-                x: c(2),
-                y: c(3),
-            },
-            SegmentKind::Cubic => Segment::Cubic {
-                c1x: c(0),
-                c1y: c(1),
-                c2x: c(2),
-                c2y: c(3),
-                x: c(4),
-                y: c(5),
-            },
-        };
-        push_segment(out, seg);
+        match kind {
+            SegmentKind::Move => geometry.move_to(c(0), c(1)),
+            SegmentKind::Line => geometry.line_to(c(0), c(1)),
+            SegmentKind::Quad => geometry.quad_to(c(0), c(1), c(2), c(3)),
+            SegmentKind::Cubic => geometry.cubic_to(c(0), c(1), c(2), c(3), c(4), c(5)),
+        }
         i += kind.coord_count() as u32;
     }
     // Coords that no verb claims are a mismatch too.
     if i != coords.len() {
         return Err(mismatch());
     }
-    end_segments(out);
-    Ok(())
+    Ok(geometry.finish())
 }
 
 fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
@@ -533,10 +515,12 @@ fn write_path(mut b: wire_path::Builder<'_>, p: &Path) {
 
 fn read_path(r: wire_path::Reader<'_>) -> Result<Path, ValueError> {
     let style = read_path_style(r.get_style()?)?;
-    let mut segs = Vec::new();
-    read_segments(&mut segs, r.get_verbs()?, r.get_coords()?)?;
+    let geometry = read_geometry(r.get_verbs()?, r.get_coords()?)?;
     // After the segments, so damage in them stays an error.
-    Ok(Path::from_segments(style.ok_or(ValueError::NoInk)?, segs))
+    Ok(Path {
+        style: style.ok_or(ValueError::NoInk)?,
+        geometry,
+    })
 }
 
 fn write_element(b: element::Builder<'_>, node: &Element, ids: &dyn Fn(&Image) -> u32) {
