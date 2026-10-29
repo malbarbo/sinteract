@@ -297,7 +297,7 @@ impl std::fmt::Display for ShowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ShowError::Open(e) => e.fmt(f),
-            ShowError::Unavailable => f.write_str("the display did not open"),
+            ShowError::Unavailable => f.write_str("the world has no stage open"),
             ShowError::NoPlayer(p) => write!(f, "the world has no player {}", p.number()),
         }
     }
