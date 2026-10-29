@@ -112,6 +112,15 @@ impl Worlds {
         }
     }
 
+    /// The player numbered `number`, or `None` if the world has no such
+    /// player.
+    pub fn player(&self, number: u32) -> Option<Player> {
+        self.players()
+            .iter()
+            .copied()
+            .find(|p| p.number().get() == number)
+    }
+
     /// Open the stage of a world that takes `players`, with the players of
     /// the display of this process, and return each player
     /// with its nickname. When the stage does not open, the
@@ -401,6 +410,9 @@ mod tests {
         let mut worlds = Worlds::new("test", headless);
         worlds.show(Scene::new(10.0, 10.0)).unwrap();
         assert_eq!(worlds.players(), [Player(NonZeroU32::MIN)]);
+        assert_eq!(worlds.player(1), Some(Player(NonZeroU32::MIN)));
+        assert_eq!(worlds.player(0), None);
+        assert_eq!(worlds.player(2), None);
         assert_eq!(wait(&mut worlds), WorldEvent::Frame);
     }
 

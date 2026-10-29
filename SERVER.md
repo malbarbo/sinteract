@@ -763,7 +763,8 @@ no `open` quanto no `show`, que falha com o `StageError::Players` quando
 ele pede mais de um. O `Worlds` chama a função quando um mundo abre o
 stage, então um programa que não mostra nada não monta o event loop das
 janelas. A janela de cada jogador ganha o tamanho da cena do primeiro
-`show_to`. O `players` dá os jogadores do mundo. Com o
+`show_to`. O `players` dá os jogadores do mundo, e o `player` dá o
+jogador de um número, se o mundo tem esse jogador. Com o
 `StageMode::Headless`, o stage abre sem tela, como num teste. Ele dá um
 `Frame` a 60 Hz e não desenha nada, e os jogadores vêm do `players` dele
 como numa janela.
