@@ -82,12 +82,14 @@ fn main() -> ExitCode {
 struct Game {
     /// One square for each player, in the order of the start.
     squares: Vec<Square>,
+    pad: Option<Label>,
 }
 
 /// The square of `player` at (`x`, `y`), its top left corner.
 struct Square {
     player: Player,
-    nickname: String,
+    /// The nickname of the player.
+    name: Option<Label>,
     color: Rgba,
     x: f32,
     y: f32,
@@ -129,11 +131,11 @@ impl Game {
             .enumerate()
             .map(|(i, ((player, nickname), &color))| Square {
                 player: *player,
-                nickname: if nickname.is_empty() {
+                name: Label::new(&if nickname.is_empty() {
                     format!("player {}", player.number())
                 } else {
                     nickname.clone()
-                },
+                }),
                 color,
                 x: gap * (i + 1) as f32 - SIDE / 2.0,
                 y: (HEIGHT - SIDE) / 2.0,
@@ -141,7 +143,10 @@ impl Game {
                 pad: false,
             })
             .collect();
-        Self { squares }
+        Self {
+            squares,
+            pad: Label::new("pad"),
+        }
     }
 
     /// Move each square by one tick at `rate`.
@@ -215,11 +220,11 @@ impl Game {
             };
             scene.add_path(rect(style, s.x, s.y, SIDE, SIDE));
             let cx = s.x + SIDE / 2.0;
-            if let Some(name) = label(&s.nickname, cx, s.y - 10.0) {
+            if let Some(name) = s.name.as_ref().and_then(|n| n.at(cx, s.y - 10.0)) {
                 scene.add_text(name);
             }
             if s.pad
-                && let Some(pad) = label("pad", cx, s.y + SIDE + 10.0)
+                && let Some(pad) = self.pad.as_ref().and_then(|p| p.at(cx, s.y + SIDE + 10.0))
             {
                 scene.add_text(pad);
             }
@@ -263,25 +268,43 @@ fn rect(style: PathStyle, x: f32, y: f32, w: f32, h: f32) -> Path {
         .build()
 }
 
-/// A white text of 12 pixels centered at (`cx`, `cy`), or `None` when the
-/// text does not measure.
-fn label(text: &str, cx: f32, cy: f32) -> Option<Text> {
-    let spec = TextSpec {
-        size: 12.0,
-        text: text.into(),
-        ..TextSpec::default()
-    };
-    let m = sinteract::text::measure(&spec)?;
-    spec.fit(
-        RotatedRect {
-            cx,
-            cy,
+/// A white text of 12 pixels, measured once, since the scene of each
+/// frame places it again.
+struct Label {
+    spec: TextSpec,
+    w: f32,
+    h: f32,
+}
+
+impl Label {
+    /// The label of `text`, or `None` when the text does not measure.
+    fn new(text: &str) -> Option<Label> {
+        let spec = TextSpec {
+            size: 12.0,
+            text: text.into(),
+            ..TextSpec::default()
+        };
+        let m = sinteract::text::measure(&spec)?;
+        Some(Label {
+            spec,
             w: m.width(),
             h: m.height(),
-            angle_deg: 0.0,
-        },
-        TextStyle::Fill(Paint::opaque(255, 255, 255)),
-    )
+        })
+    }
+
+    /// The label centered at (`cx`, `cy`).
+    fn at(&self, cx: f32, cy: f32) -> Option<Text> {
+        self.spec.clone().fit(
+            RotatedRect {
+                cx,
+                cy,
+                w: self.w,
+                h: self.h,
+                angle_deg: 0.0,
+            },
+            TextStyle::Fill(Paint::opaque(255, 255, 255)),
+        )
+    }
 }
 
 const fn opaque(r: u8, g: u8, b: u8) -> Rgba {
