@@ -61,6 +61,9 @@ struct Active {
     lent: Lent,
     /// The window of each seat, in the order of the seats.
     seats: Vec<Seat>,
+    /// The left edge of the next window that shows, past the windows that
+    /// show already, in logical pixels.
+    next_x: f64,
 }
 
 /// The window of one seat. The fields drop in the order of the
@@ -167,7 +170,11 @@ impl Window {
         Ok(Self {
             inbox,
             clock: FrameClock::from_millihertz(Self::FRAME_RATE),
-            active: Active { lent, seats },
+            active: Active {
+                lent,
+                seats,
+                next_x: 0.0,
+            },
             failed: None,
         })
     }
@@ -222,21 +229,22 @@ impl Window {
         let active = &mut self.active;
         let several = active.seats.len() > 1;
         let failed = &mut self.failed;
-        let mut keep = |seat: usize, target: &mut Seat, scene| {
-            if let Err(e) = target.keep(seat, several, scene) {
+        let next_x = &mut active.next_x;
+        let mut keep = |target: &mut Seat, scene| {
+            if let Err(e) = target.keep(several.then_some(&mut *next_x), scene) {
                 failed.get_or_insert(e);
             }
         };
         match to {
             Target::All => {
-                for (seat, target) in active.seats.iter_mut().enumerate() {
-                    keep(seat, target, Rc::clone(&scene));
+                for target in &mut active.seats {
+                    keep(target, Rc::clone(&scene));
                 }
             }
             Target::Player(player) => {
                 let seat = player.number().get() as usize - 1;
                 if let Some(target) = active.seats.get_mut(seat) {
-                    keep(seat, target, scene);
+                    keep(target, scene);
                 }
             }
         }
@@ -318,11 +326,11 @@ impl Drop for Window {
 }
 
 impl Seat {
-    /// Keep `scene` as the last one of the window of `seat`, one of
-    /// `several` or not, and draw it.
-    fn keep(&mut self, seat: usize, several: bool, scene: Rc<Scene>) -> Result<(), PresentError> {
+    /// Keep `scene` as the last one of the window, and draw it. A window
+    /// of several seats shows at `next_x`.
+    fn keep(&mut self, next_x: Option<&mut f64>, scene: Rc<Scene>) -> Result<(), PresentError> {
         if self.hidden {
-            self.reveal(seat, several, &scene);
+            self.reveal(next_x, &scene);
         }
         self.app.dirty = false;
         self.last = Some(Last {
@@ -332,16 +340,20 @@ impl Seat {
         self.show()
     }
 
-    /// Give the hidden window of `seat` the size of `scene`, and show it.
-    fn reveal(&mut self, seat: usize, several: bool, scene: &Scene) {
+    /// Give the hidden window the size of `scene`, and show it. A window
+    /// of several seats shows at `next_x`, and moves `next_x` past it.
+    fn reveal(&mut self, next_x: Option<&mut f64>, scene: &Scene) {
         self.hidden = false;
-        let (size, position) = layout(seat, several, scene.width(), scene.height());
+        let (w, h) = frame_px(scene.width(), scene.height());
+        let size = LogicalSize::new(f64::from(w), f64::from(h));
         // A platform that resizes later sends a Resized, which draws again.
         if let Some(size) = self.window.request_inner_size(size) {
             self.app.size = size;
         }
-        if let Some(position) = position {
-            self.window.set_outer_position(position);
+        if let Some(x) = next_x {
+            self.window
+                .set_outer_position(LogicalPosition::new(*x, 0.0));
+            *x += size.width + Window::GAP;
         }
         self.window.set_visible(true);
     }
@@ -415,21 +427,6 @@ struct Last {
     scene: Rc<Scene>,
     /// `scene` waits for the frame callback of Wayland.
     unshown: bool,
-}
-
-/// The size of the window of `seat` for a scene of `width` by `height`
-/// logical pixels, and its place, side by side with the other seats, when
-/// there are `several`.
-fn layout(
-    seat: usize,
-    several: bool,
-    width: f32,
-    height: f32,
-) -> (LogicalSize<f64>, Option<LogicalPosition<f64>>) {
-    let (w, h) = frame_px(width, height);
-    let x = seat as f64 * (w as f64 + Window::GAP);
-    let position = several.then(|| LogicalPosition::new(x, 0.0));
-    (LogicalSize::new(w as f64, h as f64), position)
 }
 
 fn new_surface(
