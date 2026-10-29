@@ -116,7 +116,8 @@ fn write_modifiers(mut b: wire_modifiers::Builder<'_>, m: Modifiers) {
 /// `None` for an event of an arm from a newer schema, for one that holds a
 /// value from a newer schema, such as a key kind, for one that holds a
 /// float that is not finite, and for one that holds a value that no writer
-/// sends, such as an empty key or a negative size. The reader skips them all.
+/// sends, such as an empty key, a negative size or a button that disagrees with
+/// its action. The reader skips them all.
 pub(super) fn read_input_event(r: input_event::Reader<'_>) -> Result<Option<InputEvent>, Error> {
     let Ok(which) = r.which() else {
         return Ok(None);
@@ -168,12 +169,22 @@ fn read_mouse_event(r: wire_mouse_event::Reader<'_>) -> Result<MouseEvent, Value
     };
     let (x, y) = (r.get_x(), r.get_y());
     check_finite(x.is_finite() && y.is_finite())?;
+    let buttons = MouseButtons::from_bits(r.get_buttons());
+    // The buttons are the ones held after the event.
+    let agree = match action {
+        MouseAction::Down(b) => buttons.contains(b),
+        MouseAction::Up(b) => !buttons.contains(b),
+        MouseAction::Move | MouseAction::Wheel { .. } | MouseAction::Leave => true,
+    };
+    if !agree {
+        return Err(ValueError::Impossible);
+    }
     Ok(MouseEvent {
         action,
         x,
         y,
         modifiers: read_modifiers(r.get_modifiers()?),
-        buttons: MouseButtons::from_bits(r.get_buttons()),
+        buttons,
     })
 }
 

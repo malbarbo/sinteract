@@ -159,8 +159,9 @@ enum ValueError {
     /// A path or a text with no fill and no stroke that marks the canvas.
     /// The reader skips it, since it draws nothing.
     NoInk,
-    /// A value that no writer sends, such as an empty key or a negative
-    /// size. The reader skips the event that holds it.
+    /// A value that no writer sends, such as an empty key, a negative size
+    /// or a button that disagrees with its action. The reader skips the
+    /// event that holds it.
     Impossible,
 }
 
@@ -526,6 +527,7 @@ mod tests {
                 },
                 buttons: MouseButtons::default()
                     .with(MouseButton::Left)
+                    .with(MouseButton::Right)
                     .with(MouseButton::Back),
             };
             match decode_event(&encode_event(&InputEvent::Mouse(mouse))).unwrap() {
@@ -1372,6 +1374,31 @@ mod tests {
         }
         match decode_event(&encode_event(&resize(0.0, 0.0))).unwrap() {
             InputEvent::Resize { width, height } => assert_eq!((width, height), (0.0, 0.0)),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_mouse_event_whose_buttons_disagree_with_its_action_is_skipped() {
+        let mouse = |action, buttons| {
+            InputEvent::Mouse(MouseEvent {
+                action,
+                x: 0.0,
+                y: 0.0,
+                modifiers: Modifiers::default(),
+                buttons,
+            })
+        };
+        let none = MouseButtons::default();
+        let left = none.with(MouseButton::Left);
+        let right = none.with(MouseButton::Right);
+        let down = MouseAction::Down(MouseButton::Left);
+        let up = MouseAction::Up(MouseButton::Left);
+        for ev in [mouse(down, none), mouse(up, left)] {
+            assert!(is_event_skipped(&encode_event(&ev)), "{ev:?}");
+        }
+        match decode_event(&encode_event(&mouse(up, right))).unwrap() {
+            InputEvent::Mouse(m) => assert_eq!((m.action, m.buttons), (up, right)),
             other => panic!("got {other:?}"),
         }
     }

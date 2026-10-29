@@ -105,7 +105,8 @@ struct PadEvent {
 # A reader skips an event whose arm it does not know, an event that holds a
 # value it does not know, such as a key kind, an event that holds a float
 # that is not finite, and an event that holds a value that no writer sends,
-# such as an empty key or a negative size.
+# such as an empty key, a negative size or a button that disagrees with its
+# action.
 struct InputEvent {
     union {
         key    @0 :KeyEvent;
