@@ -142,7 +142,7 @@ fn start(
 ) -> Result<(ServerCore, Conn), String> {
     let mut lobby = LobbyCore::new();
     let mut buf = vec![0; READ_BYTES];
-    while lobby.players().is_none() {
+    while lobby.player_range().is_none() {
         let n = match from_engine.read(&mut buf) {
             Ok(0) => return Err("the engine ended before its hello".into()),
             Ok(n) => n,

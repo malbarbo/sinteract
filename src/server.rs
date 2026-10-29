@@ -10,8 +10,8 @@
 //!
 //! A room starts as a [`LobbyCore`], which takes the hello of the engine.
 //! The engine says in its hello how many players the game takes,
-//! [`LobbyCore::players`] hands that to the lobby of the host, and the host
-//! passes the players to [`LobbyCore::start`], which gives the
+//! [`LobbyCore::player_range`] hands that to the lobby of the host, and the
+//! host passes the players to [`LobbyCore::start`], which gives the
 //! [`ServerCore`]. The engine sends nothing else before the start, so the
 //! host needs the core and its tasks only from the start on. Then the host
 //! gives each of [`ServerCore::players`] a token of its own, such as 16
@@ -271,7 +271,7 @@ impl LobbyCore {
 
     /// The players that the game takes, from the hello of the engine, or
     /// `None` before the hello.
-    pub fn players(&self) -> Option<PlayerRange> {
+    pub fn player_range(&self) -> Option<PlayerRange> {
         match self.stage {
             Stage::Hello(_) => None,
             Stage::Ready(range) => Some(range),
@@ -1096,12 +1096,12 @@ mod tests {
     #[test]
     fn the_start_takes_the_players_after_the_hello() {
         let lobby = LobbyCore::new();
-        assert_eq!(lobby.players(), None);
+        assert_eq!(lobby.player_range(), None);
         let (lobby, e) = lobby.start(&["Ana"], RATE).unwrap_err();
         assert_eq!(e, StartError::NoHello);
         let lobby = lobby.from_engine(&hello(2, 4)).unwrap();
         let range = PlayerRange::new(2, 4).unwrap();
-        assert_eq!(lobby.players(), Some(range));
+        assert_eq!(lobby.player_range(), Some(range));
         let (lobby, e) = lobby.start(&["Ana"], RATE).unwrap_err();
         assert_eq!(e, StartError::Players { players: 1, range });
         let mut room = Room::new(lobby.start(&["Ana", "Beto"], RATE).unwrap());

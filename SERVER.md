@@ -80,7 +80,7 @@ A sala passa por cinco fases:
 1. O `LobbyCore` espera o `hello` da engine, a primeira mensagem do fd 4,
    que diz quantos jogadores o jogo aceita. Uma primeira mensagem que não
    se lê como um `hello` encerra a sala (`LobbyError::Payload`).
-2. Com o `hello`, o `LobbyCore::players()` diz a faixa de jogadores do
+2. Com o `hello`, o `LobbyCore::player_range()` diz a faixa de jogadores do
    jogo, e o lobby do servidor junta os jogadores. A engine não manda nada
    até o `start`, e um byte dela nessa fase encerra a sala
    (`LobbyError::BeforeStart`).
@@ -137,7 +137,7 @@ use sinteract::server::{Conn, EngineError, LobbyCore, LobbyError, Next, ServerCo
 
 let mut lobby = LobbyCore::new();
 lobby = lobby.from_engine(&bytes)?;       // bytes do fd 4; um erro acaba a sala
-lobby.players();                          // a faixa do hello, ou None antes dele
+lobby.player_range();                     // a faixa do hello, ou None antes dele
 let mut core: ServerCore = lobby.start(&nicknames, tick_rate).map_err(|(lobby, e)| e)?;
 core.players();                           // cada jogador com o apelido
 let conn: Conn = core.connect(player)?;   // uma view com o token do jogador
@@ -173,7 +173,7 @@ engine.
 ### O lobby e os jogadores
 
 - O `sinteract` não tem sala de espera. Depois do `hello`, o
-  `LobbyCore::players()` devolve a faixa de jogadores do jogo, de 1 a 1024
+  `LobbyCore::player_range()` devolve a faixa de jogadores do jogo, de 1 a 1024
   (`session::MAX_PLAYERS`), e o lobby do servidor junta os apelidos.
 - O `LobbyCore::start(&nicknames, tick_rate)` numera os jogadores a partir
   de 1, na ordem da lista, e manda o `start` à engine, com a taxa do
@@ -664,7 +664,7 @@ async fn play(socket: WebSocket, room: Arc<Room>, player: Player) {
 O esboço deixa de fora:
 - o ping do WebSocket;
 - o `stdout` e o `stderr` da engine como log;
-- quem pode chamar o `start`, e a faixa de `players()` no lobby.
+- quem pode chamar o `start`, e a faixa do `player_range()` no lobby.
 
 ## O lado da engine
 

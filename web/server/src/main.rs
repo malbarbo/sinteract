@@ -283,7 +283,7 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
     let mut phase = room.phase();
     let (next, errors) = match (std::mem::replace(&mut *phase, Phase::Over), read) {
         (Phase::Lobby(lobby), Some(bytes)) => match lobby.from_engine(bytes) {
-            Ok(lobby) if lobby.players().is_some() => start(room, lobby),
+            Ok(lobby) if lobby.player_range().is_some() => start(room, lobby),
             Ok(lobby) => (Phase::Lobby(lobby), Vec::new()),
             Err(e) => (Phase::Over, vec![e.to_string()]),
         },
