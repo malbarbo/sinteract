@@ -175,7 +175,7 @@ fn print() -> Result<(), String> {
 }
 
 fn png() -> Result<(), String> {
-    let mut renderer = PixmapRenderer::new(2.0, WIDTH, HEIGHT).map_err(|e| e.to_string())?;
+    let mut renderer = PixmapRenderer::new(2.0);
     let pixmap = renderer
         .render(&gallery(STILL))
         .map_err(|e| e.to_string())?;

@@ -29,7 +29,7 @@ use crate::text::TextLayout;
 /// Rasterize a [`crate::scene::Scene`] at `scale`, where 1.0 is the frame's
 /// own pixels.
 pub fn render_to_pixmap(scene: &crate::scene::Scene, scale: f32) -> Result<Pixmap, AllocError> {
-    let mut renderer = PixmapRenderer::new(scale, scene.width(), scene.height())?;
+    let mut renderer = PixmapRenderer::new(scale);
     renderer.render(scene)?;
     Ok(renderer.into_pixmap())
 }
@@ -82,14 +82,12 @@ pub struct PixmapRenderer {
 }
 
 impl PixmapRenderer {
-    /// A surface for frames at `scale`, where 1.0 is the frame's own pixels,
-    /// sized first for a `width × height` frame.
-    pub fn new(scale: f32, width: f32, height: f32) -> Result<Self, AllocError> {
-        let base = base(scale);
-        let (out_w, out_h) = out_size(width, height, base.sx);
-        Ok(Self {
-            pixmap: new_pixmap(out_w, out_h)?,
-            base,
+    /// A surface for frames at `scale`, where 1.0 is the frame's own pixels.
+    /// It takes its size at the first render.
+    pub fn new(scale: f32) -> Self {
+        Self {
+            pixmap: Pixmap::new(1, 1).expect("a 1x1 pixmap always allocates"),
+            base: base(scale),
             clip_stack: Vec::new(),
             mask_pool: Vec::new(),
             layer_stack: Vec::new(),
@@ -98,7 +96,7 @@ impl PixmapRenderer {
             builder: PathBuilder::new(),
             images: ImageCache::default(),
             background: SkColor::TRANSPARENT,
-        })
+        }
     }
 
     /// Render the next frames at `scale`. The surface grows or shrinks at
@@ -144,9 +142,9 @@ impl PixmapRenderer {
 }
 
 impl Default for PixmapRenderer {
-    /// A surface at scale 1.0 that takes its size at the first render.
+    /// A surface at scale 1.0.
     fn default() -> Self {
-        Self::new(1.0, 1.0, 1.0).expect("a 1x1 pixmap always allocates")
+        Self::new(1.0)
     }
 }
 
@@ -1037,7 +1035,7 @@ mod tests {
 
     #[test]
     fn draw_path_paints_rectangle() {
-        let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
+        let mut r = canvas(20.0, 20.0);
         r.draw_path(&square_path(solid(0, 255, 0), 20.0));
         let pm = r.into_pixmap();
         assert_eq!(pixel_rgba(&pm, 10, 10), (0, 255, 0, 255));
@@ -1069,7 +1067,7 @@ mod tests {
 
     #[test]
     fn a_bitmap_whose_image_does_not_decode_draws_a_gray_box_with_a_red_cross() {
-        let mut r = PixmapRenderer::new(1.0, 20.0, 10.0).expect("alloc");
+        let mut r = canvas(20.0, 10.0);
         r.draw_bitmap(&Bitmap::fit(crate::asset::png_image(2, 1), WHOLE_CANVAS));
         let pm = r.into_pixmap();
         assert_eq!(pixel_rgba(&pm, 3, 5), (200, 200, 200, 255));
@@ -1151,16 +1149,24 @@ mod tests {
         Image::new(png.encode_png().expect("encode")).expect("a PNG")
     }
 
+    /// A surface of `width` by `height` at scale 1.0, for a test that draws
+    /// with no render.
+    fn canvas(width: f32, height: f32) -> PixmapRenderer {
+        let mut r = PixmapRenderer::new(1.0);
+        r.ensure_size(width, height).expect("alloc");
+        r
+    }
+
     /// Draw `bitmap` over a canvas of 20x10.
     fn draw_on_canvas(bitmap: Bitmap) -> Pixmap {
-        let mut r = PixmapRenderer::new(1.0, 20.0, 10.0).expect("alloc");
+        let mut r = canvas(20.0, 10.0);
         r.draw_bitmap(&bitmap);
         r.into_pixmap()
     }
 
     #[test]
     fn with_clip_excludes_outside() {
-        let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
+        let mut r = canvas(20.0, 20.0);
         r.with_clip(&square_clip(0.0, 0.0, 10.0), |c| {
             c.draw_path(&square_path(solid(0, 0, 255), 20.0));
         });
@@ -1235,7 +1241,7 @@ mod tests {
     fn set_scale_resizes_the_next_render() {
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 5.0, 5.0));
-        let mut r = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
+        let mut r = PixmapRenderer::new(1.0);
         r.render(&scene).expect("render");
         r.set_scale(2.0);
         let pm = r.render(&scene).expect("render");
@@ -1248,7 +1254,7 @@ mod tests {
     fn a_replaced_pixmap_holds_the_last_render_and_the_next_one_resizes() {
         let mut scene = Scene::new(10.0, 10.0);
         scene.add_path(rect(solid(255, 0, 0), 0.0, 0.0, 5.0, 5.0));
-        let mut r = PixmapRenderer::new(1.0, scene.width(), scene.height()).expect("alloc");
+        let mut r = PixmapRenderer::new(1.0);
         r.render(&scene).expect("render");
         let last = r.replace_pixmap(Pixmap::new(1, 1).expect("alloc"));
         assert_eq!(pixel_rgba(&last, 2, 2), (255, 0, 0, 255));
@@ -1278,7 +1284,7 @@ mod tests {
     #[test]
     fn a_recycled_mask_does_not_leak_the_previous_clip() {
         // Sibling clips reuse one mask buffer.
-        let mut r = PixmapRenderer::new(1.0, 20.0, 20.0).expect("alloc");
+        let mut r = canvas(20.0, 20.0);
         let cover = |c: &mut PixmapRenderer| c.draw_path(&square_path(solid(0, 0, 255), 20.0));
         r.with_clip(&square_clip(0.0, 0.0, 8.0), cover);
         r.with_clip(&square_clip(10.0, 0.0, 8.0), cover);
