@@ -1,7 +1,7 @@
 //! [`Headless`], the display of a stage under [`super::StageMode::Headless`].
 
 use std::io;
-use std::num::NonZeroU32;
+use std::num::NonZeroU16;
 use std::time::Instant;
 
 use super::driver::{PresentError, sealed};
@@ -20,12 +20,12 @@ pub(crate) struct Headless {
 
 impl Headless {
     /// The rate of the frames, which no screen paces.
-    const FRAME_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
     pub(crate) fn new() -> Self {
         Self {
             inbox: Inbox::new(None),
-            clock: FrameClock::from_millihertz(Self::FRAME_RATE),
+            clock: FrameClock::new(Self::FRAME_RATE),
         }
     }
 }
@@ -50,7 +50,7 @@ impl super::Display for Headless {
     }
 
     fn frame_rate(&self) -> FrameRate {
-        FrameRate::from_millihertz(self.clock.millihertz())
+        self.clock.rate()
     }
 }
 

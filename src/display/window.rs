@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::io;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU16, NonZeroU32};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
@@ -85,7 +85,7 @@ struct Seat {
 
 impl Window {
     /// The rate of the frames on a monitor that gives no refresh rate.
-    const FRAME_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
     /// How long [`Window::open`] waits for the platform to create the window.
     const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -169,7 +169,7 @@ impl Window {
             .collect();
         Ok(Self {
             inbox,
-            clock: FrameClock::from_millihertz(Self::FRAME_RATE),
+            clock: FrameClock::new(Self::FRAME_RATE),
             active: Active {
                 lent,
                 seats,
@@ -200,7 +200,8 @@ impl Window {
         {
             pace.app.refresh_rate_stale = false;
             let rate = monitor.refresh_rate_millihertz().and_then(NonZeroU32::new);
-            self.clock.set_millihertz(rate.unwrap_or(Self::FRAME_RATE));
+            self.clock
+                .set_rate(rate.map_or(Self::FRAME_RATE, FrameRate::from_millihertz));
         }
         let mut shown = None;
         for (index, seat) in s.seats.iter_mut().enumerate() {
@@ -310,7 +311,7 @@ impl super::Display for Window {
     }
 
     fn frame_rate(&self) -> FrameRate {
-        FrameRate::from_millihertz(self.clock.millihertz())
+        self.clock.rate()
     }
 }
 

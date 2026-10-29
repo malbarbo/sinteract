@@ -1,6 +1,5 @@
 //! The software clock that paces the frames of a display.
 
-use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
 use crate::session::FrameRate;
@@ -8,32 +7,25 @@ use crate::session::FrameRate;
 /// When the next frame of a display falls due, at the next tick of the
 /// clock. The first tick is due at once.
 pub(crate) struct FrameClock {
-    rate: NonZeroU32,
-    period: Duration,
+    rate: FrameRate,
     due: Instant,
 }
 
 impl FrameClock {
-    /// A clock at `rate` thousandths of a hertz, the unit of a refresh rate
-    /// in winit.
-    pub(crate) fn from_millihertz(rate: NonZeroU32) -> Self {
+    pub(crate) fn new(rate: FrameRate) -> Self {
         Self {
             rate,
-            period: FrameRate::from_millihertz(rate).period(),
             due: Instant::now(),
         }
     }
 
-    /// Change the rate to `rate` thousandths of a hertz. The next tick
-    /// keeps its time.
+    /// Change the rate to `rate`. The next tick keeps its time.
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
-    pub(crate) fn set_millihertz(&mut self, rate: NonZeroU32) {
+    pub(crate) fn set_rate(&mut self, rate: FrameRate) {
         self.rate = rate;
-        self.period = FrameRate::from_millihertz(rate).period();
     }
 
-    /// The rate in thousandths of a hertz.
-    pub(crate) fn millihertz(&self) -> NonZeroU32 {
+    pub(crate) fn rate(&self) -> FrameRate {
         self.rate
     }
 
@@ -44,8 +36,8 @@ impl FrameClock {
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn align(&mut self, vblank: Instant) {
         self.due = match self.due.checked_duration_since(vblank) {
-            Some(ahead) => vblank + nearest_multiple(ahead, self.period),
-            None => vblank - nearest_multiple(vblank - self.due, self.period),
+            Some(ahead) => vblank + nearest_multiple(ahead, self.rate.period()),
+            None => vblank - nearest_multiple(vblank - self.due, self.rate.period()),
         };
     }
 
@@ -63,9 +55,9 @@ impl FrameClock {
         if self.due > now {
             return false;
         }
-        self.due += self.period;
+        self.due += self.rate.period();
         if self.due <= now {
-            self.due = now + self.period;
+            self.due = now + self.rate.period();
         }
         true
     }
@@ -81,19 +73,19 @@ mod tests {
     use super::*;
 
     fn at_60_hz() -> FrameClock {
-        FrameClock::from_millihertz(NonZeroU32::new(60_000).unwrap())
+        FrameClock::new(FrameRate::from_hz(std::num::NonZeroU16::new(60).unwrap()))
     }
 
     #[test]
     fn the_period_comes_from_the_rate() {
-        assert_eq!(at_60_hz().period, Duration::from_nanos(16_666_666));
+        assert_eq!(at_60_hz().rate.period(), Duration::from_nanos(16_666_666));
     }
 
     #[test]
     fn aligns_the_next_tick_to_the_nearest_frame_of_the_screen() {
         let mut clock = at_60_hz();
         let t0 = clock.due();
-        let period = clock.period;
+        let period = clock.rate.period();
         assert!(clock.take_due(t0));
         // The screen shows a frame a little after the next tick was due, so
         // the tick moves to that frame.
@@ -115,7 +107,7 @@ mod tests {
     fn keeps_its_beat_after_a_short_frame() {
         let mut clock = at_60_hz();
         let t0 = clock.due();
-        let period = clock.period;
+        let period = clock.rate.period();
         assert!(clock.take_due(t0));
         // The engine comes back a little after the tick was due.
         assert!(clock.take_due(t0 + period + period / 4));
@@ -127,7 +119,7 @@ mod tests {
     fn a_late_engine_gets_one_tick_at_once_and_the_next_a_period_later() {
         let mut clock = at_60_hz();
         let t0 = clock.due();
-        let period = clock.period;
+        let period = clock.rate.period();
         assert!(clock.take_due(t0));
         let late = t0 + period * 3;
         assert!(clock.take_due(late));

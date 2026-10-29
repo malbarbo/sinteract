@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::io::{self, Write};
-use std::num::NonZeroU32;
+use std::num::NonZeroU16;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
@@ -88,7 +88,7 @@ struct Active {
 impl Terminal {
     /// There is no hardware refresh in a terminal. 60 Hz is smooth for
     /// half-block animation and does not flood the pty with escape codes.
-    const FRAME_RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+    const FRAME_RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
     /// Enter the alt screen and raw mode, and show the frames through
     /// `graphics`, or through the graphics that the terminal shows when
@@ -156,7 +156,7 @@ impl Terminal {
         };
         Ok(Self {
             inbox,
-            clock: FrameClock::from_millihertz(Self::FRAME_RATE),
+            clock: FrameClock::new(Self::FRAME_RATE),
             renderer,
             graphics,
             active: Active {
@@ -225,7 +225,7 @@ impl super::Display for Terminal {
     }
 
     fn frame_rate(&self) -> FrameRate {
-        FrameRate::from_millihertz(self.clock.millihertz())
+        self.clock.rate()
     }
 
     fn footer_rows(&self) -> u16 {

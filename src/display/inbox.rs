@@ -330,6 +330,7 @@ impl Queue {
 mod tests {
     use super::*;
     use crate::event::{KeyKind, Modifiers, MouseAction, MouseButtons};
+    use crate::session::FrameRate;
     use std::num::NonZeroU32;
     use std::thread;
 
@@ -392,7 +393,7 @@ mod tests {
         fn new(rate: u32) -> Self {
             Self {
                 inbox: Inbox::new(None),
-                clock: FrameClock::from_millihertz(NonZeroU32::new(rate).unwrap()),
+                clock: FrameClock::new(FrameRate::from_millihertz(NonZeroU32::new(rate).unwrap())),
             }
         }
 
