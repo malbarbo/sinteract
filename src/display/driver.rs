@@ -69,7 +69,9 @@ pub trait Display: sealed::Sealed {
         0
     }
 
-    /// Show the last [`Display::footer_rows`] of `lines` under the frame.
+    /// Show the last [`Display::footer_rows`] of `lines` under the frame. A
+    /// line wider than the display loses its end, and a control character
+    /// shows as a space.
     fn set_footer(&mut self, _lines: &[String]) -> Result<(), PresentError> {
         Ok(())
     }

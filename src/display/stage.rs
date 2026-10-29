@@ -80,7 +80,7 @@ pub struct TerminalOptions {
     /// with the rest of the output of the program. Without it the frame
     /// goes away with the alt screen.
     pub keep_last_frame: bool,
-    /// The rows of text under the frame, which `Terminal::set_footer`
+    /// The rows of text under the frame, which [`Stage::set_footer`]
     /// fills. The frame shrinks to leave them free.
     pub footer_rows: u16,
 }

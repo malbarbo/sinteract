@@ -171,27 +171,6 @@ impl Terminal {
         })
     }
 
-    /// Show `lines` in the rows of [`TerminalOptions::footer_rows`] under
-    /// the frame. Only the last lines fit, a line wider than the terminal
-    /// loses its end, and a control character shows as a space. The text
-    /// waits for the first frame, and goes away with the alt screen at
-    /// close.
-    pub fn set_footer<S: AsRef<str>>(&mut self, lines: &[S]) -> Result<(), PresentError> {
-        // The writer of the frames takes the two locks in the same order.
-        let mut stdout = io::stdout().lock();
-        let mut footer = self.footer.lock().unwrap_or_else(PoisonError::into_inner);
-        footer.set(lines);
-        if TTY.load(Ordering::Acquire) == RESTORED {
-            return Ok(());
-        }
-        let Some(top) = footer.top else {
-            return Ok(());
-        };
-        footer.write(&mut stdout, top, screen_cols())?;
-        stdout.flush()?;
-        Ok(())
-    }
-
     /// Rasterize `scene` and hand the frame to the writer, which clears the
     /// screen first when `after_resize` holds. Returns the result of the
     /// write of the frame before.
@@ -256,8 +235,22 @@ impl super::Display for Terminal {
             .rows
     }
 
+    /// The text waits for the first frame, and goes away with the alt
+    /// screen at close.
     fn set_footer(&mut self, lines: &[String]) -> Result<(), PresentError> {
-        Terminal::set_footer(self, lines)
+        // The writer of the frames takes the two locks in the same order.
+        let mut stdout = io::stdout().lock();
+        let mut footer = self.footer.lock().unwrap_or_else(PoisonError::into_inner);
+        footer.set(lines);
+        if TTY.load(Ordering::Acquire) == RESTORED {
+            return Ok(());
+        }
+        let Some(top) = footer.top else {
+            return Ok(());
+        };
+        footer.write(&mut stdout, top, screen_cols())?;
+        stdout.flush()?;
+        Ok(())
     }
 }
 
@@ -1158,8 +1151,9 @@ impl Drop for CloseOnExit<'_> {
 }
 
 /// The lines of text under the frame of a [`Terminal`]. The writer of the
-/// frames draws them after each frame, and [`Terminal::set_footer`] draws
-/// them between two frames.
+/// frames draws them after each frame, and
+/// [`Display::set_footer`](super::Display::set_footer) draws them between
+/// two frames.
 struct Footer {
     /// [`TerminalOptions::footer_rows`].
     rows: u16,
