@@ -310,7 +310,6 @@ impl Stage {
             .map_err(StageError::Start)?;
         let count = session.player_count();
         let remote = Remote {
-            frame_rate: session.frame_rate(),
             session,
             deadline,
             ended: false,
@@ -414,7 +413,7 @@ impl Stage {
             Inner::Local(display) => display.frame_rate(),
             #[cfg(feature = "window")]
             Inner::Players(players) => players.window.frame_rate(),
-            Inner::Remote(remote) => remote.frame_rate,
+            Inner::Remote(remote) => remote.session.frame_rate(),
         }
     }
 
@@ -687,8 +686,6 @@ impl Pending {
 
 /// A session with a server, on fd 3 and fd 4.
 struct Remote {
-    /// The rate of the frames, from the start of the session.
-    frame_rate: FrameRate,
     session: Session<DeadlineReader, BufWriter<File>>,
     /// The deadline of the reader of the session, which has no other way
     /// to it.
@@ -1016,7 +1013,6 @@ pub(super) mod tests {
         let (session, _) = Session::start(players, reader, BufWriter::new(to_server)).unwrap();
         let count = session.player_count();
         let remote = Remote {
-            frame_rate: session.frame_rate(),
             session,
             deadline,
             ended: false,
