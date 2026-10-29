@@ -203,19 +203,17 @@ impl fmt::Display for WedgeAngleError {
 
 impl std::error::Error for WedgeAngleError {}
 
-/// A count from `MIN` to `MAX`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Count<const MIN: u32, const MAX: u32>(u32);
+/// The most vertices a shape takes. A shape allocates all its vertices at
+/// once, and 10^6 of them already take seconds to draw.
+pub const MAX_VERTICES: u32 = 100_000;
 
-impl<const MIN: u32, const MAX: u32> Count<MIN, MAX> {
+/// The sides of a polygon, from 3 to [`MAX_VERTICES`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SideCount(u32);
+
+impl SideCount {
     pub fn new(n: u32) -> Result<Self, CountError> {
-        if n < MIN {
-            Err(CountError::TooFew)
-        } else if n > MAX {
-            Err(CountError::TooMany)
-        } else {
-            Ok(Self(n))
-        }
+        count(n, 3).map(Self)
     }
 
     pub fn get(self) -> u32 {
@@ -223,15 +221,30 @@ impl<const MIN: u32, const MAX: u32> Count<MIN, MAX> {
     }
 }
 
-/// The most vertices a shape takes. A shape allocates all its vertices at
-/// once, and 10^6 of them already take seconds to draw.
-pub const MAX_VERTICES: u32 = 100_000;
-
-/// The sides of a polygon, from 3 to [`MAX_VERTICES`].
-pub type SideCount = Count<3, MAX_VERTICES>;
-
 /// The points of a radial star, from 2 to [`MAX_VERTICES`].
-pub type PointCount = Count<2, MAX_VERTICES>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PointCount(u32);
+
+impl PointCount {
+    pub fn new(n: u32) -> Result<Self, CountError> {
+        count(n, 2).map(Self)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// `n`, if it is from `min` to [`MAX_VERTICES`].
+fn count(n: u32, min: u32) -> Result<u32, CountError> {
+    if n < min {
+        Err(CountError::TooFew)
+    } else if n > MAX_VERTICES {
+        Err(CountError::TooMany)
+    } else {
+        Ok(n)
+    }
+}
 
 /// The count is outside the range of its type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -22,8 +22,8 @@ pub use draw::CanvasTooLarge;
 pub use font::{Font, FontWeight};
 pub use geometry::Point;
 pub use measure::{
-    Count, CountError, Factor, FactorError, Finite, Length, LengthError, MAX_VERTICES, NotFinite,
-    Opacity, OutOfRange, PointCount, SideCount, TriangleAngle, WedgeAngle, WedgeAngleError,
+    CountError, Factor, FactorError, Finite, Length, LengthError, MAX_VERTICES, NotFinite, Opacity,
+    OutOfRange, PointCount, SideCount, TriangleAngle, WedgeAngle, WedgeAngleError,
 };
 pub use path::PathCmd;
 pub use shape::{AngleSumError, StarPolygonError, TriangleSidesError};
