@@ -158,12 +158,12 @@ core.is_over();                           // a engine acabou
 
 O `Lobby::from_engine` consome o lobby e devolve o lobby com os bytes
 novos, ou um `LobbyError`, e todo `LobbyError` acaba a sala. O
-`Room::from_engine` devolve as mensagens que o core descartou, na
-ordem do fluxo, e o core segue. Um fluxo quebrado volta no `Err` e acaba
+`Room::from_engine` devolve as mensagens que o `Room` descartou, na
+ordem do fluxo, e o `Room` segue. Um fluxo quebrado volta no `Err` e acaba
 a sala, assim como o `Err` do `engine_ended`, que vem quando o fd 4
 acaba no meio de uma mensagem.
 
-O core escreve as mensagens para a engine num buffer, na ordem das
+O `Room` escreve as mensagens para a engine num buffer, na ordem das
 chamadas. O `take_engine_output(&mut buf)` move tudo para o fim de `buf`,
 e o servidor escreve `buf` no fd 3. Se uma task só leva a saída, a ordem no
 fd 3 é a ordem do lock. Depois do `close`, ou no fim da sala, ele devolve
@@ -211,11 +211,11 @@ engine.
   num worker, manda um `tick` a cada quadro da tela, na taxa que a tela
   tiver, e põe no `start` uma taxa nominal, 60000. Ali o passo por `tick`
   não vale, e uma engine que guarda o tempo mede com o próprio relógio.
-- A engine responde a cada `tick` com um `tickTaken`, e o core só manda o
+- A engine responde a cada `tick` com um `tickTaken`, e o `Room` só manda o
   próximo `tick` depois dele. Uma engine mais lenta que o timer não
   acumula `tick`. A `Session` da engine escreve o `tickTaken` sozinha.
 - O `close` para de escrever no fd 3 e descarta o que o servidor ainda não
-  levou. O core segue lendo o fd 4, e os últimos frames ainda chegam às
+  levou. O `Room` segue lendo o fd 4, e os últimos frames ainda chegam às
   views.
 - O `is_over` diz que a engine acabou. O timer e a task do fd 4 param aí.
 
@@ -229,12 +229,12 @@ engine.
   descartada, assim como a de uma conexão antiga. Um servidor que lê a
   entrada de outro jeito, sem WebSocket, passa o evento ao `input(conn,
   &event)`.
-- O core guarda as teclas e os botões que a view segura. Quando a view
+- O `Room` guarda as teclas e os botões que a view segura. Quando a view
   sai, ou quando outra conexão toma o lugar, a engine recebe um `Up` de
   cada um, e nenhuma tecla fica presa. Um `Down` de uma tecla nova com 32
   teclas seguras é descartado.
 
-As raízes `ViewToServer` e `ServerToEngine` são diferentes, então o core
+As raízes `ViewToServer` e `ServerToEngine` são diferentes, então o `Room`
 decodifica e codifica de novo cada entrada. Isso custa pouco, e é o ponto
 onde o número do jogador entra. Um evento de um braço que o `sinteract` do
 servidor não conhece só passa depois que o servidor atualiza o
@@ -242,7 +242,7 @@ servidor não conhece só passa depois que o servidor atualiza o
 
 ### A engine
 
-Depois do `start`, o core olha o braço de cada mensagem do fd 4, o
+Depois do `start`, o `Room` olha o braço de cada mensagem do fd 4, o
 jogador de um frame e os ids das imagens dele, sem decodificar o resto da
 cena:
 
@@ -253,7 +253,7 @@ cena:
 - Um **`frame`** é uma cena inteira, para um jogador ou para todos. Vale só
   o mais novo. Enquanto o WebSocket de um jogador está ocupado, um frame
   novo substitui o que esperava, e uma conexão lenta pula frames sem
-  atrasar as outras. O core guarda o último frame de cada jogador, e uma
+  atrasar as outras. O `Room` guarda o último frame de cada jogador, e uma
   view que conecta começa por ele.
 - Um frame para um jogador que não existe é um erro
   (`EngineError::NoSeat`).
@@ -269,10 +269,10 @@ bytes de cada asset e os manda a cada view. Os assets vivos de uma sala
 ficam abaixo de dois limites, 8 imagens de 2048×2048 pixels
 (`asset::MAX_LIVE_PIXELS`) e 48 MiB (`asset::MAX_LIVE_BYTES`).
 
-A cada frame, o core marca os assets que o frame desenha e, se a sala
+A cada frame, o `Room` marca os assets que o frame desenha e, se a sala
 passa dos limites, descarta os que os frames usaram há mais tempo, e os do
 frame atual por último. Uma engine que cabe nos limites a cada frame nunca
-perde uma imagem que desenha. O core não separa os jogadores, porque as
+perde uma imagem que desenha. O `Room` não separa os jogadores, porque as
 views de uma sala quase sempre desenham as mesmas imagens. A engine recebe
 um `lost` para cada asset descartado. Um asset que não cabe ao lado dos
 que chegaram depois do último frame é perdido na hora.
@@ -299,7 +299,7 @@ O `next_for(conn)` devolve, em ordem:
 
 Os assets vêm antes do frame, então um asset chega antes do frame que o
 usa. O frame guarda os assets que desenha como eram na chegada, então uma
-view atrasada recebe os assets mesmo depois que o core os descartou. O
+view atrasada recebe os assets mesmo depois que o `Room` os descartou. O
 `forget` mantém a memória da view no limite, como o `lost` faz com a
 engine. O `Next::Send` leva um `Arc<[u8]>`, e o frame para todos é um `Arc`
 só. O `Bytes::from_owner` o põe numa mensagem do axum sem cópia.
@@ -485,8 +485,8 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
-/// Leva ao fd 3 o que o core escreveu para a engine, na ordem do lock. Antes
-/// do start não há nada para a engine.
+/// Leva ao fd 3 o que o `server::Room` escreveu para a engine, na ordem
+/// do lock. Antes do start não há nada para a engine.
 async fn write_engine(room: Arc<Room>, mut fd3: pipe::Sender) {
     let mut buf = Vec::new();
     loop {
@@ -617,7 +617,8 @@ async fn upgrade(
         .on_upgrade(move |socket| play(socket, room, player))
 }
 
-/// Uma view: manda o que o core tem para ela e passa a entrada ao core.
+/// Uma view. Ela manda o que o `server::Room` tem para ela e passa a
+/// entrada dela ao `server::Room`.
 async fn play(socket: WebSocket, room: Arc<Room>, player: Player) {
     let mut wake = room.views.subscribe(); // antes do primeiro next_for
     let Some(conn) = room.with(|core| core.connect(player)).flatten() else {

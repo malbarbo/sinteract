@@ -159,8 +159,8 @@ fn start(from_engine: &mut impl Read, to_engine: &mut impl Write) -> Result<(Roo
     Ok((core, conn))
 }
 
-/// Write what the core has for the engine. The view closes the pipe of
-/// the engine at its own end, so it does not look at whether the core
+/// Write what the room has for the engine. The view closes the pipe of
+/// the engine at its own end, so it does not look at whether the room
 /// writes more.
 fn send_engine(core: &mut Room, to_engine: &mut impl Write) -> io::Result<()> {
     let mut out = Vec::new();
@@ -225,7 +225,7 @@ fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Vec<u8>>, wake: S
     let _ = wake.wake();
 }
 
-/// Pass the reads of the engine that arrived to the core.
+/// Pass the reads of the engine that arrived to the room.
 fn take_engine(core: &mut Room, from_reader: &Receiver<Vec<u8>>) {
     loop {
         let taken = match from_reader.try_recv() {
@@ -243,7 +243,7 @@ fn take_engine(core: &mut Room, from_reader: &Receiver<Vec<u8>>) {
     }
 }
 
-/// Show the frames that the core has for the view. `reader` keeps the
+/// Show the frames that the room has for the view. `reader` keeps the
 /// images of the assets that come before them. Returns `Err` when the view
 /// is done, with the error of the display if it failed, or with `None`
 /// when the engine ended.

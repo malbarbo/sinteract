@@ -233,8 +233,8 @@ async fn run(options: Options) -> io::Result<()> {
     Ok(())
 }
 
-/// Moves to fd 3 what the core wrote for the engine, in the order of the
-/// lock.
+/// Moves to fd 3 what the `server::Room` wrote for the engine, in the
+/// order of the lock.
 async fn write_engine(room: Arc<Room>, mut fd3: pipe::Sender) {
     let mut buf = Vec::new();
     loop {
@@ -379,7 +379,8 @@ async fn upgrade(
         .on_upgrade(move |socket| play(socket, room, player))
 }
 
-/// A view: sends what the core has for it and passes its input to the core.
+/// A view. It sends what the `server::Room` has for the view and passes
+/// the input of the view to the `server::Room`.
 async fn play(socket: WebSocket, room: Arc<Room>, player: Player) {
     // Before the first next_for.
     let mut wake = room.views.subscribe();

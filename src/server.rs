@@ -1,7 +1,7 @@
 //! [`Room`] holds the rules of a room, with no I/O and no clock. The
 //! server and the page that plays the part of the server keep the sockets,
-//! the pipes and the timer, and call the core for each thing that happens.
-//! The core writes the messages for the engine into a buffer, and the host
+//! the pipes and the timer, and call the room for each thing that happens.
+//! The room writes the messages for the engine into a buffer, and the host
 //! takes them with [`Room::take_engine_output`] and writes them to the
 //! engine. The order of the messages is the order of the calls, as long as
 //! one task of the host takes the output. The host passes the bytes of the
@@ -13,7 +13,7 @@
 //! [`Lobby::player_range`] hands that to the lobby of the host, and the
 //! host passes the players to [`Lobby::start`], which gives the
 //! [`Room`]. The engine sends nothing else before the start, so the
-//! host needs the core and its tasks only from the start on. Then the host
+//! host needs the room and its tasks only from the start on. Then the host
 //! gives each of [`Room::players`] a token of its own, such as 16
 //! random bytes in the link of the player, which the page keeps in its
 //! `sessionStorage`. A connection that brings the token takes the seat
@@ -128,18 +128,18 @@ pub enum LobbyError {
     BeforeStart,
 }
 
-/// Why the core dropped a message of the engine after the start.
+/// Why the room dropped a message of the engine after the start.
 #[derive(Debug)]
 pub enum EngineError {
-    /// A message does not decode. The core drops it and goes on.
+    /// A message does not decode. The room drops it and goes on.
     Payload(wire::Error),
     /// The asset `id` is not an image that a view decodes, or is larger
-    /// than an image can be. The core drops it and goes on.
+    /// than an image can be. The room drops it and goes on.
     Asset { id: u32, error: ImageError },
-    /// An asset came for an id that names a live asset. The core drops it
+    /// An asset came for an id that names a live asset. The room drops it
     /// and goes on.
     LiveId(u32),
-    /// A frame came for a player that has no seat in the room. The core
+    /// A frame came for a player that has no seat in the room. The room
     /// drops it and goes on.
     NoSeat(NonZeroU32),
 }
@@ -242,14 +242,14 @@ impl std::error::Error for ViewError {
 }
 
 /// The cap on a message of a view. Input is small, and the cap keeps what
-/// the core writes for the engine under the cap of the framing.
+/// the room writes for the engine under the cap of the framing.
 pub const MAX_VIEW_BYTES: usize = 64 * 1024;
 
 /// The cap on a nickname, in bytes of UTF-8.
 const MAX_NICKNAME_BYTES: usize = 64;
 
 /// The cap on the keys that a view holds down at once. A keyboard holds
-/// far fewer, and the cap bounds what a view grows in the core.
+/// far fewer, and the cap bounds what a view grows in the room.
 const MAX_HELD_KEYS: usize = 32;
 
 /// A message for the engine is far below the cap of the framing, since the
@@ -309,8 +309,8 @@ impl Lobby {
     /// `frame_rate`. The server calls
     /// [`Room::tick`] at that rate until the end. A nickname loses
     /// its control characters, so it cannot move the cursor of a terminal
-    /// that prints it, and is cut to 64 bytes. The error gives the lobby
-    /// core back, for another try.
+    /// that prints it, and is cut to 64 bytes. The error gives the lobby back,
+    /// for another try.
     pub fn start<S: AsRef<str>>(
         self,
         nicknames: &[S],
@@ -428,7 +428,7 @@ impl Room {
     }
 
     /// Take a message that the view of `conn` sent over its WebSocket, and
-    /// pass its event to [`Self::input`]. The core drops a message from a
+    /// pass its event to [`Self::input`]. The room drops a message from a
     /// newer schema.
     pub fn from_view(&mut self, conn: Conn, payload: &[u8]) -> Result<(), ViewError> {
         if payload.len() > MAX_VIEW_BYTES {
@@ -458,16 +458,16 @@ impl Room {
     }
 
     /// Take the next bytes of the engine. They may end anywhere, inside a
-    /// message too. The core keeps an asset, and a frame goes to its
+    /// message too. The room keeps an asset, and a frame goes to its
     /// player, or to every player, with the assets that it draws. At each
-    /// frame the core drops the assets that the frames used longest ago to
+    /// frame the room drops the assets that the frames used longest ago to
     /// fit the limits of the room, with a lost to the engine for each. A
     /// frame for a player with no seat is an error. Returns the messages
-    /// that the core dropped, in the order of the stream. A header that is
+    /// that the room dropped, in the order of the stream. A header that is
     /// not one of the engine breaks the stream, which comes back as `Err`
     /// and ends the room. The engine
     /// may still run, blocked on a write, so the host closes its pipe or
-    /// kills it. The core ignores the bytes after the end.
+    /// kills it. The room ignores the bytes after the end.
     pub fn from_engine(&mut self, bytes: &[u8]) -> io::Result<Vec<EngineError>> {
         let mut errors = Vec::new();
         let Some(engine) = &mut self.engine else {
@@ -533,7 +533,7 @@ impl Room {
 
     /// The next message for the view of `conn`. The view gets the newest
     /// frame that it has not got, after the assets of the frame that the
-    /// view lacks. The core keeps that frame as
+    /// view lacks. The room keeps that frame as
     /// the next one of the view until the view gets it, so a view that falls
     /// behind skips the frames in between and still gets a frame now and
     /// then. The view gets a forget for an asset that is neither in the
@@ -579,7 +579,7 @@ impl Room {
 
     /// Move the messages for the engine to the end of `buf`. A host that
     /// cannot write all of them keeps the rest in `buf` for the next write.
-    /// Returns `false` once the core writes nothing more to the engine,
+    /// Returns `false` once the room writes nothing more to the engine,
     /// after [`Self::close`] or at the end of the room, so the task that
     /// writes to the engine closes its pipe, and `true` otherwise.
     pub fn take_engine_output(&mut self, buf: &mut Vec<u8>) -> bool {
@@ -849,15 +849,15 @@ mod tests {
     use crate::session::{Session, SessionEvent};
     use crate::wire::testing::{self, Pipe};
 
-    /// A core with a session that reads what the core writes, which also
-    /// checks that the core writes nothing that a session rejects. The
-    /// session starts at the first message of the core.
+    /// A room with a session that reads what the room writes, which also
+    /// checks that the room writes nothing that a session rejects. The
+    /// session starts at the first message of the room.
     struct Harness {
         core: Room,
         engine: Option<Session<Pipe, Pipe>>,
-        /// The pipe from the core to the engine.
+        /// The pipe from the room to the engine.
         to_engine: Pipe,
-        /// The pipe from the engine to the core.
+        /// The pipe from the engine to the room.
         from_engine: Pipe,
     }
 
@@ -884,7 +884,7 @@ mod tests {
 
         /// The events that the engine got since the last call, in a short
         /// form, with each lost, which the session keeps to itself. The
-        /// tickTaken of the engine goes back to the core.
+        /// tickTaken of the engine goes back to the room.
         fn events(&mut self) -> Vec<String> {
             let mut buf = Vec::new();
             self.core.take_engine_output(&mut buf);
@@ -1072,7 +1072,7 @@ mod tests {
     /// The tick rate of the tests, 60 Hz.
     const RATE: FrameRate = FrameRate::from_hz(NonZeroU16::new(60).expect("60 is not zero"));
 
-    /// A core of `nicknames`, after a hello of 1 to 9 players.
+    /// A room of `nicknames`, after a hello of 1 to 9 players.
     fn started(nicknames: &[&str]) -> Room {
         Lobby::new()
             .from_engine(&hello(1, 9))
