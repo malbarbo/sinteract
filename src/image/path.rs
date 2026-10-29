@@ -1,7 +1,7 @@
 //! The commands of a path.
 
-use super::Finite;
 use super::geometry::{Bounds, Point};
+use super::{Finite, Length};
 use crate::scene::{Path, PathBounds, PathStyle};
 
 /// A command of a path, as in SVG.
@@ -51,8 +51,8 @@ impl PathCmd {
     /// An arc of an ellipse with radii `rx` and `ry`, turned by `rotation`
     /// degrees, as in SVG.
     pub fn arc_to(
-        rx: Finite,
-        ry: Finite,
+        rx: Length,
+        ry: Length,
         rotation: Finite,
         large_arc: bool,
         sweep: bool,
