@@ -210,7 +210,7 @@ impl Transform for Flip {
     fn command(&self, c: PathCmd, (): ()) -> PathCmd {
         c.map(
             |p| self.apply(p),
-            |rx, ry, rotation, sweep| (rx, ry, -rotation, !sweep),
+            |rx, ry, rotation, sweep| (rx, ry, -rotation, sweep.reverse()),
         )
     }
 

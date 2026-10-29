@@ -6,7 +6,7 @@ use std::fmt;
 use std::num::NonZeroU32;
 
 use super::geometry::Point;
-use super::path::PathCmd;
+use super::path::{ArcSize, PathCmd, Sweep};
 use super::tree::{Image, Overflow};
 use super::{Finite, Length, PointCount, SideCount, Style, TriangleAngle, WedgeAngle};
 
@@ -107,7 +107,16 @@ impl Image {
     pub fn ellipse(w: Length, h: Length, style: Style) -> Result<Self, Overflow> {
         let (w, h) = (w.get(), h.get());
         let (rx, ry) = (w / 2.0, h / 2.0);
-        let arc = |x, y| PathCmd::arc(rx, ry, 0.0, false, true, Point { x, y });
+        let arc = |x, y| {
+            PathCmd::arc(
+                rx,
+                ry,
+                0.0,
+                ArcSize::Small,
+                Sweep::Clockwise,
+                Point { x, y },
+            )
+        };
         // A quarter arc ends away from where it starts even when the width
         // or the height is 0, so the bounds keep the other side.
         let commands = [arc(rx, h), arc(0.0, ry), arc(rx, 0.0), arc(w, ry)];
@@ -363,7 +372,11 @@ impl Image {
 /// The commands of a wedge that starts at its center, the origin.
 pub(super) fn wedge(radius: Length, angle: WedgeAngle) -> Vec<PathCmd> {
     let (r, angle) = (radius.get(), angle.get());
-    let sweep = angle < 0.0;
+    let sweep = if angle < 0.0 {
+        Sweep::Clockwise
+    } else {
+        Sweep::Counterclockwise
+    };
     let mut commands = vec![PathCmd::line_to(Point { x: r, y: 0.0 })];
     if angle.abs() == 360.0 {
         // An arc that ends where it starts draws nothing, so a full
@@ -372,7 +385,7 @@ pub(super) fn wedge(radius: Length, angle: WedgeAngle) -> Vec<PathCmd> {
             r,
             r,
             0.0,
-            false,
+            ArcSize::Small,
             sweep,
             Point { x: -r, y: 0.0 },
         ));
@@ -380,7 +393,7 @@ pub(super) fn wedge(radius: Length, angle: WedgeAngle) -> Vec<PathCmd> {
             r,
             r,
             0.0,
-            false,
+            ArcSize::Small,
             sweep,
             Point { x: r, y: 0.0 },
         ));
@@ -389,7 +402,12 @@ pub(super) fn wedge(radius: Length, angle: WedgeAngle) -> Vec<PathCmd> {
             x: r * cos_deg(angle),
             y: -r * sin_deg(angle),
         };
-        commands.push(PathCmd::arc(r, r, 0.0, angle.abs() > 180.0, sweep, end));
+        let size = if angle.abs() > 180.0 {
+            ArcSize::Large
+        } else {
+            ArcSize::Small
+        };
+        commands.push(PathCmd::arc(r, r, 0.0, size, sweep, end));
     }
     commands
 }

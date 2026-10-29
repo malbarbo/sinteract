@@ -25,7 +25,7 @@ pub use measure::{
     CountError, Factor, FactorError, Finite, Length, LengthError, MAX_VERTICES, NotFinite, Opacity,
     OutOfRange, PointCount, SideCount, TriangleAngle, WedgeAngle, WedgeAngleError,
 };
-pub use path::PathCmd;
+pub use path::{ArcSize, PathCmd, Sweep};
 pub use shape::{AngleSumError, StarPolygonError, TriangleSidesError};
 pub use style::{Attribute, Style};
 pub use tree::{BitmapError, Image, Overflow};

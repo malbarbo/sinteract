@@ -4,6 +4,32 @@ use super::geometry::{Bounds, Point};
 use super::{Finite, Length};
 use crate::scene::{Path, PathBounds, PathStyle};
 
+/// The smaller or the larger of the two arcs that join the ends, as the
+/// large-arc flag of SVG.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArcSize {
+    Small,
+    Large,
+}
+
+/// The way an arc turns from its start to its end on the screen, where y
+/// grows downward, as the sweep flag of SVG.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sweep {
+    Clockwise,
+    Counterclockwise,
+}
+
+impl Sweep {
+    /// The other way, as a mirror turns it.
+    pub(super) fn reverse(self) -> Self {
+        match self {
+            Sweep::Clockwise => Sweep::Counterclockwise,
+            Sweep::Counterclockwise => Sweep::Clockwise,
+        }
+    }
+}
+
 /// A command of a path, as in SVG.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PathCmd(Cmd);
@@ -25,8 +51,8 @@ enum Cmd {
         rx: f64,
         ry: f64,
         rotation: f64,
-        large_arc: bool,
-        sweep: bool,
+        size: ArcSize,
+        sweep: Sweep,
         end: Point,
     },
 }
@@ -54,11 +80,11 @@ impl PathCmd {
         rx: Length,
         ry: Length,
         rotation: Finite,
-        large_arc: bool,
-        sweep: bool,
+        size: ArcSize,
+        sweep: Sweep,
         end: Point,
     ) -> Self {
-        Self::arc(rx.get(), ry.get(), rotation.get(), large_arc, sweep, end)
+        Self::arc(rx.get(), ry.get(), rotation.get(), size, sweep, end)
     }
 
     /// [`PathCmd::arc_to`] for numbers that a shape computes. A number that
@@ -67,15 +93,15 @@ impl PathCmd {
         rx: f64,
         ry: f64,
         rotation: f64,
-        large_arc: bool,
-        sweep: bool,
+        size: ArcSize,
+        sweep: Sweep,
         end: Point,
     ) -> Self {
         Self(Cmd::Arc {
             rx,
             ry,
             rotation,
-            large_arc,
+            size,
             sweep,
             end,
         })
@@ -99,14 +125,14 @@ impl PathCmd {
                 rx,
                 ry,
                 rotation,
-                large_arc,
+                size,
                 sweep,
                 end,
             } => Cmd::Arc {
                 rx,
                 ry,
                 rotation,
-                large_arc,
+                size,
                 sweep,
                 end: t(end),
             },
@@ -118,7 +144,7 @@ impl PathCmd {
     pub(super) fn map(
         self,
         point: impl Fn(Point) -> Point,
-        arc: impl FnOnce(f64, f64, f64, bool) -> (f64, f64, f64, bool),
+        arc: impl FnOnce(f64, f64, f64, Sweep) -> (f64, f64, f64, Sweep),
     ) -> Self {
         Self(match self.0 {
             Cmd::Move(p) => Cmd::Move(point(p)),
@@ -136,7 +162,7 @@ impl PathCmd {
                 rx,
                 ry,
                 rotation,
-                large_arc,
+                size,
                 sweep,
                 end,
             } => {
@@ -145,7 +171,7 @@ impl PathCmd {
                     rx,
                     ry,
                     rotation,
-                    large_arc,
+                    size,
                     sweep,
                     end: point(end),
                 }
@@ -192,7 +218,7 @@ pub(super) fn bounds(start: Point, commands: &[PathCmd]) -> Option<Bounds> {
                 rx,
                 ry,
                 rotation,
-                large_arc,
+                size,
                 sweep,
                 end,
             } => {
@@ -201,8 +227,8 @@ pub(super) fn bounds(start: Point, commands: &[PathCmd]) -> Option<Bounds> {
                     without_residue(rx),
                     without_residue(ry),
                     without_residue(rotation),
-                    large_arc,
-                    sweep,
+                    size == ArcSize::Large,
+                    sweep == Sweep::Clockwise,
                     x,
                     y,
                 )
@@ -254,13 +280,14 @@ pub(super) fn draw(
                 rx,
                 ry,
                 rotation,
-                large_arc,
+                size,
                 sweep,
                 end,
             } => {
                 let (x, y) = point(end);
                 let v = |v: f64| without_residue(v) as f32;
-                builder.arc_to(v(rx), v(ry), v(rotation), large_arc, sweep, x, y)
+                let (large, clockwise) = (size == ArcSize::Large, sweep == Sweep::Clockwise);
+                builder.arc_to(v(rx), v(ry), v(rotation), large, clockwise, x, y)
             }
         };
     }
