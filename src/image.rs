@@ -18,7 +18,7 @@ mod tree;
 
 pub use color::{Color, NAMED_COLORS};
 pub use compose::{CurveEnd, XPlace, YPlace};
-pub use draw::TooLarge;
+pub use draw::CanvasTooLarge;
 pub use font::{Font, FontWeight};
 pub use geometry::Point;
 pub use measure::{

@@ -1,6 +1,6 @@
 //! The comparison of two images by their pixels.
 
-use super::{Image, TooLarge};
+use super::{CanvasTooLarge, Image};
 use crate::renderer::pixmap::render_to_pixmap;
 use crate::scene::{self, Element, Scene};
 
@@ -14,16 +14,16 @@ impl Image {
     ///
     /// The pixmap decodes only a PNG and draws a mark for any other image,
     /// so the bitmaps of such images also have to show the same images in
-    /// the same order. Returns `TooLarge` when the canvas does not fit in a
-    /// pixmap.
-    pub fn same(&self, other: &Image) -> Result<bool, TooLarge> {
+    /// the same order. Returns `CanvasTooLarge` when the canvas does not
+    /// fit in a pixmap.
+    pub fn same(&self, other: &Image) -> Result<bool, CanvasTooLarge> {
         if self == other {
             return Ok(true);
         }
         // A canvas too large for a float differs from one that fits.
         let (w, h) = match (self.canvas_size(), other.canvas_size()) {
             (Ok(a), Ok(b)) if a == b => a,
-            (Err(TooLarge), Err(TooLarge)) => return Err(TooLarge),
+            (Err(CanvasTooLarge), Err(CanvasTooLarge)) => return Err(CanvasTooLarge),
             _ => return Ok(false),
         };
         // The canvas of to_repl_scene.
@@ -62,9 +62,9 @@ fn not_png(elements: &[Element]) -> Vec<&scene::Image> {
     images
 }
 
-/// The pixels of `scene`, or `TooLarge` when they do not fit in a pixmap.
-fn pixels(scene: &Scene) -> Result<Vec<u8>, TooLarge> {
-    let pixmap = render_to_pixmap(scene, 1.0).map_err(|_| TooLarge)?;
+/// The pixels of `scene`, or `CanvasTooLarge` when they do not fit in a pixmap.
+fn pixels(scene: &Scene) -> Result<Vec<u8>, CanvasTooLarge> {
+    let pixmap = render_to_pixmap(scene, 1.0).map_err(|_| CanvasTooLarge)?;
     Ok(pixmap.take())
 }
 
@@ -139,14 +139,14 @@ mod tests {
     #[test]
     fn a_canvas_too_large_for_a_pixmap_is_too_large() {
         let (a, b) = (rectangle(1e5, 1e5, red()), rectangle(1e5, 1e5, Color::NONE));
-        assert_eq!(a.same(&b), Err(TooLarge));
+        assert_eq!(a.same(&b), Err(CanvasTooLarge));
         assert_eq!(a.same(&a.clone()), Ok(true));
     }
 
     #[test]
     fn a_canvas_too_large_is_not_the_same_as_one_that_fits() {
         let (small, huge) = (rectangle(10.0, 10.0, red()), rectangle(1e39, 10.0, red()));
-        assert_eq!(huge.canvas_size(), Err(TooLarge));
+        assert_eq!(huge.canvas_size(), Err(CanvasTooLarge));
         assert_eq!(small.same(&huge), Ok(false));
         assert_eq!(huge.same(&small), Ok(false));
     }

@@ -17,23 +17,27 @@ use crate::scene::{
 /// the largest `f32`, which the scene takes, or, for [`Image::same`], the
 /// canvas has more pixels than a pixmap holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TooLarge;
+pub struct CanvasTooLarge;
 
-impl fmt::Display for TooLarge {
+impl fmt::Display for CanvasTooLarge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the image is too large to draw")
+        f.write_str("the canvas of the image is too large")
     }
 }
 
-impl std::error::Error for TooLarge {}
+impl std::error::Error for CanvasTooLarge {}
 
 impl Image {
     /// The width and the height of the canvas that holds `self`, in whole
     /// pixels.
-    pub fn canvas_size(&self) -> Result<(f32, f32), TooLarge> {
+    pub fn canvas_size(&self) -> Result<(f32, f32), CanvasTooLarge> {
         let size = |v: Length| {
             let v = whole_pixels(v.get()) as f32;
-            if v.is_finite() { Ok(v) } else { Err(TooLarge) }
+            if v.is_finite() {
+                Ok(v)
+            } else {
+                Err(CanvasTooLarge)
+            }
         };
         let (w, h) = self.dimension();
         Ok((size(w)?, size(h)?))
@@ -109,26 +113,26 @@ impl Image {
     /// svgs in one HTML document need different numbers, or the clip of one
     /// can take the place of the clip of the other. The svg keeps each
     /// bitmap in the format of its image.
-    pub fn to_svg(&self, number: usize) -> Result<String, TooLarge> {
+    pub fn to_svg(&self, number: usize) -> Result<String, CanvasTooLarge> {
         Ok(Self::svg(&self.to_scene()?, number))
     }
 
     /// [`Image::to_svg`] as a repl shows it, on a canvas with one more
     /// column and one more row, where an outline on the right or the bottom
     /// edge draws its line. DrRacket shows an image the same way.
-    pub fn to_repl_svg(&self, number: usize) -> Result<String, TooLarge> {
+    pub fn to_repl_svg(&self, number: usize) -> Result<String, CanvasTooLarge> {
         Ok(Self::svg(&self.to_repl_scene()?, number))
     }
 
     /// A scene of the size of [`Image::canvas_size`] with what `self`
     /// draws.
-    pub fn to_scene(&self) -> Result<Scene, TooLarge> {
+    pub fn to_scene(&self) -> Result<Scene, CanvasTooLarge> {
         let (w, h) = self.canvas_size()?;
         Ok(self.scene(w, h))
     }
 
     /// [`Image::to_scene`] on the canvas of [`Image::to_repl_svg`].
-    pub fn to_repl_scene(&self) -> Result<Scene, TooLarge> {
+    pub fn to_repl_scene(&self) -> Result<Scene, CanvasTooLarge> {
         let (w, h) = self.repl_canvas_size()?;
         Ok(self.scene(w, h))
     }
@@ -136,7 +140,7 @@ impl Image {
     /// The canvas of [`Image::to_repl_svg`], one pixel wider and taller
     /// than [`Image::canvas_size`]. A repl that draws `self` on a scene of
     /// its own uses this size.
-    pub fn repl_canvas_size(&self) -> Result<(f32, f32), TooLarge> {
+    pub fn repl_canvas_size(&self) -> Result<(f32, f32), CanvasTooLarge> {
         let (w, h) = self.canvas_size()?;
         Ok((w + 1.0, h + 1.0))
     }
@@ -368,7 +372,7 @@ mod tests {
     #[test]
     fn a_canvas_above_the_largest_f32_is_too_large() {
         assert_eq!(solid(3e38, 1.0).canvas_size(), Ok((3e38, 1.0)));
-        assert_eq!(solid(1.0, 1e39).canvas_size(), Err(TooLarge));
+        assert_eq!(solid(1.0, 1e39).canvas_size(), Err(CanvasTooLarge));
     }
 
     #[test]
@@ -556,7 +560,7 @@ mod tests {
         assert!(repl.contains(r#"width="12" height="5""#), "{repl}");
         let (w, h) = (Length::new(1e300).unwrap(), length(1.0));
         let huge = Image::rectangle(w, h, Style::default());
-        assert_eq!(huge.to_svg(0), Err(TooLarge));
-        assert_eq!(huge.to_repl_svg(0), Err(TooLarge));
+        assert_eq!(huge.to_svg(0), Err(CanvasTooLarge));
+        assert_eq!(huge.to_repl_svg(0), Err(CanvasTooLarge));
     }
 }
