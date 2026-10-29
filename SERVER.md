@@ -770,7 +770,7 @@ Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
 `ShowError::Unavailable`, e o `wait_event` dorme até o prazo.
 
 Uma engine sem `Stage` usa a `session::Session` direto, com o
-`Session::start(players, r, w)`, o `frame_rate`, o `players`, que dá o
+`Session::start(players, r, w)`, o `frame_rate`, o `player_count`, que dá o
 número de jogadores do start, o `wait` e o `write_frame`, sobre o `Read` e o `Write` que ela tiver.
 
 ## O que o navegador mostra
