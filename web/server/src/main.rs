@@ -32,7 +32,7 @@ use axum::serve::{Listener, ListenerExt};
 use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
-use sinteract::server::{LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
+use sinteract::server::{self, MAX_VIEW_BYTES, Next, SUBPROTOCOL};
 use sinteract::session::{ENGINE_TO_SERVER_FD, FrameRate, Player, SERVER_TO_ENGINE_FD};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
@@ -60,7 +60,7 @@ struct Options {
 
 /// The phase of the room. The lobby becomes a game at the hello.
 enum Phase {
-    Lobby(LobbyCore),
+    Lobby(server::Lobby),
     Game(Game),
     /// The room ended before the start.
     Over,
@@ -68,7 +68,7 @@ enum Phase {
 
 /// The room after the start, with the player of each token.
 struct Game {
-    core: ServerCore,
+    core: server::Room,
     tokens: HashMap<String, Player>,
 }
 
@@ -91,18 +91,18 @@ impl Room {
         self.phase.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Calls the `ServerCore`, or returns `None` before the start and in a
+    /// Calls the `server::Room`, or returns `None` before the start and in a
     /// room that ended before it.
-    fn core<T>(&self, f: impl FnOnce(&mut ServerCore) -> T) -> Option<T> {
+    fn core<T>(&self, f: impl FnOnce(&mut server::Room) -> T) -> Option<T> {
         match &mut *self.phase() {
             Phase::Game(game) => Some(f(&mut game.core)),
             Phase::Lobby(_) | Phase::Over => None,
         }
     }
 
-    /// Calls the `ServerCore` as `core` does, and wakes whoever may have
+    /// Calls the `server::Room` as `core` does, and wakes whoever may have
     /// something new.
-    fn with<T>(&self, f: impl FnOnce(&mut ServerCore) -> T) -> Option<T> {
+    fn with<T>(&self, f: impl FnOnce(&mut server::Room) -> T) -> Option<T> {
         let out = self.core(f);
         self.wake();
         out
@@ -205,7 +205,7 @@ async fn run(options: Options) -> io::Result<()> {
         .await?
         .tap_io(|tcp| _ = tcp.set_nodelay(true));
     let room = Arc::new(Room {
-        phase: Mutex::new(Phase::Lobby(LobbyCore::new())),
+        phase: Mutex::new(Phase::Lobby(server::Lobby::new())),
         to_engine: Notify::new(),
         views: watch::channel(()).0,
         players: options.players,
@@ -225,7 +225,7 @@ async fn run(options: Options) -> io::Result<()> {
         r = axum::serve(listener, app) => r?,
         _ = tokio::signal::ctrl_c() => {
             // The engine still sends its last frames.
-            if room.with(ServerCore::close).is_some() {
+            if room.with(server::Room::close).is_some() {
                 let _ = reader.await;
             }
         }
@@ -312,7 +312,7 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
 
 /// Starts the room with the players of the options, and prints the link of
 /// each one.
-fn start(room: &Room, lobby: LobbyCore) -> (Phase, Vec<String>) {
+fn start(room: &Room, lobby: server::Lobby) -> (Phase, Vec<String>) {
     let nicknames: Vec<String> = (1..=room.players).map(|n| format!("player {n}")).collect();
     let core = match lobby.start(&nicknames, FRAME_RATE) {
         Ok(core) => core,
@@ -333,7 +333,7 @@ async fn tick(room: Arc<Room>) {
     every.set_missed_tick_behavior(MissedTickBehavior::Skip);
     while !room.is_over() {
         every.tick().await;
-        room.with(ServerCore::tick);
+        room.with(server::Room::tick);
     }
 }
 

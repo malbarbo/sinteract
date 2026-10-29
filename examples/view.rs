@@ -1,6 +1,6 @@
 //! A view for an engine that talks the protocol on fd 3 and fd 4, such as
 //! `examples/engine.rs`. It runs the engine as a subprocess and plays the
-//! part of the server for one player, with a [`ServerCore`]. At the hello
+//! part of the server for one player, with a [`Room`]. At the hello
 //! of the engine it starts the room with player 1, shows the frames in the
 //! terminal or in a window, and sends the input of the user and a tick at
 //! 60 Hz. At the end it prints to stderr what the frames cost:
@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use command_fds::{CommandFdExt, FdMapping};
 use sinteract::display::{Display, PresentError, Sender, TerminalOptions, open_native};
 use sinteract::event::Event;
-use sinteract::server::{Conn, LobbyCore, Next, ServerCore};
+use sinteract::server::{Conn, Lobby, Next, Room};
 use sinteract::session::{ENGINE_TO_SERVER_FD, FrameRate, SERVER_TO_ENGINE_FD};
 use sinteract::view::FrameReader;
 
@@ -136,11 +136,8 @@ fn main() -> ExitCode {
 
 /// Read the engine up to its hello, start the room with the one player,
 /// and send the engine the start.
-fn start(
-    from_engine: &mut impl Read,
-    to_engine: &mut impl Write,
-) -> Result<(ServerCore, Conn), String> {
-    let mut lobby = LobbyCore::new();
+fn start(from_engine: &mut impl Read, to_engine: &mut impl Write) -> Result<(Room, Conn), String> {
+    let mut lobby = Lobby::new();
     let mut buf = vec![0; READ_BYTES];
     while lobby.player_range().is_none() {
         let n = match from_engine.read(&mut buf) {
@@ -165,7 +162,7 @@ fn start(
 /// Write what the core has for the engine. The view closes the pipe of
 /// the engine at its own end, so it does not look at whether the core
 /// writes more.
-fn send_engine(core: &mut ServerCore, to_engine: &mut impl Write) -> io::Result<()> {
+fn send_engine(core: &mut Room, to_engine: &mut impl Write) -> io::Result<()> {
     let mut out = Vec::new();
     core.take_engine_output(&mut out);
     if out.is_empty() {
@@ -229,7 +226,7 @@ fn read_engine(mut from_engine: impl Read, to_loop: SyncSender<Vec<u8>>, wake: S
 }
 
 /// Pass the reads of the engine that arrived to the core.
-fn take_engine(core: &mut ServerCore, from_reader: &Receiver<Vec<u8>>) {
+fn take_engine(core: &mut Room, from_reader: &Receiver<Vec<u8>>) {
     loop {
         let taken = match from_reader.try_recv() {
             Ok(bytes) => core.from_engine(&bytes),
@@ -252,7 +249,7 @@ fn take_engine(core: &mut ServerCore, from_reader: &Receiver<Vec<u8>>) {
 /// when the engine ended.
 fn show(
     display: &mut dyn Display,
-    core: &mut ServerCore,
+    core: &mut Room,
     conn: Conn,
     reader: &mut FrameReader,
     stats: &mut Stats,

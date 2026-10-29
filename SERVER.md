@@ -9,7 +9,7 @@ mudança da API pública do `sinteract` atualiza este arquivo no mesmo
 commit.
 
 O servidor não precisa conhecer Cap'n Proto. Ele depende só do `sinteract`,
-sem as features de tela, e chama o `LobbyCore` e o `ServerCore` para cada
+sem as features de tela, e chama o `Lobby` e o `Room` para cada
 coisa que acontece. Os dois não fazem E/S e não têm relógio. A E/S e o
 timer ficam com o Tokio.
 
@@ -77,15 +77,15 @@ bloqueante do fd 3, e sem `tick` o jogo espera.
 
 A sala passa por cinco fases:
 
-1. O `LobbyCore` espera o `hello` da engine, a primeira mensagem do fd 4,
+1. O `Lobby` espera o `hello` da engine, a primeira mensagem do fd 4,
    que diz quantos jogadores o jogo aceita. Uma primeira mensagem que não
    se lê como um `hello` encerra a sala (`LobbyError::Payload`).
-2. Com o `hello`, o `LobbyCore::player_range()` diz a faixa de jogadores do
+2. Com o `hello`, o `Lobby::player_range()` diz a faixa de jogadores do
    jogo, e o lobby do servidor junta os jogadores. A engine não manda nada
    até o `start`, e um byte dela nessa fase encerra a sala
    (`LobbyError::BeforeStart`).
-3. O `LobbyCore::start` começa o jogo com os jogadores do lobby e devolve o
-   `ServerCore`. Os jogadores são os mesmos até o fim.
+3. O `Lobby::start` começa o jogo com os jogadores do lobby e devolve o
+   `Room`. Os jogadores são os mesmos até o fim.
 4. O `close` do servidor para de escrever no fd 3. O servidor fecha o
    fd 3, e o fim dele diz à engine que acabe. A engine ainda pode mandar os
    últimos frames.
@@ -112,13 +112,13 @@ Cap'n Proto:
 ```
 
 O limite do tamanho é 64 MiB e é verificado antes da alocação. O
-`LobbyCore` e o `ServerCore` fazem o framing dos dois pipes. Eles escrevem
+`Lobby` e o `Room` fazem o framing dos dois pipes. Eles escrevem
 os cabeçalhos do fd 3 e separam as mensagens do fd 4, então o servidor
 passa os bytes como chegaram, em pedaços de qualquer tamanho.
 
 No WebSocket não há cabeçalho. Cada mensagem binária do WebSocket é um
 payload inteiro, e a versão vai no subprotocolo, `sinteract.v1`, que o
-`server::SUBPROTOCOL` e o `view::SUBPROTOCOL` guardam. O `ServerCore`
+`server::SUBPROTOCOL` e o `view::SUBPROTOCOL` guardam. O `Room`
 monta as mensagens para a view e lê as da view como chegaram.
 
 O `player` é o número do jogador na partida, a partir de 1, a posição dele
@@ -130,15 +130,15 @@ que falam de um jogador:
 
 A view não diz quem é, porque o servidor sabe pela conexão.
 
-## O `LobbyCore` e o `ServerCore`
+## O `Lobby` e o `Room`
 
 ```rust
-use sinteract::server::{Conn, EngineError, LobbyCore, LobbyError, Next, ServerCore};
+use sinteract::server::{Conn, EngineError, Lobby, LobbyError, Next, Room};
 
-let mut lobby = LobbyCore::new();
+let mut lobby = Lobby::new();
 lobby = lobby.from_engine(&bytes)?;       // bytes do fd 4; um erro acaba a sala
 lobby.player_range();                     // a faixa do hello, ou None antes dele
-let mut core: ServerCore = lobby.start(&nicknames, frame_rate).map_err(|(lobby, e)| e)?;
+let mut core: Room = lobby.start(&nicknames, frame_rate).map_err(|(lobby, e)| e)?;
 core.players();                           // cada jogador com o apelido
 let conn: Conn = core.connect(player)?;   // uma view com o token do jogador
 core.from_view(conn, &payload)?;          // uma mensagem do WebSocket
@@ -156,9 +156,9 @@ core.engine_ended()?;                     // o fd 4 acabou
 core.is_over();                           // a engine acabou
 ```
 
-O `LobbyCore::from_engine` consome o lobby e devolve o lobby com os bytes
+O `Lobby::from_engine` consome o lobby e devolve o lobby com os bytes
 novos, ou um `LobbyError`, e todo `LobbyError` acaba a sala. O
-`ServerCore::from_engine` devolve as mensagens que o core descartou, na
+`Room::from_engine` devolve as mensagens que o core descartou, na
 ordem do fluxo, e o core segue. Um fluxo quebrado volta no `Err` e acaba
 a sala, assim como o `Err` do `engine_ended`, que vem quando o fd 4
 acaba no meio de uma mensagem.
@@ -173,16 +173,16 @@ engine.
 ### O lobby e os jogadores
 
 - O `sinteract` não tem sala de espera. Depois do `hello`, o
-  `LobbyCore::player_range()` devolve a faixa de jogadores do jogo, de 1 a 1024
+  `Lobby::player_range()` devolve a faixa de jogadores do jogo, de 1 a 1024
   (`session::MAX_PLAYERS`), e o lobby do servidor junta os apelidos.
-- O `LobbyCore::start(&nicknames, frame_rate)` numera os jogadores a
+- O `Lobby::start(&nicknames, frame_rate)` numera os jogadores a
   partir de 1, na ordem da lista, e manda o `start` à engine, com a taxa
   do `tick`, um `FrameRate`. Ele recusa um número de jogadores fora da
   faixa e um `start` antes do `hello` (`StartError`), e devolve o lobby
   junto com o erro, para outra tentativa.
 - O `start` tira os caracteres de controle do apelido e o corta em 64
   bytes. O apelido vem do login ou do lobby, nunca da engine. O
-  `ServerCore::players()` dá cada jogador com o apelido que a engine
+  `Room::players()` dá cada jogador com o apelido que a engine
   recebeu. O jogador é um `session::Player`, o mesmo tipo da engine, e só
   o `start` cria um. O `number()` dá o número dele, para um log.
 - Depois do `start`, o servidor dá a cada jogador um token, como 16 bytes
@@ -306,7 +306,7 @@ só. O `Bytes::from_owner` o põe numa mensagem do axum sem cópia.
 
 ### Como acordar as tasks
 
-O `LobbyCore` ou o `ServerCore` ficam atrás de um `std::sync::Mutex`, e
+O `server::Lobby` ou o `server::Room` ficam atrás de um `std::sync::Mutex`, e
 nenhuma chamada espera.
 
 - A task do fd 3 acorda com um `Notify::notify_one` depois de toda
@@ -348,8 +348,8 @@ e `command-fds` (feature `tokio`). Ele tem uma task no fd 3, uma no fd 4,
 uma no timer do `tick` e uma por WebSocket. O `POST /join?nick=` põe um
 apelido no lobby, o `POST /start` começa a partida e devolve o link de
 cada jogador, e o `GET /play?token=` abre o WebSocket. A sala guarda a fase
-num enum, porque o `LobbyCore::start` consome o lobby e devolve o
-`ServerCore`.
+num enum, porque o `server::Lobby::start` consome o lobby e devolve o
+`server::Room`.
 
 ```rust
 use std::collections::HashMap;
@@ -370,7 +370,7 @@ use axum::serve::ListenerExt;
 use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
-use sinteract::server::{EngineError, LobbyCore, MAX_VIEW_BYTES, Next, SUBPROTOCOL, ServerCore};
+use sinteract::server::{self, EngineError, MAX_VIEW_BYTES, Next, SUBPROTOCOL};
 use sinteract::session::{ENGINE_TO_SERVER_FD, FrameRate, Player, SERVER_TO_ENGINE_FD};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
@@ -378,10 +378,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Notify, watch};
 use tokio::time::MissedTickBehavior;
 
-/// A fase da sala. O `LobbyCore` vira um `ServerCore` no start.
+/// A fase da sala. O `server::Lobby` vira um `server::Room` no start.
 enum Phase {
-    Lobby(LobbyCore),
-    Game(ServerCore),
+    Lobby(server::Lobby),
+    Game(server::Room),
     /// A sala acabou antes do start.
     Over,
 }
@@ -411,17 +411,17 @@ struct Room {
 }
 
 impl Room {
-    /// Chama o `ServerCore`, ou devolve `None` antes do start e numa sala
+    /// Chama o `server::Room`, ou devolve `None` antes do start e numa sala
     /// que acabou antes dele.
-    fn core<T>(&self, f: impl FnOnce(&mut ServerCore) -> T) -> Option<T> {
+    fn core<T>(&self, f: impl FnOnce(&mut server::Room) -> T) -> Option<T> {
         match &mut *self.phase.lock().unwrap() {
             Phase::Game(core) => Some(f(core)),
             Phase::Lobby(_) | Phase::Over => None,
         }
     }
 
-    /// Chama o `ServerCore` como o `core`, e acorda quem pode ter algo novo.
-    fn with<T>(&self, f: impl FnOnce(&mut ServerCore) -> T) -> Option<T> {
+    /// Chama o `server::Room` como o `core`, e acorda quem pode ter algo novo.
+    fn with<T>(&self, f: impl FnOnce(&mut server::Room) -> T) -> Option<T> {
         let out = self.core(f);
         self.to_engine.notify_one();
         self.views.send_replace(());
@@ -456,7 +456,7 @@ async fn main() -> io::Result<()> {
     let fd3 = pipe::Sender::from_owned_fd(OwnedFd::from(fd3))?;
     let fd4 = pipe::Receiver::from_owned_fd(OwnedFd::from(fd4))?;
     let room = Arc::new(Room {
-        phase: Mutex::new(Phase::Lobby(LobbyCore::new())),
+        phase: Mutex::new(Phase::Lobby(server::Lobby::new())),
         to_engine: Notify::new(),
         views: watch::channel(()).0,
         lobby: Mutex::default(),
@@ -477,7 +477,7 @@ async fn main() -> io::Result<()> {
         r = axum::serve(listener, app) => r?,
         _ = tokio::signal::ctrl_c() => {
             // No lobby não há tela final, e o kill_on_drop mata a engine.
-            if room.with(ServerCore::close).is_some() {
+            if room.with(server::Room::close).is_some() {
                 let _ = reader.await; // a engine ainda manda a tela final
             }
         }
@@ -565,7 +565,7 @@ async fn tick(room: Arc<Room>) {
     every.set_missed_tick_behavior(MissedTickBehavior::Skip);
     while !room.is_over() {
         every.tick().await;
-        room.with(ServerCore::tick);
+        room.with(server::Room::tick);
     }
 }
 

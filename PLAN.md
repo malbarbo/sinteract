@@ -248,7 +248,7 @@ Feito no sinteract:
   movimentos por jogador;
 - a imagem na cena, os assets com `lost` e `forget`, a
   `Session::write_frame`, o `view::FrameReader` e o `Cache` de uma sala;
-- o `ServerCore`, com as regras de uma sala e sem I/O;
+- o `Room`, com as regras de uma sala e sem I/O;
 - um módulo por papel, `session` para a engine, `server` para o servidor
   e `view` para a view, com o `wire` fechado atrás deles;
 - a feature `render`, que um servidor desliga.
