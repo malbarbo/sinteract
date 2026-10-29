@@ -133,7 +133,7 @@ A view não diz quem é, porque o servidor sabe pela conexão.
 ## O `Lobby` e o `Room`
 
 ```rust
-use sinteract::server::{Conn, EngineError, Lobby, LobbyError, Next, Room};
+use sinteract::server::{Broken, Conn, EngineError, Lobby, LobbyError, Next, Room};
 
 let mut lobby = Lobby::new();
 lobby = lobby.from_engine(&bytes)?;       // bytes do fd 4; um erro acaba a sala
@@ -160,8 +160,9 @@ O `Lobby::from_engine` consome o lobby e devolve o lobby com os bytes
 novos, ou um `LobbyError`, e todo `LobbyError` acaba a sala. O
 `Room::from_engine` devolve as mensagens que o `Room` descartou, na
 ordem do fluxo, e o `Room` segue. Um fluxo quebrado volta no `Err` e acaba
-a sala, assim como o `Err` do `engine_ended`, que vem quando o fd 4
-acaba no meio de uma mensagem.
+a sala, num `Broken` com as mensagens que o `Room` descartou antes da
+quebra. O `engine_ended` devolve `Err` quando o fd 4 acaba no meio de uma
+mensagem, e esse `Err` também acaba a sala.
 
 O `Room` escreve as mensagens para a engine num buffer, na ordem das
 chamadas. O `take_engine_output(&mut buf)` move tudo para o fim de `buf`,
@@ -370,7 +371,7 @@ use axum::serve::ListenerExt;
 use bytes::Bytes;
 use command_fds::{CommandFdExt, FdMapping};
 use futures::{SinkExt, StreamExt};
-use sinteract::server::{self, EngineError, MAX_VIEW_BYTES, Next, SUBPROTOCOL};
+use sinteract::server::{self, MAX_VIEW_BYTES, Next, SUBPROTOCOL};
 use sinteract::session::{ENGINE_TO_SERVER_FD, FrameRate, Player, SERVER_TO_ENGINE_FD};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe;
@@ -537,15 +538,20 @@ fn from_engine(room: &Room, read: Option<&[u8]>) -> Vec<String> {
         },
         (Phase::Lobby(_), None) => vec!["a engine acabou antes do start".into()],
         (Phase::Game(mut core), read) => {
-            let taken: io::Result<Vec<EngineError>> = match read {
-                Some(bytes) => core.from_engine(bytes),
-                None => core.engine_ended().map(|()| Vec::new()),
+            let errors = match read {
+                Some(bytes) => match core.from_engine(bytes) {
+                    Ok(dropped) => dropped.iter().map(ToString::to_string).collect(),
+                    Err(broken) => (broken.dropped.iter().map(ToString::to_string))
+                        .chain([format!("fluxo quebrado: {}", broken.error)])
+                        .collect(),
+                },
+                None => match core.engine_ended() {
+                    Ok(()) => Vec::new(),
+                    Err(e) => vec![format!("fluxo quebrado: {e}")],
+                },
             };
             *phase = Phase::Game(core);
-            match taken {
-                Ok(dropped) => dropped.iter().map(ToString::to_string).collect(),
-                Err(e) => vec![format!("fluxo quebrado: {e}")],
-            }
+            errors
         }
         (Phase::Over, _) => Vec::new(),
     };

@@ -231,11 +231,19 @@ fn take_engine(core: &mut Room, from_reader: &Receiver<Vec<u8>>) {
         let taken = match from_reader.try_recv() {
             Ok(bytes) => core.from_engine(&bytes),
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => core.engine_ended().map(|()| Vec::new()),
+            Err(TryRecvError::Disconnected) => {
+                if let Err(e) = core.engine_ended() {
+                    eprintln!("view: broken stream: {e}");
+                }
+                return;
+            }
         };
         match taken {
             Ok(dropped) => dropped.iter().for_each(|e| eprintln!("view: {e}")),
-            Err(e) => eprintln!("view: broken stream: {e}"),
+            Err(broken) => {
+                broken.dropped.iter().for_each(|e| eprintln!("view: {e}"));
+                eprintln!("view: {broken}");
+            }
         }
         if core.is_over() {
             return;

@@ -144,6 +144,17 @@ pub enum EngineError {
     NoSeat(NonZeroU32),
 }
 
+/// The stream of the engine broke in [`Room::from_engine`], which ends the
+/// room.
+#[derive(Debug)]
+pub struct Broken {
+    /// The error of the header that is not one of the engine.
+    pub error: io::Error,
+    /// The messages that the room dropped before the break, in the order
+    /// of the stream.
+    pub dropped: Vec<EngineError>,
+}
+
 /// Why [`Lobby::start`] did not start the room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartError {
@@ -186,6 +197,18 @@ impl std::error::Error for LobbyError {
             LobbyError::Payload(e) => Some(e),
             LobbyError::BeforeStart => None,
         }
+    }
+}
+
+impl std::fmt::Display for Broken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "broken stream: {}", self.error)
+    }
+}
+
+impl std::error::Error for Broken {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
     }
 }
 
@@ -464,11 +487,12 @@ impl Room {
     /// fit the limits of the room, with a lost to the engine for each. A
     /// frame for a player with no seat is an error. Returns the messages
     /// that the room dropped, in the order of the stream. A header that is
-    /// not one of the engine breaks the stream, which comes back as `Err`
-    /// and ends the room. The engine
+    /// not one of the engine breaks the stream, which comes back as `Err`,
+    /// with the messages that the room dropped before it, and ends the
+    /// room. The engine
     /// may still run, blocked on a write, so the host closes its pipe or
     /// kills it. The room ignores the bytes after the end.
-    pub fn from_engine(&mut self, bytes: &[u8]) -> io::Result<Vec<EngineError>> {
+    pub fn from_engine(&mut self, bytes: &[u8]) -> Result<Vec<EngineError>, Broken> {
         let mut errors = Vec::new();
         let Some(engine) = &mut self.engine else {
             return Ok(errors);
@@ -481,9 +505,12 @@ impl Room {
             let (payload, after) = match framing::split_message(rest, Side::Engine) {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
-                Err(e) => {
+                Err(error) => {
                     self.engine = None;
-                    return Err(e);
+                    return Err(Broken {
+                        error,
+                        dropped: errors,
+                    });
                 }
             };
             rest = after;
@@ -1597,10 +1624,20 @@ mod tests {
         let (mut room, conns) = Harness::playing(&["Ana"]);
         let mut stream = frame(0, 1.0);
         stream.extend_from_slice(b"SIS1\0\0\0\0");
-        let error = room.core.from_engine(&stream).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let broken = room.core.from_engine(&stream).unwrap_err();
+        assert_eq!(broken.error.kind(), io::ErrorKind::InvalidData);
+        assert!(broken.dropped.is_empty());
         assert!(room.core.is_over());
         assert_eq!(sent(&mut room.core, conns[0]), ["frame 1", "gone"]);
+    }
+
+    #[test]
+    fn a_broken_stream_keeps_the_messages_that_the_room_dropped_before_it() {
+        let (mut room, _) = Harness::playing(&["Ana"]);
+        let mut stream = frame(2, 1.0);
+        stream.extend_from_slice(b"SIS1\0\0\0\0");
+        let broken = room.core.from_engine(&stream).unwrap_err();
+        assert!(matches!(broken.dropped[..], [EngineError::NoSeat(_)]));
     }
 
     #[test]
