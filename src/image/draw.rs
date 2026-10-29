@@ -404,7 +404,11 @@ mod tests {
 
     #[test]
     fn a_crop_clips_what_it_holds() {
-        let cropped = solid(10.0, 5.0).crop(finite(2.0), finite(1.0), length(4.0), length(3.0));
+        let cropped = solid(10.0, 5.0).crop(
+            Point::new(finite(2.0), finite(1.0)),
+            length(4.0),
+            length(3.0),
+        );
         let cropped = svg(&cropped);
         assert!(cropped.contains(r#"<path d="M0 0 L4 0 L4 3 L0 3"/></clipPath>"#));
         assert!(
@@ -415,8 +419,16 @@ mod tests {
 
     #[test]
     fn a_crop_inside_a_crop_is_one_clip() {
-        let inner = solid(10.0, 10.0).crop(finite(0.0), finite(0.0), length(6.0), length(6.0));
-        let outer = inner.crop(finite(3.0), finite(2.0), length(5.0), length(5.0));
+        let inner = solid(10.0, 10.0).crop(
+            Point::new(finite(0.0), finite(0.0)),
+            length(6.0),
+            length(6.0),
+        );
+        let outer = inner.crop(
+            Point::new(finite(3.0), finite(2.0)),
+            length(5.0),
+            length(5.0),
+        );
         let outer = svg(&outer);
         assert_eq!(outer.matches("<clipPath").count(), 1, "{outer}");
         assert!(
@@ -427,14 +439,22 @@ mod tests {
 
     #[test]
     fn a_crop_with_no_area_draws_nothing() {
-        let cropped = solid(10.0, 10.0).crop(finite(0.0), finite(0.0), length(0.0), length(5.0));
+        let cropped = solid(10.0, 10.0).crop(
+            Point::new(finite(0.0), finite(0.0)),
+            length(0.0),
+            length(5.0),
+        );
         assert!(scene(&cropped).elements().is_empty());
     }
 
     #[test]
     fn a_deep_chain_of_crops_draws() {
         let chain = (0..200_000).fold(solid(10.0, 10.0), |img, _| {
-            img.crop(finite(0.0), finite(0.0), length(10.0), length(10.0))
+            img.crop(
+                Point::new(finite(0.0), finite(0.0)),
+                length(10.0),
+                length(10.0),
+            )
         });
         assert_eq!(scene(&chain).elements().len(), 1);
     }
@@ -548,7 +568,11 @@ mod tests {
 
     #[test]
     fn each_id_starts_with_the_number() {
-        let cropped = solid(10.0, 5.0).crop(finite(2.0), finite(1.0), length(4.0), length(3.0));
+        let cropped = solid(10.0, 5.0).crop(
+            Point::new(finite(2.0), finite(1.0)),
+            length(4.0),
+            length(3.0),
+        );
         let cropped = cropped.to_svg(7).unwrap();
         assert!(cropped.contains(r#"<clipPath id="s7-c0">"#), "{cropped}");
         assert!(cropped.contains("url(#s7-c0)"), "{cropped}");

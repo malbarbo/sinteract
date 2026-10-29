@@ -140,7 +140,7 @@ fn frame(img: &Image) -> Image {
 }
 
 fn crop(img: &Image, x: f64, y: f64, w: f64, h: f64) -> Image {
-    img.crop(fin(x), fin(y), len(w), len(h))
+    img.crop(Point::new(fin(x), fin(y)), len(w), len(h))
 }
 
 fn crop_align(img: &Image, x_place: XPlace, y_place: YPlace, w: f64, h: f64) -> Image {
@@ -198,7 +198,7 @@ fn place_image_align(
     y_place: YPlace,
 ) -> Image {
     scene
-        .place_image(fin(x), fin(y), x_place, y_place, img)
+        .place_image(Point::new(fin(x), fin(y)), x_place, y_place, img)
         .unwrap()
 }
 

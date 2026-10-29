@@ -71,7 +71,7 @@ fn pixels(scene: &Scene) -> Result<Vec<u8>, CanvasTooLarge> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::{Attribute, Color, Finite, Length, Style, YPlace};
+    use crate::image::{Attribute, Color, Finite, Length, Point, Style, YPlace};
 
     fn length(v: f64) -> Length {
         Length::new(v).unwrap()
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn an_image_that_is_not_a_png_compares_by_its_blob() {
         let zero = Finite::new(0.0).unwrap();
-        let whole = bmp(0, 0).crop(zero, zero, length(1.0), length(1.0));
+        let whole = bmp(0, 0).crop(Point::new(zero, zero), length(1.0), length(1.0));
         assert_eq!(whole.same(&bmp(0, 0)), Ok(true));
         assert_eq!(whole.same(&bmp(0, 2835)), Ok(false));
         assert_eq!(bmp(0, 0).same(&bmp(255, 0)), Ok(false));

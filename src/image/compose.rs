@@ -126,19 +126,14 @@ impl Image {
     }
 
     /// `self` with `img` over it, lined up by `x_place` and `y_place` with
-    /// `(x, y)`, and cropped to the bounds of `self`.
+    /// `at`, and cropped to the bounds of `self`.
     pub fn place_image(
         &self,
-        x: Finite,
-        y: Finite,
+        at: Point,
         x_place: XPlace,
         y_place: YPlace,
         img: &Image,
     ) -> Result<Image, Overflow> {
-        let at = Point {
-            x: x.get(),
-            y: y.get(),
-        };
         self.place_lined_up(at, x_place, y_place, img)
     }
 
@@ -486,7 +481,11 @@ mod tests {
     fn a_larger_crop_leaves_room_around_the_image() {
         let a = rectangle(10.0, 10.0);
         let cropped = a.crop_align(XPlace::Right, YPlace::Middle, length(20.0), length(4.0));
-        let expected = a.crop(finite(-10.0), finite(3.0), length(20.0), length(4.0));
+        let expected = a.crop(
+            Point::new(finite(-10.0), finite(3.0)),
+            length(20.0),
+            length(4.0),
+        );
         assert_eq!(cropped, expected);
     }
 
@@ -503,22 +502,24 @@ mod tests {
         let scene = rectangle(30.0, 20.0);
         let a = rectangle(10.0, 10.0);
         let placed = scene.place_image(
-            finite(30.0),
-            finite(0.0),
+            Point::new(finite(30.0), finite(0.0)),
             XPlace::Center,
             YPlace::Middle,
             &a,
         );
         let both = Image::combine([(scene.clone(), p(0.0, 5.0)), (a.clone(), p(25.0, 0.0))]);
-        let expected = both
-            .unwrap()
-            .crop(finite(0.0), finite(5.0), length(30.0), length(20.0));
+        let expected = both.unwrap().crop(
+            Point::new(finite(0.0), finite(5.0)),
+            length(30.0),
+            length(20.0),
+        );
         assert_eq!(placed, Ok(expected));
         assert_eq!(scene.put_image(finite(30.0), finite(20.0), &a), placed);
         let (center, middle) = (XPlace::Center, YPlace::Middle);
-        let twice = placed
-            .unwrap()
-            .place_image(finite(0.0), finite(0.0), center, middle, &a);
+        let twice =
+            placed
+                .unwrap()
+                .place_image(Point::new(finite(0.0), finite(0.0)), center, middle, &a);
         let items = [(p(30.0, 0.0), a.clone()), (p(0.0, 0.0), a.clone())];
         assert_eq!(scene.place_images(center, middle, items), twice);
     }

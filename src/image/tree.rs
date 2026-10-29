@@ -180,9 +180,9 @@ impl Image {
     }
 
     /// The part of `self` in the rectangle of `w` by `h` with its least
-    /// corner at `(x, y)`.
-    pub fn crop(&self, x: Finite, y: Finite, w: Length, h: Length) -> Self {
-        let at = Point::ORIGIN.minus(Point::new(x, y));
+    /// corner at `corner`.
+    pub fn crop(&self, corner: Point, w: Length, h: Length) -> Self {
+        let at = Point::ORIGIN.minus(corner);
         self.crop_at(ImageBox::of_size(w, h), at)
             .expect("the region of a crop of finite measures is finite")
     }
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn a_crop_has_the_size_of_its_region() {
         let x = Finite::new(2.0).unwrap();
-        let cropped = square(10.0).crop(x, x, length(3.0), length(4.0));
+        let cropped = square(10.0).crop(Point::new(x, x), length(3.0), length(4.0));
         assert_eq!(cropped.dimension(), (length(3.0), length(4.0)));
     }
 
@@ -855,7 +855,7 @@ mod tests {
         let chain = || {
             let zero = Finite::new(0.0).unwrap();
             (0..200_000).fold(square(10.0), |img, _| {
-                img.crop(zero, zero, length(10.0), length(10.0))
+                img.crop(Point::new(zero, zero), length(10.0), length(10.0))
             })
         };
         assert_eq!(chain(), chain());

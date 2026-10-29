@@ -284,8 +284,7 @@ mod tests {
             Image::bitmap_data_uri(&uri).unwrap(),
             Image::line(finite(10.0), finite(0.0), stroke(1.0)),
             Image::rectangle(length(8.0), length(4.0), stroke(1.0)).crop(
-                finite(0.0),
-                finite(0.0),
+                Point::new(finite(0.0), finite(0.0)),
                 length(6.0),
                 length(2.0),
             ),
@@ -307,7 +306,13 @@ mod tests {
         let below = Image::above(XPlace::Right, [b, a]).unwrap();
         let (w, h) = turned.dimension();
         assert!(near(w, below.width().get()) && near(h, below.height().get()));
-        let inner = |img: &Image| img.crop(finite(0.0), finite(0.0), length(10.0), length(30.0));
+        let inner = |img: &Image| {
+            img.crop(
+                Point::new(finite(0.0), finite(0.0)),
+                length(10.0),
+                length(30.0),
+            )
+        };
         let (w, h) = inner(&turned).rotate(finite(0.0)).unwrap().dimension();
         assert_eq!((w, h), inner(&below).dimension());
     }
@@ -385,7 +390,7 @@ mod tests {
     fn a_transformation_of_a_deep_tree_keeps_the_stack() {
         let zero = finite(0.0);
         let chain = (0..200_000).fold(Image::square(length(10.0), stroke(1.0)), |img, _| {
-            img.crop(zero, zero, length(10.0), length(10.0))
+            img.crop(Point::new(zero, zero), length(10.0), length(10.0))
         });
         let flipped = chain.flip_horizontal().unwrap();
         assert_eq!(flipped.dimension(), chain.dimension());
