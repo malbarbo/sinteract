@@ -34,7 +34,7 @@ impl Color {
 }
 
 /// The colors that CSS names, by name.
-pub const NAMED_COLORS: [(&str, Color); 147] = [
+pub const NAMED_COLORS: &[(&str, Color)] = &[
     ("aliceblue", Color::rgb(240, 248, 255)),
     ("antiquewhite", Color::rgb(250, 235, 215)),
     ("aqua", Color::rgb(0, 255, 255)),
