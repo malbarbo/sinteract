@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::Length;
-use crate::scene::{FontStyle, TextSpec};
+use crate::scene::{FontStyle, TextSpec, Weight};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Font {
@@ -49,13 +49,12 @@ pub enum FontWeight {
     Bold,
 }
 
-impl From<FontWeight> for u16 {
-    /// The weight on the CSS scale, from 100 to 900, which a scene takes.
+impl From<FontWeight> for Weight {
     fn from(weight: FontWeight) -> Self {
         match weight {
-            FontWeight::Light => 300,
-            FontWeight::Regular => 400,
-            FontWeight::Bold => 700,
+            FontWeight::Light => Weight::LIGHT,
+            FontWeight::Regular => Weight::REGULAR,
+            FontWeight::Bold => Weight::BOLD,
         }
     }
 }

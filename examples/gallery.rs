@@ -44,7 +44,7 @@ use sinteract::renderer::svg::SvgRenderer;
 use sinteract::scene::{
     ArcSize, Bitmap, ClipPath, Dash, FillRule, FontStyle, Image, LineCap, LineJoin, MiterLimit,
     Paint, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, SpreadMode,
-    Stop, StrokeWidth, Sweep, Text, TextSpec, TextStroke, TextStyle,
+    Stop, StrokeWidth, Sweep, Text, TextSpec, TextStroke, TextStyle, Weight,
 };
 use sinteract::session::{PlayerRange, Target};
 
@@ -661,7 +661,7 @@ fn rotated_clip(s: &mut Scene, x: f32, y: f32, t: f32) {
         // A text and a bitmap cross the edge of the clip.
         let spec = TextSpec {
             size: 34.0,
-            weight: 700,
+            weight: Weight::BOLD,
             text: "clipped".into(),
             ..TextSpec::default()
         };
@@ -795,12 +795,13 @@ fn layer(s: &mut Scene, x: f32, y: f32, _: f32) {
 }
 
 fn text_styles(s: &mut Scene, x: f32, y: f32, _: f32) {
+    const SEMIBOLD: Weight = Weight::new(600).unwrap();
     let lines = [
-        (600, FontStyle::Normal, "Semibold 600"),
-        (400, FontStyle::Normal, "Regular 400"),
-        (700, FontStyle::Normal, "Bold 700"),
-        (400, FontStyle::Italic, "Italic"),
-        (700, FontStyle::Oblique, "Bold oblique"),
+        (SEMIBOLD, FontStyle::Normal, "Semibold 600"),
+        (Weight::REGULAR, FontStyle::Normal, "Regular 400"),
+        (Weight::BOLD, FontStyle::Normal, "Bold 700"),
+        (Weight::REGULAR, FontStyle::Italic, "Italic"),
+        (Weight::BOLD, FontStyle::Oblique, "Bold oblique"),
     ];
     for (i, (weight, style, line)) in lines.into_iter().enumerate() {
         let spec = TextSpec {
@@ -905,7 +906,7 @@ fn text_transforms(s: &mut Scene, x: f32, y: f32, t: f32) {
         s.add_text(node);
     }
     let outline = TextSpec {
-        weight: 700,
+        weight: Weight::BOLD,
         ..spec("Outline", 30.0)
     };
     // A gradient on a text is in canvas space, as on a path.

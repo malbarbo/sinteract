@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 use ttf_parser::{Face, GlyphId};
 
 use crate::outline::PathSink;
-use crate::scene::{FontStyle, TextSpec};
+use crate::scene::{FontStyle, TextSpec, Weight};
 
 // ---------------------------------------------------------------------------
 // Text metrics, the public API
@@ -307,7 +307,7 @@ pub(crate) struct ResolvedFont {
 impl ResolvedFont {
     /// Resolve a family, a weight and a style to a face, by the rules that
     /// [`measure`] documents.
-    pub(crate) fn resolve(family: &str, weight: u16, style: FontStyle) -> Self {
+    pub(crate) fn resolve(family: &str, weight: Weight, style: FontStyle) -> Self {
         // This runs once per text node per frame, so the comparison allocates
         // nothing.
         let key = family.trim();
@@ -407,7 +407,7 @@ mod system {
     /// Without the lookup, no family resolves to a system font.
     pub(super) fn font(
         _family: &str,
-        _weight: u16,
+        _weight: crate::scene::Weight,
         _style: crate::scene::FontStyle,
     ) -> Option<super::ResolvedFont> {
         None
@@ -450,8 +450,8 @@ struct Family {
 impl Family {
     /// The variant for `weight` and `style`. An oblique style takes the
     /// italic face.
-    fn variant(&'static self, weight: u16, style: FontStyle) -> &'static EmbeddedFont {
-        let bold = weight >= BOLD_THRESHOLD;
+    fn variant(&'static self, weight: Weight, style: FontStyle) -> &'static EmbeddedFont {
+        let bold = weight.get() >= BOLD_THRESHOLD;
         let italic = !matches!(style, FontStyle::Normal);
         match (bold, italic) {
             (false, false) => &self.regular,
@@ -556,7 +556,7 @@ mod tests {
     }
 
     /// The metrics of `text` in `family` at `weight`, in the normal style.
-    fn metrics(family: &str, weight: u16, size: f32, text: &str) -> TextMetrics {
+    fn metrics(family: &str, weight: Weight, size: f32, text: &str) -> TextMetrics {
         measure(&TextSpec {
             family: family.into(),
             weight,
@@ -594,19 +594,19 @@ mod tests {
 
     #[test]
     fn an_empty_text_measures_zero_wide() {
-        assert_eq!(metrics("", 400, 20.0, "").width(), 0.0);
+        assert_eq!(metrics("", Weight::REGULAR, 20.0, "").width(), 0.0);
     }
 
     #[test]
     fn the_width_grows_with_the_characters() {
-        let one = metrics("", 400, 20.0, "h").width();
-        let many = metrics("", 400, 20.0, "hhhh").width();
+        let one = metrics("", Weight::REGULAR, 20.0, "h").width();
+        let many = metrics("", Weight::REGULAR, 20.0, "hhhh").width();
         assert!(many > one * 3.5, "{many} should be roughly 4x {one}");
     }
 
     #[test]
     fn the_height_spans_the_ascender_to_the_descender() {
-        let h = metrics("", 400, 20.0, "").height();
+        let h = metrics("", Weight::REGULAR, 20.0, "").height();
         // Sinteract Sans has an ascender of 1854 and a descender of -434 in
         // a 2048-unit em, and the division is exact.
         assert_eq!(h, (1854.0 + 434.0) * 20.0 / 2048.0);
@@ -614,7 +614,7 @@ mod tests {
 
     #[test]
     fn the_baseline_is_within_the_box() {
-        let m = metrics("", 400, 20.0, "");
+        let m = metrics("", Weight::REGULAR, 20.0, "");
         let (h, y) = (m.height(), m.baseline_y());
         assert!(y > -h / 2.0 && y < h / 2.0);
     }
@@ -636,7 +636,7 @@ mod tests {
         let mut b = Recorder::default();
         outline_spec(&text_spec(30.0, "   "), &mut b);
         assert!(b.ops.is_empty(), "{:?}", b.ops);
-        assert!(metrics("", 400, 30.0, "   ").width() > 0.0);
+        assert!(metrics("", Weight::REGULAR, 30.0, "   ").width() > 0.0);
     }
 
     #[test]
@@ -647,8 +647,8 @@ mod tests {
             "A\nB", "A\r\nB", "A\u{0}B", "A\u{1b}B", "A\u{7f}B", "A\u{9f}B",
         ] {
             assert_eq!(
-                metrics("", 400, 30.0, s).width(),
-                metrics("", 400, 30.0, "AB").width(),
+                metrics("", Weight::REGULAR, 30.0, s).width(),
+                metrics("", Weight::REGULAR, 30.0, "AB").width(),
                 "{s:?}"
             );
             let mut with = Recorder::default();
@@ -661,10 +661,10 @@ mod tests {
     fn a_tab_draws_eight_spaces_of_the_face() {
         let mut widths = Vec::new();
         for family in ["sans-serif", "monospace"] {
-            let tab = metrics(family, 400, 30.0, "A\tB").width();
+            let tab = metrics(family, Weight::REGULAR, 30.0, "A\tB").width();
             assert_eq!(
                 tab,
-                metrics(family, 400, 30.0, "A        B").width(),
+                metrics(family, Weight::REGULAR, 30.0, "A        B").width(),
                 "{family}"
             );
             let mut with_tab = Recorder::default();
@@ -699,7 +699,10 @@ mod tests {
         assert!(face.glyph_index(emoji).is_none(), "the face covers {emoji}");
         let notdef = f64::from(face.glyph_hor_advance(GlyphId(0)).unwrap());
         let expected = (notdef * 30.0 / f64::from(face.units_per_em())) as f32;
-        assert_eq!(metrics("", 400, 30.0, "\u{1f600}").width(), expected);
+        assert_eq!(
+            metrics("", Weight::REGULAR, 30.0, "\u{1f600}").width(),
+            expected
+        );
         let mut b = Recorder::default();
         outline_spec(&text_spec(30.0, "\u{1f600}"), &mut b);
         assert!(
@@ -711,7 +714,7 @@ mod tests {
     #[test]
     fn portuguese_chars_have_glyphs() {
         let s = "ção";
-        let w = metrics("", 400, 20.0, s).width();
+        let w = metrics("", Weight::REGULAR, 20.0, s).width();
         assert!(w > 0.0);
         let mut b = Recorder::default();
         outline_spec(&text_spec(30.0, s), &mut b);
@@ -720,21 +723,21 @@ mod tests {
 
     #[test]
     fn resolve_empty_family_picks_sans_regular() {
-        let f = ResolvedFont::resolve("", 400, FontStyle::Normal);
+        let f = ResolvedFont::resolve("", Weight::REGULAR, FontStyle::Normal);
         assert_eq!(f.family, "Sinteract Sans");
         assert!(std::ptr::eq(f.face, sans()), "not the regular face");
     }
 
     #[test]
     fn resolve_serif_alias_picks_serif() {
-        let f = ResolvedFont::resolve("serif", 400, FontStyle::Normal);
+        let f = ResolvedFont::resolve("serif", Weight::REGULAR, FontStyle::Normal);
         assert_eq!(f.family, "Sinteract Serif");
     }
 
     #[test]
     fn resolve_sans_alias_picks_sans() {
         for name in ["sans", "sans-serif", "Sinteract Sans"] {
-            let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
+            let f = ResolvedFont::resolve(name, Weight::REGULAR, FontStyle::Normal);
             assert_eq!(f.family, "Sinteract Sans", "name={name}");
         }
     }
@@ -742,7 +745,7 @@ mod tests {
     #[test]
     fn resolve_mono_alias_picks_mono() {
         for name in ["mono", "monospace", "Sinteract Mono"] {
-            let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
+            let f = ResolvedFont::resolve(name, Weight::REGULAR, FontStyle::Normal);
             assert_eq!(f.family, "Sinteract Mono", "name={name}");
         }
     }
@@ -750,7 +753,7 @@ mod tests {
     #[test]
     fn resolve_ignores_the_space_around_the_family() {
         for name in ["  serif  ", "\tserif\n", "   "] {
-            let f = ResolvedFont::resolve(name, 400, FontStyle::Normal);
+            let f = ResolvedFont::resolve(name, Weight::REGULAR, FontStyle::Normal);
             let want = if name.trim().is_empty() {
                 "Sinteract Sans"
             } else {
@@ -762,14 +765,14 @@ mod tests {
 
     #[test]
     fn resolve_is_case_insensitive() {
-        let f = ResolvedFont::resolve("SANS-SERIF", 400, FontStyle::Normal);
+        let f = ResolvedFont::resolve("SANS-SERIF", Weight::REGULAR, FontStyle::Normal);
         assert_eq!(f.family, "Sinteract Sans");
     }
 
     #[test]
     fn bold_picks_a_different_face_than_regular() {
-        let w_reg = metrics("", 400, 20.0, "Hello").width();
-        let w_bold = metrics("", 700, 20.0, "Hello").width();
+        let w_reg = metrics("", Weight::REGULAR, 20.0, "Hello").width();
+        let w_bold = metrics("", Weight::BOLD, 20.0, "Hello").width();
         assert!(
             w_bold > w_reg,
             "expected bold wider than regular: {w_bold} vs {w_reg}"
@@ -799,7 +802,11 @@ mod tests {
     fn unknown_family_falls_back_to_sans_when_not_in_fontdb() {
         // No system has a font with this name, so resolve falls through to
         // Sinteract Sans.
-        let f = ResolvedFont::resolve("ZZZ_NonexistentFontXyzzy_ZZZ", 400, FontStyle::Normal);
+        let f = ResolvedFont::resolve(
+            "ZZZ_NonexistentFontXyzzy_ZZZ",
+            Weight::REGULAR,
+            FontStyle::Normal,
+        );
         assert_eq!(f.family, "Sinteract Sans");
     }
 
@@ -882,7 +889,7 @@ mod tests {
     #[test]
     fn measure_agrees_with_text_layout() {
         let spec = TextSpec {
-            weight: 700,
+            weight: Weight::BOLD,
             font_style: FontStyle::Italic,
             ..text_spec(24.5, "Olá")
         };

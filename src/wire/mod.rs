@@ -159,9 +159,9 @@ enum ValueError {
     /// A path or a text with no fill and no stroke that marks the canvas.
     /// The reader skips it, since it draws nothing.
     NoInk,
-    /// A value that no writer sends, such as an empty key, a negative size
-    /// or a button that disagrees with its action. The reader skips the
-    /// event that holds it.
+    /// A value that no writer sends, such as an empty key, a negative size,
+    /// a font weight out of 1 to 1000 or a button that disagrees with its
+    /// action. The reader skips the element or the event that holds it.
     Impossible,
 }
 
@@ -228,7 +228,7 @@ mod tests {
     use crate::scene::{
         Affine, Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Image, LineCap, LineJoin,
         Paint, Path, PathFill, PathStroke, PathStyle, Rgba, RotatedRect, Sampling, Scene, Segment,
-        SegmentKind, SpreadMode, Stop, StrokeWidth, Text, TextSpec, TextStroke, TextStyle,
+        SegmentKind, SpreadMode, Stop, StrokeWidth, Text, TextSpec, TextStroke, TextStyle, Weight,
     };
     use crate::scene_capnp::element;
     use capnp::message::Builder as MessageBuilder;
@@ -275,7 +275,7 @@ mod tests {
                 let mut text = TextSpec {
                     size: 12.0,
                     family: "Sinteract Sans".into(),
-                    weight: 700,
+                    weight: Weight::BOLD,
                     font_style: FontStyle::Italic,
                     text: "Olá".into(),
                 }
@@ -1905,6 +1905,7 @@ mod tests {
             text.reborrow().init_fill().init_solid();
             text.reborrow().init_stroke().init_solid();
             text.set_size(12.0);
+            text.set_weight(400);
             text.set_text("Hi");
         }
         let Message::Frame { scene: d, .. } = decode(&frame_holding(&to_bytes(builder))).unwrap()
@@ -1915,6 +1916,32 @@ mod tests {
             panic!("expected one Path, got {:?}", d.elements());
         };
         assert_eq!(p.style, PathStyle::black());
+    }
+
+    #[test]
+    fn a_text_with_a_weight_out_of_1_to_1000_is_skipped() {
+        // A Weight cannot hold 0 or 1001, so the bytes are built by hand.
+        let mut builder = MessageBuilder::new_default();
+        {
+            let frame = builder.init_root::<crate::scene_capnp::scene::Builder>();
+            let mut nodes = frame.init_elements(3);
+            for (i, weight) in [0, 1001, 1000].into_iter().enumerate() {
+                let mut text = nodes.reborrow().get(i as u32).init_text();
+                text.reborrow().init_fill().init_solid().set_a(255);
+                text.reborrow().init_stroke().init_solid();
+                text.set_size(12.0);
+                text.set_weight(weight);
+                text.set_text("Hi");
+            }
+        }
+        let Message::Frame { scene: d, .. } = decode(&frame_holding(&to_bytes(builder))).unwrap()
+        else {
+            panic!("expected Frame");
+        };
+        let [Element::Text(t)] = d.elements() else {
+            panic!("expected one Text, got {:?}", d.elements());
+        };
+        assert_eq!(t.spec().weight, Weight::new(1000).unwrap());
     }
 
     #[test]

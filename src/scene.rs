@@ -444,6 +444,29 @@ pub enum LineCap {
     Square = 2,
 }
 
+/// A font weight on the CSS scale, from 1 to 1000.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Weight(u16);
+
+impl Weight {
+    pub const LIGHT: Self = Self(300);
+    pub const REGULAR: Self = Self(400);
+    pub const BOLD: Self = Self(700);
+
+    /// Returns `None` if `weight` is not from 1 to 1000.
+    pub const fn new(weight: u16) -> Option<Self> {
+        if weight >= 1 && weight <= 1000 {
+            Some(Self(weight))
+        } else {
+            None
+        }
+    }
+
+    pub fn get(self) -> u16 {
+        self.0
+    }
+}
+
 /// The limit of a miter join, finite and above 1. A join whose miter
 /// length, in stroke widths, is above the limit becomes a bevel.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -774,15 +797,14 @@ impl Text {
 ///
 /// `family` is [`crate::text::TextMetrics::family`], the family after
 /// fallback, so a view lays the text out as the engine did. An empty
-/// family is the default Sans. `weight` is the CSS weight, 400 for Regular
-/// and 700 for Bold.
+/// family is the default Sans.
 #[derive(Clone, Debug)]
 pub struct TextSpec {
     pub size: f32,
     /// A `Box<str>` saves 8 bytes over a `String`, and [`Text`] is the
     /// largest variant of [`Element`].
     pub family: Box<str>,
-    pub weight: u16,
+    pub weight: Weight,
     pub font_style: FontStyle,
     pub text: String,
 }
@@ -792,7 +814,7 @@ impl Default for TextSpec {
         Self {
             size: 0.0,
             family: Box::default(),
-            weight: 400,
+            weight: Weight::REGULAR,
             font_style: FontStyle::Normal,
             text: String::new(),
         }

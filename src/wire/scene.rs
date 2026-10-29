@@ -12,7 +12,7 @@ use crate::scene::{
     Affine, Bitmap, ClipPath, Dash, Element, FillRule, FontStyle, Geometry, GradientGeometry,
     Image, LineCap, LineJoin, MAX_NESTING, MiterLimit, Paint, Path, PathFill, PathStroke,
     PathStyle, Rgba, Sampling, Scene, SegmentKind, Segments, SpreadMode, Stop, Stops, StrokeWidth,
-    Text, TextSpec, TextStroke, TextStyle,
+    Text, TextSpec, TextStroke, TextStyle, Weight,
 };
 use crate::scene_capnp::{
     FillRule as WFillRule, FontStyle as WFontStyle, LineCap as WLineCap, LineJoin as WLineJoin,
@@ -385,7 +385,7 @@ fn write_text_node(mut b: text_node::Builder<'_>, n: &Text) {
     b.set_m5(m[5]);
     b.set_size(n.spec().size);
     b.set_family(&*n.spec().family);
-    b.set_weight(n.spec().weight);
+    b.set_weight(n.spec().weight.get());
     b.set_style(font_style_to_wire(n.spec().font_style));
     b.set_underline(n.underline);
     b.set_text(&*n.spec().text);
@@ -404,14 +404,19 @@ fn read_text_node(r: text_node::Reader<'_>) -> Result<Text, ValueError> {
         r.get_m4(),
         r.get_m5(),
     ]);
-    let spec = TextSpec {
-        size: r.get_size(),
-        family: r.get_family()?.to_str()?.into(),
-        weight: r.get_weight(),
-        font_style: font_style_from_wire(r.get_style()?),
-        text: r.get_text()?.to_str()?.to_owned(),
-    };
+    let weight = Weight::new(r.get_weight());
+    let size = r.get_size();
+    let family = r.get_family()?.to_str()?.into();
+    let font_style = font_style_from_wire(r.get_style()?);
+    let text = r.get_text()?.to_str()?.to_owned();
     // After every field, so damage in one stays an error.
+    let spec = TextSpec {
+        size,
+        family,
+        weight: weight.ok_or(ValueError::Impossible)?,
+        font_style,
+        text,
+    };
     Ok(Text::from_parts(
         style.ok_or(ValueError::NoInk)?,
         transform,

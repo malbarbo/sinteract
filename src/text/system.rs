@@ -5,12 +5,12 @@ use std::sync::{Mutex, OnceLock};
 use ttf_parser::Face;
 
 use super::ResolvedFont;
-use crate::scene::FontStyle;
+use crate::scene::{FontStyle, Weight};
 
 /// The installed font that `family`, `weight` and `style` pick, or `None`
 /// when no installed family has that name. A request is answered once and
 /// cached.
-pub(super) fn font(family: &str, weight: u16, style: FontStyle) -> Option<ResolvedFont> {
+pub(super) fn font(family: &str, weight: Weight, style: FontStyle) -> Option<ResolvedFont> {
     // One lock for the lookup and for the insert, so two threads that ask for
     // the same family do not both parse a face and leak it.
     let mut cache = system_cache().lock().ok()?;
@@ -43,12 +43,12 @@ struct SystemCache {
 }
 
 /// A family, a weight and a style, as `resolve` receives them.
-type FontRequest = (Box<str>, u16, FontStyle);
+type FontRequest = (Box<str>, Weight, FontStyle);
 
 fn query_system_font(
     faces: &mut Vec<(fontdb::ID, ResolvedFont)>,
     family: &str,
-    weight: u16,
+    weight: Weight,
     style: FontStyle,
 ) -> Option<ResolvedFont> {
     let db = font_db();
@@ -59,7 +59,7 @@ fn query_system_font(
     };
     let query = fontdb::Query {
         families: &[fontdb::Family::Name(family)],
-        weight: fontdb::Weight(weight),
+        weight: fontdb::Weight(weight.get()),
         stretch: fontdb::Stretch::Normal,
         style: style_db,
     };
