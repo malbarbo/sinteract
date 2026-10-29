@@ -94,7 +94,11 @@ impl Window {
     /// [`OpenError::Busy`] while another `Window` exists, with
     /// [`OpenError::NoWindow`] when the session has no graphical display,
     /// and with [`OpenError::Platform`] when the platform has no window for
-    /// us, or on a thread other than the one of the first window.
+    /// us or, on macOS, off the main thread. On another platform a thread
+    /// other than the one of the first window fails with
+    /// [`OpenError::WrongThread`]. Fails with [`OpenError::LoopEnded`] after
+    /// the event loop of the windows ended, and with [`OpenError::Timeout`]
+    /// when the platform does not create the window in time.
     pub fn open(title: &str, width: f32, height: f32) -> Result<Self, OpenError> {
         let (w, h) = frame_px(width, height);
         let attrs = WindowAttributes::default()
