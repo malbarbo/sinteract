@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt::{self, Write};
 
-use crate::asset::{Embed, embed, encode_data_uri};
+use crate::asset::{Embed, data_uri_of_mime, embed};
 use crate::outline::{Moved, PathSink};
 use crate::renderer::{
     MISSING_FILL, MISSING_STROKE, Renderer, RestoreOnDrop, TEXT_MITER_LIMIT, frame_side,
@@ -175,7 +175,7 @@ fn data_url(image: &Image, keep_format: bool) -> Option<String> {
         Embed::Decode { mime } if keep_format => (mime, Cow::Borrowed(blob)),
         Embed::Decode { mime } => as_png(blob, mime)?,
     };
-    Some(encode_data_uri(mime, &blob))
+    Some(data_uri_of_mime(mime, &blob))
 }
 
 /// The image in `blob` as a PNG, the way up that the pixmap draws it.

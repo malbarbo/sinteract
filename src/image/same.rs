@@ -86,7 +86,7 @@ mod tests {
     }
 
     fn bitmap(mime: &str, blob: &[u8]) -> Image {
-        Image::bitmap_data_uri(&crate::asset::encode_data_uri(mime, blob)).unwrap()
+        Image::bitmap_data_uri(&crate::asset::data_uri_of_mime(mime, blob)).unwrap()
     }
 
     #[test]

@@ -825,7 +825,7 @@ mod tests {
 
     #[test]
     fn a_bitmap_has_the_size_of_its_image() {
-        let uri = |w, h| crate::asset::encode_data_uri("image/png", &crate::asset::png_head(w, h));
+        let uri = |w, h| crate::asset::data_uri_of_mime("image/png", &crate::asset::png_head(w, h));
         let bitmap = Image::bitmap_data_uri(&uri(3, 2)).unwrap();
         assert_eq!(bitmap.dimension(), (length(3.0), length(2.0)));
         assert_eq!(

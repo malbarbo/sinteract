@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn a_rotation_turns_every_kind_of_part() {
-        let uri = crate::asset::encode_data_uri("image/png", &crate::asset::png_head(3, 2));
+        let uri = crate::asset::data_uri_of_mime("image/png", &crate::asset::png_head(3, 2));
         let parts = [
             Image::bitmap_data_uri(&uri).unwrap(),
             Image::line(finite(10.0), finite(0.0), stroke(1.0)),

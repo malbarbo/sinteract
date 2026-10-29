@@ -293,13 +293,13 @@ pub fn image_head(blob: &[u8]) -> Result<ImageHead, ImageError> {
 /// The image in `blob` as a `data:` URI in base64, of the media type in
 /// its header, or an error if it is not a PNG, a JPEG, a GIF, a WebP or a
 /// BMP.
-pub fn data_uri(blob: &[u8]) -> Result<String, ImageError> {
+pub fn encode_data_uri(blob: &[u8]) -> Result<String, ImageError> {
     let head = head(blob).ok_or(ImageError::Unsupported)?;
-    Ok(encode_data_uri(head.format.mime(), blob))
+    Ok(data_uri_of_mime(head.format.mime(), blob))
 }
 
 /// `blob` as a `data:` URI in base64 of the media type `mime`.
-pub(crate) fn encode_data_uri(mime: &str, blob: &[u8]) -> String {
+pub(crate) fn data_uri_of_mime(mime: &str, blob: &[u8]) -> String {
     let mut uri = format!("data:{mime};base64,");
     B64.encode_string(blob, &mut uri);
     uri
@@ -1139,15 +1139,15 @@ mod tests {
     }
 
     #[test]
-    fn a_data_uri_names_the_format_of_its_header_and_decodes_back() {
+    fn encode_data_uri_names_the_format_of_its_header_and_decodes_back() {
         let blob = png_head(3, 2);
-        let uri = data_uri(&blob).unwrap();
+        let uri = encode_data_uri(&blob).unwrap();
         assert!(
             uri.starts_with("data:image/png;base64,iVBORw0KGgo"),
             "{uri}"
         );
         assert_eq!(decode_data_uri(&uri), Some(blob));
-        assert_eq!(data_uri(b"GIF"), Err(ImageError::Unsupported));
+        assert_eq!(encode_data_uri(b"GIF"), Err(ImageError::Unsupported));
     }
 
     #[test]

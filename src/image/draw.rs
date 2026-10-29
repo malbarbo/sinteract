@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn a_bitmap_fills_its_box() {
-        let png = crate::asset::encode_data_uri("image/png", &crate::asset::png_head(3, 2));
+        let png = crate::asset::data_uri_of_mime("image/png", &crate::asset::png_head(3, 2));
         let bitmap = Image::bitmap_data_uri(&png).unwrap();
         let scene = scene(&bitmap);
         let [Element::Bitmap(bitmap)] = scene.elements() else {
