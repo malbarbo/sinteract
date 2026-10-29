@@ -66,4 +66,4 @@ pub use stage::{
 pub use terminal::{PrintError, Printer, Terminal};
 #[cfg(feature = "window")]
 pub use window::Window;
-pub use worlds::{FrameEvent, ShowError, Worlds};
+pub use worlds::{ShowError, WorldEvent, Worlds};
