@@ -27,6 +27,7 @@ pub(super) enum Node {
     Path {
         drawn: Option<Bounds>,
         style: Style,
+        start: Point,
         commands: Box<[PathCmd]>,
         closed: bool,
     },
@@ -101,6 +102,7 @@ static EMPTY: LazyLock<Image> = LazyLock::new(|| {
     Image(Arc::new(Node::Path {
         drawn: None,
         style: Style::default(),
+        start: Point::ORIGIN,
         commands: Box::default(),
         closed: true,
     }))
@@ -112,14 +114,14 @@ impl Image {
         EMPTY.clone()
     }
 
-    /// The path of `commands`. A path that does not start with a move draws
-    /// nothing.
+    /// The path from `start` through `commands`.
     pub fn path(
+        start: Point,
         commands: impl Into<Box<[PathCmd]>>,
         closed: bool,
         style: Style,
     ) -> Result<Self, Overflow> {
-        Ok(Self::path_at(commands, closed, style)?.0)
+        Ok(Self::path_at(start, commands, closed, style)?.0)
     }
 
     /// The line from the origin to `(x, y)`. As in 2htdp, a line takes one
@@ -210,18 +212,20 @@ impl Image {
         }
     }
 
-    /// The path of `commands`, with the place of the least corner of its
-    /// bounds.
+    /// The path from `start` through `commands`, with the place of the least
+    /// corner of its bounds.
     pub(super) fn path_at(
+        start: Point,
         commands: impl Into<Box<[PathCmd]>>,
         closed: bool,
         style: Style,
     ) -> Result<(Self, Point), Overflow> {
         let commands = commands.into();
-        let drawn = path::bounds(&commands);
+        let drawn = path::bounds(start, &commands);
         let path = Self::new(Node::Path {
             drawn,
             style,
+            start,
             commands,
             closed,
         })?;
@@ -243,8 +247,15 @@ impl Image {
     fn new(node: Node) -> Result<Self, Overflow> {
         let finite = match &node {
             Node::Path {
-                drawn, commands, ..
-            } => drawn.is_none_or(Bounds::is_finite) && commands.iter().all(|c| c.is_finite()),
+                drawn,
+                start,
+                commands,
+                ..
+            } => {
+                drawn.is_none_or(Bounds::is_finite)
+                    && start.is_finite()
+                    && commands.iter().all(|c| c.is_finite())
+            }
             Node::Line { from, to, .. } => from.is_finite() && to.is_finite(),
             Node::Combination { drawn, parts } => {
                 drawn.is_none_or(Bounds::is_finite) && parts.iter().all(|(_, at)| at.is_finite())
@@ -296,11 +307,13 @@ impl Image {
             Node::Path {
                 drawn,
                 style,
+                start,
                 commands,
                 closed,
             } => Node::Path {
                 drawn: moved(drawn),
                 style: style.clone(),
+                start: start.plus(by),
                 commands: commands.iter().map(|c| c.translate(by)).collect(),
                 closed: *closed,
             },
@@ -461,13 +474,15 @@ impl Image {
                     }
                     Node::Path {
                         style,
+                        start,
                         commands,
                         closed,
                         ..
                     } => {
+                        let start = t.point(*start, param);
                         let commands = commands.iter().map(|c| t.command(*c, param));
                         let commands: Box<[PathCmd]> = commands.collect();
-                        done.push(Self::path_at(commands, *closed, t.style(style)?)?);
+                        done.push(Self::path_at(start, commands, *closed, t.style(style)?)?);
                     }
                     Node::Line { style, from, to } => {
                         let line = Self::new(Node::Line {
@@ -568,17 +583,19 @@ impl PartialEq for Image {
                     Node::Path {
                         drawn: d1,
                         style: s1,
+                        start: p1,
                         commands: c1,
                         closed: k1,
                     },
                     Node::Path {
                         drawn: d2,
                         style: s2,
+                        start: p2,
                         commands: c2,
                         closed: k2,
                     },
                 ) => {
-                    if d1 != d2 || s1 != s2 || c1 != c2 || k1 != k2 {
+                    if d1 != d2 || s1 != s2 || p1 != p2 || c1 != c2 || k1 != k2 {
                         return false;
                     }
                 }
@@ -718,10 +735,13 @@ mod tests {
     }
 
     fn polyline(points: &[(f64, f64)]) -> Result<Image, Overflow> {
-        let mut commands = vec![PathCmd::move_to(p(points[0].0, points[0].1))];
-        commands.extend(points[1..].iter().map(|&(x, y)| PathCmd::line_to(p(x, y))));
+        let start = p(points[0].0, points[0].1);
+        let commands: Vec<_> = points[1..]
+            .iter()
+            .map(|&(x, y)| PathCmd::line_to(p(x, y)))
+            .collect();
         let red = Style::new([Attribute::Stroke(Color::rgb(255, 0, 0))]);
-        Image::path(commands, false, red)
+        Image::path(start, commands, false, red)
     }
 
     fn square(side: f64) -> Image {
@@ -742,11 +762,11 @@ mod tests {
 
     #[test]
     fn a_path_measures_what_it_draws() {
-        let no_move = Image::path([PathCmd::line_to(p(10.0, 10.0))], false, Style::default());
-        assert_eq!(no_move.unwrap().dimension(), (length(0.0), length(0.0)));
+        let no_segment = Image::path(p(10.0, 10.0), [], false, Style::default());
+        assert_eq!(no_segment.unwrap().dimension(), (length(0.0), length(0.0)));
         let loose_move = Image::path(
+            p(0.0, 0.0),
             [
-                PathCmd::move_to(p(0.0, 0.0)),
                 PathCmd::line_to(p(10.0, 0.0)),
                 PathCmd::move_to(p(50.0, 50.0)),
             ],

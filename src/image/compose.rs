@@ -173,8 +173,8 @@ impl Image {
     /// `self` with the polygon through `points`, cropped to the bounds of
     /// `self`.
     pub fn place_polygon(&self, points: &[Point], style: Style) -> Result<Image, Overflow> {
-        let (commands, closed) = polygon_commands(points.iter().copied());
-        let (polygon, at) = Image::path_at(commands, closed, style)?;
+        let (start, commands, closed) = polygon_commands(points.iter().copied());
+        let (polygon, at) = Image::path_at(start, commands, closed, style)?;
         self.place(&polygon, at)
     }
 
@@ -199,7 +199,7 @@ impl Image {
         angle: WedgeAngle,
         style: Style,
     ) -> Result<Image, Overflow> {
-        let (wedge, corner) = Image::path_at(wedge(radius, angle), true, style)?;
+        let (wedge, corner) = Image::path_at(Point::ORIGIN, wedge(radius, angle), true, style)?;
         self.place(&wedge, center.plus(corner))
     }
 
@@ -210,8 +210,8 @@ impl Image {
 
     /// `self` with the polygon through `points`.
     pub fn add_polygon(&self, points: &[Point], style: Style) -> Result<Image, Overflow> {
-        let (commands, closed) = polygon_commands(points.iter().copied());
-        self.add(Image::path_at(commands, closed, style)?)
+        let (start, commands, closed) = polygon_commands(points.iter().copied());
+        self.add(Image::path_at(start, commands, closed, style)?)
     }
 
     /// `self` with the curve from `from` to `to`.
@@ -238,7 +238,7 @@ impl Image {
         angle: WedgeAngle,
         style: Style,
     ) -> Result<Image, Overflow> {
-        let (wedge, corner) = Image::path_at(wedge(radius, angle), true, style)?;
+        let (wedge, corner) = Image::path_at(Point::ORIGIN, wedge(radius, angle), true, style)?;
         self.add((wedge, center.plus(corner)))
     }
 
@@ -316,7 +316,7 @@ fn outline(color: Color) -> Style {
 }
 
 fn line(from: Point, to: Point, style: Style) -> Result<(Image, Point), Overflow> {
-    Image::path_at([PathCmd::move_to(from), PathCmd::line_to(to)], false, style)
+    Image::path_at(from, [PathCmd::line_to(to)], false, style)
 }
 
 fn curve(
@@ -338,8 +338,7 @@ fn curve(
         x: p2.x - reach(to.pull, cos_deg(a2)),
         y: p2.y + reach(to.pull, sin_deg(a2)),
     };
-    let commands = [PathCmd::move_to(p1), PathCmd::cubic_to(c1, c2, p2)];
-    Image::path_at(commands, closed, style)
+    Image::path_at(p1, [PathCmd::cubic_to(c1, c2, p2)], closed, style)
 }
 
 /// Where the least corner of a top of size `(wt, ht)` and of a bottom of

@@ -163,17 +163,14 @@ impl PathCmd {
     }
 }
 
-/// The bounds of what the path of `commands` draws, or `None` when it draws
-/// nothing. As in the drawing, a path draws nothing unless it starts with a
-/// move, and a move that no segment leaves adds nothing.
-pub(super) fn bounds(commands: &[PathCmd]) -> Option<Bounds> {
-    let Some((PathCmd(Cmd::Move(start)), rest)) = commands.split_first() else {
-        return None;
-    };
+/// The bounds of what the path from `start` through `commands` draws, or
+/// `None` when it draws nothing. As in the drawing, a move that no segment
+/// leaves adds nothing.
+pub(super) fn bounds(start: Point, commands: &[PathCmd]) -> Option<Bounds> {
     let p = |p: Point| (without_residue(p.x), without_residue(p.y));
-    let (x, y) = p(*start);
+    let (x, y) = p(start);
     let mut bounds = PathBounds::new(x, y);
-    for cmd in rest {
+    for cmd in commands {
         bounds = match cmd.0 {
             Cmd::Move(end) => {
                 let (x, y) = p(end);
@@ -225,19 +222,17 @@ pub(super) fn bounds(commands: &[PathCmd]) -> Option<Bounds> {
     })
 }
 
-/// The path of `commands` with `style`, with `point` applied to each point,
-/// or `None` when the commands do not start with a move.
+/// The path from `start` through `commands` with `style`, with `point`
+/// applied to each point.
 pub(super) fn draw(
+    start: Point,
     commands: &[PathCmd],
     style: PathStyle,
     point: impl Fn(Point) -> (f32, f32),
-) -> Option<Path> {
-    let Some((PathCmd(Cmd::Move(start)), rest)) = commands.split_first() else {
-        return None;
-    };
-    let (x, y) = point(*start);
+) -> Path {
+    let (x, y) = point(start);
     let mut builder = Path::builder(style, x, y);
-    for cmd in rest {
+    for cmd in commands {
         builder = match cmd.0 {
             Cmd::Move(end) => {
                 let (x, y) = point(end);
@@ -269,7 +264,7 @@ pub(super) fn draw(
             }
         };
     }
-    Some(builder.build())
+    builder.build()
 }
 
 /// How far from 0, or from a whole number, a coordinate may be and still

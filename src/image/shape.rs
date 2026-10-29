@@ -110,14 +110,8 @@ impl Image {
         let arc = |x, y| PathCmd::arc(rx, ry, 0.0, false, true, Point { x, y });
         // A quarter arc ends away from where it starts even when the width
         // or the height is 0, so the bounds keep the other side.
-        let commands = [
-            PathCmd::move_to(Point { x: w, y: ry }),
-            arc(rx, h),
-            arc(0.0, ry),
-            arc(rx, 0.0),
-            arc(w, ry),
-        ];
-        Image::path(commands, true, style)
+        let commands = [arc(rx, h), arc(0.0, ry), arc(rx, 0.0), arc(w, ry)];
+        Image::path(Point { x: w, y: ry }, commands, true, style)
     }
 
     pub fn circle(radius: Length, style: Style) -> Result<Self, Overflow> {
@@ -354,28 +348,23 @@ impl Image {
             let to = if i + 1 < n { vertex(i + 1) } else { first };
             pulled_edge(vertex(i), to, pull, angle)
         });
-        let commands: Box<[PathCmd]> = std::iter::once(PathCmd::move_to(first))
-            .chain(edges)
-            .collect();
-        Image::path(commands, true, style)
+        let commands: Box<[PathCmd]> = edges.collect();
+        Image::path(first, commands, true, style)
     }
 
     /// The slice of a circle of `radius` from the horizontal radius on the
     /// right to the radius at `angle` degrees. A positive angle turns
     /// counterclockwise and a negative one clockwise.
     pub fn wedge(radius: Length, angle: WedgeAngle, style: Style) -> Result<Self, Overflow> {
-        Image::path(wedge(radius, angle), true, style)
+        Image::path(Point::ORIGIN, wedge(radius, angle), true, style)
     }
 }
 
-/// The commands of a wedge with its center at the origin.
+/// The commands of a wedge that starts at its center, the origin.
 pub(super) fn wedge(radius: Length, angle: WedgeAngle) -> Vec<PathCmd> {
     let (r, angle) = (radius.get(), angle.get());
     let sweep = angle < 0.0;
-    let mut commands = vec![
-        PathCmd::move_to(Point::ORIGIN),
-        PathCmd::line_to(Point { x: r, y: 0.0 }),
-    ];
+    let mut commands = vec![PathCmd::line_to(Point { x: r, y: 0.0 })];
     if angle.abs() == 360.0 {
         // An arc that ends where it starts draws nothing, so a full
         // turn takes two halves.
@@ -407,26 +396,21 @@ pub(super) fn wedge(radius: Length, angle: WedgeAngle) -> Vec<PathCmd> {
 
 /// The path through `points`, closed when there are three or more.
 fn polygon(points: impl IntoIterator<Item = Point>, style: Style) -> Result<Image, Overflow> {
-    let (commands, closed) = polygon_commands(points);
-    Image::path(commands, closed, style)
+    let (start, commands, closed) = polygon_commands(points);
+    Image::path(start, commands, closed, style)
 }
 
-/// The commands of the path through `points`, and whether the path is
-/// closed.
-pub(super) fn polygon_commands(points: impl IntoIterator<Item = Point>) -> (Box<[PathCmd]>, bool) {
-    let commands: Box<[PathCmd]> = points
-        .into_iter()
-        .enumerate()
-        .map(|(i, p)| {
-            if i == 0 {
-                PathCmd::move_to(p)
-            } else {
-                PathCmd::line_to(p)
-            }
-        })
-        .collect();
-    let closed = commands.len() >= 3;
-    (commands, closed)
+/// The start and the commands of the path through `points`, and whether
+/// the path is closed. No points make a path with no segment, which draws
+/// nothing.
+pub(super) fn polygon_commands(
+    points: impl IntoIterator<Item = Point>,
+) -> (Point, Box<[PathCmd]>, bool) {
+    let mut points = points.into_iter();
+    let start = points.next().unwrap_or(Point::ORIGIN);
+    let commands: Box<[PathCmd]> = points.map(PathCmd::line_to).collect();
+    let closed = commands.len() >= 2;
+    (start, commands, closed)
 }
 
 /// The star polygon of [`Image::star_polygon`], for counts with no common
@@ -625,6 +609,12 @@ mod tests {
         assert!((width / 1e300 - 1.0).abs() < 1e-3, "{width}");
         let none = Image::triangle_asa(angle(90.0), length(10.0), angle(90.0), style());
         assert_eq!(none, Err(AngleSumError::AtLeast180));
+    }
+
+    #[test]
+    fn a_polygon_with_no_points_draws_nothing() {
+        let none = Image::polygon(&[], style()).unwrap();
+        assert_eq!(none.dimension(), (length(0.0), length(0.0)));
     }
 
     #[test]

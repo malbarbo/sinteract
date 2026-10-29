@@ -69,6 +69,7 @@ impl Image {
                 Node::Path { drawn: None, .. } => {}
                 Node::Path {
                     style,
+                    start,
                     commands,
                     closed,
                     ..
@@ -76,7 +77,7 @@ impl Image {
                     let style = Resolved::read(style);
                     let path = style
                         .path_style(*closed)
-                        .and_then(|s| path::draw(commands, s, pixel_point(&style, at)));
+                        .map(|s| path::draw(*start, commands, s, pixel_point(&style, at)));
                     if let Some(path) = path {
                         scene.cropped(&crop).add_path(path);
                     }
@@ -315,7 +316,7 @@ fn paint(c: Color, opacity: Option<f32>) -> Option<Paint> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::{Finite, Opacity, PathCmd, YPlace};
+    use crate::image::{Finite, Opacity, YPlace};
     use crate::scene::{Element, TextStyle};
 
     fn length(v: f64) -> Length {
@@ -461,8 +462,8 @@ mod tests {
 
     #[test]
     fn a_path_that_draws_nothing_adds_nothing() {
-        let no_move = Image::path([PathCmd::line_to(Point::ORIGIN)], false, Style::default());
-        assert!(scene(&no_move.unwrap()).elements().is_empty());
+        let no_segment = Image::path(Point::ORIGIN, [], false, Style::default());
+        assert!(scene(&no_segment.unwrap()).elements().is_empty());
     }
 
     #[test]

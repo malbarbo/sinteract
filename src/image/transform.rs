@@ -406,10 +406,12 @@ mod tests {
         // A control point can lie far outside the bounds, and the flip puts
         // it on the other side.
         let curve = Image::path(
-            [
-                PathCmd::move_to(p(0.0, 0.0)),
-                PathCmd::cubic_to(p(-1e308, 0.0), p(-1e308, 0.0), p(1e308, 0.0)),
-            ],
+            p(0.0, 0.0),
+            [PathCmd::cubic_to(
+                p(-1e308, 0.0),
+                p(-1e308, 0.0),
+                p(1e308, 0.0),
+            )],
             false,
             stroke(1.0),
         );
