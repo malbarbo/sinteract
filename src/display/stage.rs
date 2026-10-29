@@ -200,7 +200,7 @@ pub enum StageError {
     /// The terminal did not open.
     Terminal(TerminalError),
     /// Another stage of this process holds fd 3 and fd 4, or the
-    /// [`Frames`](super::Frames) already has an open stage.
+    /// [`Worlds`](super::Worlds) already has an open stage.
     Busy,
     /// The session did not start.
     Start(StartError),

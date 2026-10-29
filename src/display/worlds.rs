@@ -1,4 +1,4 @@
-//! [`Frames`], the stage of a world of a teaching language, as spython and
+//! [`Worlds`], the stage of a world of a teaching language, as spython and
 //! sgleam run it. The world keeps its own clock, shows a scene when its
 //! state changes, and reads only the keys, the pads and the close.
 
@@ -12,27 +12,27 @@ use crate::scene::Scene;
 use crate::session::FrameError;
 use crate::session::{Player, PlayerRange, Target};
 
-/// The frames of the worlds of a program, one world after another. A world
-/// of one player lets the first [`Frames::show`] open the stage. A world of
-/// several players opens the stage and takes its players with
-/// [`Frames::open`], and shows each one its scene with [`Frames::show_to`].
+/// The worlds of a program, one after another. A world of one player lets
+/// the first [`Worlds::show`] open the stage. A world of several players
+/// opens the stage and takes its players with [`Worlds::open`], and shows
+/// each one its scene with [`Worlds::show_to`].
 /// A window takes the size of the scene of its first show.
-/// [`Frames::close`] ends the stage.
+/// [`Worlds::close`] ends the stage.
 ///
 /// A show keeps the scene and draws nothing. The stage draws the scene of
 /// the last show of each player at its next tick, so a world that changes faster than the
 /// screen draws only what the screen can show, and a session sends one
 /// frame per tick of the server.
-pub struct Frames {
+pub struct Worlds {
     title: String,
     mode: Box<dyn FnMut() -> StageMode>,
     state: State,
-    /// The lines of [`Frames::print_line`] while a stage keeps rows for
+    /// The lines of [`Worlds::print_line`] while a stage keeps rows for
     /// them, at most as many as the rows.
     footer: Vec<String>,
 }
 
-/// What [`Frames::wait_event`] returns.
+/// What [`Worlds::wait_event`] returns.
 #[derive(Debug, PartialEq)]
 pub enum FrameEvent {
     Key(Player, KeyEvent),
@@ -47,7 +47,7 @@ pub enum FrameEvent {
     Timeout,
 }
 
-/// Why [`Frames::show`] showed nothing.
+/// Why [`Worlds::show`] showed nothing.
 #[derive(Debug)]
 pub enum ShowError {
     /// The stage of the world did not open, and the world goes on without
@@ -82,14 +82,14 @@ struct Open {
 /// A world has one player, the user or player 1 of the server.
 const PLAYERS: PlayerRange = PlayerRange::new(1, 1).expect("1 to 1 is a range");
 
-impl Frames {
-    /// The frames of a program, with `title` on the window, and the
+impl Worlds {
+    /// The worlds of a program, with `title` on the window, and the
     /// mode of each stage from `mode`, with the local players. The
     /// call comes when a world opens its stage, so a `mode` that calls
     /// [`StageMode::auto`] checks for a window only in a program that shows
     /// one.
     pub fn new(title: impl Into<String>, mode: impl FnMut() -> StageMode + 'static) -> Self {
-        Frames {
+        Worlds {
             title: title.into(),
             mode: Box::new(mode),
             state: State::Closed,
@@ -152,7 +152,7 @@ impl Frames {
     }
 
     /// Keep `scene` for `player` until the next tick. The world took its
-    /// players from [`Frames::open`].
+    /// players from [`Worlds::open`].
     pub fn show_to(&mut self, player: Player, scene: Scene) -> Result<(), ShowError> {
         self.keep(Target::Player(player), scene)
     }
@@ -293,9 +293,9 @@ impl std::error::Error for ShowError {
     }
 }
 
-impl std::fmt::Debug for Frames {
+impl std::fmt::Debug for Worlds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Frames")
+        f.debug_struct("Worlds")
             .field("title", &self.title)
             .field("open", &self.is_open())
             .finish_non_exhaustive()
@@ -318,11 +318,11 @@ mod tests {
         StageMode::Headless { players: None }
     }
 
-    /// Frames with the stage of a session open, as after a first show.
-    fn frames() -> (Frames, Server) {
+    /// Worlds with the stage of a session open, as after a first show.
+    fn worlds() -> (Worlds, Server) {
         let (stage, server) = session();
-        let mut frames = Frames::new("test", headless);
-        frames.state = State::Open(Open {
+        let mut worlds = Worlds::new("test", headless);
+        worlds.state = State::Open(Open {
             stage,
             players: vec![Player(NonZeroU32::MIN)],
             pending: Vec::new(),
@@ -330,15 +330,15 @@ mod tests {
             after_down: HashMap::new(),
             closed: false,
         });
-        (frames, server)
+        (worlds, server)
     }
 
     fn soon() -> Instant {
         Instant::now() + Duration::from_millis(20)
     }
 
-    fn wait(frames: &mut Frames) -> FrameEvent {
-        frames.wait_event(soon(), |e| panic!("{e}"))
+    fn wait(worlds: &mut Worlds) -> FrameEvent {
+        worlds.wait_event(soon(), |e| panic!("{e}"))
     }
 
     fn key(kind: KeyKind, name: &str) -> KeyEvent {
@@ -362,27 +362,27 @@ mod tests {
 
     #[test]
     fn a_show_goes_out_at_the_next_tick_and_only_the_last_one() {
-        let (mut frames, mut server) = frames();
-        frames.show(Scene::new(10.0, 10.0)).unwrap();
-        frames.show(Scene::new(20.0, 10.0)).unwrap();
-        assert_eq!(wait(&mut frames), FrameEvent::Timeout);
+        let (mut worlds, mut server) = worlds();
+        worlds.show(Scene::new(10.0, 10.0)).unwrap();
+        worlds.show(Scene::new(20.0, 10.0)).unwrap();
+        assert_eq!(wait(&mut worlds), FrameEvent::Timeout);
         assert!(server.read().is_empty());
         server.tick();
-        assert_eq!(wait(&mut frames), FrameEvent::Tick);
+        assert_eq!(wait(&mut worlds), FrameEvent::Tick);
         assert_eq!(widths(&server.read()), ["taken", "frame 20"]);
         server.tick();
-        assert_eq!(wait(&mut frames), FrameEvent::Tick);
+        assert_eq!(wait(&mut worlds), FrameEvent::Tick);
         assert_eq!(widths(&server.read()), ["taken"]);
     }
 
     #[test]
     fn a_show_to_a_player_goes_out_with_the_player() {
-        let (mut frames, mut server) = frames();
+        let (mut worlds, mut server) = worlds();
         let ana = Player(NonZeroU32::MIN);
-        frames.show_to(ana, Scene::new(10.0, 10.0)).unwrap();
-        frames.show_to(ana, Scene::new(20.0, 10.0)).unwrap();
+        worlds.show_to(ana, Scene::new(10.0, 10.0)).unwrap();
+        worlds.show_to(ana, Scene::new(20.0, 10.0)).unwrap();
         server.tick();
-        assert_eq!(wait(&mut frames), FrameEvent::Tick);
+        assert_eq!(wait(&mut worlds), FrameEvent::Tick);
         let players: Vec<_> = server
             .read()
             .into_iter()
@@ -397,20 +397,20 @@ mod tests {
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn a_show_opens_one_player() {
-        let mut frames = Frames::new("test", headless);
-        frames.show(Scene::new(10.0, 10.0)).unwrap();
-        assert_eq!(frames.players(), [Player(NonZeroU32::MIN)]);
-        assert_eq!(wait(&mut frames), FrameEvent::Tick);
+        let mut worlds = Worlds::new("test", headless);
+        worlds.show(Scene::new(10.0, 10.0)).unwrap();
+        assert_eq!(worlds.players(), [Player(NonZeroU32::MIN)]);
+        assert_eq!(wait(&mut worlds), FrameEvent::Tick);
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn a_show_with_more_players_in_the_options_fails() {
-        let mut frames = Frames::new("test", || StageMode::Headless {
+        let mut worlds = Worlds::new("test", || StageMode::Headless {
             players: NonZeroU32::new(2),
         });
         assert!(matches!(
-            frames.show(Scene::new(10.0, 10.0)),
+            worlds.show(Scene::new(10.0, 10.0)),
             Err(ShowError::Open(StageError::Players { .. }))
         ));
     }
@@ -418,53 +418,53 @@ mod tests {
     #[cfg(all(feature = "terminal", feature = "window"))]
     #[test]
     fn an_open_that_fails_leaves_the_world_with_no_stage() {
-        let mut frames = Frames::new("test", || StageMode::Terminal {
+        let mut worlds = Worlds::new("test", || StageMode::Terminal {
             options: crate::display::TerminalOptions::default(),
             graphics: None,
         });
         let range = PlayerRange::new(2, 4).expect("2 to 4 is a range");
         assert!(matches!(
-            frames.open(range),
+            worlds.open(range),
             Err(StageError::TerminalPlayers { .. })
         ));
-        assert!(!frames.is_open());
-        assert!(frames.players().is_empty());
+        assert!(!worlds.is_open());
+        assert!(worlds.players().is_empty());
         let ana = Player(NonZeroU32::MIN);
         assert!(matches!(
-            frames.show_to(ana, Scene::new(10.0, 10.0)),
+            worlds.show_to(ana, Scene::new(10.0, 10.0)),
             Err(ShowError::Unavailable)
         ));
     }
 
     #[test]
     fn a_second_open_is_busy_and_keeps_the_stage() {
-        let (mut frames, mut server) = frames();
-        assert!(matches!(frames.open(PLAYERS), Err(StageError::Busy)));
-        assert!(frames.is_open());
+        let (mut worlds, mut server) = worlds();
+        assert!(matches!(worlds.open(PLAYERS), Err(StageError::Busy)));
+        assert!(worlds.is_open());
         server.tick();
-        assert_eq!(wait(&mut frames), FrameEvent::Tick);
+        assert_eq!(wait(&mut worlds), FrameEvent::Tick);
     }
 
     #[test]
     fn a_show_to_with_no_stage_is_unavailable() {
-        let mut frames = Frames::new("test", headless);
-        assert!(frames.players().is_empty());
+        let mut worlds = Worlds::new("test", headless);
+        assert!(worlds.players().is_empty());
         let ana = Player(NonZeroU32::MIN);
         assert!(matches!(
-            frames.show_to(ana, Scene::new(10.0, 10.0)),
+            worlds.show_to(ana, Scene::new(10.0, 10.0)),
             Err(ShowError::Unavailable)
         ));
     }
 
     #[test]
     fn a_press_with_no_down_before_it_gives_a_down_first() {
-        let (mut frames, mut server) = frames();
+        let (mut worlds, mut server) = worlds();
         server.key(key(KeyKind::Press, "a"));
         server.key(key(KeyKind::Down, "b"));
         server.key(key(KeyKind::Press, "b"));
         server.key(key(KeyKind::Up, "b"));
         let kinds: Vec<_> = (0..5)
-            .map(|_| match wait(&mut frames) {
+            .map(|_| match wait(&mut worlds) {
                 FrameEvent::Key(_, k) => format!("{:?} {}", k.kind, k.key),
                 other => format!("{other:?}"),
             })
@@ -474,33 +474,33 @@ mod tests {
 
     #[test]
     fn a_pad_comes_out_with_its_player() {
-        let (mut frames, mut server) = frames();
+        let (mut worlds, mut server) = worlds();
         server.pad(PadEvent::Down(PadButton::A));
         assert_eq!(
-            wait(&mut frames),
+            wait(&mut worlds),
             FrameEvent::Pad(Player(NonZeroU32::MIN), PadEvent::Down(PadButton::A))
         );
     }
 
     #[test]
     fn the_end_of_the_session_closes_and_close_draws_the_last_show() {
-        let (mut frames, mut server) = frames();
-        frames.show(Scene::new(30.0, 10.0)).unwrap();
+        let (mut worlds, mut server) = worlds();
+        worlds.show(Scene::new(30.0, 10.0)).unwrap();
         server.end();
-        assert_eq!(wait(&mut frames), FrameEvent::Close);
-        assert_eq!(wait(&mut frames), FrameEvent::Close);
-        assert!(frames.close().is_empty());
-        assert!(!frames.is_open());
-        assert!(frames.players().is_empty());
+        assert_eq!(wait(&mut worlds), FrameEvent::Close);
+        assert_eq!(wait(&mut worlds), FrameEvent::Close);
+        assert!(worlds.close().is_empty());
+        assert!(!worlds.is_open());
+        assert!(worlds.players().is_empty());
         assert_eq!(widths(&server.read()), ["frame 30"]);
     }
 
     #[test]
     fn a_wait_with_no_stage_sleeps_until_the_deadline() {
-        let mut frames = Frames::new("test", headless);
+        let mut worlds = Worlds::new("test", headless);
         let deadline = soon();
         assert_eq!(
-            frames.wait_event(deadline, |e| panic!("{e}")),
+            worlds.wait_event(deadline, |e| panic!("{e}")),
             FrameEvent::Timeout
         );
         assert!(Instant::now() >= deadline);

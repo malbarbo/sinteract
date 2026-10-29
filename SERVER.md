@@ -748,7 +748,7 @@ fecha o fd 3 e o fd 4. Num build de wasi, o host mantém o fd 3 e o fd 4 abertos
 depois do `close`, e outro `Stage` pode abrir a próxima sessão da mesma
 instância. Num processo nativo, a sessão é uma só.
 
-O `display::Frames` é o `Stage` de um mundo de uma linguagem de ensino,
+O `display::Worlds` é o `Stage` de um mundo de uma linguagem de ensino,
 como o do spython e do sgleam. O mundo guarda o próprio relógio, o
 `show` guarda a cena, que sai no próximo `Tick`. O `wait_event` devolve
 as teclas e os pads, cada um com o seu jogador, o fechamento e o `Tick`,
@@ -758,9 +758,9 @@ mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
 vários jogadores abre o stage com o `open`, que devolve cada jogador com
 o apelido, e manda a cena de cada um com o `show_to`. Um `open` com o
 stage de outro mundo aberto falha com o `StageError::Busy` e deixa esse
-stage como está. Os jogadores locais vêm só do `StageMode` da função que o `Frames::new` recebe, tanto
+stage como está. Os jogadores locais vêm só do `StageMode` da função que o `Worlds::new` recebe, tanto
 no `open` quanto no `show`, que falha com o `StageError::Players` quando
-ele pede mais de um. O `Frames` chama a função quando um mundo abre o
+ele pede mais de um. O `Worlds` chama a função quando um mundo abre o
 stage, então um programa que não mostra nada não monta o event loop das
 janelas. A janela de cada jogador ganha o tamanho da cena do primeiro
 `show_to`. O `players` dá os jogadores do mundo. Com o

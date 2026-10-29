@@ -13,7 +13,7 @@
 //! in a winit window. `headless` ticks and draws nothing, for a stage with
 //! no display. [`Stage`] runs a game on one of them, or in a
 //! [`crate::session::Session`] with a server, with the same loop, and
-//! [`Frames`] runs the world of a teaching language on a stage.
+//! [`Worlds`] runs the world of a teaching language on a stage.
 //!
 //! The feature `terminal` carries the terminal and the feature `window` the
 //! window, and `open_native` needs both. An engine on wasi has neither, and
@@ -33,9 +33,9 @@ mod sixel;
 #[cfg(all(feature = "window", target_os = "macos"))]
 mod display_link;
 mod driver;
-mod frames;
 #[cfg(any(feature = "terminal", feature = "window"))]
 mod headless;
+mod worlds;
 // A build with no display of its own keeps only `Sender`, for the type of
 // `Display::sender`.
 #[cfg_attr(not(any(feature = "terminal", feature = "window")), allow(dead_code))]
@@ -57,7 +57,6 @@ pub mod window;
 pub use driver::{Display, NoGraphics, PresentError, TerminalError, WindowError};
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub use driver::{NativeError, open_native};
-pub use frames::{FrameEvent, Frames, ShowError};
 pub use inbox::{SendError, Sender};
 pub use stage::{
     MAX_LOCAL_PLAYERS, Stage, StageError, StageEvent, StageMode, StagePresentError,
@@ -67,3 +66,4 @@ pub use stage::{
 pub use terminal::{PrintError, Printer, Terminal};
 #[cfg(feature = "window")]
 pub use window::Window;
+pub use worlds::{FrameEvent, ShowError, Worlds};
