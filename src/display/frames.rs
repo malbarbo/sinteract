@@ -6,9 +6,10 @@ use std::collections::{HashMap, VecDeque};
 use std::thread;
 use std::time::Instant;
 
-use super::{PresentError, Stage, StageError, StageEvent, StageMode};
+use super::{PresentError, Stage, StageError, StageEvent, StageMode, StagePresentError};
 use crate::event::{InputEvent, KeyEvent, KeyKind, PadEvent};
 use crate::scene::Scene;
+use crate::session::FrameError;
 use crate::session::{Player, PlayerRange, Target};
 
 /// The frames of the worlds of a program, one world after another. A world
@@ -250,7 +251,9 @@ impl Open {
         for (target, scene) in std::mem::take(&mut self.pending) {
             if let Err(e) = self.stage.present(target, scene) {
                 on_error(&e);
-                if let PresentError::Io(_) = e {
+                if let StagePresentError::Display(PresentError::Io(_))
+                | StagePresentError::Session(FrameError::Io(_)) = e
+                {
                     self.closed = true;
                     break;
                 }

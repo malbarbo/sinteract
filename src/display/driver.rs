@@ -7,11 +7,9 @@ use std::num::NonZeroU32;
 use std::time::Instant;
 
 use super::inbox::Sender;
-use crate::asset::RoomFull;
 use crate::event::Event;
 use crate::renderer::AllocError;
 use crate::scene::Scene;
-use crate::session::Player;
 
 /// A session that shows scenes and delivers events. Opening is the
 /// constructor of the implementation, and the session ends at drop:
@@ -87,18 +85,10 @@ pub(super) mod sealed {
 pub enum PresentError {
     /// Rasterizing the scene failed.
     Alloc(AllocError),
-    /// A write to the terminal or to the server failed. Part of the frame
-    /// may have arrived.
+    /// A write to the terminal failed. Part of the frame may have arrived.
     Io(io::Error),
     /// The surface of the window refused the frame.
     Platform(String),
-    /// The images of the frame go over the limits of a room together. Only
-    /// a [`super::Stage`] in a session refuses such a frame, and nothing
-    /// went out.
-    Full(RoomFull),
-    /// The frame goes to a player that the [`super::Stage`] does not have,
-    /// such as a player of an earlier stage, and nothing went out.
-    NoPlayer(Player),
 }
 
 impl fmt::Display for PresentError {
@@ -107,10 +97,6 @@ impl fmt::Display for PresentError {
             PresentError::Alloc(e) => write!(f, "cannot draw the scene: {e}"),
             PresentError::Io(e) => write!(f, "cannot show the frame: {e}"),
             PresentError::Platform(e) => write!(f, "cannot show the frame: {e}"),
-            PresentError::Full(e) => e.fmt(f),
-            PresentError::NoPlayer(player) => {
-                write!(f, "the stage has no player {}", player.number())
-            }
         }
     }
 }
@@ -120,8 +106,7 @@ impl std::error::Error for PresentError {
         match self {
             PresentError::Alloc(e) => Some(e),
             PresentError::Io(e) => Some(e),
-            PresentError::Full(e) => Some(e),
-            PresentError::Platform(_) | PresentError::NoPlayer(_) => None,
+            PresentError::Platform(_) => None,
         }
     }
 }

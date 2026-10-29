@@ -216,10 +216,9 @@ impl Window {
     }
 
     /// Show `scene` in the window of each player of `to`, where player k
-    /// has seat k - 1, and fail with [`PresentError::NoPlayer`] for a
-    /// player with no window. A draw that fails goes to
-    /// [`Window::take_failed`].
-    pub(crate) fn present_to(&mut self, to: Target, scene: Rc<Scene>) -> Result<(), PresentError> {
+    /// has seat k - 1. A player with no window gets nothing. A draw that
+    /// fails goes to [`Window::take_failed`].
+    pub(crate) fn present_to(&mut self, to: Target, scene: Rc<Scene>) {
         let active = &mut self.active;
         let several = active.seats.len() > 1;
         let failed = &mut self.failed;
@@ -236,17 +235,15 @@ impl Window {
             }
             Target::Player(player) => {
                 let seat = player.number().get() as usize - 1;
-                let Some(target) = active.seats.get_mut(seat) else {
-                    return Err(PresentError::NoPlayer(player));
-                };
-                keep(seat, target, scene);
+                if let Some(target) = active.seats.get_mut(seat) {
+                    keep(seat, target, scene);
+                }
             }
         }
         // The new scene makes a redraw of this window stale.
         if !active.seats.iter().any(|seat| seat.app.dirty) {
             self.inbox.take_redraw();
         }
-        Ok(())
     }
 
     /// The first draw that failed since the last call, in a present, at a
@@ -291,7 +288,7 @@ impl super::Display for Window {
     /// Draw `scene`. A draw that failed since the last present, at a
     /// frame callback or at a redraw, fails this one too.
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        self.present_to(Target::All, Rc::new(scene))?;
+        self.present_to(Target::All, Rc::new(scene));
         self.take_failed()
     }
 

@@ -156,6 +156,40 @@ impl StageMode {
 /// own.
 pub const MAX_LOCAL_PLAYERS: u32 = 8;
 
+/// Why a frame of [`Stage::present`] did not go out.
+#[derive(Debug)]
+pub enum StagePresentError {
+    /// The display failed to show the frame.
+    Display(PresentError),
+    /// The session did not write the frame.
+    Session(FrameError),
+    /// The frame goes to a player that the stage does not have, such as a
+    /// player of an earlier stage, and nothing went out.
+    NoPlayer(Player),
+}
+
+impl fmt::Display for StagePresentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StagePresentError::Display(e) => e.fmt(f),
+            StagePresentError::Session(e) => e.fmt(f),
+            StagePresentError::NoPlayer(player) => {
+                write!(f, "the stage has no player {}", player.number())
+            }
+        }
+    }
+}
+
+impl std::error::Error for StagePresentError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StagePresentError::Display(e) => Some(e),
+            StagePresentError::Session(e) => Some(e),
+            StagePresentError::NoPlayer(_) => None,
+        }
+    }
+}
+
 /// Why [`Stage::open`] did not open a stage.
 #[derive(Debug)]
 pub enum StageError {
@@ -314,33 +348,32 @@ impl Stage {
     }
 
     /// Show `scene` to `to`. A player that the stage does not have fails
-    /// with [`PresentError::NoPlayer`], here and in a session. A window of
+    /// with [`StagePresentError::NoPlayer`], here and in a session. A window of
     /// each player shows the last frame to all or to that player at the
     /// next wait. A draw of a window that fails after a present, at the
     /// wait, at a frame callback or at a redraw, fails the next present,
     /// which still keeps its scene. A session writes the frame, with each
     /// image that the server does not have, and still writes after the
     /// end of the stream of the server, so the views get the last frames.
-    pub fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
+    pub fn present(&mut self, to: Target, scene: Scene) -> Result<(), StagePresentError> {
         let has_player = || match to {
             Target::Player(player) if player.number() > self.players => {
-                Err(PresentError::NoPlayer(player))
+                Err(StagePresentError::NoPlayer(player))
             }
             _ => Ok(()),
         };
         match &mut self.inner {
             Inner::Local(display) => {
                 has_player()?;
-                display.present(scene)
+                display.present(scene).map_err(StagePresentError::Display)
             }
             #[cfg(feature = "window")]
             Inner::Players(players) => players.present(to, scene),
             Inner::Remote(remote) => {
                 has_player()?;
-                remote.session.write_frame(to, &scene).map_err(|e| match e {
-                    FrameError::Full(e) => PresentError::Full(e),
-                    FrameError::Io(e) => PresentError::Io(e),
-                })
+                (remote.session)
+                    .write_frame(to, &scene)
+                    .map_err(StagePresentError::Session)
             }
         }
     }
@@ -572,9 +605,11 @@ impl Players {
     /// Keep `scene` for the seats of `to` until the next wait. A draw
     /// that failed since the last present fails this one, which still
     /// keeps `scene`.
-    fn present(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
+    fn present(&mut self, to: Target, scene: Scene) -> Result<(), StagePresentError> {
         self.pending.keep(to, scene)?;
-        self.window.take_failed()
+        self.window
+            .take_failed()
+            .map_err(StagePresentError::Display)
     }
 
     /// Draw the scenes that wait, and block until the next event.
@@ -584,9 +619,7 @@ impl Players {
             let pending = &mut self.pending;
             let seated = self.window.wait_seated(deadline, |window| {
                 pending.draw(|player, scene| {
-                    // Pending has the players of the window, and a closed window
-                    // ends the wait with Close.
-                    let _ = window.present_to(Target::Player(player), scene);
+                    window.present_to(Target::Player(player), scene);
                 });
             });
             return Ok(match seated? {
@@ -624,14 +657,14 @@ impl Pending {
 
     /// Keep `scene` for the players of `to`, in place of the scene that
     /// each one had.
-    fn keep(&mut self, to: Target, scene: Scene) -> Result<(), PresentError> {
+    fn keep(&mut self, to: Target, scene: Scene) -> Result<(), StagePresentError> {
         let scene = Rc::new(scene);
         match to {
             Target::All => self.scenes.fill(Some(scene)),
             Target::Player(player) => {
                 let seat = player.number().get() as usize - 1;
                 let Some(pending) = self.scenes.get_mut(seat) else {
-                    return Err(PresentError::NoPlayer(player));
+                    return Err(StagePresentError::NoPlayer(player));
                 };
                 *pending = Some(scene);
             }
@@ -1021,7 +1054,7 @@ pub(super) mod tests {
         let other = Player(NonZeroU32::new(2).unwrap());
         assert!(matches!(
             stage.present(Target::Player(other), Scene::new(10.0, 10.0)),
-            Err(PresentError::NoPlayer(p)) if p == other
+            Err(StagePresentError::NoPlayer(p)) if p == other
         ));
         assert!(server.read().is_empty());
     }
@@ -1174,7 +1207,7 @@ pub(super) mod tests {
         let third = Player(NonZeroU32::new(3).expect("3 is not zero"));
         assert!(matches!(
             pending.keep(Target::Player(third), Scene::new(3.0, 1.0)),
-            Err(PresentError::NoPlayer(p)) if p == third
+            Err(StagePresentError::NoPlayer(p)) if p == third
         ));
         assert_eq!(drawn(&mut pending), []);
     }

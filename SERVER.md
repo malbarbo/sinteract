@@ -280,8 +280,9 @@ que chegaram depois do último frame é perdido na hora.
 A engine não cuida disso. O `Session::write_frame` manda cada imagem uma
 vez, antes do primeiro frame que a desenha, e manda de novo, com outro `id`,
 uma imagem que o servidor perdeu. Um frame cujas imagens juntas passam dos
-limites não sai (`FrameError::Full`, ou `PresentError::Full` no `Stage`),
-porque o servidor perderia uma delas a cada frame. O front end carrega
+limites não sai (`FrameError::Full`, que o `Stage` devolve dentro do
+`StagePresentError::Session`), porque o servidor perderia uma delas a
+cada frame. O front end carrega
 cada imagem uma vez com `Image::load`, que reduz uma imagem acima de
 2048×2048 pixels, e guarda a `Image`.
 
@@ -689,7 +690,7 @@ todos seguida de uma para um jogador no mesmo tick mostra a dele. Um
 desenho de janela que falha depois de um `present`, no `wait`, num frame
 callback ou num redraw, faz falhar o `present` seguinte, que guarda a
 cena mesmo assim. Um `present` para um jogador que o `Stage` não tem
-devolve `PresentError::NoPlayer`, tanto aqui quanto numa sessão, e nada
+devolve `StagePresentError::NoPlayer`, tanto aqui quanto numa sessão, e nada
 sai:
 
 ```rust
