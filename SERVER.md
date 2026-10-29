@@ -709,7 +709,7 @@ let (mut stage, jogadores) = Stage::open("jogo", players, mode)?;
 mundo.start(&jogadores); // cada Player com o apelido, o jogador 1 primeiro
 loop {
     match stage.wait(None)? { // o fd 3 quebrou ou o fd 4 falhou
-        StageEvent::Tick => {
+        StageEvent::Frame => {
             mundo.on_tick(1000.0 / stage.frame_rate().millihertz().get() as f32); // segundos por tick
             for (p, _) in &jogadores {
                 stage.present(Target::Player(*p), mundo.cena_de(*p))?;
@@ -724,10 +724,10 @@ loop {
 stage.close(); // fecha o fd 3 e o fd 4, e a sala acaba
 ```
 
-O `Tick` vem só do `tick` do servidor, e o `Stage` escreve o `tickTaken`
-no fd 4 antes de entregar o `Tick`. O servidor manda `tick` antes de a
+O `Frame` vem só do `tick` do servidor, e o `Stage` escreve o `tickTaken`
+no fd 4 antes de entregar o `Frame`. O servidor manda `tick` antes de a
 view conectar, então o `resize` de um jogador pode chegar depois de vários
-`Tick`. Numa janela, o `resize` vem antes do primeiro `Tick`, e um jogo que
+`Frame`. Numa janela, o `resize` vem antes do primeiro `Frame`, e um jogo que
 conta com isso passa no teste local e quebra no servidor. Um movimento do mouse ou um `resize`
 que ainda não foi lido é substituído pelo mais novo do mesmo jogador, sem
 passar por cima da entrada de outro jogador. A sessão guarda os `lost` do
@@ -737,7 +737,7 @@ devolve o erro dela, como devolve o de uma leitura do fd 3 que falha.
 Depois de um erro, todo `wait` devolve `Close`. O
 `frame_rate` dá a taxa do `start` numa sessão, e a taxa do monitor numa
 janela, que muda quando a janela passa para outro monitor. Por isso o
-jogo lê a taxa de novo a cada `Tick`. O `examples/engine.rs` do
+jogo lê a taxa de novo a cada `Frame`. O `examples/engine.rs` do
 `sinteract` é uma engine completa.
 
 O `wait` respeita o prazo também numa sessão. Ele espera o fd 3 até o
@@ -750,10 +750,10 @@ instância. Num processo nativo, a sessão é uma só.
 
 O `display::Worlds` é o `Stage` de um mundo de uma linguagem de ensino,
 como o do spython e do sgleam. O mundo guarda o próprio relógio, o
-`show` guarda a cena, que sai no próximo `Tick`. O `wait` devolve
-as teclas e os pads, cada um com o seu jogador, o fechamento e o `Tick`,
-depois de mandar as cenas guardadas. Um mundo que desenha só no `Tick`
-mostra a cena no tick seguinte, com um quadro de atraso. Um
+`show` guarda a cena, que sai no próximo `Frame`. O `wait` devolve
+as teclas e os pads, cada um com o seu jogador, o fechamento e o `Frame`,
+depois de mandar as cenas guardadas. Um mundo que desenha só no `Frame`
+mostra a cena no `Frame` seguinte, com um quadro de atraso. Um
 mundo de um jogador deixa o primeiro `show` abrir o stage. Um mundo de
 vários jogadores abre o stage com o `open`, que devolve cada jogador com
 o apelido, e manda a cena de cada um com o `show_to`. Um `open` com o
@@ -765,7 +765,7 @@ stage, então um programa que não mostra nada não monta o event loop das
 janelas. A janela de cada jogador ganha o tamanho da cena do primeiro
 `show_to`. O `players` dá os jogadores do mundo. Com o
 `StageMode::Headless`, o stage abre sem tela, como num teste. Ele dá um
-`Tick` a 60 Hz e não desenha nada, e os jogadores vêm do `players` dele
+`Frame` a 60 Hz e não desenha nada, e os jogadores vêm do `players` dele
 como numa janela.
 Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
 `ShowError::Unavailable`, e o `wait` dorme até o prazo.

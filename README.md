@@ -62,7 +62,7 @@ player 1. A window takes the size of the scene of its first present:
 let (mut stage, _players) = Stage::open("My game", players, options)?;
 loop {
     match stage.wait(None)? {
-        StageEvent::Tick => stage.present(Target::All, draw())?,
+        StageEvent::Frame => stage.present(Target::All, draw())?,
         StageEvent::Input { player, event } => update(player, event),
         StageEvent::Error(e) => eprintln!("{e}"),
         StageEvent::Timeout => {}

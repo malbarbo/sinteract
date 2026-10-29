@@ -67,15 +67,15 @@ mod tests {
     fn ticks_and_takes_a_scene() {
         let mut display = Headless::new();
         let deadline = Instant::now() + Duration::from_secs(1);
-        assert!(matches!(display.wait(Some(deadline)), Ok(Event::Tick)));
-        assert!(matches!(display.wait(Some(deadline)), Ok(Event::Tick)));
+        assert!(matches!(display.wait(Some(deadline)), Ok(Event::Frame)));
+        assert!(matches!(display.wait(Some(deadline)), Ok(Event::Frame)));
         assert!(display.present(Scene::new(10.0, 10.0)).is_ok());
     }
 
     #[test]
     fn a_deadline_before_the_tick_times_out() {
         let mut display = Headless::new();
-        assert!(matches!(display.wait(None), Ok(Event::Tick)));
+        assert!(matches!(display.wait(None), Ok(Event::Frame)));
         assert!(matches!(
             display.wait(Some(Instant::now())),
             Ok(Event::Timeout)

@@ -1,13 +1,13 @@
 //! The events that a display delivers.
 //!
 //! Every display turns its input into the same [`InputEvent`] stream, adds
-//! a [`Event::Tick`] at each frame, and the engine loop blocks on `wait`
+//! a [`Event::Frame`] at each frame, and the engine loop blocks on `wait`
 //! and dispatches:
 //!
 //! ```text
 //! loop {
 //!     match display.wait(deadline)? {
-//!         Event::Tick => on_tick(),
+//!         Event::Frame => on_frame(),
 //!         Event::Input(InputEvent::Key(k)) => on_key(k),
 //!         Event::Input(InputEvent::Mouse(m)) => on_mouse(m),
 //!         Event::Input(InputEvent::Resize { width, height }) => on_resize(width, height),
@@ -19,9 +19,9 @@
 //! }
 //! ```
 //!
-//! The display decides when a `Tick` arrives, with a timer in the
+//! The display decides when a `Frame` arrives, with a timer in the
 //! terminal and in the window and rAF in the browser. In a session, the
-//! tick of the server arrives as a `SessionEvent::Tick`. The engine
+//! tick of the server arrives as a `SessionEvent::Frame`. The engine
 //! derives a simulation tick from the time between two.
 
 /// What happened, as `wait` delivers it.
@@ -30,7 +30,7 @@ pub enum Event {
     /// From the user or the platform.
     Input(InputEvent),
     /// Time for the next frame.
-    Tick,
+    Frame,
     /// A `Sender` woke the wait, with no data.
     Wake,
     /// The deadline passed with nothing to deliver.

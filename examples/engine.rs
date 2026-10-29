@@ -60,7 +60,7 @@ fn main() -> ExitCode {
     };
     loop {
         match stage.wait(None) {
-            Ok(StageEvent::Tick) => {
+            Ok(StageEvent::Frame) => {
                 game.tick(stage.frame_rate());
                 if let Err(e) = stage.present(Target::All, game.scene()) {
                     eprintln!("engine: {e}");

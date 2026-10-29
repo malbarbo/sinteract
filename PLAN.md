@@ -154,11 +154,11 @@ exemplo em Tokio.
 
 ## Loop e ritmo
 
-`Display::wait(deadline)` devolve um `Event` (`Input`, `Tick`, `Wake`,
-`Timeout` ou `Close`), ou o erro de uma leitura que falhou. O ritmo vem de um evento `Tick` na
-fila. O terminal e a janela fazem o próprio `Tick`, e a `Session` recebe o
+`Display::wait(deadline)` devolve um `Event` (`Input`, `Frame`, `Wake`,
+`Timeout` ou `Close`), ou o erro de uma leitura que falhou. O ritmo vem de um evento `Frame` na
+fila. O terminal e a janela fazem o próprio `Frame`, e a `Session` recebe o
 `tick` do servidor, que marca o ritmo de todos os jogadores, porque cada
-view tem o seu ritmo. O `Tick` é um `Event` e não um `InputEvent`, então a
+view tem o seu ritmo. O `Frame` é um `Event` e não um `InputEvent`, então a
 entrada de um jogador não carrega um. O loop do aluno é o mesmo em todos os modos:
 
 ```python
@@ -191,7 +191,7 @@ engine não fala de um jogador que não está no jogo. A sessão fica com o
 `Read` e o
 `Write` da sessão, como os descritores 3 e 4, e tudo que a engine manda ao
 servidor passa por ela. O `wait` devolve os eventos com o jogador, sempre com no
-máximo um `Tick` na fila, e o `write_frame` manda o frame, com cada imagem
+máximo um `Frame` na fila, e o `write_frame` manda o frame, com cada imagem
 nova antes.
 O `Stage` junta os dois modos num loop só. Com o `StageMode::Session`,
 que o subcomando `server` e o build de wasi pedem, o `Stage::open` abre a

@@ -134,7 +134,7 @@ enum Entry {
     /// The input of a seat.
     Input(u32, InputEvent),
     /// Only the clock of the display queues it.
-    Tick,
+    Frame,
     Wake,
     #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     Read(io::Error),
@@ -144,7 +144,7 @@ enum Entry {
 /// An event of [`Inbox::next`], with the seat of an input.
 #[derive(Debug)]
 pub(crate) enum Seated {
-    Tick,
+    Frame,
     Input(
         #[cfg_attr(not(feature = "window"), allow(dead_code))] u32,
         InputEvent,
@@ -158,7 +158,7 @@ pub(crate) enum Seated {
 impl From<Seated> for Event {
     fn from(seated: Seated) -> Self {
         match seated {
-            Seated::Tick => Event::Tick,
+            Seated::Frame => Event::Frame,
             Seated::Input(_, event) => Event::Input(event),
             Seated::Wake => Event::Wake,
             Seated::Timeout => Event::Timeout,
@@ -278,12 +278,12 @@ impl Inbox {
             return Some(Ok(Seated::Close));
         };
         queue.receive_all();
-        if !queue.pending.iter().any(|e| matches!(e, Entry::Tick)) && clock.take_due(now) {
-            queue.pending.push_back(Entry::Tick);
+        if !queue.pending.iter().any(|e| matches!(e, Entry::Frame)) && clock.take_due(now) {
+            queue.pending.push_back(Entry::Frame);
         }
         Some(match queue.pending.pop_front()? {
             Entry::Input(seat, ev) => Ok(Seated::Input(seat, ev)),
-            Entry::Tick => Ok(Seated::Tick),
+            Entry::Frame => Ok(Seated::Frame),
             Entry::Wake => Ok(Seated::Wake),
             Entry::Read(e) => {
                 self.close();
@@ -367,7 +367,7 @@ mod tests {
     }
 
     fn is_tick(ready: &io::Result<Event>) -> bool {
-        matches!(ready, Ok(Event::Tick))
+        matches!(ready, Ok(Event::Frame))
     }
 
     fn is_close(ready: &io::Result<Event>) -> bool {

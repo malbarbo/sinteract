@@ -55,7 +55,7 @@ fn main() -> ExitCode {
     let mut game = Game::new(&players);
     loop {
         match stage.wait(None) {
-            Ok(StageEvent::Tick) => {
+            Ok(StageEvent::Frame) => {
                 game.tick(stage.frame_rate());
                 for square in &game.squares {
                     let scene = game.scene_for(square.player);

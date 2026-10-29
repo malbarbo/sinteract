@@ -33,7 +33,7 @@ use crate::session::{
 /// let (mut stage, _players) = Stage::open("My game", players, mode)?;
 /// loop {
 ///     match stage.wait(None)? {
-///         StageEvent::Tick => stage.present(Target::All, Scene::new(400.0, 300.0))?,
+///         StageEvent::Frame => stage.present(Target::All, Scene::new(400.0, 300.0))?,
 ///         StageEvent::Input { player, event } => {}
 ///         StageEvent::Error(e) => eprintln!("{e}"),
 ///         StageEvent::Timeout => {}
@@ -54,7 +54,7 @@ pub struct Stage {
 #[derive(Debug)]
 pub enum StageEvent {
     /// Time to draw the next frames, for every player.
-    Tick,
+    Frame,
     /// The input of `player`.
     Input { player: Player, event: InputEvent },
     /// The session dropped a message that broke a rule, and goes on. Only
@@ -332,7 +332,7 @@ impl Stage {
         match &mut self.inner {
             Inner::Local(display) => loop {
                 return Ok(match display.wait(deadline)? {
-                    Event::Tick => StageEvent::Tick,
+                    Event::Frame => StageEvent::Frame,
                     Event::Input(event) => StageEvent::Input {
                         player: Player::LOCAL,
                         event,
@@ -625,7 +625,7 @@ impl Players {
                 });
             });
             return Ok(match seated? {
-                Seated::Tick => StageEvent::Tick,
+                Seated::Frame => StageEvent::Frame,
                 Seated::Input(seat, event) => StageEvent::Input {
                     player: Player(NonZeroU32::MIN.saturating_add(seat)),
                     event,
@@ -711,7 +711,7 @@ impl Remote {
         self.deadline.at.set(None);
         let passed = self.deadline.passed.take();
         match event {
-            Ok(SessionEvent::Tick) => Ok(StageEvent::Tick),
+            Ok(SessionEvent::Frame) => Ok(StageEvent::Frame),
             Ok(SessionEvent::Input { player, event }) => Ok(StageEvent::Input { player, event }),
             Ok(SessionEvent::Error(e)) => Ok(StageEvent::Error(e)),
             Ok(SessionEvent::End) => {
@@ -1046,7 +1046,7 @@ pub(super) mod tests {
         ));
         assert!(Instant::now() >= deadline);
         server.tick();
-        assert!(matches!(stage.wait(Some(deadline)), Ok(StageEvent::Tick)));
+        assert!(matches!(stage.wait(Some(deadline)), Ok(StageEvent::Frame)));
         assert!(matches!(server.read()[..], [testing::Message::TickTaken]));
     }
 
@@ -1069,7 +1069,7 @@ pub(super) mod tests {
             std::thread::sleep(Duration::from_millis(20));
             server_to_engine::write_tick(&mut to_engine).unwrap();
         });
-        assert!(matches!(stage.wait(None), Ok(StageEvent::Tick)));
+        assert!(matches!(stage.wait(None), Ok(StageEvent::Frame)));
         writer.join().unwrap();
         assert!(matches!(stage.wait(None), Ok(StageEvent::Close)));
     }
@@ -1084,7 +1084,7 @@ pub(super) mod tests {
         let (mut stage, players) = Stage::open("test", range, mode).unwrap();
         let numbers: Vec<_> = players.iter().map(|(p, _)| p.number().get()).collect();
         assert_eq!(numbers, [1, 2]);
-        assert!(matches!(stage.wait(None), Ok(StageEvent::Tick)));
+        assert!(matches!(stage.wait(None), Ok(StageEvent::Frame)));
         let ana = Player(NonZeroU32::MIN);
         assert!(
             stage

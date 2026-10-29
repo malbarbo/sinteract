@@ -141,7 +141,7 @@ fn run(mut display: Box<dyn Display>) -> Result<(), String> {
     let mut presenting = std::time::Duration::ZERO;
     loop {
         match display.wait(None) {
-            Ok(Event::Tick) => {
+            Ok(Event::Frame) => {
                 let scene = gallery(start.elapsed().as_secs_f32());
                 let before = Instant::now();
                 display.present(scene).map_err(|e| e.to_string())?;
@@ -206,7 +206,7 @@ fn stage() -> Result<(), String> {
         Stage::open("sinteract gallery", players, mode).map_err(|e| e.to_string())?;
     loop {
         match stage.wait(None) {
-            Ok(StageEvent::Tick) => stage
+            Ok(StageEvent::Frame) => stage
                 .present(Target::All, gallery(STILL))
                 .map_err(|e| e.to_string())?,
             Ok(StageEvent::Input { .. } | StageEvent::Timeout) => {}

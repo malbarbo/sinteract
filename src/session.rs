@@ -157,7 +157,7 @@ impl PlayerRange {
 #[derive(Debug)]
 pub enum SessionEvent {
     /// Time to draw the next frames, for every player.
-    Tick,
+    Frame,
     /// The input of `player`.
     Input { player: Player, event: InputEvent },
     /// The session dropped a message that broke a rule, and goes on.
@@ -363,7 +363,7 @@ impl<R: Read, W: Write> Session<R, W> {
     pub fn wait(&mut self) -> io::Result<SessionEvent> {
         loop {
             if let Some(event) = self.events.pop_front() {
-                if matches!(event, SessionEvent::Tick) {
+                if matches!(event, SessionEvent::Frame) {
                     let written = writer(&mut self.w).and_then(|w| {
                         engine_to_server::write_tick_taken(w)?;
                         w.flush()
@@ -500,7 +500,7 @@ impl<R: Read, W: Write> Session<R, W> {
     /// Turn `message` into an event.
     fn receive(&mut self, message: Message) {
         let event = match message {
-            Message::Tick => SessionEvent::Tick,
+            Message::Tick => SessionEvent::Frame,
             // The next frame that draws the image sends it again, with a new
             // id, as the schema says.
             Message::Lost(id) => {
@@ -520,8 +520,8 @@ impl<R: Read, W: Write> Session<R, W> {
     /// `event` replaces.
     fn push(&mut self, event: SessionEvent) {
         match &event {
-            SessionEvent::Tick => {
-                if self.events.iter().any(|e| matches!(e, SessionEvent::Tick)) {
+            SessionEvent::Frame => {
+                if self.events.iter().any(|e| matches!(e, SessionEvent::Frame)) {
                     return;
                 }
             }
@@ -546,7 +546,7 @@ impl<R: Read, W: Write> Session<R, W> {
                     return new.supersedes(event).then_some(old);
                 }
                 SessionEvent::Input { .. } => {}
-                SessionEvent::Tick | SessionEvent::Error(_) | SessionEvent::End => return None,
+                SessionEvent::Frame | SessionEvent::Error(_) | SessionEvent::End => return None,
             }
         }
         None
@@ -750,7 +750,7 @@ mod tests {
                     names.push("end".into());
                     break;
                 }
-                Ok(SessionEvent::Tick) => "tick".into(),
+                Ok(SessionEvent::Frame) => "tick".into(),
                 Ok(SessionEvent::Input { player, event }) => match (player.number(), event) {
                     (player, InputEvent::Key(k)) => format!("{player} key {}", k.key),
                     (player, InputEvent::Mouse(m)) => format!("{player} move {}", m.x),
@@ -1017,7 +1017,7 @@ mod tests {
                 wire::Error::NoPlayer
             )))
         ));
-        assert!(matches!(next(&mut session), Some(SessionEvent::Tick)));
+        assert!(matches!(next(&mut session), Some(SessionEvent::Frame)));
     }
 
     #[test]
@@ -1114,7 +1114,7 @@ mod tests {
         let (mut session, _) = Session::start(players(), r, io::sink()).unwrap();
         let e = session.wait().expect_err("the error of the reader");
         assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
-        assert!(matches!(session.wait(), Ok(SessionEvent::Tick)));
+        assert!(matches!(session.wait(), Ok(SessionEvent::Frame)));
         assert!(matches!(session.wait(), Ok(SessionEvent::End)));
         assert!(matches!(session.wait(), Ok(SessionEvent::End)));
     }
@@ -1127,7 +1127,7 @@ mod tests {
         let (mut session, _) =
             Session::start(players(), &stream[..], io::BufWriter::new(engine.clone())).unwrap();
         engine.drain();
-        assert!(matches!(session.wait(), Ok(SessionEvent::Tick)));
+        assert!(matches!(session.wait(), Ok(SessionEvent::Frame)));
         assert!(matches!(
             testing::read(&mut &engine.drain()[..]),
             Ok(Some(testing::Message::TickTaken))

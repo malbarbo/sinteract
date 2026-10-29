@@ -71,7 +71,7 @@ fn main() -> ExitCode {
         match display.wait(None) {
             // The server keeps the time, so the ticks of the display go
             // nowhere.
-            Ok(Event::Tick) => {}
+            Ok(Event::Frame) => {}
             Ok(Event::Input(ev)) => {
                 if to_net.send(encode_input(&ev)).is_err() {
                     break;

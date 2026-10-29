@@ -100,7 +100,7 @@ fn main() -> ExitCode {
         }
         match event {
             // The room keeps its own time.
-            Ok(Event::Tick) => {}
+            Ok(Event::Frame) => {}
             Ok(Event::Input(ev)) => core.input(conn, &ev),
             // The bytes of the engine come through the channel, and the
             // reader thread wakes the loop after each read.

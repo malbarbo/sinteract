@@ -24,7 +24,7 @@ use crate::session::FrameRate;
 /// # fn run(display: &mut dyn Display) -> Result<(), Box<dyn std::error::Error>> {
 /// loop {
 ///     match display.wait(None)? {
-///         Event::Tick => display.present(next_scene())?,
+///         Event::Frame => display.present(next_scene())?,
 ///         Event::Input(InputEvent::Key(k)) => on_key(k),
 ///         Event::Input(InputEvent::Mouse(m)) => on_mouse(m),
 ///         Event::Input(InputEvent::Resize { .. } | InputEvent::Pad(_)) => {}

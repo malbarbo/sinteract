@@ -40,9 +40,10 @@ pub enum WorldEvent {
     /// The user closed the display, or the server ended the session. Every
     /// wait after it returns Close too, until the next world.
     Close,
-    /// The stage ticked, and the scenes of the shows before it went out. A
-    /// scene that the world shows now goes out at the next tick.
-    Tick,
+    /// The stage started a frame, and the scenes of the shows before it
+    /// went out. A scene that the world shows now goes out at the next
+    /// frame.
+    Frame,
     /// The deadline passed first.
     Timeout,
 }
@@ -166,8 +167,8 @@ impl Worlds {
         Ok(())
     }
 
-    /// Wait until a key, a pad, a tick, the close or `deadline`. The scene
-    /// of the last show goes out at the tick. The mouse and a resize
+    /// Wait until a key, a pad, a frame, the close or `deadline`. The scene
+    /// of the last show goes out at the frame. The mouse and a resize
     /// never come out. A terminal that sends a press with no down before
     /// it gives a down and then the press, since a world reads a down as
     /// the start of a key. With no stage open, it sleeps until
@@ -192,9 +193,9 @@ impl Worlds {
                 return WorldEvent::Close;
             }
             match open.stage.wait(Some(deadline)) {
-                Ok(StageEvent::Tick) => {
+                Ok(StageEvent::Frame) => {
                     open.present(&mut on_error);
-                    return WorldEvent::Tick;
+                    return WorldEvent::Frame;
                 }
                 Ok(StageEvent::Input {
                     player,
@@ -368,10 +369,10 @@ mod tests {
         assert_eq!(wait(&mut worlds), WorldEvent::Timeout);
         assert!(server.read().is_empty());
         server.tick();
-        assert_eq!(wait(&mut worlds), WorldEvent::Tick);
+        assert_eq!(wait(&mut worlds), WorldEvent::Frame);
         assert_eq!(widths(&server.read()), ["taken", "frame 20"]);
         server.tick();
-        assert_eq!(wait(&mut worlds), WorldEvent::Tick);
+        assert_eq!(wait(&mut worlds), WorldEvent::Frame);
         assert_eq!(widths(&server.read()), ["taken"]);
     }
 
@@ -382,7 +383,7 @@ mod tests {
         worlds.show_to(ana, Scene::new(10.0, 10.0)).unwrap();
         worlds.show_to(ana, Scene::new(20.0, 10.0)).unwrap();
         server.tick();
-        assert_eq!(wait(&mut worlds), WorldEvent::Tick);
+        assert_eq!(wait(&mut worlds), WorldEvent::Frame);
         let players: Vec<_> = server
             .read()
             .into_iter()
@@ -400,7 +401,7 @@ mod tests {
         let mut worlds = Worlds::new("test", headless);
         worlds.show(Scene::new(10.0, 10.0)).unwrap();
         assert_eq!(worlds.players(), [Player(NonZeroU32::MIN)]);
-        assert_eq!(wait(&mut worlds), WorldEvent::Tick);
+        assert_eq!(wait(&mut worlds), WorldEvent::Frame);
     }
 
     #[cfg(all(feature = "terminal", feature = "window"))]
@@ -442,7 +443,7 @@ mod tests {
         assert!(matches!(worlds.open(PLAYERS), Err(StageError::Busy)));
         assert!(worlds.is_open());
         server.tick();
-        assert_eq!(wait(&mut worlds), WorldEvent::Tick);
+        assert_eq!(wait(&mut worlds), WorldEvent::Frame);
     }
 
     #[test]

@@ -941,7 +941,7 @@ mod tests {
                 Err(e) => panic!("{e}"),
             })
             .map(|e| match e {
-                SessionEvent::Tick => "tick".into(),
+                SessionEvent::Frame => "tick".into(),
                 SessionEvent::Input { player, event } => {
                     let player = player.number();
                     match event {
