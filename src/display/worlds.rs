@@ -32,7 +32,7 @@ pub struct Worlds {
     footer: Vec<String>,
 }
 
-/// What [`Worlds::wait_event`] returns.
+/// What [`Worlds::wait`] returns.
 #[derive(Debug, PartialEq)]
 pub enum WorldEvent {
     Key(Player, KeyEvent),
@@ -175,7 +175,7 @@ impl Worlds {
     ///
     /// A message that the session drops goes to `on_error`, and the wait
     /// goes on.
-    pub fn wait_event(
+    pub fn wait(
         &mut self,
         deadline: Instant,
         mut on_error: impl FnMut(&dyn std::error::Error),
@@ -338,7 +338,7 @@ mod tests {
     }
 
     fn wait(worlds: &mut Worlds) -> WorldEvent {
-        worlds.wait_event(soon(), |e| panic!("{e}"))
+        worlds.wait(soon(), |e| panic!("{e}"))
     }
 
     fn key(kind: KeyKind, name: &str) -> KeyEvent {
@@ -500,7 +500,7 @@ mod tests {
         let mut worlds = Worlds::new("test", headless);
         let deadline = soon();
         assert_eq!(
-            worlds.wait_event(deadline, |e| panic!("{e}")),
+            worlds.wait(deadline, |e| panic!("{e}")),
             WorldEvent::Timeout
         );
         assert!(Instant::now() >= deadline);

@@ -750,7 +750,7 @@ instância. Num processo nativo, a sessão é uma só.
 
 O `display::Worlds` é o `Stage` de um mundo de uma linguagem de ensino,
 como o do spython e do sgleam. O mundo guarda o próprio relógio, o
-`show` guarda a cena, que sai no próximo `Tick`. O `wait_event` devolve
+`show` guarda a cena, que sai no próximo `Tick`. O `wait` devolve
 as teclas e os pads, cada um com o seu jogador, o fechamento e o `Tick`,
 depois de mandar as cenas guardadas. Um mundo que desenha só no `Tick`
 mostra a cena no tick seguinte, com um quadro de atraso. Um
@@ -768,7 +768,7 @@ janelas. A janela de cada jogador ganha o tamanho da cena do primeiro
 `Tick` a 60 Hz e não desenha nada, e os jogadores vêm do `players` dele
 como numa janela.
 Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
-`ShowError::Unavailable`, e o `wait_event` dorme até o prazo.
+`ShowError::Unavailable`, e o `wait` dorme até o prazo.
 
 Uma engine sem `Stage` usa a `session::Session` direto, com o
 `Session::start(players, r, w)`, o `frame_rate`, o `player_count`, que dá o
