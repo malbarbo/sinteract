@@ -1121,6 +1121,11 @@ impl Geometry {
         GeometryBuilder::new((), x, y)
     }
 
+    /// Begin a geometry at `(x, y)`, with room for `capacity` segments.
+    pub(crate) fn builder_with_capacity(capacity: usize, x: f32, y: f32) -> GeometryBuilder {
+        GeometryBuilder::with_capacity((), capacity, x, y)
+    }
+
     pub fn segments(&self) -> Segments<'_> {
         Segments(self.segs.iter())
     }
@@ -1192,17 +1197,19 @@ pub type ClipPathBuilder = GeometryBuilder<FillRule>;
 
 impl<T> GeometryBuilder<T> {
     fn new(extra: T, x: f32, y: f32) -> Self {
-        Self {
-            extra,
-            segs: vec![Segment::Move { x, y }],
-            last_point: (x, y),
-        }
+        Self::with_capacity(extra, 1, x, y)
     }
 
-    /// Make room for `additional` more segments.
-    pub(crate) fn reserve(mut self, additional: usize) -> Self {
-        self.segs.reserve(additional);
-        self
+    /// A builder with room for `capacity` segments, the first move
+    /// included.
+    fn with_capacity(extra: T, capacity: usize, x: f32, y: f32) -> Self {
+        let mut segs = Vec::with_capacity(capacity);
+        segs.push(Segment::Move { x, y });
+        Self {
+            extra,
+            segs,
+            last_point: (x, y),
+        }
     }
 
     pub fn move_to(mut self, x: f32, y: f32) -> Self {
