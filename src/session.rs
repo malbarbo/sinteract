@@ -353,6 +353,13 @@ impl<R: Read, W: Write> Session<R, W> {
         self.players
     }
 
+    /// The reader of the stream of the server, where a reader with a
+    /// deadline takes the deadline of the next wait. A read here takes
+    /// bytes that the session never sees, which breaks the stream.
+    pub fn reader_mut(&mut self) -> &mut R {
+        &mut self.r
+    }
+
     /// The next event, with bytes from `r` when none waits. It blocks for
     /// as long as `r` blocks. The end of `r` ends the session, and after
     /// the end it returns `End` without a read. A stream that breaks, with

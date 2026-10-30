@@ -1,12 +1,10 @@
 //! [`Stage`], where an engine runs its game, on a display of this process
 //! or in a session with a server, with the same loop.
 
-use std::cell::Cell;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufWriter, Read};
 use std::num::NonZeroU32;
-use std::rc::Rc;
 use std::time::Instant;
 
 use super::{Display, PresentError, TerminalError, WindowError};
@@ -301,17 +299,16 @@ impl Stage {
         let (from_server, to_server, taken) = session_fds::take()?;
         // No deadline until the start, since a read that times out there
         // loses the hello.
-        let deadline = Rc::new(Deadline::default());
         let reader = DeadlineReader {
             file: from_server,
-            deadline: Rc::clone(&deadline),
+            deadline: None,
+            passed: false,
         };
         let (session, players) = Session::start(players, reader, BufWriter::new(to_server))
             .map_err(StageError::Start)?;
         let count = session.player_count();
         let remote = Remote {
             session,
-            deadline,
             ended: false,
             _taken: taken,
         };
@@ -624,9 +621,6 @@ impl Players {
 /// A session with a server, on fd 3 and fd 4.
 struct Remote {
     session: Session<DeadlineReader, BufWriter<File>>,
-    /// The deadline of the reader of the session, which has no other way
-    /// to it.
-    deadline: Rc<Deadline>,
     /// The stream of the server ended or failed, and every wait returns
     /// Close.
     ended: bool,
@@ -640,10 +634,11 @@ impl Remote {
         if self.ended {
             return Ok(StageEvent::Close);
         }
-        self.deadline.at.set(deadline);
+        self.session.reader_mut().deadline = deadline;
         let event = self.session.wait();
-        self.deadline.at.set(None);
-        let passed = self.deadline.passed.take();
+        let reader = self.session.reader_mut();
+        reader.deadline = None;
+        let passed = std::mem::take(&mut reader.passed);
         match event {
             Ok(SessionEvent::Frame) => Ok(StageEvent::Frame),
             Ok(SessionEvent::Input { player, event }) => Ok(StageEvent::Input { player, event }),
@@ -664,28 +659,24 @@ impl Remote {
     }
 }
 
-/// The deadline of a wait of a session, and whether the reader saw it pass.
-/// A `TimedOut` from elsewhere, such as from fd 4, is a failure.
-#[derive(Default)]
-struct Deadline {
-    at: Cell<Option<Instant>>,
-    passed: Cell<bool>,
-}
-
 /// Fd 3, which a read waits on until a deadline. The read fails with
 /// [`io::ErrorKind::TimedOut`] and marks the deadline passed when the
 /// deadline passes first.
 struct DeadlineReader {
     file: File,
-    deadline: Rc<Deadline>,
+    /// The deadline of the wait of the session, or none.
+    deadline: Option<Instant>,
+    /// A read saw `deadline` pass. A `TimedOut` without it, such as from
+    /// fd 4, is a failure.
+    passed: bool,
 }
 
 impl Read for DeadlineReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if let Some(at) = self.deadline.at.get()
+        if let Some(at) = self.deadline
             && !wait_readable(&self.file, at)?
         {
-            self.deadline.passed.set(true);
+            self.passed = true;
             return Err(io::ErrorKind::TimedOut.into());
         }
         self.file.read(buf)
@@ -941,17 +932,16 @@ pub(super) mod tests {
         // SAFETY: F_SETFL only sets the flags of an open descriptor.
         unsafe { libc::fcntl(from_engine.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
         server_to_engine::write_start(&mut to_engine, &["Ana"], RATE).unwrap();
-        let deadline = Rc::new(Deadline::default());
         let reader = DeadlineReader {
             file: from_server,
-            deadline: Rc::clone(&deadline),
+            deadline: None,
+            passed: false,
         };
         let players = PlayerRange::new(1, 1).unwrap();
         let (session, _) = Session::start(players, reader, BufWriter::new(to_server)).unwrap();
         let count = session.player_count();
         let remote = Remote {
             session,
-            deadline,
             ended: false,
             _taken: session_fds::Taken::for_test(),
         };

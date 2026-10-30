@@ -780,6 +780,8 @@ Quando o stage não abre, o mundo segue sem ele, os `show` devolvem
 Uma engine sem `Stage` usa a `session::Session` direto, com o
 `Session::start(players, r, w)`, o `frame_rate`, o `player_count`, que dá o
 número de jogadores do start, o `wait` e o `write_frame`, sobre o `Read` e o `Write` que ela tiver.
+O `reader_mut` dá o `r` de volta, para um leitor com prazo receber o prazo
+do próximo `wait`.
 
 ## O que o navegador mostra
 
