@@ -210,10 +210,13 @@ impl Game {
                         paint: Paint::solid(s.color).expect("a visible color"),
                         rule: FillRule::NonZero,
                     },
-                    PathStroke::new(
-                        Paint::opaque(255, 255, 255),
-                        StrokeWidth::new(3.0).expect("a positive width"),
-                    ),
+                    PathStroke {
+                        closed: true,
+                        ..PathStroke::new(
+                            Paint::opaque(255, 255, 255),
+                            StrokeWidth::new(3.0).expect("a positive width"),
+                        )
+                    },
                 )
             } else {
                 fill(s.color)
