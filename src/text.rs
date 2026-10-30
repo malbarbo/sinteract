@@ -501,14 +501,14 @@ pub struct EmbeddedFace {
 pub fn embedded_faces() -> impl Iterator<Item = EmbeddedFace> {
     [&SANS, &SERIF, &MONO].into_iter().flat_map(|family| {
         [
-            (&family.regular, 400, false),
-            (&family.bold, 700, false),
-            (&family.italic, 400, true),
-            (&family.bold_italic, 700, true),
+            (&family.regular, Weight::REGULAR, false),
+            (&family.bold, Weight::BOLD, false),
+            (&family.italic, Weight::REGULAR, true),
+            (&family.bold_italic, Weight::BOLD, true),
         ]
         .map(|(font, weight, italic)| EmbeddedFace {
             family: font.name,
-            weight,
+            weight: weight.get(),
             italic,
             bytes: font.bytes,
         })
