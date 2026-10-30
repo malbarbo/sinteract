@@ -1629,9 +1629,7 @@ impl Scene {
 
     /// Append a [`Path`] from [`Path::builder`].
     pub fn add_path(&mut self, path: Path) {
-        if path.is_finite() {
-            self.elements.push(Element::Path(path));
-        }
+        self.cropped(&Crop::default()).add_path(path);
     }
 
     /// Clip what `inside` draws to a [`ClipPath`] or to a [`RotatedRect`].
@@ -1686,15 +1684,11 @@ impl Scene {
     }
 
     pub fn add_text(&mut self, text: Text) {
-        if text.is_finite() {
-            self.elements.push(Element::Text(text));
-        }
+        self.cropped(&Crop::default()).add_text(text);
     }
 
     pub fn add_bitmap(&mut self, bitmap: Bitmap) {
-        if bitmap.is_finite() {
-            self.elements.push(Element::Bitmap(bitmap));
-        }
+        self.cropped(&Crop::default()).add_bitmap(bitmap);
     }
 
     /// This scene, with each element that goes in through the result cut to
