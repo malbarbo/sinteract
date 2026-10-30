@@ -90,6 +90,10 @@ impl Window {
     /// How long [`Window::open`] waits for the platform to create the window.
     const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
+    /// How long one pump waits while a window opens, so the wait checks
+    /// [`Window::OPEN_TIMEOUT`] between two pumps.
+    const OPEN_PUMP: Duration = Duration::from_millis(16);
+
     /// The space between two windows of several seats, in logical pixels.
     const GAP: f64 = 16.0;
 
@@ -542,7 +546,7 @@ impl Lent {
         };
         let deadline = Instant::now() + timeout;
         loop {
-            if !self.pump(&mut opener, Duration::from_millis(16)) {
+            if !self.pump(&mut opener, Window::OPEN_PUMP) {
                 return Err(WindowError::LoopEnded);
             }
             match opener.opened.take() {
