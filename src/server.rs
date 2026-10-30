@@ -268,8 +268,9 @@ impl std::error::Error for ViewError {
 /// the room writes for the engine under the cap of the framing.
 pub const MAX_VIEW_BYTES: usize = 64 * 1024;
 
-/// The cap on a nickname, in bytes of UTF-8.
-const MAX_NICKNAME_BYTES: usize = 64;
+/// The cap on a nickname, in bytes of UTF-8. The start cuts a longer
+/// one, so a lobby may stop the nickname at the same cap.
+pub const MAX_NICKNAME_BYTES: usize = 64;
 
 /// The cap on the keys that a view holds down at once. A keyboard holds
 /// far fewer, and the cap bounds what a view grows in the room.

@@ -182,7 +182,8 @@ engine.
   faixa e um `start` antes do `hello` (`StartError`), e devolve o lobby
   junto com o erro, para outra tentativa.
 - O `start` tira os caracteres de controle do apelido e o corta em 64
-  bytes. O apelido vem do login ou do lobby, nunca da engine. O
+  bytes (`MAX_NICKNAME_BYTES`), e o lobby pode limitar o campo do apelido
+  ao mesmo tamanho. O apelido vem do login ou do lobby, nunca da engine. O
   `Room::players()` dá cada jogador com o apelido que a engine
   recebeu. O jogador é um `session::Player`, o mesmo tipo da engine, e só
   o `start` cria um. O `number()` dá o número dele, para um log.
