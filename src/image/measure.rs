@@ -207,13 +207,15 @@ impl std::error::Error for WedgeAngleError {}
 /// once, and 10^6 of them already take seconds to draw.
 pub const MAX_VERTICES: u32 = 100_000;
 
-/// The sides of a polygon, from 3 to [`MAX_VERTICES`].
+/// The sides of a polygon, from [`SideCount::MIN`] to [`MAX_VERTICES`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SideCount(u32);
 
 impl SideCount {
+    pub const MIN: u32 = 3;
+
     pub fn new(n: u32) -> Result<Self, CountError> {
-        count(n, 3).map(Self)
+        count(n, Self::MIN).map(Self)
     }
 
     pub fn get(self) -> u32 {
@@ -221,13 +223,15 @@ impl SideCount {
     }
 }
 
-/// The points of a radial star, from 2 to [`MAX_VERTICES`].
+/// The points of a radial star, from [`PointCount::MIN`] to [`MAX_VERTICES`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PointCount(u32);
 
 impl PointCount {
+    pub const MIN: u32 = 2;
+
     pub fn new(n: u32) -> Result<Self, CountError> {
-        count(n, 2).map(Self)
+        count(n, Self::MIN).map(Self)
     }
 
     pub fn get(self) -> u32 {
