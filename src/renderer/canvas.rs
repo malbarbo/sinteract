@@ -524,9 +524,12 @@ impl<K: Eq + Hash, V> FrameCache<K, V> {
     }
 }
 
+/// The most periods of a repeated gradient that draw.
+const MAX_PERIODS: f32 = 256.0;
+
 /// The first and the last period of the gradient that the corners `ts`
-/// reach, rounded out to whole periods. At most 256 periods draw, the last
-/// ones.
+/// reach, rounded out to whole periods. At most [`MAX_PERIODS`] periods
+/// draw, the last ones.
 fn periods(spread: SpreadMode, ts: [f32; 4]) -> (f32, f32) {
     if spread == SpreadMode::Pad {
         return (0.0, 1.0);
@@ -543,7 +546,7 @@ fn periods(spread: SpreadMode, ts: [f32; 4]) -> (f32, f32) {
         .fold(f32::NEG_INFINITY, f32::max)
         .ceil()
         .max(1.0);
-    (lo.max(hi - 256.0), hi)
+    (lo.max(hi - MAX_PERIODS), hi)
 }
 
 fn winding(rule: FillRule) -> CanvasWindingRule {
