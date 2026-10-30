@@ -223,29 +223,25 @@ impl Window {
         }
     }
 
-    /// Show `scene` in the window of each player of `to`, where player k
-    /// has seat k - 1. A player with no window gets nothing. A draw that
-    /// fails goes to [`Window::take_failed`].
-    pub(crate) fn present_to(&mut self, to: Target, scene: Rc<Scene>) {
+    /// Keep `scene` for the window of each player of `to`, where player k
+    /// has seat k - 1, and draw it at the next wait. A seat that gets a
+    /// scene for every player and then one of its own before the wait
+    /// draws only its own. A player with no window gets nothing.
+    pub(crate) fn present_to(&mut self, to: Target, scene: Scene) {
+        let scene = Rc::new(scene);
         let active = &mut self.active;
-        let several = active.seats.len() > 1;
-        let failed = &mut self.failed;
-        let next_x = &mut active.next_x;
-        let mut keep = |target: &mut Seat, scene| {
-            if let Err(e) = target.keep(several.then_some(&mut *next_x), scene) {
-                failed.get_or_insert(e);
-            }
-        };
+        let next_x = (active.seats.len() > 1).then_some(&mut active.next_x);
         match to {
             Target::All => {
+                let mut next_x = next_x;
                 for target in &mut active.seats {
-                    keep(target, Rc::clone(&scene));
+                    target.keep(next_x.as_deref_mut(), Rc::clone(&scene));
                 }
             }
             Target::Player(player) => {
                 let seat = player.number().get() as usize - 1;
                 if let Some(target) = active.seats.get_mut(seat) {
-                    keep(target, scene);
+                    target.keep(next_x, scene);
                 }
             }
         }
@@ -255,25 +251,21 @@ impl Window {
         }
     }
 
-    /// The first draw that failed since the last call, in a present, at a
+    /// The first draw that failed since the last call, at a wait, at a
     /// frame callback or at a redraw, or `Ok`.
     pub(crate) fn take_failed(&mut self) -> Result<(), PresentError> {
         self.failed.take().map_or(Ok(()), Err)
     }
 
     /// Block until the next event, with the seat of an input, as
-    /// [`super::Display::wait`] does. `draw` runs after the events
-    /// that wait, so a frame callback has its time before the draw.
-    pub(crate) fn wait_seated(
-        &mut self,
-        deadline: Option<Instant>,
-        draw: impl FnOnce(&mut Self),
-    ) -> io::Result<Seated> {
+    /// [`super::Display::wait`] does. The first pump draws the scenes of
+    /// the presents before it, after the events that wait, so a frame
+    /// callback has its time before the draw.
+    pub(crate) fn wait_seated(&mut self, deadline: Option<Instant>) -> io::Result<Seated> {
         // A frame that draws for longer than the period finds the next tick
         // due, so the wait returns it without a pump, and the platform takes
         // a window that never answers for hung. So every call pumps once.
         self.pump(Duration::ZERO);
-        draw(self);
         loop {
             // A closed session has a closed inbox, which returns Close
             // before it redraws or blocks.
@@ -294,16 +286,17 @@ impl Window {
 }
 
 impl super::Display for Window {
-    /// Draw `scene`. A draw that failed since the last present, at a
-    /// frame callback or at a redraw, fails this one too.
+    /// Keep `scene` and draw it at the next wait. A draw that failed since
+    /// the last present, at a wait, at a frame callback or at a redraw,
+    /// fails this one.
     fn present(&mut self, scene: Scene) -> Result<(), PresentError> {
-        self.present_to(Target::All, Rc::new(scene));
+        self.present_to(Target::All, scene);
         self.take_failed()
     }
 
     /// Block in the event loop of the window, which the [`Sender`]s wake.
     fn wait(&mut self, deadline: Option<Instant>) -> io::Result<Event> {
-        self.wait_seated(deadline, |_| {}).map(Event::from)
+        self.wait_seated(deadline).map(Event::from)
     }
 
     fn sender(&self) -> Sender {
@@ -327,18 +320,17 @@ impl Drop for Window {
 }
 
 impl Seat {
-    /// Keep `scene` as the last one of the window, and draw it. A window
-    /// of several seats shows at `next_x`.
-    fn keep(&mut self, next_x: Option<&mut f64>, scene: Rc<Scene>) -> Result<(), PresentError> {
+    /// Keep `scene` as the last one of the window, for the next pump to
+    /// draw. A window of several seats shows at `next_x`.
+    fn keep(&mut self, next_x: Option<&mut f64>, scene: Rc<Scene>) {
         if self.hidden {
             self.reveal(next_x, &scene);
         }
         self.app.dirty = false;
         self.last = Some(Last {
             scene,
-            unshown: false,
+            unshown: true,
         });
-        self.show()
     }
 
     /// Give the hidden window the size of `scene`, and show it. A window
@@ -426,7 +418,8 @@ impl Seat {
 struct Last {
     /// Shared with the other seats of a present to all.
     scene: Rc<Scene>,
-    /// `scene` waits for the frame callback of Wayland.
+    /// `scene` waits for the next pump, or for the frame callback of
+    /// Wayland.
     unshown: bool,
 }
 

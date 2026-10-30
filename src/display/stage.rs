@@ -492,10 +492,7 @@ fn open_players(
         e => StageError::Window(e),
     })?;
     let stage = Stage {
-        inner: Inner::Players(Box::new(Players {
-            window,
-            pending: Pending::new(players),
-        })),
+        inner: Inner::Players(Box::new(Players { window })),
         players,
     };
     Ok((stage, all))
@@ -591,7 +588,6 @@ enum Inner {
 #[cfg(feature = "window")]
 struct Players {
     window: super::Window,
-    pending: Pending,
 }
 
 #[cfg(feature = "window")]
@@ -600,7 +596,7 @@ impl Players {
     /// that failed since the last present fails this one, which still
     /// keeps `scene`.
     fn present(&mut self, to: Target, scene: Scene) -> Result<(), StagePresentError> {
-        self.pending.keep(to, scene);
+        self.window.present_to(to, scene);
         self.window
             .take_failed()
             .map_err(StagePresentError::Display)
@@ -610,13 +606,7 @@ impl Players {
     fn wait(&mut self, deadline: Option<Instant>) -> io::Result<StageEvent> {
         use super::inbox::Seated;
         loop {
-            let pending = &mut self.pending;
-            let seated = self.window.wait_seated(deadline, |window| {
-                pending.draw(|player, scene| {
-                    window.present_to(Target::Player(player), scene);
-                });
-            });
-            return Ok(match seated? {
+            return Ok(match self.window.wait_seated(deadline)? {
                 Seated::Frame => StageEvent::Frame,
                 Seated::Input(seat, event) => StageEvent::Input {
                     player: Player(NonZeroU32::MIN.saturating_add(seat)),
@@ -627,48 +617,6 @@ impl Players {
                 Seated::Timeout => StageEvent::Timeout,
                 Seated::Close => StageEvent::Close,
             });
-        }
-    }
-}
-
-/// The last scene of each player since the last draw. A player that gets
-/// a scene for every player and then one of its own before the draw
-/// draws only its own.
-#[cfg(feature = "window")]
-struct Pending {
-    /// The scene of player k at index k - 1.
-    scenes: Vec<Option<Rc<Scene>>>,
-}
-
-#[cfg(feature = "window")]
-impl Pending {
-    /// No scenes for the players 1 to `players`.
-    fn new(players: NonZeroU32) -> Self {
-        Self {
-            scenes: vec![None; players.get() as usize],
-        }
-    }
-
-    /// Keep `scene` for the players of `to`, in place of the scene that
-    /// each one had. [`Stage::present`] checks that the player is here.
-    fn keep(&mut self, to: Target, scene: Scene) {
-        let scene = Rc::new(scene);
-        match to {
-            Target::All => self.scenes.fill(Some(scene)),
-            Target::Player(player) => {
-                let seat = player.number().get() as usize - 1;
-                *self.scenes.get_mut(seat).expect("the stage has the player") = Some(scene);
-            }
-        }
-    }
-
-    /// Hand each scene that waits to `draw`, with its player.
-    fn draw(&mut self, mut draw: impl FnMut(Player, Rc<Scene>)) {
-        let players = (1..).map_while(NonZeroU32::new).map(Player);
-        for (player, pending) in players.zip(&mut self.scenes) {
-            if let Some(scene) = pending.take() {
-                draw(player, scene);
-            }
         }
     }
 }
@@ -1147,43 +1095,5 @@ pub(super) mod tests {
         let two = NonZeroU32::new(2);
         let mode = StageMode::choose(two, TerminalOptions::default(), || panic!("checked"));
         assert!(matches!(mode, StageMode::Window { players } if players == two));
-    }
-
-    /// Two players with nothing to draw.
-    #[cfg(feature = "window")]
-    fn two_pending() -> Pending {
-        Pending::new(NonZeroU32::new(2).expect("2 is not zero"))
-    }
-
-    /// Each scene that `pending` draws, as its player and its width.
-    #[cfg(feature = "window")]
-    fn drawn(pending: &mut Pending) -> Vec<(u32, f32)> {
-        let mut drawn = Vec::new();
-        pending.draw(|player, scene| drawn.push((player.number().get(), scene.width())));
-        drawn
-    }
-
-    #[cfg(feature = "window")]
-    fn second() -> Target {
-        Target::Player(Player(NonZeroU32::new(2).expect("2 is not zero")))
-    }
-
-    #[cfg(feature = "window")]
-    #[test]
-    fn a_scene_to_a_player_after_one_to_all_replaces_only_its_own() {
-        let mut pending = two_pending();
-        pending.keep(Target::All, Scene::new(1.0, 1.0));
-        pending.keep(second(), Scene::new(2.0, 1.0));
-        assert_eq!(drawn(&mut pending), [(1, 1.0), (2, 2.0)]);
-        assert_eq!(drawn(&mut pending), []);
-    }
-
-    #[cfg(feature = "window")]
-    #[test]
-    fn a_scene_to_all_after_one_to_a_player_replaces_it() {
-        let mut pending = two_pending();
-        pending.keep(second(), Scene::new(2.0, 1.0));
-        pending.keep(Target::All, Scene::new(1.0, 1.0));
-        assert_eq!(drawn(&mut pending), [(1, 1.0), (2, 1.0)]);
     }
 }
