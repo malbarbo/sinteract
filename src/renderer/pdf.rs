@@ -155,7 +155,8 @@ impl XImage {
             rgb.extend([c.red(), c.green(), c.blue()]);
             alpha.push(c.alpha());
         }
-        let compress = |data: &[u8]| miniz_oxide::deflate::compress_to_vec_zlib(data, 6);
+        let compress =
+            |data: &[u8]| miniz_oxide::deflate::compress_to_vec_zlib(data, DEFLATE_LEVEL);
         let opaque = alpha.iter().all(|&a| a == u8::MAX);
         XImage {
             size: (pixmap.width(), pixmap.height()),
@@ -693,6 +694,10 @@ enum PaintTarget {
 /// Draw-list coordinates are CSS pixels, 96 per inch, and PDF points are 72
 /// per inch.
 const PX_TO_PT: f32 = 72.0 / 96.0;
+
+/// The deflate level of an image, the default of zlib, which balances the
+/// size against the time.
+const DEFLATE_LEVEL: u8 = 6;
 
 /// Maps draw-list pixels, with y down, to PDF points, with y up, on a page
 /// `height` pixels tall.
