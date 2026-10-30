@@ -34,6 +34,10 @@ use vtparse::CsiParam;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// The most bytes of replies before the query gives up on the CPR. The
+/// replies of every query take far fewer.
+const MAX_REPLY_BYTES: usize = 4096;
+
 /// The Kitty query, DA1, `CSI 16 t`, `CSI ? u` and CPR, in the order of the
 /// module doc.
 const QUERY: &str = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c\x1b[16t\x1b[?u\x1b[6n";
@@ -137,7 +141,7 @@ impl Replies {
     fn feed(&mut self, chunk: &[u8]) -> bool {
         self.len += chunk.len();
         self.parser.parse(chunk, &mut self.found);
-        self.found.cpr || self.len > 4096
+        self.found.cpr || self.len > MAX_REPLY_BYTES
     }
 
     fn caps(&self) -> Caps {
