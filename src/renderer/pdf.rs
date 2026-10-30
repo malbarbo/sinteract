@@ -447,7 +447,7 @@ impl PdfRenderer {
     fn apply_alpha(&mut self, fa: f32, sa: f32) {
         let fk = alpha_key(fa);
         let sk = alpha_key(sa);
-        if fk == 1000 && sk == 1000 {
+        if fk == OPAQUE_KEY && sk == OPAQUE_KEY {
             return;
         }
         let next = self.gstates.len() as u32;
@@ -629,10 +629,10 @@ impl PdfRenderer {
 
         for (k, &(fk, sk)) in gstates.keys().enumerate() {
             let mut gs = pdf.ext_graphics(gstate_ref(k));
-            if fk != 1000 {
+            if fk != OPAQUE_KEY {
                 gs.non_stroking_alpha(alpha_value(fk));
             }
-            if sk != 1000 {
+            if sk != OPAQUE_KEY {
                 gs.stroking_alpha(alpha_value(sk));
             }
             gs.finish();
@@ -700,14 +700,17 @@ fn page_transform(height: f32) -> [f32; 6] {
     [PX_TO_PT, 0.0, 0.0, -PX_TO_PT, 0.0, PX_TO_PT * height]
 }
 
+/// The key of an opaque alpha. A key counts thousandths.
+const OPAQUE_KEY: u16 = 1000;
+
 /// An alpha in thousandths, so `gstates` can key on it and near-equal alphas
 /// share one ExtGState.
 fn alpha_key(a: f32) -> u16 {
-    (a.clamp(0.0, 1.0) * 1000.0).round() as u16
+    (a.clamp(0.0, 1.0) * f32::from(OPAQUE_KEY)).round() as u16
 }
 
 fn alpha_value(key: u16) -> f32 {
-    f32::from(key) / 1000.0
+    f32::from(key) / f32::from(OPAQUE_KEY)
 }
 
 /// The name of the ExtGState at `idx` in the resources of the page.
