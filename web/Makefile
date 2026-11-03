@@ -64,5 +64,7 @@ render-test: all
 
 clean:
 	rm -rf build dist
+	cargo clean --manifest-path server/Cargo.toml
+	cargo clean --manifest-path wasm/Cargo.toml
 
 .PHONY: all capnp check test render-test clean
