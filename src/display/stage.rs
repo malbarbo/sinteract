@@ -232,9 +232,10 @@ impl Stage {
     /// its nickname. With [`StageMode::Session`] it starts a session that
     /// reads the server from fd 3 and writes to it on fd 4, and blocks
     /// until the start. Otherwise it opens a window with `title`, or the
-    /// terminal, as `mode` asks, with player 1 and an empty nickname. With several
+    /// terminal, as `mode` asks, with player 1 named `player 1`. With several
     /// players in `mode`, it opens a window for each one, with the
-    /// number of the player in the title and an empty nickname, and closing
+    /// number of the player in the title and the nickname `player N`, the
+    /// same one the web server gives, and closing
     /// any of them ends the stage. A window stays hidden until its first
     /// present, which gives it the size of the scene. A second stage in a
     /// session fails with [`StageError::Busy`] while the first one owns fd 3
@@ -465,11 +466,11 @@ fn has_window_system() -> bool {
     false
 }
 
-/// The players 1 to `players`, each with an empty nickname.
+/// The players 1 to `players`, each with the nickname `player N`.
 fn numbered(players: NonZeroU32) -> Vec<(Player, String)> {
     (1..=players.get())
         .filter_map(NonZeroU32::new)
-        .map(|number| (Player(number), String::new()))
+        .map(|number| (Player(number), format!("player {number}")))
         .collect()
 }
 
