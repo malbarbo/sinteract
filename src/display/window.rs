@@ -437,7 +437,12 @@ fn new_surface(
 }
 
 fn platform_error(e: impl std::fmt::Display) -> WindowError {
-    WindowError::Platform(winit_message(&e.to_string()).to_string())
+    WindowError::Platform(winit_text(e))
+}
+
+/// The message of a winit error, through [`winit_message`].
+fn winit_text(e: impl std::fmt::Display) -> String {
+    winit_message(&e.to_string()).to_string()
 }
 
 /// The message of a winit error without the `os error at <file>:<line>: `
@@ -727,7 +732,7 @@ impl Opener {
                 .map(|(attrs, tx)| {
                     let window = event_loop
                         .create_window(attrs.clone())
-                        .map_err(|e| winit_message(&e.to_string()).to_string())?;
+                        .map_err(winit_text)?;
                     let app = App::new(tx.clone(), &window, wayland);
                     Ok((Rc::new(window), app))
                 })
