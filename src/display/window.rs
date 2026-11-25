@@ -435,7 +435,15 @@ fn new_surface(
 }
 
 fn platform_error(e: impl std::fmt::Display) -> WindowError {
-    WindowError::Platform(e.to_string())
+    WindowError::Platform(winit_message(&e.to_string()).to_string())
+}
+
+/// The message of a winit error without the place in the source of winit
+/// that `os error at <file>:<line>: ` gives, which tells the user nothing.
+fn winit_message(text: &str) -> &str {
+    text.strip_prefix("os error at ")
+        .and_then(|rest| rest.split_once(": "))
+        .map_or(text, |(_, message)| message)
 }
 
 fn surface_error(e: impl std::fmt::Display) -> PresentError {
@@ -623,7 +631,10 @@ fn build_loop() -> Result<EventLoop<()>, WindowError> {
     }
     let event_loop = builder.build().map_err(|e| match e {
         EventLoopError::RecreationAttempt => WindowError::WrongThread,
-        e => WindowError::Platform(format!("the window event loop did not build: {e}")),
+        e => WindowError::Platform(format!(
+            "the window event loop did not build: {}",
+            winit_message(&e.to_string())
+        )),
     })?;
     event_loop.set_control_flow(ControlFlow::Wait);
     Ok(event_loop)
@@ -685,7 +696,7 @@ impl Opener {
                 .map(|(attrs, tx)| {
                     let window = event_loop
                         .create_window(attrs.clone())
-                        .map_err(|e| e.to_string())?;
+                        .map_err(|e| winit_message(&e.to_string()).to_string())?;
                     let app = App::new(tx.clone(), &window, wayland);
                     Ok((Rc::new(window), app))
                 })
@@ -1158,6 +1169,19 @@ mod tests {
         assert!(has_display(only("DISPLAY", ":0")));
         assert!(has_display(only("WAYLAND_DISPLAY", "wayland-0")));
         assert!(has_display(only("WAYLAND_SOCKET", "3")));
+    }
+
+    #[test]
+    fn a_winit_message_drops_the_place_in_winit() {
+        assert_eq!(
+            winit_message("os error at /home/runner/winit/src/mod.rs:788: No such thing"),
+            "No such thing"
+        );
+        assert_eq!(
+            winit_message(r"os error at C:\winit\src\mod.rs:788: No such thing"),
+            "No such thing"
+        );
+        assert_eq!(winit_message("No such thing"), "No such thing");
     }
 
     #[test]
