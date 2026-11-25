@@ -486,7 +486,7 @@ fn open_players(
         .map(|(player, _)| format!("{title} (player {})", player.number()))
         .collect();
     let window = super::Window::open_seats(&titles).map_err(|e| match e {
-        WindowError::NoWindowSystem => StageError::NoWindowPlayers,
+        e if e.no_window_system() => StageError::NoWindowPlayers,
         e => StageError::Window(e),
     })?;
     let stage = Stage {
