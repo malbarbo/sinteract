@@ -671,14 +671,15 @@ fn build_loop() -> Result<EventLoop<()>, WindowError> {
     Ok(event_loop)
 }
 
-/// Fails with the error of [`Window::open`] when the process has no window
-/// system, the one that [`WindowError::no_window_system`] counts. Outside
-/// macOS it builds the event loop of the process, which connects to the X
-/// server or to the Wayland compositor, so it runs on the thread that opens
-/// the windows. A loop that a window holds, that another thread built or
-/// that ended still counts as a window system, and the open of the window
-/// gives the error. On macOS it only checks for the main thread, since a
-/// build there registers the process with the dock.
+/// Fails when the process has no window system. Outside macOS the check
+/// builds the event loop of the process, which connects to the X server or
+/// to the Wayland compositor, so it runs on the thread that opens the
+/// windows, and an error of the check is one that
+/// [`WindowError::no_window_system`] counts. A loop that a window holds,
+/// that another thread built or that ended still counts as a window system,
+/// and the open of the window gives the error. On macOS the check fails
+/// with [`WindowError::Platform`] off the main thread, and builds nothing,
+/// since a build there registers the process with the dock.
 pub fn check_window_system() -> Result<(), WindowError> {
     #[cfg(target_os = "macos")]
     if unsafe { libc::pthread_main_np() } != 1 {
