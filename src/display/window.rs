@@ -523,15 +523,13 @@ impl Lent {
                     };
                     Ok(Self { proxy })
                 }
-                Err(
-                    e @ (WindowError::Platform(_)
-                    | WindowError::NoLibraries { .. }
-                    | WindowError::NoConnection { .. }),
-                ) => {
+                // winit refuses a build after one that failed, so the state
+                // keeps the failure. Neither of these is a failed build.
+                Err(e @ (WindowError::NoWindowSystem | WindowError::WrongThread)) => Err(e),
+                Err(e) => {
                     *state = Loop::Failed(e.clone());
                     Err(e)
                 }
-                Err(e) => Err(e),
             },
             Loop::Failed(e) => Err(e.clone()),
             Loop::Ready { held: true, .. } => Err(WindowError::Busy),
