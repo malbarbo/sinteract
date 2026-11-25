@@ -106,10 +106,17 @@ winit = { version = "0.30", optional = true, default-features = false, features 
 ] }
 softbuffer = { version = "0.4", optional = true, default-features = false, features = [
     "x11",
-    "x11-dlopen",
     "wayland",
     "wayland-dlopen",
 ] }
+
+# winit and softbuffer open the libraries of X11 and Wayland with dlopen, so
+# a machine without them still runs in the terminal. A static binary has no
+# dlopen, and under `--cfg no_dlopen` a fork of dlib links the libraries of
+# the -dlopen features. The x11-dlopen of softbuffer goes through tiny-xlib,
+# which no fork covers, so the cfg leaves it out.
+[target.'cfg(not(any(target_arch = "wasm32", no_dlopen)))'.dependencies]
+softbuffer = { version = "0.4", optional = true, default-features = false, features = ["x11-dlopen"] }
 
 # The display link of the view of a window, which paces the ticks of the
 # window on macOS. softbuffer already builds it.
