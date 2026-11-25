@@ -671,21 +671,28 @@ fn build_loop() -> Result<EventLoop<()>, WindowError> {
     Ok(event_loop)
 }
 
-/// Returns `true` if the process has a window system, `false` otherwise.
-/// Outside macOS it builds the event loop of the process, which connects
-/// to the X server or to the Wayland compositor, so it runs on the thread
-/// that opens the windows. A loop that a window holds, that another thread
-/// built or that ended still counts, and the open of the window gives the
-/// error. On macOS it only checks for the main thread, since a build there
-/// registers the process with the dock.
-pub(crate) fn has_window_system() -> bool {
+/// Fails with the error of [`Window::open`] when the process has no window
+/// system, the one that [`WindowError::no_window_system`] counts. Outside
+/// macOS it builds the event loop of the process, which connects to the X
+/// server or to the Wayland compositor, so it runs on the thread that opens
+/// the windows. A loop that a window holds, that another thread built or
+/// that ended still counts as a window system, and the open of the window
+/// gives the error. On macOS it only checks for the main thread, since a
+/// build there registers the process with the dock.
+pub fn check_window_system() -> Result<(), WindowError> {
     #[cfg(target_os = "macos")]
-    return unsafe { libc::pthread_main_np() } == 1;
-    #[cfg(not(target_os = "macos"))]
-    match Lent::take() {
-        Ok(_) => true,
-        Err(e) => !e.no_window_system(),
+    if unsafe { libc::pthread_main_np() } != 1 {
+        return Err(WindowError::Platform(
+            "on macOS a window opens only on the main thread".into(),
+        ));
     }
+    #[cfg(not(target_os = "macos"))]
+    if let Err(e) = Lent::take()
+        && e.no_window_system()
+    {
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Returns `true` if `var` names a Wayland or X11 display, `false` otherwise.

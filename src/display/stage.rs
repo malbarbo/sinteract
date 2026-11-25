@@ -457,7 +457,7 @@ fn open_headless() -> Result<Box<dyn Display>, StageError> {
 
 #[cfg(feature = "window")]
 fn has_window_system() -> bool {
-    super::window::has_window_system()
+    super::window::check_window_system().is_ok()
 }
 
 /// A build without the window opens none, so [`StageMode::auto`] picks
