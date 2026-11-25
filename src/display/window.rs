@@ -1246,8 +1246,8 @@ mod tests {
         );
     }
 
-    /// A front end shows the terminal when the event loop does not build,
-    /// whatever the cause.
+    /// A loop error of a cause that `loop_error` does not know counts as no
+    /// window system.
     #[test]
     fn a_loop_error_of_an_unknown_cause_has_no_window_system() {
         let error = loop_error("Failed to convert Xlib connection to XCB", |_| None);

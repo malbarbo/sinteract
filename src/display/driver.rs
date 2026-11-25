@@ -263,8 +263,9 @@ impl fmt::Display for WindowError {
 
 impl WindowError {
     /// Returns `true` if the error says that the session has no window
-    /// system, `false` otherwise. Another window on the same thread fails
-    /// the same way, so a front end can show the terminal.
+    /// system or that the event loop did not build, `false` otherwise.
+    /// Another window on the same thread fails the same way, so a front end
+    /// can show the terminal.
     pub fn no_window_system(&self) -> bool {
         matches!(
             self,
