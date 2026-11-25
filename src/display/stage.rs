@@ -212,9 +212,10 @@ pub enum StageError {
     /// The game takes `range`, at least two players, and the display is
     /// the terminal, which shows one.
     TerminalPlayers { range: PlayerRange },
-    /// Several players play on a display of this process, and the session
-    /// has no graphical display for their windows.
-    NoWindowPlayers,
+    /// Several players play on a display of this process, and their windows
+    /// did not open, for the reason of the [`WindowError`]. The terminal
+    /// shows one player only.
+    NoWindowPlayers(WindowError),
     /// The mode is [`StageMode::Session`], and fd 3 or fd 4 is not open, or
     /// the platform has no such descriptors.
     NoSession,
@@ -486,7 +487,7 @@ fn open_players(
         .map(|(player, _)| format!("{title} (player {})", player.number()))
         .collect();
     let window = super::Window::open_seats(&titles).map_err(|e| match e {
-        e if e.no_window_system() => StageError::NoWindowPlayers,
+        e if e.no_window_system() => StageError::NoWindowPlayers(e),
         e => StageError::Window(e),
     })?;
     let stage = Stage {
@@ -528,9 +529,13 @@ impl fmt::Display for StageError {
                  they need a window each",
                 range.min()
             ),
-            StageError::NoWindowPlayers => f.write_str(
+            StageError::NoWindowPlayers(WindowError::NoWindowSystem) => f.write_str(
                 "several players need a window each, and this session has no graphical display",
             ),
+            StageError::NoWindowPlayers(e) => {
+                f.write_str("several players need a window each, and the window did not open: ")?;
+                e.fmt_cause(f)
+            }
             StageError::NoSession => {
                 f.write_str("no server ran this engine, since fd 3 or fd 4 is not open")
             }
@@ -554,7 +559,7 @@ impl std::error::Error for StageError {
             StageError::Busy
             | StageError::Players { .. }
             | StageError::TerminalPlayers { .. }
-            | StageError::NoWindowPlayers
+            | StageError::NoWindowPlayers(_)
             | StageError::NoSession
             | StageError::NotSessionFd { .. }
             | StageError::NoDisplay => None,
@@ -833,6 +838,24 @@ pub(super) mod tests {
     use crate::wire::{server_to_engine, testing};
 
     const RATE: NonZeroU32 = NonZeroU32::new(60_000).expect("60 Hz is not zero");
+
+    /// The message of players with no window keeps why the window did not
+    /// open.
+    #[test]
+    fn no_window_players_says_why_the_window_did_not_open() {
+        assert_eq!(
+            StageError::NoWindowPlayers(WindowError::NoWindowSystem).to_string(),
+            "several players need a window each, and this session has no graphical display"
+        );
+        let libraries = WindowError::NoLibraries {
+            system: crate::display::WindowSystem::X11,
+        };
+        assert_eq!(
+            StageError::NoWindowPlayers(libraries).to_string(),
+            "several players need a window each, and the window did not open: \
+             the libraries of X11 did not load"
+        );
+    }
 
     /// The two ends of a pipe, to read and to write.
     fn pipe() -> (File, File) {
