@@ -682,13 +682,7 @@ pub(crate) fn has_window_system() -> bool {
     #[cfg(not(target_os = "macos"))]
     match Lent::take() {
         Ok(_) => true,
-        Err(
-            WindowError::NoWindowSystem
-            | WindowError::NoLibraries { .. }
-            | WindowError::NoConnection { .. }
-            | WindowError::Platform(_),
-        ) => false,
-        Err(_) => true,
+        Err(e) => !(e.no_window_system() || matches!(e, WindowError::Platform(_))),
     }
 }
 

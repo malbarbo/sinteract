@@ -252,6 +252,20 @@ impl fmt::Display for WindowError {
     }
 }
 
+impl WindowError {
+    /// Returns `true` if the error says that the session has no window
+    /// system to open a window on, `false` otherwise. Another window of the
+    /// process fails the same way, so a front end can show the terminal.
+    pub fn no_window_system(&self) -> bool {
+        matches!(
+            self,
+            WindowError::NoWindowSystem
+                | WindowError::NoLibraries { .. }
+                | WindowError::NoConnection { .. }
+        )
+    }
+}
+
 impl std::error::Error for WindowError {}
 
 /// The window system of a session on Linux and the other Unix systems.
