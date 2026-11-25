@@ -232,36 +232,37 @@ impl fmt::Display for WindowError {
                 f.write_str("the window event loop ended, and it cannot start again")
             }
             WindowError::Timeout => f.write_str("the window did not open in time"),
-            WindowError::NoLibraries { system } => {
-                write!(
-                    f,
-                    "cannot open a window: the libraries of {system} did not load"
-                )
+            WindowError::NoLibraries { .. }
+            | WindowError::NoConnection { .. }
+            | WindowError::NoEventLoop(_)
+            | WindowError::Platform(_) => {
+                f.write_str("cannot open a window: ")?;
+                self.fmt_cause(f)
             }
-            WindowError::NoConnection { system, display } if display.is_empty() => {
-                write!(
-                    f,
-                    "cannot open a window: no connection to the {system} display"
-                )
-            }
-            WindowError::NoConnection { display, .. } => {
-                write!(
-                    f,
-                    "cannot open a window: no connection to the display `{display}`"
-                )
-            }
-            WindowError::NoEventLoop(e) => {
-                write!(
-                    f,
-                    "cannot open a window: the window event loop did not build: {e}"
-                )
-            }
-            WindowError::Platform(e) => write!(f, "cannot open a window: {e}"),
         }
     }
 }
 
 impl WindowError {
+    /// Writes why the window did not open, without the `cannot open a
+    /// window: ` that [`fmt::Display`] puts in front of it.
+    pub(crate) fn fmt_cause(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WindowError::NoLibraries { system } => {
+                write!(f, "the libraries of {system} did not load")
+            }
+            WindowError::NoConnection { system, display } if display.is_empty() => {
+                write!(f, "no connection to the {system} display")
+            }
+            WindowError::NoConnection { display, .. } => {
+                write!(f, "no connection to the display `{display}`")
+            }
+            WindowError::NoEventLoop(e) => write!(f, "the window event loop did not build: {e}"),
+            WindowError::Platform(e) => f.write_str(e),
+            e => fmt::Display::fmt(e, f),
+        }
+    }
+
     /// Returns `true` if the error says that the session has no window
     /// system or that the event loop did not build, `false` otherwise.
     /// Another window on the same thread fails the same way, so a front end
