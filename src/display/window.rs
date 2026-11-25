@@ -1244,7 +1244,8 @@ mod tests {
         );
     }
 
-    /// A Wayland session through `WAYLAND_SOCKET` has no name.
+    /// An empty or unset variable gives no name, so the message names the
+    /// window system.
     #[test]
     fn a_loop_error_of_a_display_with_no_name_names_the_system() {
         let error = loop_error("Could not find wayland compositor", |_| None);
