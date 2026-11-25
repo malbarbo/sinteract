@@ -30,7 +30,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
-use super::driver::{PresentError, WindowError, sealed};
+use super::driver::{PresentError, WindowError, WindowSystem, sealed};
 use super::frame_clock::FrameClock;
 use super::inbox::{Inbox, Next, Seated, Sender};
 use crate::event::{
@@ -100,10 +100,10 @@ impl Window {
     /// Open a window of `width` by `height` logical pixels. Fails with
     /// [`WindowError::Busy`] while another `Window` exists, with
     /// [`WindowError::NoWindowSystem`] when the session has no graphical display,
-    /// with [`WindowError::NoLibraries`] when the libraries of X11 and Wayland
-    /// do not load, with [`WindowError::NoConnection`] when nothing answers at
-    /// the display, and with [`WindowError::Platform`] when the platform has
-    /// no window for us or, on macOS, off the main thread. On another platform a thread
+    /// with [`WindowError::NoLibraries`] when the libraries of X11 or Wayland
+    /// do not load, with [`WindowError::NoConnection`] when the connection to
+    /// the display fails, and with [`WindowError::Platform`] when the platform
+    /// has no window for us or, on macOS, off the main thread. On another platform a thread
     /// other than the one of the first window fails with
     /// [`WindowError::WrongThread`]. Fails with [`WindowError::LoopEnded`] after
     /// the event loop of the windows ended, and with [`WindowError::Timeout`]
@@ -440,8 +440,8 @@ fn platform_error(e: impl std::fmt::Display) -> WindowError {
     WindowError::Platform(winit_message(&e.to_string()).to_string())
 }
 
-/// The message of a winit error without the place in the source of winit
-/// that `os error at <file>:<line>: ` gives, which tells the user nothing.
+/// The message of a winit error without the `os error at <file>:<line>: `
+/// in front of it. The place in the source of winit tells the user nothing.
 fn winit_message(text: &str) -> &str {
     text.strip_prefix("os error at ")
         .and_then(|rest| rest.split_once(": "))
@@ -449,16 +449,24 @@ fn winit_message(text: &str) -> &str {
 }
 
 /// The error of an event loop that did not build, from the message of
-/// winit. `var` reads the environment, for the name of the display.
+/// winit. `var` reads the environment, for the name of the display. The
+/// messages are those of `XNotSupported` in winit 0.30 and of
+/// `ConnectError` in wayland-client 0.31, so a new version of either has
+/// to keep them, or this falls back to [`WindowError::Platform`].
 fn loop_error(text: &str, var: impl Fn(&str) -> Option<String>) -> WindowError {
-    let display = |name: &str| WindowError::NoConnection {
+    let display = |system, name: &str| WindowError::NoConnection {
+        system,
         display: var(name).unwrap_or_default(),
     };
     match winit_message(text) {
-        "Failed to load one of xlib's shared libraries"
-        | "The wayland library could not be loaded" => WindowError::NoLibraries,
-        "Failed to open connection to X server" => display("DISPLAY"),
-        "Could not find wayland compositor" => display("WAYLAND_DISPLAY"),
+        "Failed to load one of xlib's shared libraries" => WindowError::NoLibraries {
+            system: WindowSystem::X11,
+        },
+        "The wayland library could not be loaded" => WindowError::NoLibraries {
+            system: WindowSystem::Wayland,
+        },
+        "Failed to open connection to X server" => display(WindowSystem::X11, "DISPLAY"),
+        "Could not find wayland compositor" => display(WindowSystem::Wayland, "WAYLAND_DISPLAY"),
         message => WindowError::Platform(format!("the window event loop did not build: {message}")),
     }
 }
@@ -512,7 +520,7 @@ impl Lent {
                 }
                 Err(
                     e @ (WindowError::Platform(_)
-                    | WindowError::NoLibraries
+                    | WindowError::NoLibraries { .. }
                     | WindowError::NoConnection { .. }),
                 ) => {
                     *state = Loop::Failed(e.clone());
@@ -673,7 +681,7 @@ pub(crate) fn has_window_system() -> bool {
         Ok(_) => true,
         Err(
             WindowError::NoWindowSystem
-            | WindowError::NoLibraries
+            | WindowError::NoLibraries { .. }
             | WindowError::NoConnection { .. }
             | WindowError::Platform(_),
         ) => false,
@@ -1218,24 +1226,34 @@ mod tests {
         let error = |message: &str| loop_error(&format!("{at}{message}"), var).to_string();
         assert_eq!(
             error("Failed to load one of xlib's shared libraries"),
-            "cannot open a window: the libraries of X11 and Wayland did not load"
+            "cannot open a window: the libraries of X11 did not load"
         );
         assert_eq!(
             error("The wayland library could not be loaded"),
-            "cannot open a window: the libraries of X11 and Wayland did not load"
+            "cannot open a window: the libraries of Wayland did not load"
         );
         assert_eq!(
             error("Failed to open connection to X server"),
-            "cannot open a window: nothing answers at the display `:1`"
+            "cannot open a window: no connection to the display `:1`"
         );
         assert_eq!(
             error("Could not find wayland compositor"),
-            "cannot open a window: nothing answers at the display `wayland-0`"
+            "cannot open a window: no connection to the display `wayland-0`"
         );
         assert_eq!(
             error("Failed to convert Xlib connection to XCB"),
             "cannot open a window: the window event loop did not build: \
              Failed to convert Xlib connection to XCB"
+        );
+    }
+
+    /// A Wayland session through `WAYLAND_SOCKET` has no name.
+    #[test]
+    fn a_loop_error_of_a_display_with_no_name_names_the_system() {
+        let error = loop_error("Could not find wayland compositor", |_| None);
+        assert_eq!(
+            error.to_string(),
+            "cannot open a window: no connection to the Wayland display"
         );
     }
 

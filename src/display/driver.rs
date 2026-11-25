@@ -203,12 +203,16 @@ pub enum WindowError {
     LoopEnded,
     /// The window did not open in time.
     Timeout,
-    /// The libraries of X11 or Wayland did not load, as in a static binary
-    /// that does not carry them.
-    NoLibraries,
-    /// Nothing answers at `display`, the display that `DISPLAY` or
-    /// `WAYLAND_DISPLAY` names.
-    NoConnection { display: String },
+    /// The libraries of `system` did not load, as in a static binary that
+    /// does not carry them.
+    NoLibraries { system: WindowSystem },
+    /// The connection to the display of `system` failed. `display` is the
+    /// value of `DISPLAY` or `WAYLAND_DISPLAY`, and empty when the variable
+    /// is empty or unset.
+    NoConnection {
+        system: WindowSystem,
+        display: String,
+    },
     /// The platform has no window for us.
     Platform(String),
 }
@@ -225,13 +229,22 @@ impl fmt::Display for WindowError {
                 f.write_str("the window event loop ended, and it cannot start again")
             }
             WindowError::Timeout => f.write_str("the window did not open in time"),
-            WindowError::NoLibraries => {
-                f.write_str("cannot open a window: the libraries of X11 and Wayland did not load")
-            }
-            WindowError::NoConnection { display } => {
+            WindowError::NoLibraries { system } => {
                 write!(
                     f,
-                    "cannot open a window: nothing answers at the display `{display}`"
+                    "cannot open a window: the libraries of {system} did not load"
+                )
+            }
+            WindowError::NoConnection { system, display } if display.is_empty() => {
+                write!(
+                    f,
+                    "cannot open a window: no connection to the {system} display"
+                )
+            }
+            WindowError::NoConnection { display, .. } => {
+                write!(
+                    f,
+                    "cannot open a window: no connection to the display `{display}`"
                 )
             }
             WindowError::Platform(e) => write!(f, "cannot open a window: {e}"),
@@ -240,6 +253,22 @@ impl fmt::Display for WindowError {
 }
 
 impl std::error::Error for WindowError {}
+
+/// The window system of a session on Linux and the other Unix systems.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowSystem {
+    X11,
+    Wayland,
+}
+
+impl fmt::Display for WindowSystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            WindowSystem::X11 => "X11",
+            WindowSystem::Wayland => "Wayland",
+        })
+    }
+}
 
 /// Why a [`Terminal`](super::Terminal) did not open.
 #[derive(Debug)]

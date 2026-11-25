@@ -54,7 +54,7 @@ pub mod terminal;
 #[cfg(feature = "window")]
 pub mod window;
 
-pub use driver::{Display, NoGraphics, PresentError, TerminalError, WindowError};
+pub use driver::{Display, NoGraphics, PresentError, TerminalError, WindowError, WindowSystem};
 #[cfg(all(feature = "terminal", feature = "window"))]
 pub use driver::{NativeError, open_native};
 pub use inbox::{SendError, Sender};
