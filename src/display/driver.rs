@@ -213,6 +213,9 @@ pub enum WindowError {
         system: WindowSystem,
         display: String,
     },
+    /// The event loop of the windows did not build, for a reason that
+    /// none of the other variants names.
+    NoEventLoop(String),
     /// The platform has no window for us.
     Platform(String),
 }
@@ -247,6 +250,12 @@ impl fmt::Display for WindowError {
                     "cannot open a window: no connection to the display `{display}`"
                 )
             }
+            WindowError::NoEventLoop(e) => {
+                write!(
+                    f,
+                    "cannot open a window: the window event loop did not build: {e}"
+                )
+            }
             WindowError::Platform(e) => write!(f, "cannot open a window: {e}"),
         }
     }
@@ -262,6 +271,7 @@ impl WindowError {
             WindowError::NoWindowSystem
                 | WindowError::NoLibraries { .. }
                 | WindowError::NoConnection { .. }
+                | WindowError::NoEventLoop(_)
         )
     }
 }

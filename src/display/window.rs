@@ -102,8 +102,10 @@ impl Window {
     /// [`WindowError::NoWindowSystem`] when the session has no graphical display,
     /// with [`WindowError::NoLibraries`] when the libraries of X11 or Wayland
     /// do not load, with [`WindowError::NoConnection`] when the connection to
-    /// the display fails, and with [`WindowError::Platform`] when the platform
-    /// has no window for us or, on macOS, off the main thread. On another platform a thread
+    /// the display fails, with [`WindowError::NoEventLoop`] when the event
+    /// loop does not build for another reason, and with
+    /// [`WindowError::Platform`] when the platform has no window for us or,
+    /// on macOS, off the main thread. On another platform a thread
     /// other than the one of the first window fails with
     /// [`WindowError::WrongThread`]. Fails with [`WindowError::LoopEnded`] after
     /// the event loop of the windows ended, and with [`WindowError::Timeout`]
@@ -457,7 +459,7 @@ fn winit_message(text: &str) -> &str {
 /// winit. `var` reads the environment, for the name of the display. The
 /// messages are those of `XNotSupported` in winit 0.30 and of
 /// `ConnectError` in wayland-client 0.31, so a new version of either has
-/// to keep them, or this falls back to [`WindowError::Platform`].
+/// to keep them, or this falls back to [`WindowError::NoEventLoop`].
 fn loop_error(text: &str, var: impl Fn(&str) -> Option<String>) -> WindowError {
     let display = |system, name: &str| WindowError::NoConnection {
         system,
@@ -472,7 +474,7 @@ fn loop_error(text: &str, var: impl Fn(&str) -> Option<String>) -> WindowError {
         },
         "Failed to open connection to X server" => display(WindowSystem::X11, "DISPLAY"),
         "Could not find wayland compositor" => display(WindowSystem::Wayland, "WAYLAND_DISPLAY"),
-        message => WindowError::Platform(format!("the window event loop did not build: {message}")),
+        message => WindowError::NoEventLoop(message.to_string()),
     }
 }
 
@@ -682,7 +684,7 @@ pub(crate) fn has_window_system() -> bool {
     #[cfg(not(target_os = "macos"))]
     match Lent::take() {
         Ok(_) => true,
-        Err(e) => !(e.no_window_system() || matches!(e, WindowError::Platform(_))),
+        Err(e) => !e.no_window_system(),
     }
 }
 
@@ -1242,6 +1244,15 @@ mod tests {
             "cannot open a window: the window event loop did not build: \
              Failed to convert Xlib connection to XCB"
         );
+    }
+
+    /// A front end shows the terminal when the event loop does not build,
+    /// whatever the cause.
+    #[test]
+    fn a_loop_error_of_an_unknown_cause_has_no_window_system() {
+        let error = loop_error("Failed to convert Xlib connection to XCB", |_| None);
+        assert!(matches!(error, WindowError::NoEventLoop(_)));
+        assert!(error.no_window_system());
     }
 
     /// An empty or unset variable gives no name, so the message names the
