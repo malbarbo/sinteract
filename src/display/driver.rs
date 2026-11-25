@@ -189,7 +189,7 @@ impl std::error::Error for NativeError {
 }
 
 /// Why a [`Window`](super::Window) did not open.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WindowError {
     /// Another window is open.
     Busy,
@@ -203,6 +203,12 @@ pub enum WindowError {
     LoopEnded,
     /// The window did not open in time.
     Timeout,
+    /// The libraries of X11 or Wayland did not load, as in a static binary
+    /// that does not carry them.
+    NoLibraries,
+    /// Nothing answers at `display`, the display that `DISPLAY` or
+    /// `WAYLAND_DISPLAY` names.
+    NoConnection { display: String },
     /// The platform has no window for us.
     Platform(String),
 }
@@ -219,6 +225,15 @@ impl fmt::Display for WindowError {
                 f.write_str("the window event loop ended, and it cannot start again")
             }
             WindowError::Timeout => f.write_str("the window did not open in time"),
+            WindowError::NoLibraries => {
+                f.write_str("cannot open a window: the libraries of X11 and Wayland did not load")
+            }
+            WindowError::NoConnection { display } => {
+                write!(
+                    f,
+                    "cannot open a window: nothing answers at the display `{display}`"
+                )
+            }
             WindowError::Platform(e) => write!(f, "cannot open a window: {e}"),
         }
     }

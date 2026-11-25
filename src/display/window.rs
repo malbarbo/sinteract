@@ -100,8 +100,10 @@ impl Window {
     /// Open a window of `width` by `height` logical pixels. Fails with
     /// [`WindowError::Busy`] while another `Window` exists, with
     /// [`WindowError::NoWindowSystem`] when the session has no graphical display,
-    /// and with [`WindowError::Platform`] when the platform has no window for
-    /// us or, on macOS, off the main thread. On another platform a thread
+    /// with [`WindowError::NoLibraries`] when the libraries of X11 and Wayland
+    /// do not load, with [`WindowError::NoConnection`] when nothing answers at
+    /// the display, and with [`WindowError::Platform`] when the platform has
+    /// no window for us or, on macOS, off the main thread. On another platform a thread
     /// other than the one of the first window fails with
     /// [`WindowError::WrongThread`]. Fails with [`WindowError::LoopEnded`] after
     /// the event loop of the windows ended, and with [`WindowError::Timeout`]
@@ -446,6 +448,21 @@ fn winit_message(text: &str) -> &str {
         .map_or(text, |(_, message)| message)
 }
 
+/// The error of an event loop that did not build, from the message of
+/// winit. `var` reads the environment, for the name of the display.
+fn loop_error(text: &str, var: impl Fn(&str) -> Option<String>) -> WindowError {
+    let display = |name: &str| WindowError::NoConnection {
+        display: var(name).unwrap_or_default(),
+    };
+    match winit_message(text) {
+        "Failed to load one of xlib's shared libraries"
+        | "The wayland library could not be loaded" => WindowError::NoLibraries,
+        "Failed to open connection to X server" => display("DISPLAY"),
+        "Could not find wayland compositor" => display("WAYLAND_DISPLAY"),
+        message => WindowError::Platform(format!("the window event loop did not build: {message}")),
+    }
+}
+
 fn surface_error(e: impl std::fmt::Display) -> PresentError {
     PresentError::Platform(e.to_string())
 }
@@ -463,7 +480,7 @@ thread_local! {
 enum Loop {
     Unbuilt,
     /// The build failed, and winit refuses a second one.
-    Failed(String),
+    Failed(WindowError),
     /// The loop is leaked, because some platforms tear down under a dropped
     /// loop.
     Ready {
@@ -493,13 +510,17 @@ impl Lent {
                     };
                     Ok(Self { proxy })
                 }
-                Err(WindowError::Platform(e)) => {
+                Err(
+                    e @ (WindowError::Platform(_)
+                    | WindowError::NoLibraries
+                    | WindowError::NoConnection { .. }),
+                ) => {
                     *state = Loop::Failed(e.clone());
-                    Err(WindowError::Platform(e))
+                    Err(e)
                 }
                 Err(e) => Err(e),
             },
-            Loop::Failed(e) => Err(WindowError::Platform(e.clone())),
+            Loop::Failed(e) => Err(e.clone()),
             Loop::Ready { held: true, .. } => Err(WindowError::Busy),
             Loop::Ready { event_loop, held } => {
                 *held = true;
@@ -631,10 +652,7 @@ fn build_loop() -> Result<EventLoop<()>, WindowError> {
     }
     let event_loop = builder.build().map_err(|e| match e {
         EventLoopError::RecreationAttempt => WindowError::WrongThread,
-        e => WindowError::Platform(format!(
-            "the window event loop did not build: {}",
-            winit_message(&e.to_string())
-        )),
+        e => loop_error(&e.to_string(), |name| std::env::var(name).ok()),
     })?;
     event_loop.set_control_flow(ControlFlow::Wait);
     Ok(event_loop)
@@ -653,7 +671,12 @@ pub(crate) fn has_window_system() -> bool {
     #[cfg(not(target_os = "macos"))]
     match Lent::take() {
         Ok(_) => true,
-        Err(WindowError::NoWindowSystem | WindowError::Platform(_)) => false,
+        Err(
+            WindowError::NoWindowSystem
+            | WindowError::NoLibraries
+            | WindowError::NoConnection { .. }
+            | WindowError::Platform(_),
+        ) => false,
         Err(_) => true,
     }
 }
@@ -1182,6 +1205,38 @@ mod tests {
             "No such thing"
         );
         assert_eq!(winit_message("No such thing"), "No such thing");
+    }
+
+    #[test]
+    fn a_loop_error_names_the_cause() {
+        let var = |name: &str| match name {
+            "DISPLAY" => Some(":1".to_string()),
+            "WAYLAND_DISPLAY" => Some("wayland-0".to_string()),
+            _ => None,
+        };
+        let at = "os error at /home/runner/winit/src/mod.rs:788: ";
+        let error = |message: &str| loop_error(&format!("{at}{message}"), var).to_string();
+        assert_eq!(
+            error("Failed to load one of xlib's shared libraries"),
+            "cannot open a window: the libraries of X11 and Wayland did not load"
+        );
+        assert_eq!(
+            error("The wayland library could not be loaded"),
+            "cannot open a window: the libraries of X11 and Wayland did not load"
+        );
+        assert_eq!(
+            error("Failed to open connection to X server"),
+            "cannot open a window: nothing answers at the display `:1`"
+        );
+        assert_eq!(
+            error("Could not find wayland compositor"),
+            "cannot open a window: nothing answers at the display `wayland-0`"
+        );
+        assert_eq!(
+            error("Failed to convert Xlib connection to XCB"),
+            "cannot open a window: the window event loop did not build: \
+             Failed to convert Xlib connection to XCB"
+        );
     }
 
     #[test]
