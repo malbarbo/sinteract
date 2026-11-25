@@ -532,10 +532,11 @@ impl fmt::Display for StageError {
             StageError::NoWindowPlayers(WindowError::NoWindowSystem) => f.write_str(
                 "several players need a window each, and this session has no graphical display",
             ),
-            StageError::NoWindowPlayers(e) => {
-                f.write_str("several players need a window each, and the window did not open: ")?;
-                e.fmt_cause(f)
-            }
+            StageError::NoWindowPlayers(e) => write!(
+                f,
+                "several players need a window each, and the window did not open: {}",
+                e.cause()
+            ),
             StageError::NoSession => {
                 f.write_str("no server ran this engine, since fd 3 or fd 4 is not open")
             }

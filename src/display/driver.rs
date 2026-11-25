@@ -244,9 +244,19 @@ impl fmt::Display for WindowError {
 }
 
 impl WindowError {
-    /// Writes why the window did not open, without the `cannot open a
-    /// window: ` that [`fmt::Display`] puts in front of it.
-    pub(crate) fn fmt_cause(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    /// Why the window did not open, without the `cannot open a window: `
+    /// that [`fmt::Display`] puts in front of it.
+    pub fn cause(&self) -> impl fmt::Display + '_ {
+        struct Cause<'a>(&'a WindowError);
+        impl fmt::Display for Cause<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt_cause(f)
+            }
+        }
+        Cause(self)
+    }
+
+    fn fmt_cause(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WindowError::NoLibraries { system } => {
                 write!(f, "the libraries of {system} did not load")
